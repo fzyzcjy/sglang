@@ -1461,8 +1461,20 @@ class Scheduler:
         return success, message
 
     def get_weights_by_name(self, recv_req: GetWeightsByNameReqInput):
-        parameter = self.tp_worker.get_weights_by_name(recv_req)
-        return parameter
+        print(f'hi hacky change get_weights_by_name!!! {recv_req=}')
+        match recv_req.name:
+            case 'hack_pause':
+                self.flush_cache()
+                self.token_to_kv_pool._clear_buffers()
+                torch.cuda.empty_cache()
+            case 'hack_resume':
+                self.token_to_kv_pool._create_buffers()
+            case _:
+                raise NotImplementedError
+
+        return None
+        # parameter = self.tp_worker.get_weights_by_name(recv_req)
+        # return parameter
 
     def start_profile(self) -> None:
         if self.profiler is None:
