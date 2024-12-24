@@ -1479,6 +1479,7 @@ class Scheduler:
                     time.sleep(2)
                     print(f'HACK: Now dealloc it ({a.shape=})')
                     del a
+                    torch.cuda.empty_cache()
 
             case 'hack_resume':
                 self.token_to_kv_pool._create_buffers()
