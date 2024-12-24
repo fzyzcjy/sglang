@@ -91,6 +91,8 @@ logger = logging.getLogger(__name__)
 # Test retract decode
 test_retract = get_bool_env_var("SGLANG_TEST_RETRACT")
 
+# HACK_ENABLE_RECORD_MEMORY = True
+HACK_ENABLE_RECORD_MEMORY = False
 
 class Scheduler:
     """A scheduler that manages a tensor parallel GPU worker."""
@@ -1474,8 +1476,9 @@ class Scheduler:
             # case 'hack_memory_profiling_start':
             #     torch.cuda.memory._record_memory_history()
             case 'hack_memory_profiling_end':
-                torch.cuda.memory._dump_snapshot(f"/host_home/temp/snapshot.pickle")
-                torch.cuda.memory._record_memory_history(enabled=None)
+                if HACK_ENABLE_RECORD_MEMORY:
+                    torch.cuda.memory._dump_snapshot(f"/host_home/temp/snapshot.pickle")
+                    torch.cuda.memory._record_memory_history(enabled=None)
             case _:
                 raise NotImplementedError
 
@@ -1525,8 +1528,9 @@ def run_scheduler_process(
     dp_rank: Optional[int],
     pipe_writer,
 ):
-    print('hi run_scheduler_process start, HACKY ADD MEMORY PROFILER!!!')
-    torch.cuda.memory._record_memory_history()
+    if HACK_ENABLE_RECORD_MEMORY:
+        print('hi run_scheduler_process start, HACKY ADD MEMORY PROFILER!!!')
+        torch.cuda.memory._record_memory_history()
 
     setproctitle.setproctitle("sglang::scheduler")
 
