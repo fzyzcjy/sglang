@@ -91,8 +91,8 @@ logger = logging.getLogger(__name__)
 # Test retract decode
 test_retract = get_bool_env_var("SGLANG_TEST_RETRACT")
 
-# HACK_ENABLE_RECORD_MEMORY = True
-HACK_ENABLE_RECORD_MEMORY = False
+HACK_ENABLE_RECORD_MEMORY = True
+# HACK_ENABLE_RECORD_MEMORY = False
 
 class Scheduler:
     """A scheduler that manages a tensor parallel GPU worker."""
@@ -1470,13 +1470,24 @@ class Scheduler:
                 self.token_to_kv_pool._clear_buffers()
                 # self.req_to_token_pool._clear_buffers()
                 torch.cuda.empty_cache()
+                print(f'Inside scheduler.py, {torch.cuda.memory_allocated()/1e9=}, {torch.cuda.memory_reserved()/1e9=}')
+
+                if HACK_ENABLE_RECORD_MEMORY:
+                    print('HACK: alloc a big tensor and then dealloc to make memory profile UI better')
+                    a = torch.empty((4, 1000, 1000, 1000), dtype=torch.uint8)
+                    time.sleep(2)
+                    print(f'HACK: Now dealloc it ({a.shape=})')
+                    del a
+                    
             case 'hack_resume':
                 self.token_to_kv_pool._create_buffers()
                 # self.req_to_token_pool._create_buffers()
                 # self.flush_cache()
+                print(f'Inside scheduler.py, {torch.cuda.memory_allocated()/1e9=}, {torch.cuda.memory_reserved()/1e9=}')
             # case 'hack_memory_profiling_start':
             #     torch.cuda.memory._record_memory_history()
             case 'hack_memory_profiling_end':
+                print(f'Inside scheduler.py, {torch.cuda.memory_allocated()/1e9=}, {torch.cuda.memory_reserved()/1e9=}')
                 if HACK_ENABLE_RECORD_MEMORY:
                     torch.cuda.memory._dump_snapshot(f"/host_home/temp/snapshot.pickle")
                     torch.cuda.memory._record_memory_history(enabled=None)
