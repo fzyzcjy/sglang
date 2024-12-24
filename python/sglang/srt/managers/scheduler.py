@@ -1466,9 +1466,11 @@ class Scheduler:
             case 'hack_pause':
                 self.flush_cache()
                 self.token_to_kv_pool._clear_buffers()
+                self.req_to_token_pool._clear_buffers()
                 torch.cuda.empty_cache()
             case 'hack_resume':
                 self.token_to_kv_pool._create_buffers()
+                self.req_to_token_pool._create_buffers()
             # case 'hack_memory_profiling_start':
             #     torch.cuda.memory._record_memory_history()
             case 'hack_memory_profiling_end':

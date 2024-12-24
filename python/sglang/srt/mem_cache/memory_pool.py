@@ -39,9 +39,7 @@ class ReqToTokenPool:
         self.size = size
         self.max_context_len = max_context_len
         self.device = device
-        self.req_to_token = torch.zeros(
-            (size, max_context_len), dtype=torch.int32, device=device
-        )
+        self._create_buffers()
         self.free_slots = list(range(size))
         self.write_records = []
         self.use_records = use_records
@@ -50,6 +48,14 @@ class ReqToTokenPool:
             self.write = self.write_with_records
         else:
             self.write = self.write_without_records
+
+    def _create_buffers(self):
+        self.req_to_token = torch.zeros(
+            (self.size, self.max_context_len), dtype=torch.int32, device=self.device
+        )
+
+    def _clear_buffers(self):
+        del self.req_to_token
 
     def write(self, indices, values):
         # Keep the signature for type checking. It will be assigned during runtime.
