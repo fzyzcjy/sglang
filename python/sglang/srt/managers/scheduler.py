@@ -1474,11 +1474,12 @@ class Scheduler:
 
                 if HACK_ENABLE_RECORD_MEMORY:
                     print('HACK: alloc a big tensor and then dealloc to make memory profile UI better')
-                    a = torch.empty((4, 1000, 1000, 1000), dtype=torch.uint8)
+                    time.sleep(2)
+                    a = torch.empty((8, 1000, 1000, 1000), dtype=torch.uint8, device='cuda')
                     time.sleep(2)
                     print(f'HACK: Now dealloc it ({a.shape=})')
                     del a
-                    
+
             case 'hack_resume':
                 self.token_to_kv_pool._create_buffers()
                 # self.req_to_token_pool._create_buffers()
