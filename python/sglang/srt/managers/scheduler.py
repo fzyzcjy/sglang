@@ -1469,6 +1469,11 @@ class Scheduler:
                 torch.cuda.empty_cache()
             case 'hack_resume':
                 self.token_to_kv_pool._create_buffers()
+            # case 'hack_memory_profiling_start':
+            #     torch.cuda.memory._record_memory_history()
+            case 'hack_memory_profiling_end':
+                torch.cuda.memory._dump_snapshot(f"/host_home/temp/snapshot.pickle")
+                torch.cuda.memory._record_memory_history(enabled=None)
             case _:
                 raise NotImplementedError
 
@@ -1518,6 +1523,9 @@ def run_scheduler_process(
     dp_rank: Optional[int],
     pipe_writer,
 ):
+    print('hi run_scheduler_process start, HACKY ADD MEMORY PROFILER!!!')
+    torch.cuda.memory._record_memory_history()
+
     setproctitle.setproctitle("sglang::scheduler")
 
     # [For Router] if env var "SGLANG_DP_RANK" exist, set dp_rank to the value of the env var
