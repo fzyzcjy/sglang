@@ -86,7 +86,7 @@ class TestUpdateWeights(unittest.TestCase):
         updated_response = self.run_decode()
         assert origin_response[:32] == updated_response[:32]
 
-    def test_update_weights_unexist_model(self):
+    def test_update_weights_nonexist_model(self):
         origin_model_path = self.get_model_info()
         print(f"origin_model_path: {origin_model_path}")
         origin_response = self.run_decode()
