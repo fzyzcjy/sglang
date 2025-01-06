@@ -91,10 +91,7 @@ def run():
         rid='req-0',  # TODO when multi req, handle this
         input_text=input_text,
         input_ids=input_ids,
-        image_inputs=dict(
-            pixel_values=None,
-            image_hashes=None,
-        ),
+        image_inputs=None,
         sampling_params=SamplingParams(),
         return_logprob=False,
         logprob_start_len=0,
