@@ -51,11 +51,14 @@ def run():
     # # [Optional] update parallel state in SGLang for 3D-HybridEngine
     # inference_engine.update_parallel_state(TP=device_mesh["tp"])
 
+    input_text = "Today is a sunny day and I like"
+    input_ids = hf_tokenizer(input_text)['input_ids'][0].tolist()
+
     # generate sequence, it would be better if the output is a list of Tensor not list of list[str]
     inference_engine.handle_generate_request(TokenizedGenerateReqInput(
         rid=TODO,
-        input_text=TODO,
-        input_ids=TODO,
+        input_text=input_text,
+        input_ids=input_ids,
         image_inputs={},
         sampling_params=SamplingParams(),
         return_logprob=False,
