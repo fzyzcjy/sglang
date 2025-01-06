@@ -1,3 +1,5 @@
+import time
+
 from python.sglang.srt.managers.io_struct import TokenizedGenerateReqInput
 from python.sglang.srt.managers.scheduler import Scheduler
 from python.sglang.srt.sampling.sampling_params import SamplingParams
@@ -54,6 +56,11 @@ def run():
     input_text = "Today is a sunny day and I like"
     input_ids = hf_tokenizer(input_text)['input_ids'][0].tolist()
 
+    def hack_send_to_detokenizer_callback(out):
+        print('outputs', out)
+
+    inference_engine.hack_send_to_detokenizer_callback = hack_send_to_detokenizer_callback
+
     # generate sequence, it would be better if the output is a list of Tensor not list of list[str]
     inference_engine.handle_generate_request(TokenizedGenerateReqInput(
         rid='req-0',  # TODO when multi req, handle this
@@ -66,8 +73,9 @@ def run():
         top_logprobs_num=0,
         stream=True,  # TODO ?
     ))
-
-    outputs = TODO
+  
+    print('sleep')
+    time.sleep(10)
 
     # already done in old PR, waiting for merging
     # # offload kvcache after generation

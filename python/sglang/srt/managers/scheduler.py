@@ -28,7 +28,6 @@ import psutil
 import setproctitle
 import torch
 import zmq
-
 from sglang.global_config import global_config
 from sglang.srt.configs.model_config import ModelConfig
 from sglang.srt.hf_transformers_utils import get_processor, get_tokenizer
@@ -341,8 +340,8 @@ class Scheduler:
             1.0,
         )
         self.new_token_ratio_decay = (
-            self.init_new_token_ratio - self.min_new_token_ratio
-        ) / global_config.default_new_token_ratio_decay_steps
+                                         self.init_new_token_ratio - self.min_new_token_ratio
+                                     ) / global_config.default_new_token_ratio_decay_steps
         self.new_token_ratio = self.init_new_token_ratio
 
         # Tells whether the current running batch is full so that we can skip
@@ -675,9 +674,9 @@ class Scheduler:
 
     def log_prefill_stats(self, adder, can_run_list, running_bs, has_being_chunked):
         self.tree_cache_metrics["total"] += (
-            adder.log_input_tokens + adder.log_hit_tokens
-        ) / 10**9
-        self.tree_cache_metrics["hit"] += (adder.log_hit_tokens) / 10**9
+                                                adder.log_input_tokens + adder.log_hit_tokens
+                                            ) / 10 ** 9
+        self.tree_cache_metrics["hit"] += (adder.log_hit_tokens) / 10 ** 9
         tree_cache_hit_rate = (
             self.tree_cache_metrics["hit"] / self.tree_cache_metrics["total"]
         )
@@ -830,10 +829,10 @@ class Scheduler:
             if (
                 self.lora_paths
                 and len(
-                    lora_set
-                    | set([req.lora_path for req in adder.can_run_list])
-                    | set([req.lora_path])
-                )
+                lora_set
+                | set([req.lora_path for req in adder.can_run_list])
+                | set([req.lora_path])
+            )
                 > self.max_loras_per_batch
             ):
                 self.batch_is_full = True
@@ -1030,7 +1029,7 @@ class Scheduler:
                 if self.is_mixed_chunk and self.enable_overlap and req.finished():
                     # Free the one delayed token for the mixed decode batch
                     j = len(batch.out_cache_loc) - len(batch.reqs) + i
-                    self.token_to_kv_pool.free(batch.out_cache_loc[j : j + 1])
+                    self.token_to_kv_pool.free(batch.out_cache_loc[j: j + 1])
                     continue
 
                 if req.is_being_chunked <= 0:
@@ -1109,7 +1108,7 @@ class Scheduler:
 
             if self.enable_overlap and req.finished():
                 # Free the one delayed token
-                self.token_to_kv_pool.free(batch.out_cache_loc[i : i + 1])
+                self.token_to_kv_pool.free(batch.out_cache_loc[i: i + 1])
                 continue
 
             if batch.spec_algorithm.is_none():
@@ -1172,15 +1171,15 @@ class Scheduler:
 
         if req.input_token_logprobs_val is None:
             input_token_logprobs_val = output.input_token_logprobs[
-                pt : pt + num_input_logprobs - 1 - req.last_update_decode_tokens
-            ]
+                                       pt: pt + num_input_logprobs - 1 - req.last_update_decode_tokens
+                                       ]
 
             input_token_logprobs_idx = req.fill_ids[
-                len(req.fill_ids)
-                - num_input_logprobs
-                + 1 : len(req.fill_ids)
-                - req.last_update_decode_tokens
-            ]
+                                       len(req.fill_ids)
+                                       - num_input_logprobs
+                                       + 1: len(req.fill_ids)
+                                            - req.last_update_decode_tokens
+                                       ]
             # Clip the padded hash values from image tokens.
             # Otherwise, it will lead to detokenization errors.
             input_token_logprobs_idx = [
@@ -1201,18 +1200,18 @@ class Scheduler:
             # Some decode tokens are re-computed in an extend batch
             req.output_token_logprobs_val.extend(
                 output.input_token_logprobs[
-                    pt
-                    + num_input_logprobs
-                    - 1
-                    - req.last_update_decode_tokens : pt
-                    + num_input_logprobs
-                    - 1
+                pt
+                + num_input_logprobs
+                - 1
+                - req.last_update_decode_tokens: pt
+                                                 + num_input_logprobs
+                                                 - 1
                 ],
             )
             req.output_token_logprobs_idx.extend(
                 req.fill_ids[
-                    len(req.fill_ids)
-                    - req.last_update_decode_tokens : len(req.fill_ids)
+                len(req.fill_ids)
+                - req.last_update_decode_tokens: len(req.fill_ids)
                 ]
             )
 
@@ -1226,10 +1225,10 @@ class Scheduler:
 
             if req.last_update_decode_tokens != 0:
                 req.output_top_logprobs_val.extend(
-                    output.input_top_logprobs_val[i][-req.last_update_decode_tokens :]
+                    output.input_top_logprobs_val[i][-req.last_update_decode_tokens:]
                 )
                 req.output_top_logprobs_idx.extend(
-                    output.input_top_logprobs_idx[i][-req.last_update_decode_tokens :]
+                    output.input_top_logprobs_idx[i][-req.last_update_decode_tokens:]
                 )
 
             req.output_top_logprobs_val.append(output.next_token_top_logprobs_val[i])
@@ -1333,33 +1332,33 @@ class Scheduler:
 
             # Send to detokenizer
             if rids:
-                self.send_to_detokenizer.send_pyobj(
-                    BatchTokenIDOut(
-                        rids,
-                        finished_reasons,
-                        vids,
-                        decoded_texts,
-                        decode_ids_list,
-                        read_offsets,
-                        origin_input_ids,
-                        output_ids,
-                        skip_special_tokens,
-                        spaces_between_special_tokens,
-                        no_stop_trim,
-                        prompt_tokens,
-                        completion_tokens,
-                        cached_tokens,
-                        input_token_logprobs_val,
-                        input_token_logprobs_idx,
-                        output_token_logprobs_val,
-                        output_token_logprobs_idx,
-                        input_top_logprobs_val,
-                        input_top_logprobs_idx,
-                        output_top_logprobs_val,
-                        output_top_logprobs_idx,
-                        normalized_prompt_logprob,
-                    )
+                out = BatchTokenIDOut(
+                    rids,
+                    finished_reasons,
+                    vids,
+                    decoded_texts,
+                    decode_ids_list,
+                    read_offsets,
+                    origin_input_ids,
+                    output_ids,
+                    skip_special_tokens,
+                    spaces_between_special_tokens,
+                    no_stop_trim,
+                    prompt_tokens,
+                    completion_tokens,
+                    cached_tokens,
+                    input_token_logprobs_val,
+                    input_token_logprobs_idx,
+                    output_token_logprobs_val,
+                    output_token_logprobs_idx,
+                    input_top_logprobs_val,
+                    input_top_logprobs_idx,
+                    output_top_logprobs_val,
+                    output_top_logprobs_idx,
+                    normalized_prompt_logprob,
                 )
+                self.hack_send_to_detokenizer_callback(out)
+                self.send_to_detokenizer.send_pyobj(out)
         else:  # embedding or reward model
             embeddings = []
             prompt_tokens = []
@@ -1402,7 +1401,7 @@ class Scheduler:
                     (
                         1
                         if local_batch.forward_mode.is_decode()
-                        or local_batch.forward_mode.is_idle()
+                           or local_batch.forward_mode.is_idle()
                         else 0
                     ),
                     dtype=torch.int32,
