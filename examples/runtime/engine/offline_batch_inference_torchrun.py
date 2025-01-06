@@ -81,12 +81,12 @@ def run():
     _log(f'{input_ids=}')
 
     def hack_send_to_detokenizer_callback(out):
-        _log(f'hack_send_to_detokenizer_callback {out=}')
+        _log(f'hack_send_to_detokenizer_callback {hf_tokenizer.decode(out.decode_ids)=}')
 
     inference_engine.hack_send_to_detokenizer_callback = hack_send_to_detokenizer_callback
 
-    sampling_params = SamplingParams()
-    sampling_params.normalize(tokenizer=None, max_new_tokens=16)
+    sampling_params = SamplingParams(max_new_tokens=16)
+    sampling_params.normalize(tokenizer=None)
 
     # generate sequence, it would be better if the output is a list of Tensor not list of list[str]
     inference_engine.handle_generate_request(TokenizedGenerateReqInput(
