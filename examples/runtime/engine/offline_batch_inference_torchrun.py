@@ -3,11 +3,15 @@ from python.sglang.srt.managers.scheduler import Scheduler
 from python.sglang.srt.sampling.sampling_params import SamplingParams
 from python.sglang.srt.server_args import ServerArgs, PortArgs
 from torch.distributed.device_mesh import init_device_mesh
+from transformers import AutoTokenizer
 
 
 def run():
     # build distributed world
     local_rank, rank, world_size = initialize_global_process_group()
+
+    model_name = "meta-llama/Llama-3.2-1B-Instruct"
+    hf_tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     # `sync_model_weights` not in this PR
     # # build device mesh for training engine.
@@ -27,7 +31,7 @@ def run():
     # build inference engine
     inference_engine = Scheduler(
         server_args=ServerArgs(
-            model_path="meta-llama/Llama-3.2-1B-Instruct",
+            model_path=model_name,
             mem_fraction_static=0.1,
             tp_size=tp_size,
             dp_size=dp_size,
@@ -48,7 +52,7 @@ def run():
     # inference_engine.update_parallel_state(TP=device_mesh["tp"])
 
     # generate sequence, it would be better if the output is a list of Tensor not list of list[str]
-    outputs = inference_engine.handle_generate_request(TokenizedGenerateReqInput(
+    inference_engine.handle_generate_request(TokenizedGenerateReqInput(
         rid=TODO,
         input_text=TODO,
         input_ids=TODO,
@@ -59,6 +63,8 @@ def run():
         top_logprobs_num=0,
         stream=True,  # TODO ?
     ))
+
+    outputs = TODO
 
     # already done in old PR, waiting for merging
     # # offload kvcache after generation
