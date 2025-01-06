@@ -3,7 +3,6 @@ import os
 import sys
 import time
 
-import torch
 from sglang.srt.managers.io_struct import TokenizedGenerateReqInput
 from sglang.srt.managers.scheduler import Scheduler
 from sglang.srt.sampling.sampling_params import SamplingParams
@@ -23,9 +22,9 @@ def run():
     _log(f'start {local_rank=} {rank=} {world_size=} {sys.argv=} {os.environ.get("CUDA_VISIBLE_DEVICES")}')
 
     # hack
-    os.environ['CUDA_VISIBLE_DEVICES'] = str(rank)
-    torch.cuda.set_device(rank)
-    _log(f"now {os.environ['CUDA_VISIBLE_DEVICES']=}")
+    # os.environ['CUDA_VISIBLE_DEVICES'] = str(rank)
+    # torch.cuda.set_device(rank)
+    # _log(f"now {os.environ['CUDA_VISIBLE_DEVICES']=}")
 
     # TODO support dp>1
     dp_size, tp_size = 1, 4
@@ -122,6 +121,7 @@ def initialize_global_process_group(timeout_second=36000):
     world_size = int(os.environ["WORLD_SIZE"])
 
     if torch.distributed.is_initialized():
+        print(f'call torch.cuda.set_device({local_rank=})')
         torch.cuda.set_device(local_rank)
     return local_rank, rank, world_size
 
