@@ -1,7 +1,6 @@
 import datetime
 import os
 import sys
-import time
 
 from sglang.srt.managers.io_struct import TokenizedGenerateReqInput
 from sglang.srt.managers.scheduler import Scheduler
@@ -99,8 +98,8 @@ def run():
         stream=True,  # TODO ?
     ))
 
-    _log('sleep')
-    time.sleep(10)
+    _log('event_loop_normal')
+    inference_engine.event_loop_normal()
 
     _log('exit')
 
