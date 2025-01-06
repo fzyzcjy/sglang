@@ -1,5 +1,6 @@
 import datetime
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -19,7 +20,7 @@ def run():
         t = datetime.datetime.now().strftime('%H:%M:%S')
         print(f'[{t}] [rank={rank}] {text}')
 
-    _log(f'start {local_rank=} {rank=} {world_size=}')
+    _log(f'start {local_rank=} {rank=} {world_size=} {sys.argv=}')
 
     dp_size, tp_size = 2, 4
     assert world_size == dp_size * tp_size, f'{world_size=}'
@@ -42,10 +43,11 @@ def run():
     # # sync weights between actor and rollout, support several format: DTensor and Megatron (sharded)
     # inference_engine.sync_model_weights(actor_weights=state_dict, load_format='dtensor')
 
+    name = sys.argv[1]
     port_args = PortArgs(
-        tokenizer_ipc_name='/tmp/hack_sglang/tokenizer_ipc',
-        scheduler_input_ipc_name='/tmp/hack_sglang/scheduler_input_ipc',
-        detokenizer_ipc_name='/tmp/hack_sglang/detokenizer_ipc',
+        tokenizer_ipc_name=f'/tmp/{name}/tokenizer_ipc',
+        scheduler_input_ipc_name=f'/tmp/{name}/scheduler_input_ipc',
+        detokenizer_ipc_name=f'/tmp/{name}/detokenizer_ipc',
         nccl_port=12345,
     )
     for p in [port_args.tokenizer_ipc_name, port_args.scheduler_input_ipc_name, port_args.detokenizer_ipc_name]:
