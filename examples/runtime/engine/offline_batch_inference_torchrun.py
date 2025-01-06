@@ -19,7 +19,7 @@ def run():
         t = datetime.datetime.now().strftime('%H:%M:%S')
         print(f'[{t}] [rank={rank}] {text}')
 
-    _log(f'start {local_rank=} {rank=} {world_size=} {sys.argv=}')
+    _log(f'start {local_rank=} {rank=} {world_size=} {sys.argv=} {os.environ.get("CUDA_VISIBLE_DEVICES")}')
 
     # TODO support dp>1
     dp_size, tp_size = 1, 4
