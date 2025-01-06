@@ -559,7 +559,6 @@ class Scheduler:
                 input_embeds=recv_req.input_embeds,
                 eos_token_ids=self.model_config.hf_eos_token_id,
             )
-            print(f'hi handle_generate_request {req=}')
             req.tokenizer = self.tokenizer
 
             if (
