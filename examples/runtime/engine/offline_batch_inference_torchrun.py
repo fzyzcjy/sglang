@@ -18,12 +18,13 @@ def run():
         t = datetime.datetime.now().strftime('%H:%M:%S')
         print(f'[{t}] [rank={rank}] {text}')
 
+    _log(f'start {local_rank=} {rank=} {world_size=}')
+
     dp_size, tp_size = 2, 4
     assert world_size == dp_size * tp_size
 
     dp_rank, tp_rank = divmod(rank, tp_size)
-
-    _log(f'start {local_rank=} {rank=} {world_size=} {dp_rank=} {tp_rank=}')
+    _log(f'{dp_rank=} {tp_rank=}')
 
     model_name = "meta-llama/Llama-3.2-1B-Instruct"
     hf_tokenizer = AutoTokenizer.from_pretrained(model_name)
