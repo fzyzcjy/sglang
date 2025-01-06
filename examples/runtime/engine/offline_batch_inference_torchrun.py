@@ -1,3 +1,4 @@
+import datetime
 import time
 
 from python.sglang.srt.managers.io_struct import TokenizedGenerateReqInput
@@ -13,10 +14,16 @@ def run():
     # build distributed world
     local_rank, rank, world_size = initialize_global_process_group()
 
+    def _log(text):
+        t = datetime.datetime.now().strftime('%H:%M:%S')
+        print(f'[{t}] [rank={rank}] {text}')
+
     dp_size, tp_size = 2, 4
     assert world_size == dp_size * tp_size
 
     dp_rank, tp_rank = divmod(rank, tp_size)
+
+    _log(f'start {local_rank=} {rank=} {world_size=} {dp_rank=} {tp_rank=}')
 
     model_name = "meta-llama/Llama-3.2-1B-Instruct"
     hf_tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -53,6 +60,7 @@ def run():
         tp_rank=tp_rank,
         dp_rank=dp_rank,
     )
+    _log(f'{inference_engine=}')
 
     # moved to above
     # # [Optional] update parallel state in SGLang for 3D-HybridEngine
@@ -60,9 +68,10 @@ def run():
 
     input_text = "Today is a sunny day and I like"
     input_ids = hf_tokenizer(input_text)['input_ids'][0].tolist()
+    _log(f'{input_ids=}')
 
     def hack_send_to_detokenizer_callback(out):
-        print('outputs', out)
+        _log(f'hack_send_to_detokenizer_callback {out=}')
 
     inference_engine.hack_send_to_detokenizer_callback = hack_send_to_detokenizer_callback
 
@@ -79,8 +88,10 @@ def run():
         stream=True,  # TODO ?
     ))
 
-    print('sleep')
+    _log('sleep')
     time.sleep(10)
+
+    _log('exit')
 
     # already done in old PR, waiting for merging
     # # offload kvcache after generation
