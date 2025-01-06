@@ -56,7 +56,7 @@ def run():
 
     # generate sequence, it would be better if the output is a list of Tensor not list of list[str]
     inference_engine.handle_generate_request(TokenizedGenerateReqInput(
-        rid=TODO,
+        rid='req-0',  # TODO when multi req, handle this
         input_text=input_text,
         input_ids=input_ids,
         image_inputs={},
