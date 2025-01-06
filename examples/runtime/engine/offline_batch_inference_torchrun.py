@@ -1,6 +1,7 @@
 import datetime
 import os
 import time
+from pathlib import Path
 
 from sglang.srt.managers.io_struct import TokenizedGenerateReqInput
 from sglang.srt.managers.scheduler import Scheduler
@@ -41,6 +42,15 @@ def run():
     # # sync weights between actor and rollout, support several format: DTensor and Megatron (sharded)
     # inference_engine.sync_model_weights(actor_weights=state_dict, load_format='dtensor')
 
+    port_args = PortArgs(
+        tokenizer_ipc_name='/tmp/hack_sglang/tokenizer_ipc',
+        scheduler_input_ipc_name='/tmp/hack_sglang/scheduler_input_ipc',
+        detokenizer_ipc_name='/tmp/hack_sglang/detokenizer_ipc',
+        nccl_port=12345,
+    )
+    for p in [port_args.tokenizer_ipc_name, port_args.scheduler_input_ipc_name, port_args.detokenizer_ipc_name]:
+        Path(p).write_text('')
+
     # [Optional] build device mesh for inference engine
     # gen_device_mesh = init_device_mesh('cuda', mesh_shape=(dp_size, tp_size), mesh_dim_names=['dp', 'tp'])
     # build inference engine
@@ -51,12 +61,7 @@ def run():
             tp_size=tp_size,
             dp_size=dp_size,
         ),
-        port_args=PortArgs(
-            tokenizer_ipc_name='/tmp/hack_sglang/tokenizer_ipc',
-            scheduler_input_ipc_name='/tmp/hack_sglang/scheduler_input_ipc',
-            detokenizer_ipc_name='/tmp/hack_sglang/detokenizer_ipc',
-            nccl_port=12345,
-        ),
+        port_args=port_args,
         gpu_id=0,  # TODO
         tp_rank=tp_rank,
         dp_rank=dp_rank,
