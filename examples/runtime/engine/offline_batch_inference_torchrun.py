@@ -21,7 +21,7 @@ def run():
     _log(f'start {local_rank=} {rank=} {world_size=}')
 
     dp_size, tp_size = 2, 4
-    assert world_size == dp_size * tp_size
+    assert world_size == dp_size * tp_size, f'{world_size=}'
 
     dp_rank, tp_rank = divmod(rank, tp_size)
     _log(f'{dp_rank=} {tp_rank=}')
