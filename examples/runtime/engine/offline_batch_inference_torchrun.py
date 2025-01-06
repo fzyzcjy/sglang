@@ -81,7 +81,7 @@ def run():
     _log(f'{input_ids=}')
 
     def hack_send_to_detokenizer_callback(out):
-        _log(f'hack_send_to_detokenizer_callback {hf_tokenizer.decode(out.decode_ids)=}')
+        _log(f'hack_send_to_detokenizer_callback {hf_tokenizer.decode(out.decode_ids[0])=}')
 
     inference_engine.hack_send_to_detokenizer_callback = hack_send_to_detokenizer_callback
 
