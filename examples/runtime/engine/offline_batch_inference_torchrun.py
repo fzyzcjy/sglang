@@ -78,7 +78,7 @@ def run():
     # inference_engine.update_parallel_state(TP=device_mesh["tp"])
 
     input_text = "Today is a sunny day and I like"
-    input_ids = hf_tokenizer(input_text)['input_ids'][0].tolist()
+    input_ids = hf_tokenizer(input_text)['input_ids']
     _log(f'{input_ids=}')
 
     def hack_send_to_detokenizer_callback(out):
