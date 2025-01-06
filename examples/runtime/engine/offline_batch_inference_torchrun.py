@@ -1,3 +1,4 @@
+from python.sglang.srt.managers.io_struct import TokenizedGenerateReqInput
 from python.sglang.srt.managers.scheduler import Scheduler
 from python.sglang.srt.server_args import ServerArgs, PortArgs
 from torch.distributed.device_mesh import init_device_mesh
@@ -46,7 +47,9 @@ def run():
     # inference_engine.update_parallel_state(TP=device_mesh["tp"])
 
     # generate sequence, it would be better if the output is a list of Tensor not list of list[str]
-    outputs = inference_engine.generate(prompt_token_ids=idx_list, sampling_params=sampling_params, use_tqdm=False)
+    outputs = inference_engine.handle_generate_request(TokenizedGenerateReqInput(
+        TODO=TODO,
+    ))
 
     # already done in old PR, waiting for merging
     # # offload kvcache after generation
