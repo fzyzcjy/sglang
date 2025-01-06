@@ -9,6 +9,7 @@ from transformers import AutoTokenizer
 from verl.distributed import initialize_global_process_group
 
 
+# TODO big refactor sglang system after poc
 def run():
     # build distributed world
     local_rank, rank, world_size = initialize_global_process_group()
