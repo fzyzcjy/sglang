@@ -1,10 +1,10 @@
 import datetime
 import time
 
-from python.sglang.srt.managers.io_struct import TokenizedGenerateReqInput
-from python.sglang.srt.managers.scheduler import Scheduler
-from python.sglang.srt.sampling.sampling_params import SamplingParams
-from python.sglang.srt.server_args import ServerArgs, PortArgs
+from sglang.srt.managers.io_struct import TokenizedGenerateReqInput
+from sglang.srt.managers.scheduler import Scheduler
+from sglang.srt.sampling.sampling_params import SamplingParams
+from sglang.srt.server_args import ServerArgs, PortArgs
 from transformers import AutoTokenizer
 from verl.distributed import initialize_global_process_group
 
