@@ -4,7 +4,6 @@ from python.sglang.srt.managers.io_struct import TokenizedGenerateReqInput
 from python.sglang.srt.managers.scheduler import Scheduler
 from python.sglang.srt.sampling.sampling_params import SamplingParams
 from python.sglang.srt.server_args import ServerArgs, PortArgs
-from torch.distributed.device_mesh import init_device_mesh
 from transformers import AutoTokenizer
 from verl.distributed import initialize_global_process_group
 
@@ -13,6 +12,11 @@ from verl.distributed import initialize_global_process_group
 def run():
     # build distributed world
     local_rank, rank, world_size = initialize_global_process_group()
+
+    dp_size, tp_size = 2, 4
+    assert world_size == dp_size * tp_size
+
+    dp_rank, tp_rank = divmod(rank, tp_size)
 
     model_name = "meta-llama/Llama-3.2-1B-Instruct"
     hf_tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -30,9 +34,7 @@ def run():
     # inference_engine.sync_model_weights(actor_weights=state_dict, load_format='dtensor')
 
     # [Optional] build device mesh for inference engine
-    dp_size, tp_size = 2, 4
-    assert world_size == dp_size * tp_size
-    gen_device_mesh = init_device_mesh('cuda', mesh_shape=(dp_size, tp_size), mesh_dim_names=['dp', 'tp'])
+    # gen_device_mesh = init_device_mesh('cuda', mesh_shape=(dp_size, tp_size), mesh_dim_names=['dp', 'tp'])
     # build inference engine
     inference_engine = Scheduler(
         server_args=ServerArgs(
@@ -48,8 +50,8 @@ def run():
             nccl_port=12345,
         ),
         gpu_id=0,  # TODO
-        tp_rank=TODO,
-        dp_rank=TODO,
+        tp_rank=tp_rank,
+        dp_rank=dp_rank,
     )
 
     # moved to above
