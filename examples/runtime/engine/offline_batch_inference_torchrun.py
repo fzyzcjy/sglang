@@ -32,7 +32,9 @@ def run():
     dp_rank, tp_rank = divmod(rank, tp_size)
     _log(f'{dp_rank=} {tp_rank=}')
 
-    model_name = "meta-llama/Llama-3.2-1B-Instruct"
+    # model_name = "meta-llama/Llama-3.2-1B-Instruct"
+    model_name = "meta-llama/Llama-3.1-70B-Instruct"
+
     hf_tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     # `sync_model_weights` not in this PR
