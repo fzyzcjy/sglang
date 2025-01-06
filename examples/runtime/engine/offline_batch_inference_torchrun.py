@@ -32,8 +32,8 @@ def run():
     dp_rank, tp_rank = divmod(rank, tp_size)
     _log(f'{dp_rank=} {tp_rank=}')
 
-    # model_name = "meta-llama/Llama-3.2-1B-Instruct"
-    model_name = "meta-llama/Llama-3.1-70B-Instruct"
+    # model_name, mem_fraction_static = "meta-llama/Llama-3.2-1B-Instruct", 0.1
+    model_name, mem_fraction_static = "meta-llama/Llama-3.1-70B-Instruct", 0.9
 
     hf_tokenizer = AutoTokenizer.from_pretrained(model_name)
 
@@ -57,7 +57,7 @@ def run():
     inference_engine = Scheduler(
         server_args=ServerArgs(
             model_path=model_name,
-            mem_fraction_static=0.1,
+            mem_fraction_static=mem_fraction_static,
             tp_size=tp_size,
             dp_size=dp_size,
         ),
