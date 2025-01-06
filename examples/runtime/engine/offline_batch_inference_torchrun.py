@@ -21,7 +21,8 @@ def run():
 
     _log(f'start {local_rank=} {rank=} {world_size=} {sys.argv=}')
 
-    dp_size, tp_size = 2, 4
+    # TODO support dp>1
+    dp_size, tp_size = 1, 4
     assert world_size == dp_size * tp_size, f'{world_size=}'
 
     dp_rank, tp_rank = divmod(rank, tp_size)
@@ -43,7 +44,7 @@ def run():
     # inference_engine.sync_model_weights(actor_weights=state_dict, load_format='dtensor')
 
     name = sys.argv[1]
-   
+
     # [Optional] build device mesh for inference engine
     # gen_device_mesh = init_device_mesh('cuda', mesh_shape=(dp_size, tp_size), mesh_dim_names=['dp', 'tp'])
     # build inference engine
