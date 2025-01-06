@@ -36,7 +36,7 @@ def run():
             detokenizer_ipc_name=TODO,
             nccl_port=TODO,
         ),
-        gpu_id=TODO,
+        gpu_id=0,  # TODO
         tp_rank=TODO,
         dp_rank=TODO,
     )
