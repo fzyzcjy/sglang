@@ -63,7 +63,8 @@ def run():
         ),
         gpu_id=0,  # TODO
         tp_rank=tp_rank,
-        dp_rank=dp_rank,
+        dp_rank=None,  # TODO
+        # dp_rank=dp_rank,
     )
     _log(f'{inference_engine=}')
 
