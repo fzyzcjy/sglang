@@ -3,6 +3,7 @@ import os
 import sys
 import time
 
+import torch
 from sglang.srt.managers.io_struct import TokenizedGenerateReqInput
 from sglang.srt.managers.scheduler import Scheduler
 from sglang.srt.sampling.sampling_params import SamplingParams
@@ -23,6 +24,8 @@ def run():
 
     # hack
     os.environ['CUDA_VISIBLE_DEVICES'] = str(rank)
+    torch.cuda.set_device(rank)
+    _log(f"now {os.environ['CUDA_VISIBLE_DEVICES']=}")
 
     # TODO support dp>1
     dp_size, tp_size = 1, 4
