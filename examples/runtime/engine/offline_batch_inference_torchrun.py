@@ -41,10 +41,10 @@ def run():
             dp_size=dp_size,
         ),
         port_args=PortArgs(
-            tokenizer_ipc_name=TODO,
-            scheduler_input_ipc_name=TODO,
-            detokenizer_ipc_name=TODO,
-            nccl_port=TODO,
+            tokenizer_ipc_name='/tmp/hack_sglang/tokenizer_ipc',
+            scheduler_input_ipc_name='/tmp/hack_sglang/scheduler_input_ipc',
+            detokenizer_ipc_name='/tmp/hack_sglang/detokenizer_ipc',
+            nccl_port=12345,
         ),
         gpu_id=0,  # TODO
         tp_rank=TODO,
