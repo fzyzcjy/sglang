@@ -85,13 +85,16 @@ def run():
 
     inference_engine.hack_send_to_detokenizer_callback = hack_send_to_detokenizer_callback
 
+    sampling_params = SamplingParams()
+    sampling_params.normalize(tokenizer=None, max_new_tokens=16)
+
     # generate sequence, it would be better if the output is a list of Tensor not list of list[str]
     inference_engine.handle_generate_request(TokenizedGenerateReqInput(
         rid='req-0',  # TODO when multi req, handle this
         input_text=input_text,
         input_ids=input_ids,
         image_inputs=None,
-        sampling_params=SamplingParams(),
+        sampling_params=sampling_params,
         return_logprob=False,
         logprob_start_len=0,
         top_logprobs_num=0,
