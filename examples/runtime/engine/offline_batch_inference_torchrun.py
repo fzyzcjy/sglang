@@ -21,6 +21,9 @@ def run():
 
     _log(f'start {local_rank=} {rank=} {world_size=} {sys.argv=} {os.environ.get("CUDA_VISIBLE_DEVICES")}')
 
+    # hack
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(rank)
+
     # TODO support dp>1
     dp_size, tp_size = 1, 4
     assert world_size == dp_size * tp_size, f'{world_size=}'
