@@ -6,6 +6,7 @@ from python.sglang.srt.sampling.sampling_params import SamplingParams
 from python.sglang.srt.server_args import ServerArgs, PortArgs
 from torch.distributed.device_mesh import init_device_mesh
 from transformers import AutoTokenizer
+from verl.distributed import initialize_global_process_group
 
 
 def run():
@@ -29,6 +30,7 @@ def run():
 
     # [Optional] build device mesh for inference engine
     dp_size, tp_size = 2, 4
+    assert world_size == dp_size * tp_size
     gen_device_mesh = init_device_mesh('cuda', mesh_shape=(dp_size, tp_size), mesh_dim_names=['dp', 'tp'])
     # build inference engine
     inference_engine = Scheduler(
@@ -73,7 +75,7 @@ def run():
         top_logprobs_num=0,
         stream=True,  # TODO ?
     ))
-  
+
     print('sleep')
     time.sleep(10)
 
