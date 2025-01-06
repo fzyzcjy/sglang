@@ -1,4 +1,5 @@
 from python.sglang.srt.managers.scheduler import Scheduler
+from python.sglang.srt.server_args import ServerArgs, PortArgs
 
 
 def run():
@@ -21,18 +22,26 @@ def run():
     gen_device_mesh = init_device_mesh('cuda', mesh_shape=(2, 4), mesh_dim_names=['dp', 'tp'])
     # build inference engine
     inference_engine = Scheduler(
-        model_hf_config=actor_model_config,
-        tensor_parallel_size=tensor_model_parallel_size,
-        pipeline_parallel_size=pipeline_parallel_size,  # if any
-        enforce_eager=False,  # use cuda graph with offload KVCache and weight
-        dtype='bfloat16',
-        load_format='dummy_dtensor',  # initialize dummy weight
-        gpu_memory_utilization=0.1,
-        trust_remote_code=True,
+        server_args=ServerArgs(
+            model_path="meta-llama/Llama-3.2-1B-Instruct",
+            mem_fraction_static=0.1,
+            tp_size=TODO,
+            dp_size=TODO,
+        ),
+        port_args=PortArgs(
+            tokenizer_ipc_name=TODO,
+            scheduler_input_ipc_name=TODO,
+            detokenizer_ipc_name=TODO,
+            nccl_port=TODO,
+        ),
+        gpu_id=TODO,
+        tp_rank=gen_device_mesh["tp"],
+        dp_rank=gen_device_mesh["dp"],
     )
 
-    # [Optional] update parallel state in SGLang for 3D-HybridEngine
-    inference_engine.update_parallel_state(TP=device_mesh["tp"])
+    # moved to above
+    # # [Optional] update parallel state in SGLang for 3D-HybridEngine
+    # inference_engine.update_parallel_state(TP=device_mesh["tp"])
 
     # generate sequence, it would be better if the output is a list of Tensor not list of list[str]
     outputs = inference_engine.generate(prompt_token_ids=idx_list, sampling_params=sampling_params, use_tqdm=False)
