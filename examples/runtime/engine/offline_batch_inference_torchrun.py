@@ -1,5 +1,6 @@
 from python.sglang.srt.managers.scheduler import Scheduler
 from python.sglang.srt.server_args import ServerArgs, PortArgs
+from torch.distributed.device_mesh import init_device_mesh
 
 
 def run():
@@ -19,14 +20,15 @@ def run():
     # inference_engine.sync_model_weights(actor_weights=state_dict, load_format='dtensor')
 
     # [Optional] build device mesh for inference engine
-    gen_device_mesh = init_device_mesh('cuda', mesh_shape=(2, 4), mesh_dim_names=['dp', 'tp'])
+    dp_size, tp_size = 2, 4
+    gen_device_mesh = init_device_mesh('cuda', mesh_shape=(dp_size, tp_size), mesh_dim_names=['dp', 'tp'])
     # build inference engine
     inference_engine = Scheduler(
         server_args=ServerArgs(
             model_path="meta-llama/Llama-3.2-1B-Instruct",
             mem_fraction_static=0.1,
-            tp_size=TODO,
-            dp_size=TODO,
+            tp_size=tp_size,
+            dp_size=dp_size,
         ),
         port_args=PortArgs(
             tokenizer_ipc_name=TODO,
@@ -35,8 +37,8 @@ def run():
             nccl_port=TODO,
         ),
         gpu_id=TODO,
-        tp_rank=gen_device_mesh["tp"],
-        dp_rank=gen_device_mesh["dp"],
+        tp_rank=TODO,
+        dp_rank=TODO,
     )
 
     # moved to above
