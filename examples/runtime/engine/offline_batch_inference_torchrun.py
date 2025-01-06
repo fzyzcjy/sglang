@@ -1,5 +1,6 @@
 from python.sglang.srt.managers.io_struct import TokenizedGenerateReqInput
 from python.sglang.srt.managers.scheduler import Scheduler
+from python.sglang.srt.sampling.sampling_params import SamplingParams
 from python.sglang.srt.server_args import ServerArgs, PortArgs
 from torch.distributed.device_mesh import init_device_mesh
 
@@ -48,7 +49,15 @@ def run():
 
     # generate sequence, it would be better if the output is a list of Tensor not list of list[str]
     outputs = inference_engine.handle_generate_request(TokenizedGenerateReqInput(
-        TODO=TODO,
+        rid=TODO,
+        input_text=TODO,
+        input_ids=TODO,
+        image_inputs={},
+        sampling_params=SamplingParams(),
+        return_logprob=False,
+        logprob_start_len=0,
+        top_logprobs_num=0,
+        stream=True,  # TODO ?
     ))
 
     # already done in old PR, waiting for merging
