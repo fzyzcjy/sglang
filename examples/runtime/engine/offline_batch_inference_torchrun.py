@@ -1,4 +1,5 @@
 import datetime
+import os
 import time
 
 from sglang.srt.managers.io_struct import TokenizedGenerateReqInput
@@ -6,7 +7,6 @@ from sglang.srt.managers.scheduler import Scheduler
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.srt.server_args import ServerArgs, PortArgs
 from transformers import AutoTokenizer
-from verl.distributed import initialize_global_process_group
 
 
 # TODO big refactor sglang system after poc
@@ -98,6 +98,20 @@ def run():
     # inference_engine.free_kvcache()  # inference_engine.init_kvcache()
     # # offload model
     # inference_engine.offload_model_weights()  # inference_engine.load_model_weights(), we can simply re-init them
+
+
+# NOTE COPIED FROM verl
+def initialize_global_process_group(timeout_second=36000):
+    import torch.distributed
+    from datetime import timedelta
+    torch.distributed.init_process_group('nccl', timeout=timedelta(seconds=timeout_second))
+    local_rank = int(os.environ["LOCAL_RANK"])
+    rank = int(os.environ["RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+
+    if torch.distributed.is_initialized():
+        torch.cuda.set_device(local_rank)
+    return local_rank, rank, world_size
 
 
 if __name__ == '__main__':
