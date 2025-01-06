@@ -66,7 +66,7 @@ def run():
             detokenizer_ipc_name=f'/tmp/{name}/detokenizer_ipc',
             nccl_port=12345,
         ),
-        gpu_id=0,  # TODO
+        gpu_id=local_rank,  # TODO
         tp_rank=tp_rank,
         dp_rank=None,  # TODO
         # dp_rank=dp_rank,
