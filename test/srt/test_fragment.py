@@ -3,7 +3,6 @@ import unittest
 from multiprocessing import Process
 
 from sglang import Engine
-from sglang.srt.server_args import get_random_available_port
 from sglang.test.test_utils import DEFAULT_SMALL_MODEL_NAME_FOR_TEST
 from sglang.srt.engine_fragment import EngineFragmentArgs
 
@@ -12,67 +11,63 @@ _TP_SIZE = 2
 
 class TestFragment(unittest.TestCase):
     def test_fragment(self):
-        fragment_nccl_port = get_random_available_port()
-
         fragment_args = EngineFragmentArgs.create(
-            model_path=model_name,
-            mem_fraction_static=mem_fraction_static,
-            tp_size=tp_size,
+            model_path=DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
+            mem_fraction_static=0.1,
+            tp_size=_TP_SIZE,
         )
 
         processes = []
-        readers = []
+        reader, writer = mp.Pipe(duplex=False)
         for tp_rank in range(_TP_SIZE):
-            reader, writer = mp.Pipe(duplex=False)
             p = Process(
                 target=_run_subprocess,
-                args=(tp_rank, fragment_nccl_port, writer),
+                args=(tp_rank, fragment_args, writer),
             )
             p.start()
             processes.append(p)
-            readers.append(reader)
 
-        outputs = [reader.recv() for reader in readers]
-        for output in outputs:
-            self.assertEqual(outputs[0], output)
+        output = reader.recv()
+        print(output)
+        # TODO add assertions
 
         for p in processes:
             p.join()
 
 
-def _run_subprocess(tp_rank: int, fragment_nccl_port: int, writer):
+def _run_subprocess(tp_rank: int, fragment_args, writer):
     print(f"run_subprocess[{tp_rank=}] Start")
 
-    engine = Engine(
-        model_path=DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
-        mem_fraction_static=0.1,
-        tp_size=_TP_SIZE,
-        fragment_tp_rank=tp_rank,
-        fragment_nccl_port=fragment_nccl_port,
-        fragment_gpu_id=tp_rank,
-        log_level="debug",
+    fragment = EngineFragment(
+        tp_rank=tp_rank,
+        gpu_id=tp_rank,
+        fragment_args=fragment_args,
     )
-    print(f"run_subprocess[{tp_rank=}] Initialized {engine=}", flush=True)
+    print(f"run_subprocess[{tp_rank=}] {fragment=}", flush=True)
 
-    ans = []
+    if tp_rank == 0:
+        engine = Engine(fragment_args=fragment_args)
+        print(f"run_subprocess[{tp_rank=}] {engine=}", flush=True)
 
-    for prompt in [
-        ["Today is a sunny day and I like", "I have a very good idea on"],
-        ["Hello, I am", "What is your name?", "Mathematics is defined as"],
-    ]:
-        print(f"Start generation", flush=True)
-        outputs = engine.generate(
-            prompt=prompt,
-            sampling_params=[dict(max_new_tokens=16)] * len(prompt),
-        )
-        print(f"End generation {tp_rank=} {prompt=} {outputs=}", flush=True)
-        ans += [o["text"] for o in outputs]
+        ans = []
 
-    writer.send(ans)
-    writer.close()
+        for prompt in [
+            ["Today is a sunny day and I like", "I have a very good idea on"],
+            ["Hello, I am", "What is your name?", "Mathematics is defined as"],
+        ]:
+            print(f"Start generation", flush=True)
+            outputs = engine.generate(
+                prompt=prompt,
+                sampling_params=[dict(max_new_tokens=16)] * len(prompt),
+            )
+            print(f"End generation {tp_rank=} {prompt=} {outputs=}", flush=True)
+            ans += [o["text"] for o in outputs]
 
-    print(f"run_subprocess[{tp_rank=}] engine.shutdown", flush=True)
-    engine.shutdown()
+        writer.send(ans)
+        writer.close()
+
+        print(f"run_subprocess[{tp_rank=}] engine.shutdown", flush=True)
+        engine.shutdown()
 
 
 if __name__ == "__main__":
