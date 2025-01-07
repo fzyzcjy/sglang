@@ -3,6 +3,7 @@ import os
 import sys
 
 from sglang import Engine
+from sglang.srt.engine_fragment import EngineFragment
 
 
 def run():
