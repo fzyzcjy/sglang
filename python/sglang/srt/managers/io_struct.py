@@ -494,8 +494,3 @@ class CloseSessionReqInput:
 class OpenSessionReqOutput:
     session_id: Optional[str]
     success: bool
-
-@dataclass
-class SchedulerReadyOutput:
-    status: str
-    max_total_num_tokens: int

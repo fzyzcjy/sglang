@@ -52,8 +52,7 @@ from sglang.srt.managers.io_struct import (
     UpdateWeightsFromDistributedReqInput,
     UpdateWeightsFromDistributedReqOutput,
     UpdateWeightsFromTensorReqInput,
-    UpdateWeightsFromTensorReqOutput, SchedulerReadyOutput,
-)
+    UpdateWeightsFromTensorReqOutput, )
 from sglang.srt.managers.schedule_batch import (
     FINISH_ABORT,
     BaseFinishReason,
@@ -1609,7 +1608,9 @@ def run_scheduler_process(
     # Create a scheduler and run the event loop
     try:
         scheduler = Scheduler(server_args, port_args, gpu_id, tp_rank, dp_rank)
-        pipe_writer.send(SchedulerReadyOutput(status='ready', max_total_num_tokens=scheduler.max_total_num_tokens))
+        pipe_writer.send(
+            {"status": "ready", "max_total_num_tokens": scheduler.max_total_num_tokens}
+        )
         if scheduler.enable_overlap:
             scheduler.event_loop_overlap()
         else:
