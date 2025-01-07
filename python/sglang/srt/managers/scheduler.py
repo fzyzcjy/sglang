@@ -1529,14 +1529,21 @@ class Scheduler:
 
     def update_weights_from_tensor(self, recv_req: UpdateWeightsFromTensorReqInput):
         """Update the online model parameter from tensors."""
+
         success, message = self.tp_worker.update_weights_from_tensor(recv_req)
+
         # TODO extract common code b/t update_weights_from_distributed and update_weights_from_tensor later
         if success:
             flash_cache_success = self.flush_cache()
             assert flash_cache_success, "Cache flush failed after updating weights"
         else:
             logger.error(message)
-        return UpdateWeightsFromTensorReqOutput(success, message)
+
+        output_sender = {
+            'tokenizer': self.send_to_tokenizer.send_pyobj,
+            'fragment': self.fragment_scheduler_pipe.send,
+        }[recv_req.source]
+        output_sender(UpdateWeightsFromTensorReqOutput(success, message))
 
     def get_weights_by_name(self, recv_req: GetWeightsByNameReqInput):
         parameter = self.tp_worker.get_weights_by_name(recv_req)

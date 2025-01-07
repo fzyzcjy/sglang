@@ -19,7 +19,7 @@ processes (TokenizerManager, DetokenizerManager, Controller).
 import uuid
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union, Literal
 
 import torch
 
@@ -424,15 +424,18 @@ class UpdateWeightsFromDistributedReqOutput:
     success: bool
     message: str
 
+UpdateWeightsFromTensorReqInputSource = Literal['tokenizer', 'fragment']
 
 @dataclass
 class UpdateWeightsFromTensorReqInput:
     serialized_named_tensors: bytes  # indeed Dict[str, torch.Tensor]
+    source: UpdateWeightsFromTensorReqInputSource
 
     @staticmethod
-    def init_new(named_tensors: List[Tuple[str, torch.Tensor]]):
+    def init_new(named_tensors: List[Tuple[str, torch.Tensor]], source: UpdateWeightsFromTensorReqInputSource):
         return UpdateWeightsFromTensorReqInput(
-            serialized_named_tensors=MultiprocessingSerializer.serialize(named_tensors)
+            serialized_named_tensors=MultiprocessingSerializer.serialize(named_tensors),
+            source=source,
         )
 
 

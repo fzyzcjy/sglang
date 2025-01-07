@@ -39,6 +39,6 @@ class EngineFragment:
 
     def update_weights_from_tensor(self, named_tensors: List[Tuple[str, torch.Tensor]]):
         """Update weights from tensor directly."""
-        obj = UpdateWeightsFromTensorReqInput.init_new(named_tensors)
+        obj = UpdateWeightsFromTensorReqInput.init_new(named_tensors, 'fragment')
         self._fragment_scheduler_pipe.send(obj)
         return TODO
