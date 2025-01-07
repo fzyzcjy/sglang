@@ -4,6 +4,7 @@ import sys
 
 from sglang import Engine
 from sglang.srt.engine_fragment import EngineFragment
+from sglang.srt.engine_fragment import EngineFragmentArgs
 
 
 def run():
@@ -57,19 +58,21 @@ def run():
     ]:
         del os.environ[k]
 
+    fragment_args = EngineFragmentArgs.create(
+        model_path=model_name,
+        mem_fraction_static=mem_fraction_static,
+        tp_size=tp_size,
+    )
+
     fragment = EngineFragment(
         tp_rank=tp_rank,
         gpu_id=tp_rank,
+        fragment_args=fragment_args,
     )
     _log(f"{fragment=}")
 
     if tp_rank == 0:
-        engine = Engine(
-            model_path=model_name,
-            mem_fraction_static=mem_fraction_static,
-            tp_size=tp_size,
-            fragment=TODO,
-        )
+        engine = Engine(fragment_args=fragment_args)
         _log(f"{engine=}")
 
         output = engine.generate(
