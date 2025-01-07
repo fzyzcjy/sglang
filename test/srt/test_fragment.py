@@ -3,6 +3,7 @@ import unittest
 from multiprocessing import Process
 
 from sglang import Engine
+from sglang.srt.engine_fragment import EngineFragment
 from sglang.srt.server_args import EngineFragmentArgs
 from sglang.test.test_utils import DEFAULT_SMALL_MODEL_NAME_FOR_TEST
 
@@ -15,6 +16,7 @@ class TestFragment(unittest.TestCase):
             model_path=DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
             mem_fraction_static=0.1,
             tp_size=_TP_SIZE,
+            random_seed=42,
         )
 
         processes = []
@@ -38,7 +40,7 @@ class TestFragment(unittest.TestCase):
 def _run_subprocess(tp_rank: int, fragment_args, writer):
     print(f"run_subprocess[{tp_rank=}] Start")
 
-    fragment = EngineFragment.init_new(
+    fragment = EngineFragment(
         tp_rank=tp_rank,
         gpu_id=tp_rank,
         fragment_args=fragment_args,
