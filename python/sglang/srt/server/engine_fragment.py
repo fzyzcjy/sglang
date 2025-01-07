@@ -6,7 +6,6 @@ from sglang.srt.managers.io_struct import UpdateWeightsFromTensorReqInput
 from sglang.srt.managers.scheduler import run_scheduler_process
 from sglang.srt.server.subprocess_launcher import _set_envs_and_config
 from sglang.srt.server_args import EngineFragmentArgs
-from sglang.srt.utils import create_zmq_ipc_name
 
 
 class EngineFragment:
@@ -37,8 +36,15 @@ class EngineFragment:
         )
         self._proc.start()
 
+        TODO_start_handle_loop
+        TODO_maybe_not_pipe_but_zmq  # since pipe cannot *async* recv
+
     def update_weights_from_tensor(self, named_tensors: List[Tuple[str, torch.Tensor]]):
         """Update weights from tensor directly."""
         obj = UpdateWeightsFromTensorReqInput.init_new(named_tensors, 'fragment')
         self._fragment_scheduler_pipe.send(obj)
         return TODO
+
+    async def _handle_loop(self):
+        while True:
+            self._dispatcher(self._fragment_scheduler_pipe.recv())
