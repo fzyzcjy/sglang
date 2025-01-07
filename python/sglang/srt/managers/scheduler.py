@@ -1585,6 +1585,7 @@ def run_scheduler_process(
         gpu_id: int,
         tp_rank: int,
         dp_rank: Optional[int],
+        pipe_writer,
 ):
     setproctitle.setproctitle("sglang::scheduler")
 
