@@ -228,14 +228,15 @@ class DataParallelController:
 def run_data_parallel_controller_process(
     server_args: ServerArgs,
     port_args: PortArgs,
-    pipe_writer,
+    ready_ipc_name,
 ):
     configure_logger(server_args)
     parent_process = psutil.Process().parent()
+    ready_sender = get_zmq_socket(zmq.Context(1), zmq.PUSH, ready_ipc_name)
 
     try:
         controller = DataParallelController(server_args, port_args)
-        pipe_writer.send(
+        ready_sender.send_pyobj(
             {"status": "ready", "max_total_num_tokens": controller.max_total_num_tokens}
         )
         controller.event_loop()

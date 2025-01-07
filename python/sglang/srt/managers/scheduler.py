@@ -1584,7 +1584,7 @@ def run_scheduler_process(
         gpu_id: int,
         tp_rank: int,
         dp_rank: Optional[int],
-        pipe_writer,
+        ready_ipc_name,
 ):
     setproctitle.setproctitle("sglang::scheduler")
 
@@ -1604,11 +1604,12 @@ def run_scheduler_process(
         set_gpu_proc_affinity(server_args.tp_size, server_args.nnodes, gpu_id)
 
     parent_process = psutil.Process().parent()
+    ready_sender = get_zmq_socket(zmq.Context(1), zmq.PUSH, ready_ipc_name)
 
     # Create a scheduler and run the event loop
     try:
         scheduler = Scheduler(server_args, port_args, gpu_id, tp_rank, dp_rank)
-        pipe_writer.send(
+        ready_sender.send_pyobj(
             {"status": "ready", "max_total_num_tokens": scheduler.max_total_num_tokens}
         )
         if scheduler.enable_overlap:
