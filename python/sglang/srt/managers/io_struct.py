@@ -497,4 +497,5 @@ class OpenSessionReqOutput:
 
 @dataclass
 class SchedulerReadyOutput:
-    pass
+    status: str
+    max_total_num_tokens: int
