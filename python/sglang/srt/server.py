@@ -507,16 +507,17 @@ def _start_scheduler_or_dp_controller_processes(port_args, server_args):
             # so they can just wait here.
             for proc in scheduler_procs:
                 proc.join()
+
+        return scheduler_pipe_readers, scheduler_procs
     else:
         # Launch the data parallel controller
         reader, writer = mp.Pipe(duplex=False)
-        scheduler_pipe_readers = [reader]
         proc = mp.Process(
             target=run_data_parallel_controller_process,
             args=(server_args, port_args, writer),
         )
         proc.start()
-    return scheduler_pipe_readers, scheduler_procs
+        return [reader], [proc]
 
 
 def launch_server(
