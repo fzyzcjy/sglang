@@ -58,7 +58,7 @@ def run():
     ]:
         del os.environ[k]
 
-    fragment_args = EngineFragmentArgs.create(
+    fragment_args = EngineFragmentArgs.init_new(
         model_path=model_name,
         mem_fraction_static=mem_fraction_static,
         tp_size=tp_size,

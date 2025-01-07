@@ -4,6 +4,7 @@ from typing import List
 
 from sglang.srt.managers.scheduler import run_scheduler_process
 from sglang.srt.server_args import ServerArgs, PortArgs
+from sglang.srt.utils import create_zmq_ipc_name
 
 
 class EngineFragment:
@@ -31,4 +32,13 @@ class EngineFragment:
 class EngineFragmentArgs:
     server_args: ServerArgs
     port_args: PortArgs
-    scheduler_ready_ipc_names: List[str]  # TODO how to stably create?
+    scheduler_ready_ipc_names: List[str]
+
+    @staticmethod
+    def init_new(log_level: str = "error", *args, **kwargs) -> 'EngineFragmentArgs':
+        server_args = ServerArgs(*args, log_level=log_level, **kwargs)
+        return EngineFragmentArgs(
+            server_args=server_args,
+            port_args=PortArgs.init_new(server_args),
+            scheduler_ready_ipc_names=[create_zmq_ipc_name() for _ in range(server_args.tp_size)],
+        )
