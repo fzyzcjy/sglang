@@ -3,7 +3,7 @@ import unittest
 from multiprocessing import Process
 
 from sglang import Engine
-from sglang.srt.engine_fragment import EngineFragmentArgs
+from sglang.srt.server_args import EngineFragmentArgs
 from sglang.test.test_utils import DEFAULT_SMALL_MODEL_NAME_FOR_TEST
 
 _TP_SIZE = 2
