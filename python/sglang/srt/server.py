@@ -86,13 +86,15 @@ from sglang.srt.utils import (
     add_prometheus_middleware,
     assert_pkg_version,
     configure_logger,
+    create_zmq_ipc_name,
     delete_directory,
+    get_zmq_socket,
     is_port_available,
     kill_process_tree,
     maybe_set_triton_cache_manager,
     prepare_model_and_tokenizer,
     set_prometheus_multiproc_dir,
-    set_ulimit, create_zmq_ipc_name, get_zmq_socket,
+    set_ulimit,
 )
 from sglang.utils import get_exception_traceback
 from sglang.version import __version__
@@ -172,7 +174,7 @@ async def flush_cache():
     tokenizer_manager.flush_cache()
     return Response(
         content="Cache flushed.\nPlease check backend logs for more details. "
-                "(When there are running or waiting requests, the operation will not be performed.)\n",
+        "(When there are running or waiting requests, the operation will not be performed.)\n",
         status_code=200,
     )
 
@@ -219,7 +221,7 @@ async def update_weights_from_disk(obj: UpdateWeightFromDiskReqInput, request: R
 
 @app.post("/init_weights_update_group")
 async def init_weights_update_group(
-        obj: InitWeightsUpdateGroupReqInput, request: Request
+    obj: InitWeightsUpdateGroupReqInput, request: Request
 ):
     """Initialize the parameter update group."""
     success, message = await tokenizer_manager.init_weights_update_group(obj, request)
@@ -232,7 +234,7 @@ async def init_weights_update_group(
 
 @app.post("/update_weights_from_distributed")
 async def update_weights_from_distributed(
-        obj: UpdateWeightsFromDistributedReqInput, request: Request
+    obj: UpdateWeightsFromDistributedReqInput, request: Request
 ):
     """Update model parameter from distributed online."""
     success, message = await tokenizer_manager.update_weights_from_distributed(
@@ -418,7 +420,7 @@ def _create_error_response(e):
 
 
 def launch_engine(
-        server_args: ServerArgs,
+    server_args: ServerArgs,
 ):
     """
     Launch the TokenizerManager in the main process, the Scheduler in a subprocess, and the DetokenizerManager in another subprocess.
@@ -441,7 +443,9 @@ def launch_engine(
         server_args.model_path, server_args.tokenizer_path
     )
 
-    ready_receivers, scheduler_procs = _start_scheduler_or_dp_controller_processes(port_args, server_args)
+    ready_receivers, scheduler_procs = _start_scheduler_or_dp_controller_processes(
+        port_args, server_args
+    )
 
     # Launch detokenizer process
     detoken_proc = mp.Process(
@@ -524,8 +528,8 @@ def _start_scheduler_or_dp_controller_processes(port_args, server_args):
 
 
 def launch_server(
-        server_args: ServerArgs,
-        pipe_finish_writer: Optional[mp.connection.Connection] = None,
+    server_args: ServerArgs,
+    pipe_finish_writer: Optional[mp.connection.Connection] = None,
 ):
     """
     Launch SRT (SGLang Runtime) Server
@@ -717,17 +721,17 @@ class Engine:
         launch_engine(server_args=server_args)
 
     def generate(
-            self,
-            # The input prompt. It can be a single prompt or a batch of prompts.
-            prompt: Optional[Union[List[str], str]] = None,
-            sampling_params: Optional[Union[List[Dict], Dict]] = None,
-            # The token ids for text; one can either specify text or input_ids.
-            input_ids: Optional[Union[List[List[int]], List[int]]] = None,
-            return_logprob: Optional[Union[List[bool], bool]] = False,
-            logprob_start_len: Optional[Union[List[int], int]] = None,
-            top_logprobs_num: Optional[Union[List[int], int]] = None,
-            lora_path: Optional[List[Optional[str]]] = None,
-            stream: bool = False,
+        self,
+        # The input prompt. It can be a single prompt or a batch of prompts.
+        prompt: Optional[Union[List[str], str]] = None,
+        sampling_params: Optional[Union[List[Dict], Dict]] = None,
+        # The token ids for text; one can either specify text or input_ids.
+        input_ids: Optional[Union[List[List[int]], List[int]]] = None,
+        return_logprob: Optional[Union[List[bool], bool]] = False,
+        logprob_start_len: Optional[Union[List[int], int]] = None,
+        top_logprobs_num: Optional[Union[List[int], int]] = None,
+        lora_path: Optional[List[Optional[str]]] = None,
+        stream: bool = False,
     ):
         obj = GenerateReqInput(
             text=prompt,
@@ -756,7 +760,7 @@ class Engine:
                     if chunk.startswith(STREAM_END_SYMBOL):
                         break
                     else:
-                        data = json.loads(chunk[len(STREAM_CHUNK_START_SYMBOL):])
+                        data = json.loads(chunk[len(STREAM_CHUNK_START_SYMBOL) :])
                         data["text"] = data["text"][offset:]
                         offset += len(data["text"])
                         yield data
@@ -768,17 +772,17 @@ class Engine:
             return ret
 
     async def async_generate(
-            self,
-            # The input prompt. It can be a single prompt or a batch of prompts.
-            prompt: Optional[Union[List[str], str]] = None,
-            sampling_params: Optional[Dict] = None,
-            # The token ids for text; one can either specify text or input_ids.
-            input_ids: Optional[Union[List[List[int]], List[int]]] = None,
-            return_logprob: Optional[Union[List[bool], bool]] = False,
-            logprob_start_len: Optional[Union[List[int], int]] = None,
-            top_logprobs_num: Optional[Union[List[int], int]] = None,
-            lora_path: Optional[List[Optional[str]]] = None,
-            stream: bool = False,
+        self,
+        # The input prompt. It can be a single prompt or a batch of prompts.
+        prompt: Optional[Union[List[str], str]] = None,
+        sampling_params: Optional[Dict] = None,
+        # The token ids for text; one can either specify text or input_ids.
+        input_ids: Optional[Union[List[List[int]], List[int]]] = None,
+        return_logprob: Optional[Union[List[bool], bool]] = False,
+        logprob_start_len: Optional[Union[List[int], int]] = None,
+        top_logprobs_num: Optional[Union[List[int], int]] = None,
+        lora_path: Optional[List[Optional[str]]] = None,
+        stream: bool = False,
     ):
         obj = GenerateReqInput(
             text=prompt,
@@ -806,7 +810,7 @@ class Engine:
                     if chunk.startswith(STREAM_END_SYMBOL):
                         break
                     else:
-                        data = json.loads(chunk[len(STREAM_CHUNK_START_SYMBOL):])
+                        data = json.loads(chunk[len(STREAM_CHUNK_START_SYMBOL) :])
                         data["text"] = data["text"][offset:]
                         offset += len(data["text"])
                         yield data
@@ -827,8 +831,8 @@ class Engine:
             return tokenizer_manager.tokenizer
 
     def encode(
-            self,
-            prompt: Union[str, List[str], List[Dict], List[List[Dict]]],
+        self,
+        prompt: Union[str, List[str], List[Dict], List[List[Dict]]],
     ):
         obj = EmbeddingReqInput(text=prompt)
 
@@ -850,13 +854,13 @@ class Engine:
         }
 
     def init_weights_update_group(
-            self,
-            master_address: str,
-            master_port: int,
-            rank_offset: int,
-            world_size: int,
-            group_name: str,
-            backend: str = "nccl",
+        self,
+        master_address: str,
+        master_port: int,
+        rank_offset: int,
+        world_size: int,
+        group_name: str,
+        backend: str = "nccl",
     ):
         """Initialize parameter update group."""
         obj = InitWeightsUpdateGroupReqInput(
@@ -912,10 +916,10 @@ class Runtime:
     """
 
     def __init__(
-            self,
-            log_level: str = "error",
-            *args,
-            **kwargs,
+        self,
+        log_level: str = "error",
+        *args,
+        **kwargs,
     ):
         """See the arguments in server_args.py::ServerArgs"""
         self.server_args = ServerArgs(*args, log_level=log_level, **kwargs)
@@ -973,9 +977,9 @@ class Runtime:
         )
 
     async def async_generate(
-            self,
-            prompt: str,
-            sampling_params: Optional[Dict] = None,
+        self,
+        prompt: str,
+        sampling_params: Optional[Dict] = None,
     ):
         if self.server_args.skip_tokenizer_init:
             json_data = {
@@ -1011,13 +1015,13 @@ class Runtime:
     add_request = async_generate
 
     def generate(
-            self,
-            prompt: Union[str, List[str]],
-            sampling_params: Optional[Dict] = None,
-            return_logprob: Optional[Union[List[bool], bool]] = False,
-            logprob_start_len: Optional[Union[List[int], int]] = None,
-            top_logprobs_num: Optional[Union[List[int], int]] = None,
-            lora_path: Optional[List[Optional[str]]] = None,
+        self,
+        prompt: Union[str, List[str]],
+        sampling_params: Optional[Dict] = None,
+        return_logprob: Optional[Union[List[bool], bool]] = False,
+        logprob_start_len: Optional[Union[List[int], int]] = None,
+        top_logprobs_num: Optional[Union[List[int], int]] = None,
+        lora_path: Optional[List[Optional[str]]] = None,
     ):
         json_data = {
             "text": prompt,
@@ -1035,8 +1039,8 @@ class Runtime:
         return json.dumps(response.json())
 
     def encode(
-            self,
-            prompt: Union[str, List[str], List[Dict], List[List[Dict]]],
+        self,
+        prompt: Union[str, List[str], List[Dict], List[List[Dict]]],
     ):
         json_data = {"text": prompt}
         response = requests.post(self.url + "/encode", json=json_data)
