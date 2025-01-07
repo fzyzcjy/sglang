@@ -4,9 +4,11 @@ import traceback
 import unittest
 from multiprocessing import Process
 
+import torch
 from sglang import Engine
 from sglang.srt.server.engine_fragment import EngineFragment
 from sglang.test.test_utils import DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+from test.srt.test_update_weights_from_tensor import check_params_by_get_weights_by_name
 
 _TP_SIZE = 2
 
@@ -85,7 +87,7 @@ def _run_subprocess(tp_rank: int, queue: multiprocessing.Queue, output_writer):
                 outputs = engine.generate(
                     prompt=prompt,
                     sampling_params=[dict(max_new_tokens=16, temperature=0.0)]
-                    * len(prompt),
+                                    * len(prompt),
                 )
                 print(
                     f"subprocess[{tp_rank=}] End generation {tp_rank=} {prompt=} {outputs=}",
@@ -96,6 +98,9 @@ def _run_subprocess(tp_rank: int, queue: multiprocessing.Queue, output_writer):
             output_writer.send(ans)
             output_writer.close()
 
+        _test_update_weights_from_tensor(tp_rank=tp_rank, fragment=fragment)
+
+        if tp_rank == 0:
             print(f"subprocess[{tp_rank=}] engine.shutdown", flush=True)
             engine.shutdown()
 
@@ -110,6 +115,19 @@ def _run_subprocess(tp_rank: int, queue: multiprocessing.Queue, output_writer):
         print(f"subprocess[{tp_rank=}] has error: {e}", flush=True)
         traceback.print_exc()
         raise
+
+
+def _test_update_weights_from_tensor(tp_rank: int, fragment):
+    param_names = [f"model.layers.{i}.mlp.up_proj.weight" for i in range(6, 16)]
+
+    check_params_by_get_weights_by_name(fragment, param_names[0], [0.0087, -0.0214, -0.0004, 0.0039, 0.0110])
+
+    new_tensor = torch.full((16384, 2048), 10.0 + tp_rank)
+    fragment.update_weights_from_tensor([(x, new_tensor) for x in param_names])
+
+    for param_name in param_names[:3]:
+        # TODO get subtensor
+        check_params_by_get_weights_by_name(fragment, param_name, [tp_rank] * 5)
 
 
 if __name__ == "__main__":
