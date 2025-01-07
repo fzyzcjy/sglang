@@ -21,6 +21,7 @@ class EngineFragment:
         _set_envs_and_config(fragment_args.server_args)
 
         pipe_parent, pipe_child = mp.Pipe()
+        self._fragment_scheduler_pipe = pipe_parent
 
         self._proc = mp.Process(
             target=run_scheduler_process,
@@ -39,4 +40,5 @@ class EngineFragment:
     def update_weights_from_tensor(self, named_tensors: List[Tuple[str, torch.Tensor]]):
         """Update weights from tensor directly."""
         obj = UpdateWeightsFromTensorReqInput.init_new(named_tensors)
+        self._fragment_scheduler_pipe.send(obj)
         return TODO
