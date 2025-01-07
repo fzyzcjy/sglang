@@ -11,7 +11,7 @@ _TP_SIZE = 2
 
 class TestFragment(unittest.TestCase):
     def test_fragment(self):
-        fragment_args = EngineFragmentArgs.create(
+        fragment_args = EngineFragmentArgs.init_new(
             model_path=DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
             mem_fraction_static=0.1,
             tp_size=_TP_SIZE,
