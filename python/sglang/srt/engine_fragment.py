@@ -1,6 +1,9 @@
 import multiprocessing as mp
+from dataclasses import dataclass
+from typing import List
 
 from sglang.srt.managers.scheduler import run_scheduler_process
+from sglang.srt.server_args import ServerArgs, PortArgs
 
 
 class EngineFragment:
@@ -21,3 +24,10 @@ class EngineFragment:
             ),
         )
         self._proc.start()
+
+
+@dataclass
+class EngineFragmentArgs:
+    server_args: ServerArgs
+    port_args: PortArgs
+    scheduler_ready_ipc_names: List[str]  # TODO how to stably create?
