@@ -497,14 +497,9 @@ def _start_scheduler_or_dp_controller_processes(port_args, server_args):
             tp_size_per_node * (server_args.node_rank + 1),
         )
         for tp_rank in tp_rank_range:
-            ready_ipc_name = create_zmq_ipc_name()
-            ready_receiver = get_zmq_socket(zmq.Context(1), zmq.PULL, ready_ipc_name)
-            gpu_id = server_args.base_gpu_id + tp_rank % tp_size_per_node
-            proc = mp.Process(
-                target=run_scheduler_process,
-                args=(server_args, port_args, gpu_id, tp_rank, None, ready_ipc_name),
+            proc, ready_receiver = _start_scheduler_process(
+                port_args, server_args, tp_rank, tp_size_per_node
             )
-            proc.start()
             scheduler_procs.append(proc)
             scheduler_ready_receivers.append(ready_receiver)
 
@@ -525,6 +520,20 @@ def _start_scheduler_or_dp_controller_processes(port_args, server_args):
         )
         proc.start()
         return [ready_receiver], [proc]
+
+
+def _start_scheduler_process(
+    port_args, server_args, tp_rank: int, tp_size_per_node: int
+):
+    ready_ipc_name = create_zmq_ipc_name()
+    ready_receiver = get_zmq_socket(zmq.Context(1), zmq.PULL, ready_ipc_name)
+    gpu_id = server_args.base_gpu_id + tp_rank % tp_size_per_node
+    proc = mp.Process(
+        target=run_scheduler_process,
+        args=(server_args, port_args, gpu_id, tp_rank, None, ready_ipc_name),
+    )
+    proc.start()
+    return proc, ready_receiver
 
 
 def launch_server(
