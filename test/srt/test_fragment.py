@@ -1,3 +1,4 @@
+import multiprocessing
 import multiprocessing as mp
 import unittest
 from multiprocessing import Process
@@ -12,6 +13,8 @@ _TP_SIZE = 2
 
 class TestFragment(unittest.TestCase):
     def test_fragment(self):
+        multiprocessing.set_start_method('spawn')
+
         fragment_args = EngineFragmentArgs.init_new(
             model_path=DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
             mem_fraction_static=0.1,
