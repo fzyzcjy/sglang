@@ -56,21 +56,26 @@ def run():
     ]:
         del os.environ[k]
 
-    engine = Engine(
-        model_path=model_name,
-        mem_fraction_static=mem_fraction_static,
-        tp_size=tp_size,
-        fragment_tp_rank=tp_rank,
-        fragment_nccl_port=23456,
-        fragment_gpu_id=tp_rank,
+    fragment = EngineFragment(
+        tp_rank=tp_rank,
+        gpu_id=tp_rank,
     )
-    _log(f"{engine=}")
+    _log(f"{fragment=}")
 
-    output = engine.generate(
-        prompt="1+1=2, 1+2=3, 1+3=4, 1+4=",
-        sampling_params=dict(max_new_tokens=16, temperature=0.0),
-    )
-    _log(f"{output=}")
+    if tp_rank == 0:
+        engine = Engine(
+            model_path=model_name,
+            mem_fraction_static=mem_fraction_static,
+            tp_size=tp_size,
+            fragment=TODO,
+        )
+        _log(f"{engine=}")
+
+        output = engine.generate(
+            prompt="1+1=2, 1+2=3, 1+3=4, 1+4=",
+            sampling_params=dict(max_new_tokens=16, temperature=0.0),
+        )
+        _log(f"{output=}")
 
 
 if __name__ == "__main__":
