@@ -492,6 +492,9 @@ class Scheduler:
             self.last_batch = batch
 
     def recv_requests(self) -> List[Req]:
+        return self._recv_requests_from_tokenizer() + self._recv_requests_from_fragment()
+
+    def _recv_requests_from_tokenizer(self) -> List[Req]:
         """Receive results at tp_rank = 0 and broadcast it to all other TP ranks."""
         if self.tp_rank == 0 or self.server_args.enable_dp_attention:
             recv_reqs = []
@@ -507,6 +510,20 @@ class Scheduler:
 
         if self.tp_size != 1 and not self.server_args.enable_dp_attention:
             recv_reqs = broadcast_pyobj(recv_reqs, self.tp_rank, self.tp_cpu_group)
+        return recv_reqs
+
+    def _recv_requests_from_fragment(self) -> List[Req]:
+        if self.recv_from_fragment is None:
+            return []
+
+        recv_reqs = []
+        while True:
+            try:
+                recv_req = self.recv_from_fragment.recv_pyobj(zmq.NOBLOCK)
+            except zmq.ZMQError:
+                break
+            recv_reqs.append(recv_req)
+
         return recv_reqs
 
     def process_input_requests(self, recv_reqs: List):
