@@ -25,6 +25,7 @@ import torch
 
 from sglang.srt.managers.schedule_batch import BaseFinishReason
 from sglang.srt.sampling.sampling_params import SamplingParams
+from sglang.srt.utils import MultiprocessingSerializer
 
 
 @dataclass
@@ -427,6 +428,12 @@ class UpdateWeightsFromDistributedReqOutput:
 @dataclass
 class UpdateWeightsFromTensorReqInput:
     serialized_named_tensors: bytes  # indeed Dict[str, torch.Tensor]
+
+    @staticmethod
+    def init_new(named_tensors: List[Tuple[str, torch.Tensor]]):
+        return UpdateWeightsFromTensorReqInput(
+            serialized_named_tensors=MultiprocessingSerializer.serialize(named_tensors)
+        )
 
 
 @dataclass

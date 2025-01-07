@@ -274,10 +274,8 @@ class Engine:
         )
 
     def update_weights_from_tensor(self, named_tensors: List[Tuple[str, torch.Tensor]]):
-        """Update weights from distributed source."""
-        obj = UpdateWeightsFromTensorReqInput(
-            serialized_named_tensors=MultiprocessingSerializer.serialize(named_tensors)
-        )
+        """Update weights from tensor directly."""
+        obj = UpdateWeightsFromTensorReqInput.init_new(named_tensors)
         loop = asyncio.get_event_loop()
         return loop.run_until_complete(
             self.tokenizer_manager.update_weights_from_tensor(obj, None)

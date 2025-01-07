@@ -122,6 +122,7 @@ def _test_update_weights_from_tensor(tp_rank: int, fragment):
 
     check_params_by_get_weights_by_name(fragment, param_names[0], [0.0087, -0.0214, -0.0004, 0.0039, 0.0110])
 
+    print(f"subprocess[{tp_rank=}] update_weights_from_tensor", flush=True)
     new_tensor = torch.full((16384, 2048), 10.0 + tp_rank)
     fragment.update_weights_from_tensor([(x, new_tensor) for x in param_names])
 
