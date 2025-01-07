@@ -79,7 +79,7 @@ from sglang.srt.openai_api.adapter import (
     v1_retrieve_file_content,
 )
 from sglang.srt.openai_api.protocol import ModelCard, ModelList
-from sglang.srt.server_args import PortArgs, ServerArgs
+from sglang.srt.server_args import PortArgs, ServerArgs, EngineFragmentArgs
 from sglang.srt.utils import (
     MultiprocessingSerializer,
     add_api_key_middleware,
@@ -723,13 +723,17 @@ class Engine:
     launching the HTTP server adds unnecessary complexity or overhead,
     """
 
-    def __init__(self, log_level: str = "error", *args, **kwargs):
+    def __init__(self, log_level: str = "error", *args, fragment_args: Optional[EngineFragmentArgs] = None, **kwargs):
         """See the arguments in server_args.py::ServerArgs"""
 
         # before python program terminates, call shutdown implicitly. Therefore, users don't have to explicitly call .shutdown()
         atexit.register(self.shutdown)
 
-        server_args = ServerArgs(*args, log_level=log_level, **kwargs)
+        if fragment_args is not None:
+            server_args = fragment_args.server_args
+        else:
+            server_args = ServerArgs(*args, log_level=log_level, **kwargs)
+
         launch_engine(server_args=server_args)
 
     def generate(
