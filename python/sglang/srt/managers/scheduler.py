@@ -14,6 +14,7 @@
 """A scheduler that manages a tensor parallel GPU worker."""
 
 import logging
+import multiprocessing as mp
 import os
 import signal
 import threading
@@ -24,6 +25,7 @@ from concurrent import futures
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Callable, Dict, List, Optional, Union
+import multiprocessing.connection
 
 import psutil
 import setproctitle
@@ -105,7 +107,7 @@ class Scheduler:
             gpu_id: int,
             tp_rank: int,
             dp_rank: Optional[int],
-            fragment_to_scheduler_ipc_name: Optional[str],
+            fragment_scheduler_pipe: Optional[mp.connection.Connection] = None,
     ):
         # Parse args
         self.server_args = server_args
@@ -1598,7 +1600,7 @@ def run_scheduler_process(
         tp_rank: int,
         dp_rank: Optional[int],
         ready_ipc_name,
-        fragment_to_scheduler_ipc_name: Optional[str] = None,
+        fragment_scheduler_pipe: Optional[mp.connection.Connection] = None,
 ):
     setproctitle.setproctitle("sglang::scheduler")
 
@@ -1628,7 +1630,7 @@ def run_scheduler_process(
             gpu_id=gpu_id,
             tp_rank=tp_rank,
             dp_rank=dp_rank,
-            fragment_to_scheduler_ipc_name=fragment_to_scheduler_ipc_name,
+            fragment_scheduler_pipe=fragment_scheduler_pipe,
         )
 
         ready_sender.send_pyobj(
