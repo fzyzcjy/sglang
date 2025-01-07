@@ -5,6 +5,7 @@ from multiprocessing import Process
 from sglang import Engine
 from sglang.srt.server_args import get_random_available_port
 from sglang.test.test_utils import DEFAULT_SMALL_MODEL_NAME_FOR_TEST
+from sglang.srt.engine_fragment import EngineFragmentArgs
 
 _TP_SIZE = 2
 
@@ -12,6 +13,12 @@ _TP_SIZE = 2
 class TestFragment(unittest.TestCase):
     def test_fragment(self):
         fragment_nccl_port = get_random_available_port()
+
+        fragment_args = EngineFragmentArgs.create(
+            model_path=model_name,
+            mem_fraction_static=mem_fraction_static,
+            tp_size=tp_size,
+        )
 
         processes = []
         readers = []
