@@ -421,6 +421,7 @@ def _create_error_response(e):
 
 def launch_engine(
         server_args: ServerArgs,
+        fragment_args: Optional[EngineFragmentArgs] = None,
 ):
     """
     Launch the TokenizerManager in the main process, the Scheduler in a subprocess, and the DetokenizerManager in another subprocess.
@@ -444,7 +445,7 @@ def launch_engine(
     )
 
     ready_receivers, scheduler_procs = _start_scheduler_or_dp_controller_processes(
-        port_args, server_args
+        port_args, server_args, fragment_args
     )
 
     # Launch detokenizer process
@@ -486,7 +487,7 @@ def launch_engine(
     scheduler_info = scheduler_infos[0]
 
 
-def _start_scheduler_or_dp_controller_processes(port_args, server_args):
+def _start_scheduler_or_dp_controller_processes(port_args, server_args, fragment_args):
     if server_args.dp_size == 1:
         # Launch tensor parallel scheduler processes
         scheduler_procs = []
@@ -498,7 +499,7 @@ def _start_scheduler_or_dp_controller_processes(port_args, server_args):
         )
         for tp_rank in tp_rank_range:
             proc, ready_receiver = _start_scheduler_process(
-                port_args, server_args, tp_rank, tp_size_per_node
+                port_args, server_args, fragment_args, tp_rank, tp_size_per_node
             )
             scheduler_procs.append(proc)
             scheduler_ready_receivers.append(ready_receiver)
@@ -523,9 +524,9 @@ def _start_scheduler_or_dp_controller_processes(port_args, server_args):
 
 
 def _start_scheduler_process(
-        port_args, server_args, tp_rank: int, tp_size_per_node: int
+        port_args, server_args, fragment_args: Optional[EngineFragmentArgs], tp_rank: int, tp_size_per_node: int
 ):
-    if TODO:
+    if fragment_args is None:
         ready_ipc_name = create_zmq_ipc_name()
         ready_receiver = get_zmq_socket(zmq.Context(1), zmq.PULL, ready_ipc_name)
         gpu_id = server_args.base_gpu_id + tp_rank % tp_size_per_node
@@ -536,7 +537,7 @@ def _start_scheduler_process(
         proc.start()
         return proc, ready_receiver
     else:
-        return None, TODO
+        return None, fragment_args.scheduler_ready_ipc_names[tp_rank]
 
 
 def launch_server(
@@ -734,7 +735,7 @@ class Engine:
         else:
             server_args = ServerArgs(*args, log_level=log_level, **kwargs)
 
-        launch_engine(server_args=server_args)
+        launch_engine(server_args=server_args, fragment_args=fragment_args)
 
     def generate(
             self,
