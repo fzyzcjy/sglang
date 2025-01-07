@@ -6,6 +6,7 @@ from sglang.srt.managers.io_struct import UpdateWeightsFromTensorReqInput
 from sglang.srt.managers.scheduler import run_scheduler_process
 from sglang.srt.server.subprocess_launcher import _set_envs_and_config
 from sglang.srt.server_args import EngineFragmentArgs
+from sglang.srt.utils import create_zmq_ipc_name
 
 
 class EngineFragment:
@@ -19,6 +20,8 @@ class EngineFragment:
         # so here EngineFragment does the same.
         _set_envs_and_config(fragment_args.server_args)
 
+        fragment_to_scheduler_ipc_name = create_zmq_ipc_name()
+
         self._proc = mp.Process(
             target=run_scheduler_process,
             kwargs=dict(
@@ -28,6 +31,7 @@ class EngineFragment:
                 tp_rank=tp_rank,
                 dp_rank=None,
                 ready_ipc_name=fragment_args.scheduler_ready_ipc_names[tp_rank],
+                fragment_to_scheduler_ipc_name=fragment_to_scheduler_ipc_name,
             ),
         )
         self._proc.start()

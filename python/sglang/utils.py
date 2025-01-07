@@ -19,6 +19,7 @@ from typing import Any, Callable, List, Optional, Tuple, Type, Union
 
 import numpy as np
 import requests
+import zmq
 from IPython.display import HTML, display
 from tqdm import tqdm
 
@@ -358,6 +359,17 @@ def terminate_process(process):
     from sglang.srt.utils import kill_process_tree
 
     kill_process_tree(process.pid)
+
+
+def zmq_recv_all_noblock(receiver):
+    results = []
+    while True:
+        try:
+            result = receiver.recv_pyobj(zmq.NOBLOCK)
+        except zmq.ZMQError:
+            break
+        results.append(result)
+    return results
 
 
 def print_highlight(html_content: str):

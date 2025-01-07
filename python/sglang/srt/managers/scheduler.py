@@ -1598,6 +1598,7 @@ def run_scheduler_process(
         tp_rank: int,
         dp_rank: Optional[int],
         ready_ipc_name,
+        fragment_to_scheduler_ipc_name: Optional[str] = None,
 ):
     setproctitle.setproctitle("sglang::scheduler")
 
@@ -1627,6 +1628,7 @@ def run_scheduler_process(
             gpu_id=gpu_id,
             tp_rank=tp_rank,
             dp_rank=dp_rank,
+            fragment_to_scheduler_ipc_name=fragment_to_scheduler_ipc_name,
         )
 
         ready_sender.send_pyobj(
