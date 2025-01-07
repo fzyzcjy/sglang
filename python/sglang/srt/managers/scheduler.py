@@ -15,6 +15,7 @@
 
 import logging
 import multiprocessing as mp
+import multiprocessing.connection
 import os
 import signal
 import threading
@@ -25,7 +26,6 @@ from concurrent import futures
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Callable, Dict, List, Optional, Union
-import multiprocessing.connection
 
 import psutil
 import setproctitle
@@ -128,6 +128,7 @@ class Scheduler:
             if not self.spec_algorithm.is_none()
             else 1
         )
+        self.fragment_scheduler_pipe = fragment_scheduler_pipe
 
         # Init inter-process communication
         context = zmq.Context(2)
@@ -154,11 +155,6 @@ class Scheduler:
             self.recv_from_tokenizer = None
             self.send_to_tokenizer = SimpleNamespace(send_pyobj=lambda x: None)
             self.send_to_detokenizer = SimpleNamespace(send_pyobj=lambda x: None)
-
-        if fragment_to_scheduler_ipc_name is not None:
-            self.recv_from_fragment = get_zmq_socket(
-                context, zmq.PULL, fragment_to_scheduler_ipc_name
-            )
 
         # Init tokenizer
         self.model_config = ModelConfig(
@@ -508,10 +504,13 @@ class Scheduler:
         return recv_reqs
 
     def _recv_requests_from_fragment(self) -> List[Req]:
-        if self.recv_from_fragment is None:
+        if self.fragment_scheduler_pipe is None:
             return []
 
-        return zmq_recv_all_noblock(self.recv_from_fragment)
+        recv_reqs = []
+        while self.fragment_scheduler_pipe.poll():
+            recv_reqs.append(self.fragment_scheduler_pipe.recv())
+        return recv_reqs
 
     def process_input_requests(self, recv_reqs: List):
         for recv_req in recv_reqs:
