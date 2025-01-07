@@ -541,7 +541,9 @@ def _start_scheduler_process(
         proc.start()
         return proc, ready_receiver
     else:
-        return None, fragment_args.scheduler_ready_ipc_names[tp_rank]
+        ready_ipc_name = fragment_args.scheduler_ready_ipc_names[tp_rank]
+        ready_receiver = get_zmq_socket(zmq.Context(1), zmq.PULL, ready_ipc_name)
+        return None, ready_receiver
 
 
 def launch_server(
