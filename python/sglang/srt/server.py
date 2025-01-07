@@ -30,7 +30,6 @@ from http import HTTPStatus
 from typing import AsyncIterator, Dict, List, Optional, Tuple, Union
 
 import torch
-import zmq
 
 # Fix a bug of Python threading
 setattr(threading, "_register_atexit", lambda *args, **kwargs: None)
@@ -86,9 +85,7 @@ from sglang.srt.utils import (
     add_prometheus_middleware,
     assert_pkg_version,
     configure_logger,
-    create_zmq_ipc_name,
     delete_directory,
-    get_zmq_socket,
     is_port_available,
     kill_process_tree,
     maybe_set_triton_cache_manager,
@@ -444,8 +441,10 @@ def launch_engine(
         server_args.model_path, server_args.tokenizer_path
     )
 
-    ready_receivers, scheduler_procs = _start_scheduler_or_dp_controller_processes(
-        port_args, server_args, fragment_args
+    scheduler_pipe_readers, scheduler_procs = (
+        _start_scheduler_or_dp_controller_processes(
+            port_args, server_args, fragment_args
+        )
     )
 
     # Launch detokenizer process
@@ -465,9 +464,9 @@ def launch_engine(
 
     # Wait for model to finish loading
     scheduler_infos = []
-    for i in range(len(ready_receivers)):
+    for i in range(len(scheduler_pipe_readers)):
         try:
-            data = ready_receivers[i].recv_pyobj()
+            data = scheduler_pipe_readers[i].recv_pyobj()
         except EOFError as e:
             logger.exception(e)
             logger.error(
@@ -491,18 +490,18 @@ def _start_scheduler_or_dp_controller_processes(port_args, server_args, fragment
     if server_args.dp_size == 1:
         # Launch tensor parallel scheduler processes
         scheduler_procs = []
-        scheduler_ready_receivers = []
+        scheduler_pipe_readers = []
         tp_size_per_node = server_args.tp_size // server_args.nnodes
         tp_rank_range = range(
             tp_size_per_node * server_args.node_rank,
             tp_size_per_node * (server_args.node_rank + 1),
         )
         for tp_rank in tp_rank_range:
-            proc, ready_receiver = _start_scheduler_process(
+            proc, reader = _start_scheduler_process(
                 port_args, server_args, fragment_args, tp_rank, tp_size_per_node
             )
             scheduler_procs.append(proc)
-            scheduler_ready_receivers.append(ready_receiver)
+            scheduler_pipe_readers.append(reader)
 
         if server_args.node_rank >= 1:
             # For other nodes, they do not need to run tokenizer or detokenizer,
@@ -510,17 +509,16 @@ def _start_scheduler_or_dp_controller_processes(port_args, server_args, fragment
             for proc in scheduler_procs:
                 proc.join()
 
-        return scheduler_ready_receivers, scheduler_procs
+        return scheduler_pipe_readers, scheduler_procs
     else:
         # Launch the data parallel controller
-        ready_ipc_name = create_zmq_ipc_name()
-        ready_receiver = get_zmq_socket(zmq.Context(1), zmq.PULL, ready_ipc_name)
+        reader, writer = mp.Pipe(duplex=False)
         proc = mp.Process(
             target=run_data_parallel_controller_process,
-            args=(server_args, port_args, ready_ipc_name),
+            args=(server_args, port_args, writer),
         )
         proc.start()
-        return [ready_receiver], [proc]
+        return [reader], [proc]
 
 
 def _start_scheduler_process(
@@ -531,19 +529,16 @@ def _start_scheduler_process(
     tp_size_per_node: int,
 ):
     if fragment_args is None:
-        ready_ipc_name = create_zmq_ipc_name()
-        ready_receiver = get_zmq_socket(zmq.Context(1), zmq.PULL, ready_ipc_name)
+        reader, writer = mp.Pipe(duplex=False)
         gpu_id = server_args.base_gpu_id + tp_rank % tp_size_per_node
         proc = mp.Process(
             target=run_scheduler_process,
-            args=(server_args, port_args, gpu_id, tp_rank, None, ready_ipc_name),
+            args=(server_args, port_args, gpu_id, tp_rank, None, writer),
         )
         proc.start()
-        return proc, ready_receiver
+        return proc, reader
     else:
-        ready_ipc_name = fragment_args.scheduler_ready_ipc_names[tp_rank]
-        ready_receiver = get_zmq_socket(zmq.Context(1), zmq.PULL, ready_ipc_name)
-        return None, ready_receiver
+        return None, TODO
 
 
 def launch_server(
