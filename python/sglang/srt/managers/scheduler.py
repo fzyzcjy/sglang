@@ -87,7 +87,7 @@ from sglang.srt.utils import (
     set_random_seed,
     suppress_other_loggers,
 )
-from sglang.utils import TypeBasedDispatcher, get_exception_traceback
+from sglang.utils import TypeBasedDispatcher, get_exception_traceback, zmq_recv_all_noblock
 
 logger = logging.getLogger(__name__)
 
@@ -497,14 +497,7 @@ class Scheduler:
     def _recv_requests_from_tokenizer(self) -> List[Req]:
         """Receive results at tp_rank = 0 and broadcast it to all other TP ranks."""
         if self.tp_rank == 0 or self.server_args.enable_dp_attention:
-            recv_reqs = []
-
-            while True:
-                try:
-                    recv_req = self.recv_from_tokenizer.recv_pyobj(zmq.NOBLOCK)
-                except zmq.ZMQError:
-                    break
-                recv_reqs.append(recv_req)
+            recv_reqs = zmq_recv_all_noblock(self.recv_from_tokenizer)
         else:
             recv_reqs = None
 
@@ -516,15 +509,7 @@ class Scheduler:
         if self.recv_from_fragment is None:
             return []
 
-        recv_reqs = []
-        while True:
-            try:
-                recv_req = self.recv_from_fragment.recv_pyobj(zmq.NOBLOCK)
-            except zmq.ZMQError:
-                break
-            recv_reqs.append(recv_req)
-
-        return recv_reqs
+        return zmq_recv_all_noblock(self.recv_from_fragment)
 
     def process_input_requests(self, recv_reqs: List):
         for recv_req in recv_reqs:
