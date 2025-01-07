@@ -937,12 +937,14 @@ class EngineFragmentArgs:
     scheduler_ready_ipc_names: List[str]
 
     @staticmethod
-    def init_new(log_level: str = "error", *args, **kwargs) -> 'EngineFragmentArgs':
+    def init_new(log_level: str = "error", *args, **kwargs) -> "EngineFragmentArgs":
         server_args = ServerArgs(*args, log_level=log_level, **kwargs)
         return EngineFragmentArgs(
             server_args=server_args,
             port_args=PortArgs.init_new(server_args),
-            scheduler_ready_ipc_names=[create_zmq_ipc_name() for _ in range(server_args.tp_size)],
+            scheduler_ready_ipc_names=[
+                create_zmq_ipc_name() for _ in range(server_args.tp_size)
+            ],
         )
 
 

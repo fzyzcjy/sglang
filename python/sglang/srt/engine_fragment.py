@@ -9,7 +9,7 @@ class EngineFragment:
         self,
         tp_rank: int,
         gpu_id: int,
-        fragment_args: 'EngineFragmentArgs',
+        fragment_args: "EngineFragmentArgs",
     ):
         self._proc = mp.Process(
             target=run_scheduler_process,
