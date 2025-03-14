@@ -1034,7 +1034,7 @@ def _model_load_weights_direct(model, named_tensors: List[Tuple[str, torch.Tenso
 
 def _unwrap_tensor(tensor, tp_rank):
     if isinstance(tensor, LocalSerializedTensor):
-        return tensor.get(tp_rank)
+        return tensor.get(tp_rank).to(torch.cuda.current_device())
     return tensor
 
 
