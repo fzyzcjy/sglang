@@ -22,6 +22,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple
 import torch
 import torch.nn.functional as F
 from torch import nn
+from tqdm import tqdm
 from transformers import PretrainedConfig
 
 from sglang.srt.distributed import (
@@ -168,6 +169,15 @@ class DeepseekV2MoE(nn.Module):
         self.tp_size = get_tensor_model_parallel_world_size()
         self.routed_scaling_factor = config.routed_scaling_factor
         self.n_shared_experts = config.n_shared_experts
+        self.n_share_experts_fusion = global_server_args_dict["n_share_experts_fusion"]
+        # Only Deepseek V3/R1 can use shared experts fusion optimization now.
+        if (
+            global_server_args_dict.get("disable_shared_experts_fusion", False)
+            or config.architectures[0] != "DeepseekV3ForCausalLM"
+            or config.n_routed_experts != 256
+            or config.routed_scaling_factor != 2.5
+        ):
+            self.n_share_experts_fusion = 0
         self.routed_scaling_factor = config.routed_scaling_factor
         if self.tp_size > config.n_routed_experts:
             raise ValueError(
@@ -189,34 +199,21 @@ class DeepseekV2MoE(nn.Module):
             else (EPMoE if global_server_args_dict["enable_ep_moe"] else FusedMoE)
         )
         if not global_server_args_dict["enable_deepep_moe"]:
-            self.experts = MoEImpl(
-                num_experts=config.n_routed_experts,
-                top_k=config.num_experts_per_tok,
-                hidden_size=config.hidden_size,
-                intermediate_size=config.moe_intermediate_size,
-                renormalize=config.norm_topk_prob,
-                quant_config=quant_config,
-                use_grouped_topk=True,
-                num_expert_group=config.n_group,
-                topk_group=config.topk_group,
-                correction_bias=self.gate.e_score_correction_bias,
-                prefix=add_prefix("experts", prefix),
-            )
-        else:
-            self.experts = MoEImpl(
-                num_experts=config.n_routed_experts,
-                top_k=config.num_experts_per_tok,
-                hidden_size=config.hidden_size,
-                intermediate_size=config.moe_intermediate_size,
-                renormalize=config.norm_topk_prob,
-                quant_config=quant_config,
-                use_grouped_topk=True,
-                num_expert_group=config.n_group,
-                topk_group=config.topk_group,
-                correction_bias=self.gate.e_score_correction_bias,
-                prefix=add_prefix("experts", prefix),
-                deepep_mode=global_server_args_dict["deepep_mode"],
-            )
+	        self.experts = MoEImpl(
+	            num_experts=config.n_routed_experts + self.n_share_experts_fusion,
+	            top_k=config.num_experts_per_tok + min(self.n_share_experts_fusion, 1),
+	            hidden_size=config.hidden_size,
+	            intermediate_size=config.moe_intermediate_size,
+	            renormalize=config.norm_topk_prob,
+	            quant_config=quant_config,
+	            use_grouped_topk=True,
+	            num_expert_group=config.n_group,
+	            topk_group=config.topk_group,
+	            correction_bias=self.gate.e_score_correction_bias,
+	            prefix=add_prefix("experts", prefix),
+	        )
+	    else:
+	        TODO_merge_code
 
         if config.n_shared_experts is not None:
             intermediate_size = config.moe_intermediate_size * config.n_shared_experts
@@ -278,8 +275,10 @@ class DeepseekV2MoE(nn.Module):
             return self.forward_deepep(hidden_states, forward_mode)
 
     def forward_normal(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        if self.n_shared_experts is not None:
+        if self.n_shared_experts is not None and self.n_share_experts_fusion == 0:
             shared_output = self.shared_experts(hidden_states)
+        else:
+            shared_output = None
         # router_logits: (num_tokens, n_experts)
         router_logits = self.gate(hidden_states)
         final_hidden_states = (
@@ -1327,6 +1326,15 @@ class DeepseekV2ForCausalLM(nn.Module):
         super().__init__()
         self.config = config
         self.quant_config = quant_config
+        self.n_share_experts_fusion = global_server_args_dict["n_share_experts_fusion"]
+        # Only Deepseek V3/R1 can use shared experts fusion optimization now.
+        if (
+            global_server_args_dict.get("disable_shared_experts_fusion", False)
+            or self.config.architectures[0] != "DeepseekV3ForCausalLM"
+            or self.config.n_routed_experts != 256
+            or self.config.routed_scaling_factor != 2.5
+        ):
+            self.n_share_experts_fusion = 0
         self.model = DeepseekV2Model(
             config, quant_config, prefix=add_prefix("model", prefix)
         )
@@ -1363,6 +1371,40 @@ class DeepseekV2ForCausalLM(nn.Module):
             ("gate_up_proj", "gate_proj", 0),
             ("gate_up_proj", "up_proj", 1),
         ]
+        if self.n_share_experts_fusion != 0:
+            weights_list = list(weights)
+            weights_dict = dict(weights_list)
+            suffix_list = [
+                "down_proj.weight",
+                "down_proj.weight_scale_inv",
+                "gate_proj.weight",
+                "gate_proj.weight_scale_inv",
+                "up_proj.weight",
+                "up_proj.weight_scale_inv",
+            ]
+            for moe_layer in tqdm(
+                range(
+                    self.config.first_k_dense_replace,
+                    self.config.num_hidden_layers,
+                    self.config.moe_layer_freq,
+                ),
+                desc=f"Cloning {self.n_share_experts_fusion} "
+                "replicas of the shared expert into MoE",
+            ):
+                for num_repeat in range(self.n_share_experts_fusion):
+                    for suffix in suffix_list:
+                        weights_list.append(
+                            (
+                                f"model.layers.{moe_layer}."
+                                f"mlp.experts."
+                                f"{self.config.n_routed_experts + num_repeat}"
+                                f".{suffix}",
+                                weights_dict[
+                                    f"model.layers.{moe_layer}.mlp.shared_experts.{suffix}"
+                                ].clone(),
+                            )
+                        )
+            weights = weights_list
 
         # Params for weights, fp8 weight scales, fp8 activation scales
         # (param_name, weight_name, expert_id, shard_id)
@@ -1375,7 +1417,7 @@ class DeepseekV2ForCausalLM(nn.Module):
             ckpt_gate_proj_name="gate_proj",
             ckpt_down_proj_name="down_proj",
             ckpt_up_proj_name="up_proj",
-            num_experts=self.config.n_routed_experts,
+            num_experts=self.config.n_routed_experts + self.n_share_experts_fusion,
         )
 
         params_dict = dict(self.named_parameters())

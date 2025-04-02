@@ -1,6 +1,7 @@
 # Adapted from https://github.com/vllm-project/vllm/blob/main/benchmarks/kernels/benchmark_moe.py
 import argparse
 import json
+import os
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Tuple, TypedDict
@@ -399,7 +400,12 @@ def main(args: argparse.Namespace):
         intermediate_size = config.moe_intermediate_size
         shard_intermediate_size = 2 * intermediate_size // args.tp_size
     elif config.architectures[0] in ["DeepseekV2ForCausalLM", "DeepseekV3ForCausalLM"]:
-        E = config.n_routed_experts
+        n_share_fusion_experts = int(os.getenv("SHARE_EXPERTS_FUSION_REPLICA", "0"))
+        E = (
+            config.n_routed_experts + n_share_fusion_experts
+            if config.architectures[0] in ["DeepseekV3ForCausalLM"]
+            else config.n_routed_experts
+        )
         topk = config.num_experts_per_tok
         intermediate_size = config.moe_intermediate_size
         shard_intermediate_size = 2 * intermediate_size // args.tp_size
