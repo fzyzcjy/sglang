@@ -1422,6 +1422,7 @@ class DeepseekV2ForCausalLM(nn.Module):
                 "up_proj.weight",
                 "up_proj.weight_scale_inv",
             ]
+            names_to_remove = []
             for moe_layer in tqdm(
                 range(
                     self.config.first_k_dense_replace,
@@ -1445,9 +1446,11 @@ class DeepseekV2ForCausalLM(nn.Module):
                             )
                         )
                 # NOTE HACK
-                for suffix in suffix_list:
-                    del weights_dict[f"model.layers.{moe_layer}.mlp.shared_experts.{suffix}"]
-            weights = weights_list
+                names_to_remove += [
+                    f"model.layers.{moe_layer}.mlp.shared_experts.{suffix}"
+                    for suffix in suffix_list
+                ]
+            weights = [w for w in weights_list if w[0] not in names_to_remove]
 
         # Params for weights, fp8 weight scales, fp8 activation scales
         # (param_name, weight_name, expert_id, shard_id)
