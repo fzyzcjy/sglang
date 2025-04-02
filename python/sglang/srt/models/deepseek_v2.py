@@ -218,7 +218,7 @@ class DeepseekV2MoE(nn.Module):
         else:
             TODO_merge_code
 
-        if config.n_shared_experts is not None:
+        if config.n_shared_experts is not None and self.n_share_experts_fusion == 0:
             intermediate_size = config.moe_intermediate_size * config.n_shared_experts
             # disable tp for shared experts when enable deepep moe
             if not global_server_args_dict["enable_deepep_moe"]:
