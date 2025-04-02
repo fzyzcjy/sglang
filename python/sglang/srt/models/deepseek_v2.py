@@ -202,21 +202,21 @@ class DeepseekV2MoE(nn.Module):
             else (EPMoE if global_server_args_dict["enable_ep_moe"] else FusedMoE)
         )
         if not global_server_args_dict["enable_deepep_moe"]:
-	        self.experts = MoEImpl(
-	            num_experts=config.n_routed_experts + self.n_share_experts_fusion,
-	            top_k=config.num_experts_per_tok + min(self.n_share_experts_fusion, 1),
-	            hidden_size=config.hidden_size,
-	            intermediate_size=config.moe_intermediate_size,
-	            renormalize=config.norm_topk_prob,
-	            quant_config=quant_config,
-	            use_grouped_topk=True,
-	            num_expert_group=config.n_group,
-	            topk_group=config.topk_group,
-	            correction_bias=self.gate.e_score_correction_bias,
-	            prefix=add_prefix("experts", prefix),
-	        )
-	    else:
-	        TODO_merge_code
+            self.experts = MoEImpl(
+                num_experts=config.n_routed_experts + self.n_share_experts_fusion,
+                top_k=config.num_experts_per_tok + min(self.n_share_experts_fusion, 1),
+                hidden_size=config.hidden_size,
+                intermediate_size=config.moe_intermediate_size,
+                renormalize=config.norm_topk_prob,
+                quant_config=quant_config,
+                use_grouped_topk=True,
+                num_expert_group=config.n_group,
+                topk_group=config.topk_group,
+                correction_bias=self.gate.e_score_correction_bias,
+                prefix=add_prefix("experts", prefix),
+            )
+        else:
+            TODO_merge_code
 
         if config.n_shared_experts is not None:
             intermediate_size = config.moe_intermediate_size * config.n_shared_experts
