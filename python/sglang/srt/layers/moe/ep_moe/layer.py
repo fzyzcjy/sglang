@@ -154,7 +154,9 @@ class EPMoE(torch.nn.Module):
         self.tp_rank = get_tensor_model_parallel_rank()
 
         self.num_experts = num_experts
-        assert self.num_experts % self.tp_size == 0, f"{self.num_experts=} {self.tp_size=}"
+        assert (
+            self.num_experts % self.tp_size == 0
+        ), f"{self.num_experts=} {self.tp_size=}"
         self.num_experts_per_partition = self.num_experts // self.tp_size
         self.start_expert_id = self.tp_rank * self.num_experts_per_partition
         self.end_expert_id = self.start_expert_id + self.num_experts_per_partition - 1
@@ -258,7 +260,7 @@ class EPMoE(torch.nn.Module):
             BLOCK_SIZE=512,
         )
 
-        seg_indptr_cur_rank = seg_indptr[self.start_expert_id: self.end_expert_id + 2]
+        seg_indptr_cur_rank = seg_indptr[self.start_expert_id : self.end_expert_id + 2]
         weight_indices_cur_rank = torch.arange(
             0,
             self.num_experts_per_partition,
@@ -435,7 +437,7 @@ class EPMoE(torch.nn.Module):
         elif shard_id == "w1":
             param.data[expert_id][: self.intermediate_size, :] = loaded_weight
         elif shard_id == "w3":
-            param.data[expert_id][self.intermediate_size:, :] = loaded_weight
+            param.data[expert_id][self.intermediate_size :, :] = loaded_weight
         else:
             raise ValueError(f"Expected shard_id w1,w2 or w3 but got {shard_id}")
 
@@ -467,11 +469,11 @@ class EPMoE(torch.nn.Module):
                 block_n, block_k = self.block_shape[0], self.block_shape[1]
                 if shard_id == "w1":
                     param_data[expert_id][
-                    : (self.intermediate_size + block_n - 1) // block_n, :
+                        : (self.intermediate_size + block_n - 1) // block_n, :
                     ] = loaded_weight
                 elif shard_id == "w3":
                     param_data[expert_id][
-                    (self.intermediate_size + block_n - 1) // block_n:, :
+                        (self.intermediate_size + block_n - 1) // block_n :, :
                     ] = loaded_weight
                 else:  # w2
                     param_data[expert_id] = loaded_weight
