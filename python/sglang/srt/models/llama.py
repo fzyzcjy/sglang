@@ -66,12 +66,12 @@ class LlamaMLP(nn.Module):
         reduce_results: bool = True,
     ) -> None:
         super().__init__()
-        self.gate_up_proj = MergedColumnParallelLinear(
+        self.gate_proj = MergedColumnParallelLinear(
             hidden_size,
             [intermediate_size] * 2,
             bias=False,
             quant_config=quant_config,
-            prefix=add_prefix("gate_up_proj", prefix),
+            prefix=add_prefix("gate_proj", prefix),
         )
         self.down_proj = RowParallelLinear(
             intermediate_size,
@@ -89,7 +89,7 @@ class LlamaMLP(nn.Module):
         self.act_fn = SiluAndMul()
 
     def forward(self, x):
-        gate_up, _ = self.gate_up_proj(x)
+        gate_up, _ = self.gate_proj(x)
         x = self.act_fn(gate_up)
         x, _ = self.down_proj(x)
         return x
