@@ -42,6 +42,7 @@ from sglang.srt.layers.linear import (
     RowParallelLinear,
 )
 from sglang.srt.layers.logits_processor import LogitsProcessor, LogitsProcessorOutput
+from sglang.srt.layers.moe.ep_moe.layer import EPMoE
 from sglang.srt.layers.moe.fused_moe_triton import FusedMoE
 from sglang.srt.layers.pooler import Pooler, PoolingType
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
@@ -51,6 +52,7 @@ from sglang.srt.layers.vocab_parallel_embedding import (
     ParallelLMHead,
     VocabParallelEmbedding,
 )
+from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_loader.weight_utils import (
     default_weight_loader,
@@ -106,13 +108,15 @@ class Llama4MoE(nn.Module):
             prefix=add_prefix("router", prefix),
         )
 
-        self.experts = FusedMoE(
+        MoEImpl = (
+            EPMoE if global_server_args_dict["enable_ep_moe"] else FusedMoE
+        )
+        self.experts = MoEImpl(
             num_experts=config.num_local_experts,
             top_k=config.num_experts_per_tok,
             hidden_size=config.hidden_size,
             custom_routing_function=Llama4MoE.custom_routing_function,
             intermediate_size=intermediate_size_moe,
-            reduce_results=False,
             renormalize=False,
             quant_config=quant_config,
             prefix=add_prefix("experts", prefix),
