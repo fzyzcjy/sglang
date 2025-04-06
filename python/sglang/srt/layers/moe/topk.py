@@ -12,19 +12,16 @@
 # limitations under the License.
 # ==============================================================================
 
-import os
 from typing import Callable, Optional
 
 import torch
 import torch.nn.functional as F
-
 from sglang.srt.managers.expert_distribution import ExpertDistributionRecorder
 from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.utils import get_compiler_backend, is_cuda, is_hip
 
 _is_cuda = is_cuda()
 _is_hip = is_hip()
-
 
 expert_distribution_recorder = ExpertDistributionRecorder()
 
@@ -135,8 +132,8 @@ def grouped_topk(
             device=topk_ids.device,
         )
         topk_weights[:, -1] = (
-            topk_weights[:, :-1].sum(dim=-1) / 2.5
-        )  # 2.5 is the routed_scaling_factor.
+            topk_weights[:, :-1].sum(dim=-1) / routed_scaling_factor
+        )
 
     if renormalize:
         topk_weights_sum = (
@@ -195,8 +192,8 @@ def biased_grouped_topk_impl(
             device=topk_ids.device,
         )
         topk_weights[:, -1] = (
-            topk_weights[:, :-1].sum(dim=-1) / 2.5
-        )  # 2.5 is the routed_scaling_factor.
+            topk_weights[:, :-1].sum(dim=-1) / routed_scaling_factor
+        )
 
     if renormalize:
         topk_weights_sum = (
