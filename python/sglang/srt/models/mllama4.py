@@ -88,6 +88,8 @@ class Llama4ForConditionalGeneration(nn.Module):
             (".self_attn.qkv_proj", ".self_attn.v_proj", "v"),
             (".shared_expert.gate_up_proj", ".shared_expert.gate_proj", 0),
             (".shared_expert.gate_up_proj", ".shared_expert.up_proj", 1),
+            (".feed_forward.gate_up_proj", ".feed_forward.gate_proj", 0),
+            (".feed_forward.gate_up_proj", ".feed_forward.up_proj", 1),
         ]
 
         params_dict = dict(self.named_parameters())
@@ -139,10 +141,6 @@ class Llama4ForConditionalGeneration(nn.Module):
                                 expert_id=expert_id,
                             )
                 else:
-                    name = name.replace(
-                        "feed_forward.gate_proj.weight",
-                        "feed_forward.gate_up_proj.weight",
-                    )
                     # Skip loading extra bias for GPTQ models.
                     if name.endswith(".bias") and name not in params_dict:
                         continue
