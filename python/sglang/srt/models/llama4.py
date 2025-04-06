@@ -22,7 +22,7 @@
 """Inference-only LLaMA model compatible with HuggingFace weights."""
 
 import logging
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Union, Type
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import torch
 from torch import nn
@@ -166,8 +166,8 @@ class Llama4MoE(nn.Module):
                 group=parallel_state.get_tp_group().device_group,
                 router_topk=self.top_k,
                 permute_fusion=True,
-                num_experts=config.n_routed_experts,
-                num_local_experts=config.n_routed_experts // self.tp_size,
+                num_experts=config.num_local_experts,
+                num_local_experts=config.num_local_experts // self.tp_size,
                 hidden_size=config.hidden_size,
                 params_dtype=config.torch_dtype,
                 deepep_mode=DeepEPMode[global_server_args_dict["deepep_mode"]],
@@ -214,7 +214,7 @@ class Llama4MoE(nn.Module):
             and hidden_states.shape[0] > 0
         ):
             # router_logits: (num_tokens, n_experts)
-            router_logits = self.router(hidden_states)
+            router_logits, _ = self.router(hidden_states)
             shared_output = self.shared_expert(hidden_states)
             topk_weights, topk_idx = select_experts(
                 hidden_states=hidden_states,
@@ -431,7 +431,8 @@ class Llama4DecoderLayer(nn.Module):
 
         def compute_input_is_scattered(l: int):
             return (
-                compute_is_moe_layer(l)
+                l > 0
+                and compute_is_moe_layer(l)
                 and compute_is_moe_layer(l - 1)
                 and global_server_args_dict["enable_deepep_moe"]
             )
@@ -599,9 +600,9 @@ class Llama4DecoderLayer(nn.Module):
                 hidden_states, residual = self.post_attention_layernorm(
                     hidden_states, residual
                 )
-        hidden_states = self.mlp(hidden_states, forward_batch.forward_mode)
+        hidden_states = self.feed_forward(hidden_states, forward_batch.forward_mode)
 
-        if self.output_is_scattered and self.attn_tp_size != 1:
+        if (not self.output_is_scattered) and self.attn_tp_size != 1:
             hidden_states += residual
             residual = None
             hidden_states, local_hidden_states = (
@@ -722,11 +723,9 @@ class Llama4ForCausalLM(LlamaForCausalLM):
         self,
         config: Llama4TextConfig,
         quant_config: Optional[QuantizationConfig] = None,
-        prefix: str = ""
+        prefix: str = "",
     ):
-        return Llama4Model(
-            config, quant_config=quant_config, prefix=prefix
-        )
+        return Llama4Model(config, quant_config=quant_config, prefix=prefix)
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]) -> Set[str]:
         return
