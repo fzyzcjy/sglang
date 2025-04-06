@@ -1,6 +1,5 @@
 # TODO: add Aapted from vllm/mllama4.py
 from collections.abc import Iterable
-from itertools import tee
 from typing import Optional, Set, Tuple
 
 import torch
@@ -140,6 +139,10 @@ class Llama4ForConditionalGeneration(nn.Module):
                                 expert_id=expert_id,
                             )
                 else:
+                    name = name.replace(
+                        "feed_forward.gate_proj.weight",
+                        "feed_forward.gate_up_proj.weight",
+                    )
                     # Skip loading extra bias for GPTQ models.
                     if name.endswith(".bias") and name not in params_dict:
                         continue
