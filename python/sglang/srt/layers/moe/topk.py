@@ -280,6 +280,7 @@ def select_experts(
                 num_expert_group=num_expert_group,
                 topk_group=topk_group,
                 n_share_experts_fusion=n_share_experts_fusion,
+                fused_shared_experts_routed_scaling_factor=fused_shared_experts_routed_scaling_factor,
             )
     elif torch_native and custom_routing_function is None:
         topk_weights, topk_ids = fused_topk_native(
