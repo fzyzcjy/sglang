@@ -20,9 +20,6 @@ import logging
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import torch
-from torch import nn
-from transformers import LlamaConfig
-
 from sglang.srt.distributed import (
     get_tensor_model_parallel_rank,
     get_tensor_model_parallel_world_size,
@@ -51,6 +48,8 @@ from sglang.srt.model_loader.weight_utils import (
 )
 from sglang.srt.utils import add_prefix, make_layers
 from sglang.utils import get_exception_traceback
+from torch import nn
+from transformers import LlamaConfig
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +140,7 @@ class LlamaAttention(nn.Module):
         self.rotary_dim = int(partial_rotary_factor * self.head_dim)
         self.q_size = self.num_heads * self.head_dim
         self.kv_size = self.num_kv_heads * self.head_dim
-        self.scaling = self.head_dim**-0.5
+        self.scaling = self.head_dim ** -0.5
         self.rope_theta = rope_theta
         self.max_position_embeddings = max_position_embeddings
 
@@ -286,13 +285,14 @@ class LlamaModel(nn.Module):
             quant_config=quant_config,
             prefix=add_prefix("embed_tokens", prefix),
         )
-        self.layers = make_layers(
-            config.num_hidden_layers,
-            lambda idx, prefix: LlamaDecoderLayer(
-                config=config, quant_config=quant_config, layer_id=idx, prefix=prefix
-            ),
-            prefix="model.layers",
-        )
+        # NOTE HACK
+        # self.layers = make_layers(
+        #     config.num_hidden_layers,
+        #     lambda idx, prefix: LlamaDecoderLayer(
+        #         config=config, quant_config=quant_config, layer_id=idx, prefix=prefix
+        #     ),
+        #     prefix="model.layers",
+        # )
 
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.layers_to_capture = []
@@ -410,7 +410,7 @@ class LlamaForCausalLM(nn.Module):
         ]
 
         self.capture_aux_hidden_states = False
-    
+
     def _init_model(
         self,
         config: LlamaConfig,
@@ -430,6 +430,7 @@ class LlamaForCausalLM(nn.Module):
         input_embeds: torch.Tensor = None,
         get_embedding: bool = False,
     ) -> LogitsProcessorOutput:
+        print(f'hi {self.__class__=} forward {input_ids=}')
         aux_hidden_states = None
         if self.capture_aux_hidden_states:
             hidden_states, aux_hidden_states = self.model(

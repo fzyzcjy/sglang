@@ -25,9 +25,6 @@ import logging
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import torch
-from torch import nn
-from transformers import Llama4TextConfig
-
 from sglang.srt.distributed import (
     get_tensor_model_parallel_rank,
     get_tensor_model_parallel_world_size,
@@ -79,6 +76,8 @@ from sglang.srt.models.llama import (
 )
 from sglang.srt.utils import DeepEPMode, add_prefix, make_layers
 from sglang.utils import get_exception_traceback
+from torch import nn
+from transformers import Llama4TextConfig
 
 logger = logging.getLogger(__name__)
 
@@ -287,24 +286,28 @@ class Llama4Attention(nn.Module):
         self.no_rope_layers = config.no_rope_layers
         self.nope = self.no_rope_layers[self.layer_id] == 0
         self.use_qk_norm = config.use_qk_norm and not self.nope
-        tp_size = get_tensor_model_parallel_world_size()
+
+        self.dp_size = get_attention_dp_size()
+        attn_tp_rank = get_attention_tp_rank()
+        attn_tp_size = get_attention_tp_size()
+
         self.total_num_heads = num_heads
-        assert self.total_num_heads % tp_size == 0
-        self.num_heads = self.total_num_heads // tp_size
+        assert self.total_num_heads % attn_tp_size == 0
+        self.num_heads = self.total_num_heads // attn_tp_size
         self.total_num_kv_heads = num_kv_heads
-        if self.total_num_kv_heads >= tp_size:
+        if self.total_num_kv_heads >= attn_tp_size:
             # Number of KV heads is greater than TP size, so we partition
             # the KV heads across multiple tensor parallel GPUs.
-            assert self.total_num_kv_heads % tp_size == 0
+            assert self.total_num_kv_heads % attn_tp_size == 0
         else:
             # Number of KV heads is less than TP size, so we replicate
             # the KV heads across multiple tensor parallel GPUs.
-            assert tp_size % self.total_num_kv_heads == 0
-        self.num_kv_heads = max(1, self.total_num_kv_heads // tp_size)
+            assert attn_tp_size % self.total_num_kv_heads == 0
+        self.num_kv_heads = max(1, self.total_num_kv_heads // attn_tp_size)
         self.head_dim = config.head_dim
         self.q_size = self.num_heads * self.head_dim
         self.kv_size = self.num_kv_heads * self.head_dim
-        self.scaling = self.head_dim**-0.5
+        self.scaling = self.head_dim ** -0.5
         self.attn_temperature_tuning = (
             getattr(config, "attn_temperature_tuning", False) and self.nope
         )
@@ -337,6 +340,8 @@ class Llama4Attention(nn.Module):
             bias=bias,
             quant_config=quant_config,
             prefix=add_prefix("qkv_proj", prefix),
+            tp_rank=attn_tp_rank,
+            tp_size=attn_tp_size,
         )
 
         self.o_proj = RowParallelLinear(
@@ -346,6 +351,8 @@ class Llama4Attention(nn.Module):
             quant_config=quant_config,
             prefix=add_prefix("o_proj", prefix),
             reduce_results=reduce_results,
+            tp_rank=attn_tp_rank,
+            tp_size=attn_tp_size,
         )
         is_neox_style = True
         is_gguf = quant_config and quant_config.get_name() == "gguf"
@@ -476,8 +483,8 @@ class Llama4DecoderLayer(nn.Module):
         self.is_last_layer = self.layer_id == config.num_hidden_layers - 1
         self.input_is_scattered = compute_input_is_scattered(layer_id)
         self.output_is_scattered = (
-            not self.is_last_layer
-        ) and compute_input_is_scattered(layer_id + 1)
+                                       not self.is_last_layer
+                                   ) and compute_input_is_scattered(layer_id + 1)
 
     def forward(
         self,
@@ -486,6 +493,8 @@ class Llama4DecoderLayer(nn.Module):
         forward_batch: ForwardBatch,
         residual: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        print(
+            f"hi {self.__class__=} forward {self.layer_id=} {hidden_states.shape if hidden_states is not None else None=} {residual.shape if residual is not None else None=} {self.is_sparse=}")
         if global_server_args_dict["enable_deepep_moe"] and self.is_sparse:
             return self.forward_deepep(
                 positions, hidden_states, forward_batch, residual
@@ -502,20 +511,23 @@ class Llama4DecoderLayer(nn.Module):
         forward_batch: ForwardBatch,
         residual: Optional[torch.Tensor],
     ) -> torch.Tensor:
-        # Self Attention
-        if residual is None:
+        if hidden_states.shape[0] == 0:
             residual = hidden_states
-            hidden_states = self.input_layernorm(hidden_states)
         else:
-            hidden_states, residual = self.input_layernorm(hidden_states, residual)
+            # Self Attention
+            if residual is None:
+                residual = hidden_states
+                hidden_states = self.input_layernorm(hidden_states)
+            else:
+                hidden_states, residual = self.input_layernorm(hidden_states, residual)
 
-        assert not (self.attn_tp_size != 1 and self.input_is_scattered)
+            assert not (self.attn_tp_size != 1 and self.input_is_scattered)
 
-        hidden_states = self.self_attn(
-            positions=positions,
-            hidden_states=hidden_states,
-            forward_batch=forward_batch,
-        )
+            hidden_states = self.self_attn(
+                positions=positions,
+                hidden_states=hidden_states,
+                forward_batch=forward_batch,
+            )
 
         # Gather
         if get_tensor_model_parallel_world_size() > 1:
