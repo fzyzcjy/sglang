@@ -218,6 +218,7 @@ def biased_grouped_topk(
     topk_group: int = 0,
     compiled: bool = True,
     n_share_experts_fusion: int = 0,
+    fused_shared_experts_routed_scaling_factor: Optional[float] = None,
 ):
     biased_grouped_topk_fn = (
         torch.compile(
@@ -235,6 +236,7 @@ def biased_grouped_topk(
         num_expert_group,
         topk_group,
         n_share_experts_fusion=n_share_experts_fusion,
+        fused_shared_experts_routed_scaling_factor=fused_shared_experts_routed_scaling_factor,
     )
 
 
@@ -266,6 +268,7 @@ def select_experts(
                 num_expert_group=num_expert_group,
                 topk_group=topk_group,
                 n_share_experts_fusion=n_share_experts_fusion,
+                fused_shared_experts_routed_scaling_factor=fused_shared_experts_routed_scaling_factor,
             )
         else:
             topk_weights, topk_ids = biased_grouped_topk(
