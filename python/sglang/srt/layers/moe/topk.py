@@ -102,6 +102,7 @@ def grouped_topk(
     num_expert_group: int = 0,
     topk_group: int = 0,
     n_share_experts_fusion: int = 0,
+    fused_shared_experts_routed_scaling_factor: Optional[float] = None,
 ):
     assert hidden_states.shape[0] == gating_output.shape[0], "Number of tokens mismatch"
 
@@ -155,6 +156,7 @@ def biased_grouped_topk_impl(
     num_expert_group: int = 0,
     topk_group: int = 0,
     n_share_experts_fusion: int = 0,
+    fused_shared_experts_routed_scaling_factor: Optional[float] = None,
 ):
     assert hidden_states.shape[0] == gating_output.shape[0], "Number of tokens mismatch"
 
