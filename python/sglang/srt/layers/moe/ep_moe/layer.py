@@ -142,6 +142,7 @@ class EPMoE(torch.nn.Module):
         correction_bias: Optional[torch.Tensor] = None,
         custom_routing_function: Optional[Callable] = None,
         activation: str = "silu",
+        apply_router_weight_on_input: bool = False,
     ):
         super().__init__()
 
@@ -170,6 +171,15 @@ class EPMoE(torch.nn.Module):
         self.correction_bias = correction_bias
         self.custom_routing_function = custom_routing_function
         self.activation = activation
+        self.apply_router_weight_on_input = apply_router_weight_on_input
+
+        # TODO
+        # TODO
+        # TODO
+        if apply_router_weight_on_input:
+            print(
+                "HACK!!!!!! temporarily ignore apply_router_weight_on_input, which IS WRONG!!!"
+            )
 
         if quant_config is None:
             self.quant_method: Optional[QuantizeMethodBase] = UnquantizedEPMoEMethod()
