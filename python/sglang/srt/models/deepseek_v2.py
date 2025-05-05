@@ -2093,8 +2093,22 @@ class DeepseekV2ForCausalLM(nn.Module):
         forward_batch: ForwardBatch,
         input_embeds: torch.Tensor = None,
     ) -> torch.Tensor:
-        # print(
-        #     f"hi [{get_tensor_model_parallel_rank()}, {self.__class__.__name__}] forward start {forward_batch.tbo_split_seq_index=} {input_ids.shape=} {input_ids=} {positions=}")
+        print(
+            f"hi [{get_tensor_model_parallel_rank()}, {self.__class__.__name__}] forward start {forward_batch.tbo_split_seq_index=} {input_ids.shape=} {forward_batch.batch_size=}"
+        )
+        if forward_batch.forward_mode.is_decode() and (input_ids.shape[0] == 1024):
+            real_num_tokens = forward_batch.batch_size
+            print(f"HACK!!! truncate input things {real_num_tokens=}")
+            forward_batch = forward_batch.filter_batch(
+                start_token_index=0,
+                end_token_index=real_num_tokens,
+                start_seq_index=0,
+                end_seq_index=real_num_tokens,
+                output_attn_backend=forward_batch.attn_backend,
+                output_gathered_buffer=forward_batch.gathered_buffer,
+            )
+            input_ids = forward_batch.input_ids
+            positions = forward_batch.positions
 
         hidden_states = self.model(input_ids, positions, forward_batch, input_embeds)
 

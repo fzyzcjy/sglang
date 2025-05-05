@@ -641,6 +641,7 @@ class ForwardBatch:
         start_seq_index: int,
         end_seq_index: int,
         output_attn_backend: AttentionBackend,
+        output_gathered_buffer=None,
     ):
         num_tokens = self.input_ids.shape[0]
         num_seqs = self.batch_size
@@ -712,7 +713,8 @@ class ForwardBatch:
                 device=self.gathered_buffer.device,
             )
         else:
-            gathered_buffer = None
+            # HACK
+            gathered_buffer = output_gathered_buffer
 
         output_dict.update(
             dict(
@@ -727,8 +729,11 @@ class ForwardBatch:
                 tbo_split_seq_index=None,
                 tbo_parent_token_range=(start_token_index, end_token_index),
                 tbo_children=None,
-                global_num_tokens_gpu=None,
-                global_num_tokens_cpu=None,
+                # NOTE CHANGED
+                global_num_tokens_gpu=self.global_num_tokens_gpu,
+                global_num_tokens_cpu=self.global_num_tokens_cpu,
+                # global_num_tokens_gpu=None,
+                # global_num_tokens_cpu=None,
                 gathered_buffer=gathered_buffer,
                 global_num_tokens_for_logprob_gpu=None,
                 global_num_tokens_for_logprob_cpu=None,
