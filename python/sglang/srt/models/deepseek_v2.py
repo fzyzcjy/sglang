@@ -2097,7 +2097,7 @@ class DeepseekV2ForCausalLM(nn.Module):
             f"hi [{get_tensor_model_parallel_rank()}, {self.__class__.__name__}] forward start {forward_batch.tbo_split_seq_index=} {input_ids.shape=} {forward_batch.batch_size=}"
         )
         if forward_batch.forward_mode.is_decode() and (input_ids.shape[0] == 1024):
-            real_num_tokens = forward_batch.batch_size
+            real_num_tokens = 64
             print(f"HACK!!! truncate input things {real_num_tokens=}")
             forward_batch = forward_batch.filter_batch(
                 start_token_index=0,

@@ -547,6 +547,9 @@ class CudaGraphRunner:
             self.hidden_states[:raw_num_token] = forward_batch.spec_info.hidden_states
 
         # Attention backend
+        print(
+            f"hi CudaGraphRunner call attn replay {bs=} {raw_bs=} {forward_batch.seq_lens_sum=}"
+        )
         self.model_runner.attn_backend.init_forward_metadata_replay_cuda_graph(
             bs,
             self.req_pool_indices,
