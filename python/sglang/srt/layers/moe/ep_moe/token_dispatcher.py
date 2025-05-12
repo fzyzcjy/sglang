@@ -147,6 +147,8 @@ class DeepEPBuffer:
         if sglang_hack_deepep_new_mode and deepep_mode == DeepEPMode.normal:
             # TODO indeed: num_qps_per_rank = max(num_sms // 2, ll_num_experts // num_ranks if test_ll_compatibility else 0)
             num_qps_per_rank = DEEPEP_NUM_SMS // 2
+        elif get_bool_env_var("SGLANG_HACK_NUM_QPS_PER_RANK_ALI"):
+            num_qps_per_rank = num_experts // group.size()
         else:
             num_qps_per_rank = max(num_experts // group.size(), Buffer.num_sms // 2)
 
