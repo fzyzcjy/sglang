@@ -212,10 +212,6 @@ class EPMoE(torch.nn.Module):
         self.grouped_gemm_runner = None
 
     def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor):
-        hidden_states_shape = hidden_states.shape
-        hidden_states_dtype = hidden_states.dtype
-        hidden_states_device = hidden_states.device
-
         assert self.quant_method is not None
 
         if self.grouped_gemm_runner is None:
@@ -271,13 +267,12 @@ class EPMoE(torch.nn.Module):
             hidden_states.shape[1],
             BLOCK_SIZE=512,
         )
-        dispose_tensor(hidden_states)
 
         seg_indptr_cur_rank = seg_indptr[self.start_expert_id : self.end_expert_id + 2]
         weight_indices_cur_rank = torch.arange(
             0,
             self.num_experts_per_partition,
-            device=hidden_states_device,
+            device=hidden_states.device,
             dtype=torch.int64,
         )
         # GroupGemm-0
@@ -285,7 +280,7 @@ class EPMoE(torch.nn.Module):
             a=gateup_input,
             b=self.w13_weight,
             c=None,
-            c_dtype=hidden_states_dtype,
+            c_dtype=hidden_states.dtype,
             batch_size=self.num_experts_per_partition,
             weight_column_major=True,
             seg_indptr=seg_indptr_cur_rank,
@@ -309,14 +304,14 @@ class EPMoE(torch.nn.Module):
             dtype=(
                 self.fp8_dtype
                 if (self.use_fp8_w8a8 and not self.use_block_quant)
-                else hidden_states_dtype
+                else hidden_states.dtype
             ),
         )
         if self.w2_input_scale is None and not self.use_block_quant:
             self.w2_input_scale = torch.ones(
                 self.num_experts_per_partition,
                 dtype=torch.float32,
-                device=hidden_states_device,
+                device=hidden_states.device,
             )
 
         if self.activation == "silu":
@@ -349,8 +344,8 @@ class EPMoE(torch.nn.Module):
         down_output = torch.empty(
             down_input.shape[0],
             self.w2_weight.shape[1],
-            device=hidden_states_device,
-            dtype=hidden_states_dtype,
+            device=hidden_states.device,
+            dtype=hidden_states.dtype,
         )
         down_output = self.grouped_gemm_runner(
             a=down_input,
@@ -373,9 +368,9 @@ class EPMoE(torch.nn.Module):
 
         # PostReorder
         output = torch.empty(
-            hidden_states_shape, dtype=hidden_states_dtype, device=hidden_states_device
+            hidden_states.shape, dtype=hidden_states.dtype, device=hidden_states.device
         )
-        post_reorder_triton_kernel[(hidden_states_shape[0],)](
+        post_reorder_triton_kernel[(hidden_states.shape[0],)](
             down_output,
             output,
             src2dst,
@@ -384,7 +379,7 @@ class EPMoE(torch.nn.Module):
             self.start_expert_id,
             self.end_expert_id,
             self.top_k,
-            hidden_states_shape[1],
+            hidden_states.shape[1],
             BLOCK_SIZE=512,
         )
         return output
