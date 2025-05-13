@@ -367,10 +367,8 @@ class EPMoE(torch.nn.Module):
         del down_input
 
         # PostReorder
-        output = torch.empty(
-            hidden_states.shape, dtype=hidden_states.dtype, device=hidden_states.device
-        )
-        post_reorder_triton_kernel[(hidden_states.shape[0],)](
+        output = torch.empty_like(hidden_states)
+        post_reorder_triton_kernel[(hidden_states.size(0),)](
             down_output,
             output,
             src2dst,
@@ -379,7 +377,7 @@ class EPMoE(torch.nn.Module):
             self.start_expert_id,
             self.end_expert_id,
             self.top_k,
-            hidden_states.shape[1],
+            hidden_states.size(1),
             BLOCK_SIZE=512,
         )
         return output
