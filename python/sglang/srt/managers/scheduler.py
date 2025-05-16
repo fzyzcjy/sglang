@@ -184,6 +184,8 @@ class Scheduler(
         pp_rank: int,
         dp_rank: Optional[int],
     ):
+        torch.cuda.memory._record_memory_history(max_entries=100000)
+
         # Parse args
         self.server_args = server_args
         self.tp_rank = tp_rank
@@ -455,6 +457,10 @@ class Scheduler(
             self.server_args.disaggregation_mode
         )
         self.init_disaggregation()
+
+        memory_profile_path = f"/host_home/temp_sglang_server2local/{time.time()}-TP-{self.tp_rank}-memory.pickle"
+        torch.cuda.memory._dump_snapshot(memory_profile_path)
+        torch.cuda.memory._record_memory_history(enabled=None)
 
     def init_tokenizer(self):
         server_args = self.server_args
