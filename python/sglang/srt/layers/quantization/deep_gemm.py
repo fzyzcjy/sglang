@@ -6,10 +6,9 @@ from enum import IntEnum, auto
 from typing import Callable, Dict, List, Optional, Tuple
 
 import torch
-from tqdm.contrib.concurrent import thread_map
-
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.utils import get_bool_env_var, get_device_sm, get_int_env_var, is_cuda
+from tqdm.contrib.concurrent import thread_map
 
 _ENABLE_JIT_DEEPGEMM = False
 if is_cuda():
@@ -282,6 +281,7 @@ def _maybe_compile_deep_gemm_one_type_all(
     num_groups: int,
     m_list: Optional[List[int]] = None,
 ) -> None:
+    return
 
     global _INITIALIZATION_DICT
     global _BUILTIN_M_LIST
