@@ -461,6 +461,7 @@ class Scheduler(
         memory_profile_path = f"/host_home/temp_sglang_server2local/{time.time()}-TP-{self.tp_rank}-memory.pickle"
         torch.cuda.memory._dump_snapshot(memory_profile_path)
         torch.cuda.memory._record_memory_history(enabled=None)
+        raise Exception("done memory snapshot!")
 
     def init_tokenizer(self):
         server_args = self.server_args
