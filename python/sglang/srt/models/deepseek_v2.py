@@ -27,6 +27,7 @@ from torch import nn
 from tqdm import tqdm
 from transformers import PretrainedConfig
 
+from sglang.srt import operations
 from sglang.srt.distributed import (
     get_tensor_model_parallel_world_size,
     parallel_state,
@@ -1230,16 +1231,41 @@ class DeepseekV2DecoderLayer(nn.Module):
         residual: Optional[torch.Tensor],
         zero_allocator: BumpAllocator,
     ) -> torch.Tensor:
-        return execute_operations(
-            inputs=dict(
+        state = operations._StateDict()
+        if self.is_layer_sparse:
+            self.op_comm_prepare_attn(
+                state,
                 positions=positions,
                 hidden_states=hidden_states,
                 forward_batch=forward_batch,
                 residual=residual,
                 zero_allocator=zero_allocator,
-            ),
-            operations=compute_layer_operations(self),
-        )
+            )
+            self.op_attn(state)
+            self.op_comm_prepare_mlp(state)
+            self.mlp.op_gate(state)
+            self.mlp.op_shared_experts(state)
+            self.mlp.op_select_experts(state)
+            self.mlp.op_dispatch_a(state)
+            self.mlp.op_dispatch_b(state)
+            self.mlp.op_experts(state)
+            self.mlp.op_combine_a(state)
+            self.mlp.op_combine_b(state)
+            self.mlp.op_output(state)
+            return self.op_comm_postprocess_layer(state)
+        else:
+            self.op_comm_prepare_attn(
+                state,
+                positions=positions,
+                hidden_states=hidden_states,
+                forward_batch=forward_batch,
+                residual=residual,
+                zero_allocator=zero_allocator,
+            )
+            self.op_attn(state)
+            self.op_comm_prepare_mlp(state)
+            self.op_mlp(state)
+            return self.op_comm_postprocess_layer(state)
 
     def op_comm_prepare_attn(
         self,
