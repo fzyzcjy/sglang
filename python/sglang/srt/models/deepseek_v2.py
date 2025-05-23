@@ -1255,9 +1255,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             )
             # self.mlp.op_gate(state)
             self_mlp = self.mlp
-            if (not self_mlp._enable_deepep_moe) or is_non_idle_and_non_empty(
-                forward_batch.forward_mode, hidden_states
-            ):
+            if True:
                 # router_logits: (num_tokens, n_experts)
                 router_logits = self_mlp.gate(hidden_states)
             # else:
@@ -1282,7 +1280,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             final_hidden_states *= self_mlp.routed_scaling_factor
             # if (s := shared_output) is not None:
             #     final_hidden_states = final_hidden_states + s
-            if (not self_mlp._enable_deepep_moe) and (self_mlp.tp_size > 1):
+            if True:
                 final_hidden_states = tensor_model_parallel_all_reduce(
                     final_hidden_states
                 )
