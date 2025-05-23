@@ -1237,63 +1237,57 @@ class DeepseekV2DecoderLayer(nn.Module):
         # state = {}
         if self.is_layer_sparse:
             # self.op_comm_prepare_attn(
-            hidden_states_after_comm_pre_attn, residual_after_input_ln = (
-                self.layer_communicator.prepare_attn(
-                    hidden_states, residual, forward_batch
-                )
+            hidden_states, residual = self.layer_communicator.prepare_attn(
+                hidden_states, residual, forward_batch
             )
             # self.op_attn(state)
-            hidden_states_after_attn = self.self_attn(
+            hidden_states = self.self_attn(
                 positions=positions,
-                hidden_states=hidden_states_after_comm_pre_attn,
+                hidden_states=hidden_states,
                 forward_batch=forward_batch,
                 zero_allocator=zero_allocator,
             )
             # self.op_comm_prepare_mlp(state)
-            hidden_states_mlp_input, residual_after_comm_pre_mlp = (
-                self.layer_communicator.prepare_mlp(
-                    hidden_states_after_attn,
-                    residual_after_input_ln,
-                    forward_batch,
-                )
+            hidden_states, residual = self.layer_communicator.prepare_mlp(
+                hidden_states,
+                residual,
+                forward_batch,
             )
             # self.mlp.op_gate(state)
-            if (not self.mlp._enable_deepep_moe) or is_non_idle_and_non_empty(
-                forward_batch.forward_mode, hidden_states_mlp_input
-            ):
-                # router_logits: (num_tokens, n_experts)
-                router_logits = self.mlp.gate(hidden_states_mlp_input)
-            else:
-                router_logits = None
+            # if (not self.mlp._enable_deepep_moe) or is_non_idle_and_non_empty(
+            #     forward_batch.forward_mode, hidden_states
+            # ):
+            # router_logits: (num_tokens, n_experts)
+            router_logits = self.mlp.gate(hidden_states)
+            # else:
+            #     router_logits = None
             # self.mlp.op_shared_experts(state) <--- skip since fusion
             # self.mlp.op_select_experts(state) <--- skip
             # self.mlp.op_dispatch_a(state) <--- skip
             # self.mlp.op_dispatch_b(state) <--- skip
             # self.mlp.op_experts(state)
-            hidden_states_experts_output = self.mlp.experts(
-                hidden_states=hidden_states_mlp_input,
+            final_hidden_states = self.mlp.experts(
+                hidden_states=hidden_states,
                 router_logits=router_logits,
             )
             # self.mlp.op_combine_a(state) <--- skip
             # self.mlp.op_combine_b(state) <--- skip
             # self.mlp.op_output(state)
-            final_hidden_states = (
-                # hidden_states_after_combine
-                # if self._enable_deepep_moe else
-                hidden_states_experts_output
-            )
+            # final_hidden_states = (
+            #     # hidden_states_after_combine
+            #     # if self._enable_deepep_moe else
+            #     hidden_states_experts_output
+            # )
             final_hidden_states *= self.mlp.routed_scaling_factor
             # if (s := shared_output) is not None:
             #     final_hidden_states = final_hidden_states + s
-            if (not self.mlp._enable_deepep_moe) and (self.mlp.tp_size > 1):
-                final_hidden_states = tensor_model_parallel_all_reduce(
-                    final_hidden_states
-                )
-            hidden_states_mlp_output = final_hidden_states
+            # if (not self.mlp._enable_deepep_moe) and (self.mlp.tp_size > 1):
+            final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
+            hidden_states = final_hidden_states
             # return self.op_comm_postprocess_layer(state)
             hidden_states, residual = self.layer_communicator.postprocess_layer(
-                hidden_states_mlp_output,
-                residual_after_comm_pre_mlp,
+                hidden_states,
+                residual,
                 forward_batch,
             )
             return hidden_states, residual
