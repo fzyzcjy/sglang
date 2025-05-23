@@ -1254,11 +1254,11 @@ class DeepseekV2DecoderLayer(nn.Module):
                 forward_batch,
             )
             # self.mlp.op_gate(state)
-            # if (not self.mlp._enable_deepep_moe) or is_non_idle_and_non_empty(
-            #     forward_batch.forward_mode, hidden_states
-            # ):
-            # router_logits: (num_tokens, n_experts)
-            router_logits = self.mlp.gate(hidden_states)
+            if (not self.mlp._enable_deepep_moe) or is_non_idle_and_non_empty(
+                forward_batch.forward_mode, hidden_states
+            ):
+                # router_logits: (num_tokens, n_experts)
+                router_logits = self.mlp.gate(hidden_states)
             # else:
             #     router_logits = None
             # self.mlp.op_shared_experts(state) <--- skip since fusion
@@ -1281,8 +1281,10 @@ class DeepseekV2DecoderLayer(nn.Module):
             final_hidden_states *= self.mlp.routed_scaling_factor
             # if (s := shared_output) is not None:
             #     final_hidden_states = final_hidden_states + s
-            # if (not self.mlp._enable_deepep_moe) and (self.mlp.tp_size > 1):
-            final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
+            if (not self.mlp._enable_deepep_moe) and (self.mlp.tp_size > 1):
+                final_hidden_states = tensor_model_parallel_all_reduce(
+                    final_hidden_states
+                )
             hidden_states = final_hidden_states
             # return self.op_comm_postprocess_layer(state)
             hidden_states, residual = self.layer_communicator.postprocess_layer(
