@@ -228,6 +228,7 @@ async def get_server_info():
         "version": __version__,
     }
 
+
 @app.get("/get_load")
 async def get_load():
     internal_states = await _global_state.tokenizer_manager.get_internal_state()
