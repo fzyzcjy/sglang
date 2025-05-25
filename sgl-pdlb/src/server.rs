@@ -52,7 +52,8 @@ impl LBState {
         let url = engine_info.api_path(api_path);
         let response = self.client.post(&url).json(&request).send().await;
         match response {
-            Ok(response) => HttpResponse::Ok().body(response.bytes().await.unwrap()),
+            Ok(response) => HttpResponse::Ok().body(
+                tokio::time::timeout(tokio::time::Duration::from_secs(3600), response.bytes()).await.unwrap()),
             Err(e) => HttpResponse::InternalServerError()
                 .body(format!("Failed to send request to worker {}: {}", url, e)),
         }
