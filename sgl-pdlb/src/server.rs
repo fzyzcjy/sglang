@@ -16,7 +16,7 @@ pub struct LBState {
 impl LBState {
     pub fn new(lb_config: LBConfig) -> Self {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(50))
+            .timeout(std::time::Duration::from_secs(3600))
             .build()
             .expect("Failed to build HTTP client");
 
