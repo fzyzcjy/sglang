@@ -45,6 +45,11 @@ class RuntimeEndpoint(BaseBackend):
         self._assert_success(res)
         self.model_info = res.json()
 
+        # HACK!!!
+        if isinstance(self.model_info, list):
+            print(f"HACK change {self.model_info=}")
+            self.model_info = self.model_info[0]
+
         if chat_template_name:
             self.chat_template = get_chat_template(chat_template_name)
         else:
