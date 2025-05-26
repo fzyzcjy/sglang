@@ -6,7 +6,6 @@ import re
 import time
 
 import numpy as np
-
 from sglang.api import set_default_backend
 from sglang.test.test_utils import (
     add_common_sglang_args_and_parse,
@@ -95,6 +94,7 @@ def main(args):
 
     preds = []
     for i in range(len(states)):
+        print(f"hi {i=} {states[i]=}")
         preds.append(get_answer_value(states[i]["answer"]))
 
     # Compute accuracy
