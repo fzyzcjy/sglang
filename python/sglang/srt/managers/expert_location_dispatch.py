@@ -15,6 +15,7 @@
 from dataclasses import dataclass
 from typing import Literal, Optional
 
+import einops
 import torch
 
 from sglang.srt.managers.expert_location import get_global_expert_location_metadata
