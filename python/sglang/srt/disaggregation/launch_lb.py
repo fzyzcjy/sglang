@@ -2,38 +2,43 @@ import argparse
 import dataclasses
 from typing import List
 
-from sgl_pdlb._rust import LoadBalancer as RustLB
-
 
 @dataclasses.dataclass
 class LBArgs:
+    rust_lb: bool = False
     host: str = "0.0.0.0"
     port: int = 8000
     policy: str = "random"
     prefill_infos: List[str] = dataclasses.field(default_factory=list)
     decode_infos: List[str] = dataclasses.field(default_factory=list)
     log_interval: int = 5
+    timeout: int = 600
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser):
         parser.add_argument(
+            "--rust-lb",
+            action="store_true",
+            help="Use Rust load balancer",
+        )
+        parser.add_argument(
             "--host",
             type=str,
-            default="0.0.0.0",
-            help="Host to bind the server (default: 0.0.0.0)",
+            default=LBArgs.host,
+            help=f"Host to bind the server (default: {LBArgs.host})",
         )
         parser.add_argument(
             "--port",
             type=int,
-            default=8000,
-            help="Port to bind the server (default: 8000)",
+            default=LBArgs.port,
+            help=f"Port to bind the server (default: {LBArgs.port})",
         )
         parser.add_argument(
             "--policy",
             type=str,
-            default="random",
+            default=LBArgs.policy,
             choices=["random", "po2"],
-            help="Policy to use for load balancing (default: random)",
+            help=f"Policy to use for load balancing (default: {LBArgs.policy})",
         )
         parser.add_argument(
             "--prefill",
@@ -59,7 +64,13 @@ class LBArgs:
             "--log-interval",
             type=int,
             default=LBArgs.log_interval,
-            help="Log interval in seconds (default: 5)",
+            help=f"Log interval in seconds (default: {LBArgs.log_interval})",
+        )
+        parser.add_argument(
+            "--timeout",
+            type=int,
+            default=LBArgs.timeout,
+            help=f"Timeout in seconds (default: {LBArgs.timeout})",
         )
 
     @classmethod
@@ -80,30 +91,50 @@ class LBArgs:
         ]
 
         return cls(
+            rust_lb=args.rust_lb,
             host=args.host,
             port=args.port,
             policy=args.policy,
             prefill_infos=prefill_infos,
             decode_infos=args.decode,
             log_interval=args.log_interval,
+            timeout=args.timeout,
         )
+
+    def __post_init__(self):
+        if not self.rust_lb:
+            assert (
+                self.policy == "random"
+            ), "Only random policy is supported for Python load balancer"
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="PD Disaggregation Load Balancer Server"
+    )
     LBArgs.add_cli_args(parser)
     args = parser.parse_args()
     lb_args = LBArgs.from_cli_args(args)
 
-    lb = RustLB(
-        host=lb_args.host,
-        port=lb_args.port,
-        policy=lb_args.policy,
-        prefill_infos=lb_args.prefill_infos,
-        decode_infos=lb_args.decode_infos,
-        log_interval=lb_args.log_interval,
-    )
-    lb.start()
+    if lb_args.rust_lb:
+        from sgl_pdlb._rust import LoadBalancer as RustLB
+
+        RustLB(
+            host=lb_args.host,
+            port=lb_args.port,
+            policy=lb_args.policy,
+            prefill_infos=lb_args.prefill_infos,
+            decode_infos=lb_args.decode_infos,
+            log_interval=lb_args.log_interval,
+            timeout=lb_args.timeout,
+        ).start()
+    else:
+        from sglang.srt.disaggregation.mini_lb import PrefillConfig, run
+
+        prefill_configs = [
+            PrefillConfig(url, port) for url, port in lb_args.prefill_infos
+        ]
+        run(prefill_configs, lb_args.decode_infos, lb_args.host, lb_args.port)
 
 
 if __name__ == "__main__":
