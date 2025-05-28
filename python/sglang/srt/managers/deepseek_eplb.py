@@ -4,6 +4,9 @@ from typing import Literal, Optional, Tuple
 
 import torch
 
+from sglang.srt.managers import deepseek_eplb_v0
+from sglang.srt.utils import get_bool_env_var
+
 
 def pack_groups(tokens_per_group: torch.Tensor, num_nodes: int) -> torch.Tensor:
     num_layers, num_groups = tokens_per_group.shape
@@ -261,6 +264,16 @@ def rebalance_experts(
     num_nodes: int,
     phase: Literal["prefill", "decode", "null"],
 ):
+    if get_bool_env_var("SGLANG_HACK_EPLB_USE_V0"):
+        print("rebalance_experts see SGLANG_HACK_EPLB_USE_V0")
+        return deepseek_eplb_v0.rebalance_experts(
+            weight=tokens_per_expert.sum(0),
+            num_replicas=num_physical_experts,
+            num_groups=num_groups,
+            num_nodes=num_nodes,
+            num_gpus=num_physical_experts // num_local_physical_experts,
+        )
+
     if (
         (phase == "prefill")
         and (num_groups is not None)
