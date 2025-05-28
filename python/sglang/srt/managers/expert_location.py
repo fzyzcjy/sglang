@@ -349,6 +349,7 @@ def compute_logical_to_rank_dispatch_physical_map_v0(
     num_physical_experts: int,
     seed: int = 42,
 ):
+    print("hi execute compute_logical_to_rank_dispatch_physical_map_v0")
     import random
 
     r = random.Random(seed)
