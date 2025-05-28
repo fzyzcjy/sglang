@@ -335,6 +335,82 @@ def compute_logical_to_rank_dispatch_physical_map(
     return logical_to_rank_dispatch_physical_map
 
 
+def compute_logical_to_rank_dispatch_physical_map_v0(
+    logical_to_all_physical_map: torch.Tensor,
+    num_gpus: int,
+    num_physical_experts: int,
+    seed: int = 42,
+):
+    import random
+
+    r = random.Random(seed)
+
+    num_local_physical_experts = num_physical_experts // num_gpus
+    num_layers, num_logical_experts, _ = logical_to_all_physical_map.shape
+    dtype = logical_to_all_physical_map.dtype
+
+    logical_to_rank_dispatch_physical_map = torch.full(
+        size=(num_gpus, num_layers, num_logical_experts),
+        fill_value=-1,
+        dtype=dtype,
+    )
+
+    for layer_id in range(num_layers):
+        for logical_expert_id in range(num_logical_experts):
+            candidate_physical_expert_ids = _logical_to_all_physical_raw(
+                logical_to_all_physical_map, layer_id, logical_expert_id
+            )
+            output_partial = logical_to_rank_dispatch_physical_map[
+                :, layer_id, logical_expert_id
+            ]
+
+            for gpu_id in range(num_gpus):
+                same_gpu_physical_expert_ids = [
+                    physical_expert_id
+                    for physical_expert_id in candidate_physical_expert_ids
+                    if _compute_gpu_id_of_physical_expert(
+                        physical_expert_id, num_local_physical_experts
+                    )
+                    == gpu_id
+                ]
+                if len(same_gpu_physical_expert_ids) > 0:
+                    output_partial[gpu_id] = same_gpu_physical_expert_ids[0]
+
+            num_remain = torch.sum(output_partial == -1).item()
+            output_partial[output_partial == -1] = torch.tensor(
+                _fair_choices(candidate_physical_expert_ids, k=num_remain, r=r),
+                dtype=dtype,
+            )
+
+    assert torch.all(logical_to_rank_dispatch_physical_map != -1)
+    return logical_to_rank_dispatch_physical_map
+
+
+def _logical_to_all_physical_raw(
+    logical_to_all_physical_map, layer_id: int, logical_expert_id: int
+) -> List[int]:
+    return [
+        physical_expert_id
+        for physical_expert_id in logical_to_all_physical_map[
+            layer_id, logical_expert_id
+        ].tolist()
+        if physical_expert_id != -1
+    ]
+
+
+def _compute_gpu_id_of_physical_expert(
+    physical_expert_id: int, num_local_physical_experts: int
+) -> int:
+    return physical_expert_id // num_local_physical_experts
+
+
+def _fair_choices(arr: List, k: int, r: random.Random) -> List:
+    quotient, remainder = divmod(k, len(arr))
+    ans = arr * quotient + r.sample(arr, k=remainder)
+    r.shuffle(ans)
+    return ans
+
+
 @dataclass
 class ModelConfigForExpertLocation:
     num_layers: int
