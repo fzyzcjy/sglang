@@ -1,5 +1,5 @@
 # This file is copied from https://github.com/deepseek-ai/EPLB/blob/main/eplb.py since that one is not a pypi package
-
+import os
 from typing import Literal, Optional, Tuple
 
 import torch
@@ -266,6 +266,13 @@ def rebalance_experts(
         and (num_groups is not None)
         and (num_groups % num_nodes == 0)
     ):
+        mode = "prefill"
+    else:
+        mode = "decode"
+    mode = os.environ.get("SGLANG_HACK_EPLB_MODE", mode)
+    print(f"rebalance_experts chosen {mode=}")
+
+    if mode == "prefill":
         return prefill_rebalance_experts(
             tokens_per_expert=tokens_per_expert,
             num_physical_experts=num_physical_experts,
@@ -273,8 +280,9 @@ def rebalance_experts(
             num_groups=num_groups,
             num_nodes=num_nodes,
         )
-    return decode_rebalance_experts(
-        tokens_per_expert=tokens_per_expert,
-        num_physical_experts=num_physical_experts,
-        num_local_physical_experts=num_local_physical_experts,
-    )
+    else:
+        return decode_rebalance_experts(
+            tokens_per_expert=tokens_per_expert,
+            num_physical_experts=num_physical_experts,
+            num_local_physical_experts=num_local_physical_experts,
+        )
