@@ -566,6 +566,8 @@ class _UtilizationRateAccumulatorMixin(_Accumulator):
 
         self._enable = self._server_args.enable_expert_distribution_metrics
 
+        self._need_empty_cache = True
+
         if self._enable:
             window_sizes = [10, 100, 1000]
             self._history = _DequeCollection(maxlens=window_sizes)
@@ -596,6 +598,11 @@ class _UtilizationRateAccumulatorMixin(_Accumulator):
             num_gpu=self._expert_location_metadata.ep_size,
         )
         gpu_physical_count = gpu_physical_count.to(self._server_args.device)
+
+        if self._need_empty_cache:
+            self._need_empty_cache = False
+            torch.cuda.empty_cache()
+
         torch.distributed.reduce(
             gpu_physical_count, dst=0, op=torch.distributed.ReduceOp.SUM
         )
