@@ -306,6 +306,7 @@ def compute_logical_to_rank_dispatch_physical_map(
             logical_to_all_physical_map=logical_to_all_physical_map,
             num_gpus=num_gpus,
             num_physical_experts=num_physical_experts,
+            ep_rank=ep_rank,
         )
 
     device = logical_to_all_physical_map.device
@@ -348,6 +349,7 @@ def compute_logical_to_rank_dispatch_physical_map_v0(
     logical_to_all_physical_map: torch.Tensor,
     num_gpus: int,
     num_physical_experts: int,
+    ep_rank: int,
     seed: int = 42,
 ):
     print("hi execute compute_logical_to_rank_dispatch_physical_map_v0")
@@ -392,7 +394,7 @@ def compute_logical_to_rank_dispatch_physical_map_v0(
             )
 
     assert torch.all(logical_to_rank_dispatch_physical_map != -1)
-    return logical_to_rank_dispatch_physical_map
+    return logical_to_rank_dispatch_physical_map[ep_rank, :, :]
 
 
 def _logical_to_all_physical_raw(
