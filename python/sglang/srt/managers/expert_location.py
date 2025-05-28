@@ -394,7 +394,9 @@ def compute_logical_to_rank_dispatch_physical_map_v0(
             )
 
     assert torch.all(logical_to_rank_dispatch_physical_map != -1)
-    return logical_to_rank_dispatch_physical_map[ep_rank, :, :]
+
+    device = logical_to_all_physical_map.device
+    return logical_to_rank_dispatch_physical_map[ep_rank, :, :].to(device)
 
 
 def _logical_to_all_physical_raw(
