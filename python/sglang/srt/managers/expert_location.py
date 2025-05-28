@@ -25,6 +25,7 @@ from sglang.srt.configs.model_config import ModelConfig
 from sglang.srt.managers import deepseek_eplb
 from sglang.srt.model_loader import get_model_architecture
 from sglang.srt.server_args import ServerArgs
+from sglang.srt.utils import get_bool_env_var
 
 logger = logging.getLogger(__name__)
 
@@ -299,6 +300,13 @@ def compute_logical_to_rank_dispatch_physical_map(
     ep_rank: int,
     base_seed: int = 42,
 ):
+    if get_bool_env_var("SGLANG_HACK_LOGICAL_TO_RANK_DISPATCH_PHYSICAL_MAP_V0"):
+        return compute_logical_to_rank_dispatch_physical_map_v0(
+            logical_to_all_physical_map=logical_to_all_physical_map,
+            num_gpus=num_gpus,
+            num_physical_experts=num_physical_experts,
+        )
+
     device = logical_to_all_physical_map.device
 
     num_local_physical_experts = num_physical_experts // num_gpus
