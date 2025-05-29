@@ -1,9 +1,7 @@
 # This file is copied from https://github.com/deepseek-ai/EPLB/blob/main/eplb.py since that one is not a pypi package
-import os
-from typing import Literal, Optional, Tuple
+from typing import Optional, Tuple
 
 import torch
-
 from sglang.srt.managers import deepseek_eplb_v0
 from sglang.srt.utils import get_bool_env_var
 
@@ -135,7 +133,7 @@ def make_redundant_experts_chunkwise(
             num_moe_layers * num_chunks,
             num_logical_experts_per_group,
             num_redundancy_experts + 1,
-            )[
+        )[
             arange_num_moe_layers_num_groups,
             redundancy_indices.view(num_moe_layers * num_chunks),
             redundancy_count,
@@ -240,7 +238,7 @@ def prefill_rebalance_experts(
         num_physical_experts,
         num_local_physical_experts,
         num_physical_experts // num_nodes,
-        )
+    )
 
     # phy2log[i][j] = mlog2log[i][phy2mlog[i][j]]
     phy2log = mlog2log.gather(1, phy2mlog.to(torch.int64))
@@ -262,30 +260,8 @@ def rebalance_experts(
     num_local_physical_experts: int,
     num_groups: Optional[int],
     num_nodes: int,
-    phase: Literal["prefill", "decode", "null"],
 ):
-    if get_bool_env_var("SGLANG_HACK_EPLB_USE_V0"):
-        print("rebalance_experts see SGLANG_HACK_EPLB_USE_V0")
-        return deepseek_eplb_v0.rebalance_experts(
-            weight=tokens_per_expert.sum(0),
-            num_replicas=num_physical_experts,
-            num_groups=num_groups,
-            num_nodes=num_nodes,
-            num_gpus=num_physical_experts // num_local_physical_experts,
-        )
-
-    if (
-        (phase == "prefill")
-        and (num_groups is not None)
-        and (num_groups % num_nodes == 0)
-    ):
-        mode = "prefill"
-    else:
-        mode = "decode"
-    mode = os.environ.get("SGLANG_HACK_EPLB_MODE", mode)
-    print(f"rebalance_experts chosen {mode=}")
-
-    if mode == "prefill":
+    if TODO:
         return prefill_rebalance_experts(
             tokens_per_expert=tokens_per_expert,
             num_physical_experts=num_physical_experts,
