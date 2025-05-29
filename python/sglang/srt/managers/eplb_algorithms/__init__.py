@@ -25,5 +25,9 @@ def rebalance_experts(
 
     if TODO:
         return deepseek.rebalance_experts(
-
+            weight=tokens_per_expert.sum(dim=0),
+            num_replicas=num_physical_experts,
+            num_groups=num_groups,
+            num_nodes=num_nodes,
+            num_gpus=num_physical_experts // num_local_physical_experts,
         )
