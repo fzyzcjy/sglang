@@ -201,7 +201,6 @@ class ExpertLocationMetadata:
             logical_to_all_physical_map_num_valid=logical_to_all_physical_map_num_valid,
             logical_to_rank_dispatch_physical_map=compute_logical_to_rank_dispatch_physical_map(
                 logical_to_all_physical_map=logical_to_all_physical_map,
-                logical_to_all_physical_map_num_valid=logical_to_all_physical_map_num_valid,
                 num_gpus=ep_size,
                 num_physical_experts=num_physical_experts,
                 ep_rank=torch.distributed.get_rank(),
@@ -292,68 +291,14 @@ def _pad_nested_array(arr, pad_value):
     return padded
 
 
-# TODO use more sophisticated approaches
+# TODO optimize performance (rewrite and/or run in separate process with overlap)
 def compute_logical_to_rank_dispatch_physical_map(
-    logical_to_all_physical_map: torch.Tensor,
-    logical_to_all_physical_map_num_valid: torch.Tensor,
-    num_gpus: int,
-    num_physical_experts: int,
-    ep_rank: int,
-    base_seed: int = 42,
-):
-    if get_bool_env_var("SGLANG_HACK_LOGICAL_TO_RANK_DISPATCH_PHYSICAL_MAP_V0"):
-        return compute_logical_to_rank_dispatch_physical_map_v0(
-            logical_to_all_physical_map=logical_to_all_physical_map,
-            num_gpus=num_gpus,
-            num_physical_experts=num_physical_experts,
-            ep_rank=ep_rank,
-        )
-
-    device = logical_to_all_physical_map.device
-
-    num_local_physical_experts = num_physical_experts // num_gpus
-    num_layers, num_logical_experts, _ = logical_to_all_physical_map.shape
-
-    g = torch.Generator(device=device)
-    g.manual_seed(base_seed + ep_rank)
-
-    output_shape = (num_layers, num_logical_experts)
-    chosen_index = (
-        torch.randint(
-            0, 65536, output_shape, dtype=torch.int32, device=device, generator=g
-        )
-        % logical_to_all_physical_map_num_valid
-    )
-    logical_to_rank_dispatch_physical_map = torch.gather(
-        logical_to_all_physical_map, dim=2, index=chosen_index.unsqueeze(-1)
-    ).squeeze(-1)
-    assert logical_to_rank_dispatch_physical_map.shape == output_shape
-
-    for index in range(logical_to_all_physical_map_num_valid.max().item()):
-        partial_logical_to_all_physical_map = logical_to_all_physical_map[:, :, index]
-        is_valid = partial_logical_to_all_physical_map != -1
-        is_same_gpu = (
-            partial_logical_to_all_physical_map // num_local_physical_experts
-        ) == ep_rank
-        logical_to_rank_dispatch_physical_map = torch.where(
-            is_valid & is_same_gpu,
-            partial_logical_to_all_physical_map,
-            logical_to_rank_dispatch_physical_map,
-        )
-
-    assert torch.all(logical_to_rank_dispatch_physical_map != -1)
-    return logical_to_rank_dispatch_physical_map
-
-
-def compute_logical_to_rank_dispatch_physical_map_v0(
     logical_to_all_physical_map: torch.Tensor,
     num_gpus: int,
     num_physical_experts: int,
     ep_rank: int,
     seed: int = 42,
 ):
-    print("hi execute compute_logical_to_rank_dispatch_physical_map_v0")
-
     r = random.Random(seed)
 
     num_local_physical_experts = num_physical_experts // num_gpus
