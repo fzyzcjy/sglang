@@ -45,12 +45,14 @@ def rebalance_experts(
 
 def compute_algorithm(
     raw_algorithm: str,
+    num_groups: int,
+    num_nodes: int,
 ) -> EplbAlgorithm:
     if raw_algorithm != "auto":
         return EplbAlgorithm[raw_algorithm]
 
     # TODO test on real scenarios and know which one performs better
     if num_groups % num_nodes == 0:
-        return TODO
+        return EplbAlgorithm.deepseek_hierarchical
     else:
-        return TODO
+        return EplbAlgorithm.deepseek
