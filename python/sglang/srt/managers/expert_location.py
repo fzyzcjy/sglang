@@ -21,9 +21,8 @@ from typing import List, Optional
 import torch
 import torch.distributed
 import torch.nn.functional as F
-
 from sglang.srt.configs.model_config import ModelConfig
-from sglang.srt.managers import deepseek_eplb
+from sglang.srt.managers import deepseek_eplb, eplb_algorithms
 from sglang.srt.model_loader import get_model_architecture
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.utils import get_bool_env_var
@@ -138,7 +137,7 @@ class ExpertLocationMetadata:
         num_physical_experts = common["num_physical_experts"]
 
         physical_to_logical_map, logical_to_all_physical_map, expert_count = (
-            deepseek_eplb.rebalance_experts(
+            eplb_algorithms.rebalance_experts(
                 tokens_per_expert=logical_count,
                 num_physical_experts=num_physical_experts,
                 num_local_physical_experts=num_physical_experts // common["ep_size"],
@@ -317,8 +316,8 @@ def compute_logical_to_rank_dispatch_physical_map(
                 logical_to_all_physical_map, layer_id, logical_expert_id
             )
             output_partial = logical_to_rank_dispatch_physical_map[
-                :, layer_id, logical_expert_id
-            ]
+                             :, layer_id, logical_expert_id
+                             ]
 
             for gpu_id in range(num_gpus):
                 same_gpu_physical_expert_ids = [
@@ -327,7 +326,7 @@ def compute_logical_to_rank_dispatch_physical_map(
                     if _compute_gpu_id_of_physical_expert(
                         physical_expert_id, num_local_physical_experts
                     )
-                    == gpu_id
+                       == gpu_id
                 ]
                 if len(same_gpu_physical_expert_ids) > 0:
                     output_partial[gpu_id] = same_gpu_physical_expert_ids[0]
