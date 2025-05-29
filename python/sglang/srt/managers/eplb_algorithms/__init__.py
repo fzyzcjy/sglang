@@ -1,14 +1,15 @@
-from typing import Optional, Literal, Union
+from enum import Enum, auto
+from typing import Optional
 
 import torch
 from sglang.srt.managers.eplb_algorithms import deepseek_vec, deepseek
 
-EplbAlgorithm = Literal[
-    'deepseek',
-    'deepseek_hierarchical',
-    'deepseek_vec',
-    'deepseek_vec_hierarchical',
-]
+
+class EplbAlgorithm(Enum):
+    deepseek = auto()
+    deepseek_hierarchical = auto()
+    deepseek_vec = auto()
+    deepseek_vec_hierarchical = auto()
 
 
 def rebalance_experts(
@@ -19,17 +20,7 @@ def rebalance_experts(
     num_nodes: int,
     algorithm: EplbAlgorithm,
 ):
-    if algorithm in ['deepseek_vec', 'deepseek_vec_hierarchical']:
-        return deepseek_vec.rebalance_experts(
-            tokens_per_expert=tokens_per_expert,
-            num_physical_experts=num_physical_experts,
-            num_local_physical_experts=num_local_physical_experts,
-            num_groups=num_groups,
-            num_nodes=num_nodes,
-            enable_hierarchical=algorithm == 'deepseek_vec_hierarchical',
-        )
-
-    if algorithm in ['deepseek', 'deepseek_hierarchical']:
+    if algorithm in [EplbAlgorithm.deepseek, EplbAlgorithm.deepseek_hierarchical]:
         return deepseek.rebalance_experts(
             weight=tokens_per_expert.sum(dim=0),
             num_replicas=num_physical_experts,
@@ -39,13 +30,27 @@ def rebalance_experts(
             enable_hierarchical=algorithm == 'deepseek_hierarchical',
         )
 
+    if algorithm in [EplbAlgorithm.deepseek_vec, EplbAlgorithm.deepseek_vec_hierarchical]:
+        return deepseek_vec.rebalance_experts(
+            tokens_per_expert=tokens_per_expert,
+            num_physical_experts=num_physical_experts,
+            num_local_physical_experts=num_local_physical_experts,
+            num_groups=num_groups,
+            num_nodes=num_nodes,
+            enable_hierarchical=algorithm == 'deepseek_vec_hierarchical',
+        )
+
     raise NotImplementedError
 
 
 def compute_algorithm(
-    raw_algorithm: Union[EplbAlgorithm, Literal["auto"]],
+    raw_algorithm: str,
 ) -> EplbAlgorithm:
     if raw_algorithm != "auto":
-        return raw_algorithm
+        return EplbAlgorithm[raw_algorithm]
 
-    return TODO
+    # TODO test on real scenarios and know which one performs better
+    if num_groups % num_nodes == 0:
+        return TODO
+    else:
+        return TODO
