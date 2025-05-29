@@ -172,6 +172,7 @@ def rebalance_experts(
     num_groups: int,
     num_nodes: int,
     num_gpus: int,
+    enable_hierarchical: bool,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Entry point for expert-parallelism load balancer.
@@ -191,7 +192,7 @@ def rebalance_experts(
 
     num_layers, num_logical_experts = weight.shape
     weight = weight.float().cpu()
-    if num_groups % num_nodes == 0:
+    if enable_hierarchical:
         # use hierarchical load-balance policy
         phy2log, phyrank, logcnt = rebalance_experts_hierarchical(
             weight, num_replicas, num_groups, num_nodes, num_gpus
