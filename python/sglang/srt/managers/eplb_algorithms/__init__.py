@@ -42,5 +42,10 @@ def rebalance_experts(
     raise NotImplementedError
 
 
-def compute_algorithm() -> EplbAlgorithm:
+def compute_algorithm(
+    raw_algorithm: str,
+) -> EplbAlgorithm:
+    if raw_algorithm != "auto":
+        return raw_algorithm
+
     return TODO

@@ -143,7 +143,9 @@ class ExpertLocationMetadata:
                 num_local_physical_experts=num_physical_experts // common["ep_size"],
                 num_groups=model_config_for_expert_location.num_groups,
                 num_nodes=server_args.nnodes,
-                algorithm=eplb_algorithms.compute_algorithm(),
+                algorithm=eplb_algorithms.compute_algorithm(
+                    raw_algorithm=server_args.eplb_algorithm,
+                ),
             )
         )
 
