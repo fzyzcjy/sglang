@@ -135,16 +135,20 @@ class ExpertLocationMetadata:
         common = ExpertLocationMetadata._init_common(server_args, model_config)
         model_config_for_expert_location = common["model_config_for_expert_location"]
         num_physical_experts = common["num_physical_experts"]
+        num_groups = model_config_for_expert_location.num_groups
+        num_nodes = server_args.nnodes
 
         physical_to_logical_map, logical_to_all_physical_map, expert_count = (
             eplb_algorithms.rebalance_experts(
                 tokens_per_expert=logical_count,
                 num_physical_experts=num_physical_experts,
                 num_local_physical_experts=num_physical_experts // common["ep_size"],
-                num_groups=model_config_for_expert_location.num_groups,
-                num_nodes=server_args.nnodes,
+                num_groups=num_groups,
+                num_nodes=num_nodes,
                 algorithm=eplb_algorithms.compute_algorithm(
                     raw_algorithm=server_args.eplb_algorithm,
+                    num_groups=num_groups,
+                    num_nodes=num_nodes,
                 ),
             )
         )
