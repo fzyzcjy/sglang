@@ -2,7 +2,6 @@
 from typing import Tuple
 
 import torch
-
 from sglang.srt.utils import get_bool_env_var
 
 
@@ -159,7 +158,7 @@ def rebalance_experts_hierarchical(
         num_logical_experts,
         num_logical_experts // num_nodes,
         device=group_pack_index.device,
-        ).view(1, -1, 1)
+    ).view(1, -1, 1)
     ).flatten(-2)
     pphy2log = mlog2log.gather(-1, pphy2mlog)
     pphyrank = phyrank.gather(-1, pphy2phy).view(num_layers, -1)
@@ -189,20 +188,15 @@ def rebalance_experts(
         logical_to_physical_map: [layers, num_logical_experts, X], the replica indices for each expert
         expert_count: [layers, num_logical_experts], number of physical replicas for each logical expert
     """
-    print(f"hi deepseek_eplb_v0 {num_replicas=} {num_groups=} {num_nodes=} {num_gpus=}")
 
     num_layers, num_logical_experts = weight.shape
     weight = weight.float().cpu()
-    if (num_groups % num_nodes == 0) and not get_bool_env_var(
-        "SGLANG_HACK_EPLB_V0_HACK_DISABLE_HIERARCHICAL"
-    ):
-        print("hi v0 rebalance_experts use hierarchical")
+    if num_groups % num_nodes == 0:
         # use hierarchical load-balance policy
         phy2log, phyrank, logcnt = rebalance_experts_hierarchical(
             weight, num_replicas, num_groups, num_nodes, num_gpus
         )
     else:
-        print("hi v0 rebalance_experts use non-hierarchical")
         # use global load-balance policy
         phy2log, phyrank, logcnt = rebalance_experts_hierarchical(
             weight, num_replicas, 1, 1, num_gpus
@@ -220,7 +214,7 @@ def rebalance_experts(
         torch.arange(num_replicas, dtype=torch.int64, device=log2phy.device).expand(
             num_layers, -1
         ),
-        )
+    )
     return phy2log, log2phy, logcnt
 
 
