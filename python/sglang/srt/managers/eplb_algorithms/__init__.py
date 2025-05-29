@@ -3,7 +3,12 @@ from typing import Optional, Literal
 import torch
 from sglang.srt.managers.eplb_algorithms import deepseek_vec, deepseek
 
-EplbAlgorithm = Literal['TODO']
+EplbAlgorithm = Literal[
+    'deepseek',
+    'deepseek_hierarchical',
+    'deepseek_vec',
+    'deepseek_vec_hierarchical',
+]
 
 
 def rebalance_experts(
@@ -14,22 +19,24 @@ def rebalance_experts(
     num_nodes: int,
     algorithm: EplbAlgorithm,
 ):
-    if TODO:
+    if algorithm in ['deepseek_vec', 'deepseek_vec_hierarchical']:
         return deepseek_vec.rebalance_experts(
             tokens_per_expert=tokens_per_expert,
             num_physical_experts=num_physical_experts,
             num_local_physical_experts=num_local_physical_experts,
             num_groups=num_groups,
             num_nodes=num_nodes,
-            enable_hierarchical=TODO,
+            enable_hierarchical=algorithm == 'deepseek_vec_hierarchical',
         )
 
-    if TODO:
+    if algorithm in ['deepseek', 'deepseek_hierarchical']:
         return deepseek.rebalance_experts(
             weight=tokens_per_expert.sum(dim=0),
             num_replicas=num_physical_experts,
             num_groups=num_groups,
             num_nodes=num_nodes,
             num_gpus=num_physical_experts // num_local_physical_experts,
-            enable_hierarchical=TODO,
+            enable_hierarchical=algorithm == 'deepseek_hierarchical',
         )
+
+    raise NotImplementedError
