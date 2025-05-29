@@ -1,4 +1,4 @@
-from typing import Optional, Literal
+from typing import Optional, Literal, Union
 
 import torch
 from sglang.srt.managers.eplb_algorithms import deepseek_vec, deepseek
@@ -43,7 +43,7 @@ def rebalance_experts(
 
 
 def compute_algorithm(
-    raw_algorithm: str,
+    raw_algorithm: Union[EplbAlgorithm, Literal["auto"]],
 ) -> EplbAlgorithm:
     if raw_algorithm != "auto":
         return raw_algorithm
