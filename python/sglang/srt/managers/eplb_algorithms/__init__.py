@@ -21,6 +21,7 @@ def rebalance_experts(
             num_local_physical_experts=num_local_physical_experts,
             num_groups=num_groups,
             num_nodes=num_nodes,
+            enable_hierarchical=TODO,
         )
 
     if TODO:
@@ -30,4 +31,5 @@ def rebalance_experts(
             num_groups=num_groups,
             num_nodes=num_nodes,
             num_gpus=num_physical_experts // num_local_physical_experts,
+            enable_hierarchical=TODO,
         )

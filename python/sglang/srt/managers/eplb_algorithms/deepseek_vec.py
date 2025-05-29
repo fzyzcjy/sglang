@@ -258,8 +258,9 @@ def rebalance_experts(
     num_local_physical_experts: int,
     num_groups: Optional[int],
     num_nodes: int,
+    enable_hierarchical: bool,
 ):
-    if TODO:
+    if enable_hierarchical:
         return prefill_rebalance_experts(
             tokens_per_expert=tokens_per_expert,
             num_physical_experts=num_physical_experts,
