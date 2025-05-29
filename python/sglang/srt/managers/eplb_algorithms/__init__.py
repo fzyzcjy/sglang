@@ -10,6 +10,7 @@ class EplbAlgorithm(Enum):
     deepseek_hierarchical = auto()
     deepseek_vec = auto()
     deepseek_vec_hierarchical = auto()
+    # TODO may have more algorithm later
 
 
 def rebalance_experts(
