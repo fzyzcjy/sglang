@@ -2,7 +2,8 @@ from enum import Enum, auto
 from typing import Optional
 
 import torch
-from sglang.srt.managers.eplb_algorithms import deepseek_vec, deepseek
+
+from sglang.srt.managers.eplb_algorithms import deepseek, deepseek_vec
 
 
 class EplbAlgorithm(Enum):
@@ -31,7 +32,10 @@ def rebalance_experts(
             enable_hierarchical=algorithm == EplbAlgorithm.deepseek_hierarchical,
         )
 
-    if algorithm in [EplbAlgorithm.deepseek_vec, EplbAlgorithm.deepseek_vec_hierarchical]:
+    if algorithm in [
+        EplbAlgorithm.deepseek_vec,
+        EplbAlgorithm.deepseek_vec_hierarchical,
+    ]:
         return deepseek_vec.rebalance_experts(
             tokens_per_expert=tokens_per_expert,
             num_physical_experts=num_physical_experts,

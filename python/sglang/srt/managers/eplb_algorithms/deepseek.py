@@ -2,6 +2,7 @@
 from typing import Tuple
 
 import torch
+
 from sglang.srt.utils import get_bool_env_var
 
 
@@ -154,11 +155,11 @@ def rebalance_experts_hierarchical(
     pphy2mlog = (
         pphy2mlog.view(num_layers, num_nodes, -1)
         + torch.arange(
-        0,
-        num_logical_experts,
-        num_logical_experts // num_nodes,
-        device=group_pack_index.device,
-    ).view(1, -1, 1)
+            0,
+            num_logical_experts,
+            num_logical_experts // num_nodes,
+            device=group_pack_index.device,
+        ).view(1, -1, 1)
     ).flatten(-2)
     pphy2log = mlog2log.gather(-1, pphy2mlog)
     pphyrank = phyrank.gather(-1, pphy2phy).view(num_layers, -1)
