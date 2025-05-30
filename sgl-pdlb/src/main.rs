@@ -1,8 +1,14 @@
+mod io_struct;
+mod lb_state;
 mod server;
 mod strategy_lb;
 
+use lb_state::{LBConfig, LBState};
+use server::{periodic_logging, startup};
+use tokio::signal;
+
 fn main() -> anyhow::Result<()> {
-    // test code
+    // FIXME: test code, move to test folder
     let prefill_infos = (0..8)
         .map(|i| (format!("123.123.123.123:{}", i), None))
         .collect::<Vec<(String, Option<u16>)>>();
@@ -11,7 +17,7 @@ fn main() -> anyhow::Result<()> {
         .map(|i| format!("233.233.233.233:{}", i))
         .collect::<Vec<String>>();
 
-    let lb_config = server::LBConfig {
+    let lb_config = LBConfig {
         host: "localhost".to_string(),
         port: 8080,
         policy: "random".to_string(),
@@ -20,10 +26,21 @@ fn main() -> anyhow::Result<()> {
         log_interval: 5,
         timeout: 600,
     };
-    let lb_state = server::LBState::new(lb_config.clone()).map_err(|e| anyhow::anyhow!(e))?;
-    actix_web::rt::System::new().block_on(async move {
-        tokio::spawn(server::periodic_logging(lb_state.clone()));
-        server::startup(lb_config.clone(), lb_state).await.unwrap();
+    let lb_state = LBState::new(lb_config.clone()).map_err(|e| anyhow::anyhow!(e))?;
+    let ret: anyhow::Result<()> = actix_web::rt::System::new().block_on(async move {
+        tokio::select! {
+            _ = periodic_logging(lb_state.clone()) => {
+                unreachable!()
+            }
+            res = startup(lb_config.clone(), lb_state) => {
+                res.map_err(|e| anyhow::anyhow!(e))?;
+                unreachable!()
+            }
+            _ = signal::ctrl_c() => {
+                println!("Received Ctrl+C, shutting down");
+                std::process::exit(0);
+            }
+        }
     });
-    Ok(())
+    ret
 }

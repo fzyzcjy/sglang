@@ -1,4 +1,5 @@
 use rand::Rng;
+use serde_json::json;
 
 #[derive(Debug, Clone)]
 pub enum EngineType {
@@ -8,18 +9,17 @@ pub enum EngineType {
 
 #[derive(Debug, Clone)]
 pub struct EngineInfo {
-    #[allow(dead_code)]
     pub engine_type: EngineType,
     pub url: String,
-    pub boostrap_port: Option<u16>,
+    pub bootstrap_port: Option<u16>,
 }
 
 impl EngineInfo {
-    pub fn new_prefill(url: String, boostrap_port: Option<u16>) -> Self {
+    pub fn new_prefill(url: String, bootstrap_port: Option<u16>) -> Self {
         EngineInfo {
             engine_type: EngineType::Prefill,
             url,
-            boostrap_port,
+            bootstrap_port,
         }
     }
 
@@ -27,7 +27,7 @@ impl EngineInfo {
         EngineInfo {
             engine_type: EngineType::Decode,
             url,
-            boostrap_port: None,
+            bootstrap_port: None,
         }
     }
 
@@ -52,6 +52,34 @@ impl EngineInfo {
     }
 }
 
+pub struct EngineLoad {
+    pub engine_info: EngineInfo,
+    pub load: isize,
+}
+
+impl EngineLoad {
+    pub fn from_json(engine_info: &EngineInfo, json: &serde_json::Value) -> Self {
+        let load = match json.get("load") {
+            Some(load) => load.as_i64().unwrap_or(-1) as isize,
+            None => -1,
+        };
+        EngineLoad {
+            engine_info: engine_info.clone(),
+            load,
+        }
+    }
+    pub fn to_json(&self) -> serde_json::Value {
+        json!({
+            "engine": self.engine_info.to_string(),
+            "load": self.load,
+        })
+    }
+
+    pub fn to_string(&self) -> String {
+        format!("{}: {}", self.engine_info.to_string(), self.load)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum LBPolicy {
     Random,
@@ -67,32 +95,20 @@ pub struct StrategyLB {
 
 impl StrategyLB {
     pub fn new(
-        policy: String,
-        prefill_infos: Vec<(String, Option<u16>)>,
-        decode_infos: Vec<String>,
+        policy: LBPolicy,
+        prefill_servers: Vec<EngineInfo>,
+        decode_servers: Vec<EngineInfo>,
     ) -> Self {
-        let policy = match policy.as_str() {
-            "random" => LBPolicy::Random,
-            "po2" => LBPolicy::PowerOfTwo,
-            _ => panic!("Invalid policy"),
-        };
-
         StrategyLB {
             policy,
-            prefill_servers: prefill_infos
-                .into_iter()
-                .map(|(url, port)| EngineInfo::new_prefill(url, port))
-                .collect(),
-            decode_servers: decode_infos
-                .into_iter()
-                .map(|url| EngineInfo::new_decode(url))
-                .collect(),
+            prefill_servers,
+            decode_servers,
         }
     }
 
     pub fn get_one_server(&self) -> EngineInfo {
-        assert!(self.prefill_servers.len() > 0);
-        assert!(self.decode_servers.len() > 0);
+        assert!(!self.prefill_servers.is_empty());
+        assert!(!self.decode_servers.is_empty());
         self.prefill_servers[0].clone()
     }
 
