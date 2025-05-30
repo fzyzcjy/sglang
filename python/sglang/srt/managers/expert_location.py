@@ -26,7 +26,6 @@ from sglang.srt.configs.model_config import ModelConfig
 from sglang.srt.managers import eplb_algorithms
 from sglang.srt.model_loader import get_model_architecture
 from sglang.srt.server_args import ServerArgs
-from sglang.srt.utils import get_bool_env_var
 
 logger = logging.getLogger(__name__)
 
