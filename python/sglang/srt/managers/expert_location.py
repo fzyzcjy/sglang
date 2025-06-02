@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ExpertLocationMetadata:
     physical_to_logical_map: torch.Tensor  # (layers, num_physical_experts)
+    physical_to_logical_map_cpu: torch.Tensor
     logical_to_all_physical_map: torch.Tensor  # (layers, num_logical_experts, X)
     logical_to_all_physical_map_num_valid: torch.Tensor  # (layers, num_logical_experts)
     # (layers, num_logical_experts)
@@ -202,6 +203,7 @@ class ExpertLocationMetadata:
 
         return ExpertLocationMetadata(
             physical_to_logical_map=physical_to_logical_map,
+            physical_to_logical_map_cpu=physical_to_logical_map.cpu(),
             logical_to_all_physical_map=logical_to_all_physical_map_padded,
             logical_to_all_physical_map_num_valid=logical_to_all_physical_map_num_valid,
             logical_to_rank_dispatch_physical_map=(
@@ -231,6 +233,7 @@ class ExpertLocationMetadata:
 
         for field in [
             "physical_to_logical_map",
+            "physical_to_logical_map_cpu",
             "logical_to_all_physical_map",
             "logical_to_all_physical_map_num_valid",
             "logical_to_rank_dispatch_physical_map",

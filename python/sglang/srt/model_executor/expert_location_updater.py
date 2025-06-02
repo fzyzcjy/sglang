@@ -78,10 +78,10 @@ def _update_expert_weights(
     num_gpu_per_node = world_size // nnodes
 
     old_physical_to_logical_map = (
-        old_expert_location_metadata.physical_to_logical_map.tolist()
+        old_expert_location_metadata.physical_to_logical_map_cpu.tolist()
     )
     new_physical_to_logical_map = (
-        new_expert_location_metadata.physical_to_logical_map.tolist()
+        new_expert_location_metadata.physical_to_logical_map_cpu.tolist()
     )
 
     for layer_id in update_layer_ids:
