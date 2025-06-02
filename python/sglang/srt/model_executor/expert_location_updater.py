@@ -35,6 +35,7 @@ class ExpertLocationUpdater:
     def update(
         self,
         routed_experts_weights_of_layer: Dict[int, List[torch.Tensor]],
+        old_expert_location_metadata: ExpertLocationMetadata,
         new_expert_location_metadata: ExpertLocationMetadata,
         update_layer_ids: List[int],
         nnodes: int,
@@ -44,14 +45,14 @@ class ExpertLocationUpdater:
             self._first_execution = False
             torch.cuda.empty_cache()
 
-        old_expert_location_metadata = get_global_expert_location_metadata()
         _update_expert_weights(
             routed_experts_weights_of_layer=routed_experts_weights_of_layer,
-            old_expert_location_metadata=old_expert_location_metadata,
-            new_expert_location_metadata=new_expert_location_metadata,
+            old_physical_to_logical_map=old_physical_to_logical_map,
+            new_physical_to_logical_map=new_physical_to_logical_map,
             update_layer_ids=update_layer_ids,
             nnodes=nnodes,
             rank=rank,
+            num_local_physical_experts=num_local_physical_experts,
         )
         old_expert_location_metadata.update(
             new_expert_location_metadata,
