@@ -52,10 +52,18 @@ class EPLBManager:
         expert_location_metadata = ExpertLocationMetadata.init_by_eplb(
             self._server_args, self._model_runner.model_config, logical_count
         )
-        self._model_runner.update_expert_location(
-            expert_location_metadata,
-            update_layer_ids=TODO,
-        )
+
+        if TODO:
+            yield
+
+        update_layer_ids_chunks = TODO
+        for chunk_index, update_layer_ids in enumerate(update_layer_ids_chunks):
+            self._model_runner.update_expert_location(
+                expert_location_metadata,
+                update_layer_ids=update_layer_ids,
+            )
+            if chunk_index != len(update_layer_ids_chunks) - 1:
+                yield
 
         msg = f"[EPLBManager] rebalance end"
         if enable_timing:
