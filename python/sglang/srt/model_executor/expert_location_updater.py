@@ -68,6 +68,7 @@ def _update_expert_weights(**kwargs):
         return _update_expert_weights_raw(**kwargs)
 
 
+# can add watchdog as well
 def _update_expert_weights_with_canary(
     routed_experts_weights_of_layer: Dict[int, List[torch.Tensor]],
     old_expert_location_metadata: ExpertLocationMetadata,
