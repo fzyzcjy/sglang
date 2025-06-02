@@ -492,7 +492,7 @@ def _log_p2p_op_metrics(
         )
 
         nbytes_curr_node = nbytes_of_node[self_node_id]
-        nbytes_cross_node = torch.sum(nbytes_curr_node) - nbytes_curr_node
+        nbytes_cross_node = torch.sum(nbytes_of_node) - nbytes_curr_node
 
         text += (
             f"{direction}_nbytes_of_gpu={nbytes_of_gpu.tolist()} "
