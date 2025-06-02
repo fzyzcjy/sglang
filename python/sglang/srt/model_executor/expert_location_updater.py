@@ -37,6 +37,7 @@ class ExpertLocationUpdater:
         self,
         routed_experts_weights_of_layer: Dict[int, List[torch.Tensor]],
         new_expert_location_metadata: ExpertLocationMetadata,
+        update_layer_ids: List[int],
         nnodes: int,
         rank: int,
     ):

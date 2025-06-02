@@ -49,7 +49,10 @@ class EPLBManager:
         expert_location_metadata = ExpertLocationMetadata.init_by_eplb(
             self._server_args, self._model_runner.model_config, logical_count
         )
-        self._model_runner.update_expert_location(expert_location_metadata)
+        self._model_runner.update_expert_location(
+            expert_location_metadata,
+            update_layer_ids=TODO,
+        )
 
         torch.cuda.synchronize()
         time_end = time.time()
