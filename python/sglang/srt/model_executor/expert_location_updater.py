@@ -61,12 +61,11 @@ class ExpertLocationUpdater:
 
 def _update_expert_weights(
     routed_experts_weights_of_layer: Dict[int, List[torch.Tensor]],
-    old_physical_to_logical_map: List[List[int]],
-    new_physical_to_logical_map: List[List[int]],
+    old_expert_location_metadata: ExpertLocationMetadata,
+    new_expert_location_metadata: ExpertLocationMetadata,
     update_layer_ids: List[int],
     nnodes: int,
     rank: int,
-    num_local_physical_experts: int,
 ):
     log_metrics = get_bool_env_var("SGLANG_EXPERT_LOCATION_UPDATER_LOG_METRICS")
 
@@ -75,7 +74,15 @@ def _update_expert_weights(
     )
 
     world_size = torch.distributed.get_world_size()
+    num_local_physical_experts = old_expert_location_metadata.num_local_physical_experts
     num_gpu_per_node = world_size // nnodes
+
+    old_physical_to_logical_map = (
+        old_expert_location_metadata.physical_to_logical_map.tolist()
+    )
+    new_physical_to_logical_map = (
+        new_expert_location_metadata.physical_to_logical_map.tolist()
+    )
 
     for layer_id in update_layer_ids:
         update_expert_weights_single_layer(
