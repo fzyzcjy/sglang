@@ -74,6 +74,8 @@ def _update_expert_weights_with_canary(
     nnodes: int,
     rank: int,
 ):
+    num_local_physical_experts = old_expert_location_metadata.num_local_physical_experts
+
     routed_experts_weights_of_layer = TODO
     TODO_write_old_meta
 
@@ -88,7 +90,8 @@ def _update_expert_weights_with_canary(
 
     # can optimize speed if needed
     for layer_id in update_layer_ids:
-        expect_value = new_expert_location_metadata.physical_to_logical_map_cpu[layer_id, TODO:TODO]
+        expect_value = new_expert_location_metadata.physical_to_logical_map_cpu[layer_id,
+                       num_local_physical_experts * rank:num_local_physical_experts * (rank + 1)]
         actual_value = routed_experts_weights_of_layer[layer_id][-1]
         assert torch.all(expect_value == actual_value), f'{expect_value=} {actual_value=} {layer_id=}'
 
