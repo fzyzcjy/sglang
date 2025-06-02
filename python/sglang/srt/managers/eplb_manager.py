@@ -56,7 +56,7 @@ class EPLBManager:
         if TODO:
             yield
 
-        update_layer_ids_chunks = TODO
+        update_layer_ids_chunks = self._compute_update_layer_ids_chunks()
         for chunk_index, update_layer_ids in enumerate(update_layer_ids_chunks):
             self._model_runner.update_expert_location(
                 expert_location_metadata,
@@ -71,3 +71,6 @@ class EPLBManager:
             time_end = time.time()
             msg += f" time={time_end - time_start:.3f}s"
         logger.info(msg)
+
+    def _compute_update_layer_ids_chunks(self) -> List[List[int]]:
+        return TODO
