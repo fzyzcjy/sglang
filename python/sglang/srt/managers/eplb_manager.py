@@ -35,9 +35,10 @@ class EPLBManager:
         )
 
     def on_forward_pass_end(self, forward_pass_id: int):
-        if forward_pass_id % self._server_args.eplb_rebalance_num_iterations == 0:
+        if TODO:
             self.rebalance()
 
+    # can be more complex if needed
     def rebalance(self):
         logger.info("[EPLBManager] rebalance start")
 
