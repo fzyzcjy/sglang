@@ -37,7 +37,7 @@ class EPLBManager:
 
         self._main_generator = self._entrypoint()
 
-    def on_forward_pass_end(self, forward_pass_id: int):
+    def on_forward_pass_end(self):
         next(self._main_generator)
 
     # can be more complex if needed

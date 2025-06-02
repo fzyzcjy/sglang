@@ -1204,7 +1204,7 @@ class ModelRunner:
             )
 
         if self.eplb_manager is not None:
-            self.eplb_manager.on_forward_pass_end(self.forward_pass_id)
+            self.eplb_manager.on_forward_pass_end()
 
         return output
 
