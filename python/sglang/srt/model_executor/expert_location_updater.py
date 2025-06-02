@@ -488,6 +488,7 @@ def _log_p2p_op_metrics(
             nbytes_of_gpu,
             "(num_nodes num_gpu_per_node) -> num_nodes",
             num_gpu_per_node=num_gpu_per_node,
+            reduction="sum",
         )
 
         nbytes_curr_node = nbytes_of_node[self_node_id]
@@ -500,7 +501,7 @@ def _log_p2p_op_metrics(
             f"{direction}_nbytes_cross_node={nbytes_cross_node.item()} "
         )
 
-    logger.info("[ExpertLocationUpdater] {text}")
+    logger.info(f"[ExpertLocationUpdater] {text}")
 
 
 def _get_direction_from_op(op: P2POp):
