@@ -96,9 +96,7 @@ def _update_expert_weights_raw(
 ):
     log_metrics = get_bool_env_var("SGLANG_EXPERT_LOCATION_UPDATER_LOG_METRICS")
 
-    temp_buffers = create_temp_buffers(
-        next(iter(routed_experts_weights_of_layer.values()))
-    )
+    temp_buffers = create_temp_buffers(routed_experts_weights_of_layer[update_layer_ids[0]])
 
     world_size = torch.distributed.get_world_size()
     num_local_physical_experts = old_expert_location_metadata.num_local_physical_experts
