@@ -53,7 +53,10 @@ class ExpertLocationUpdater:
             nnodes=nnodes,
             rank=rank,
         )
-        old_expert_location_metadata.update(new_expert_location_metadata)
+        old_expert_location_metadata.update(
+            new_expert_location_metadata,
+            update_layer_ids=update_layer_ids,
+        )
 
 
 def _update_expert_weights(
