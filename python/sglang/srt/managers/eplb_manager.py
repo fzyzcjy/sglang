@@ -3,6 +3,7 @@ import time
 from typing import TYPE_CHECKING, List
 
 import torch.cuda
+
 from sglang.srt.managers.expert_distribution import (
     get_global_expert_distribution_recorder,
 )
@@ -19,7 +20,9 @@ class EPLBManager:
         super().__init__()
         self._model_runner = model_runner
         self._server_args = model_runner.server_args
-        self._rebalance_layers_per_chunk = self._server_args.eplb_rebalance_layers_per_chunk
+        self._rebalance_layers_per_chunk = (
+            self._server_args.eplb_rebalance_layers_per_chunk
+        )
         self._rebalance_num_iterations = self._server_args.eplb_rebalance_num_iterations
 
         # Otherwise, the circular buffer will contain stale data. If the case is needed, it can be implemented.
@@ -81,11 +84,13 @@ class EPLBManager:
         logger.info(msg)
 
     def _compute_update_layer_ids_chunks(self) -> List[List[int]]:
-        all_layer_ids = sorted(list(self._model_runner.model.routed_experts_weights_of_layer.keys()))
+        all_layer_ids = sorted(
+            list(self._model_runner.model.routed_experts_weights_of_layer.keys())
+        )
         chunk_size = self._rebalance_layers_per_chunk or 1000000
         return list(_chunk_list(all_layer_ids, chunk_size=chunk_size))
 
 
 def _chunk_list(items: List, chunk_size):
     for start_index in range(0, len(items), chunk_size):
-        yield items[start_index:start_index + chunk_size]
+        yield items[start_index : start_index + chunk_size]
