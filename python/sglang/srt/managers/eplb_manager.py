@@ -54,17 +54,14 @@ class EPLBManager:
             self._server_args, self._model_runner.model_config, logical_count
         )
 
-        if self._eplb_rebalance_layers_per_chunk is not None:
-            yield
-
         update_layer_ids_chunks = self._compute_update_layer_ids_chunks()
         for chunk_index, update_layer_ids in enumerate(update_layer_ids_chunks):
+            if len(update_layer_ids_chunks) > 1:
+                yield
             self._model_runner.update_expert_location(
                 expert_location_metadata,
                 update_layer_ids=update_layer_ids,
             )
-            if chunk_index != len(update_layer_ids_chunks) - 1:
-                yield
 
         msg = f"[EPLBManager] rebalance end"
         if enable_timing:
