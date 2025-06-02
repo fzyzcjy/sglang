@@ -19,11 +19,12 @@ class EPLBManager:
         super().__init__()
         self._model_runner = model_runner
         self._server_args = model_runner.server_args
-        self._eplb_rebalance_layers_per_chunk = self._server_args.eplb_rebalance_layers_per_chunk
+        self._rebalance_layers_per_chunk = self._server_args.eplb_rebalance_layers_per_chunk
+        self._rebalance_num_iterations = self._server_args.eplb_rebalance_num_iterations
 
         # Otherwise, the circular buffer will contain stale data. If the case is needed, it can be implemented.
         assert (
-            self._server_args.eplb_rebalance_num_iterations
+            self._rebalance_num_iterations
             <= self._server_args.expert_distribution_recorder_buffer_size
         ), "eplb_rebalance_num_iterations must be less than expert_distribution_recorder_buffer_size"
 
@@ -31,18 +32,26 @@ class EPLBManager:
             get_global_expert_distribution_recorder().start_record()
 
         logger.info(
-            f"[EPLBManager] system started, will rebalance per {self._server_args.eplb_rebalance_num_iterations} iterations."
+            f"[EPLBManager] system started, will rebalance per {self._rebalance_num_iterations} iterations."
         )
 
+        self._main_generator = self._entrypoint()
+
     def on_forward_pass_end(self, forward_pass_id: int):
-        if TODO:
-            self.rebalance()
+        next(self._main_generator)
 
     # can be more complex if needed
+    def _entrypoint(self):
+        while True:
+            for _ in range(self._rebalance_num_iterations):
+                yield
+
+            yield from self.rebalance()
+
     def rebalance(self):
         logger.info("[EPLBManager] rebalance start")
 
-        enable_timing = self._eplb_rebalance_layers_per_chunk is None
+        enable_timing = self._rebalance_layers_per_chunk is None
 
         if enable_timing:
             torch.cuda.synchronize()
@@ -73,7 +82,7 @@ class EPLBManager:
 
     def _compute_update_layer_ids_chunks(self) -> List[List[int]]:
         all_layer_ids = sorted(list(self._model_runner.model.routed_experts_weights_of_layer.keys()))
-        chunk_size = self._eplb_rebalance_layers_per_chunk or 1000000
+        chunk_size = self._rebalance_layers_per_chunk or 1000000
         return list(_chunk_list(all_layer_ids, chunk_size=chunk_size))
 
 
