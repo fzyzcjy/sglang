@@ -74,7 +74,16 @@ def _update_expert_weights_with_canary(
     nnodes: int,
     rank: int,
 ):
-    return TODO
+    TODO_change
+    _update_expert_weights_raw(
+        routed_experts_weights_of_layer=routed_experts_weights_of_layer,
+        old_expert_location_metadata=old_expert_location_metadata,
+        new_expert_location_metadata=new_expert_location_metadata,
+        update_layer_ids=update_layer_ids,
+        nnodes=nnodes,
+        rank=rank,
+    )
+    TODO_assert
 
 
 def _update_expert_weights_raw(
