@@ -22,6 +22,7 @@ from sglang.srt.managers.expert_location import (
     ExpertLocationMetadata,
     get_global_expert_location_metadata,
 )
+from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.utils import get_bool_env_var
 from torch.distributed import P2POp
 
@@ -76,8 +77,15 @@ def _update_expert_weights_with_canary(
 ):
     num_local_physical_experts = old_expert_location_metadata.num_local_physical_experts
 
-    routed_experts_weights_of_layer = TODO
-    TODO_write_old_meta
+    def _get_canary_value(meta: ExpertLocationMetadata, layer_id: int):
+        return meta.physical_to_logical_map_cpu[layer_id,
+               num_local_physical_experts * rank:num_local_physical_experts * (rank + 1)]
+
+    for layer_id in update_layer_ids:
+        canary_tensor = _get_canary_value(old_expert_location_metadata, layer_id).clone().to(
+            device=global_server_args_dict["device"], non_blocking=True
+        )
+        routed_experts_weights_of_layer[layer_id].append(canary_tensor)
 
     _update_expert_weights_raw(
         routed_experts_weights_of_layer=routed_experts_weights_of_layer,
@@ -90,8 +98,7 @@ def _update_expert_weights_with_canary(
 
     # can optimize speed if needed
     for layer_id in update_layer_ids:
-        expect_value = new_expert_location_metadata.physical_to_logical_map_cpu[layer_id,
-                       num_local_physical_experts * rank:num_local_physical_experts * (rank + 1)]
+        expect_value = _get_canary_value(new_expert_location_metadata, layer_id)
         actual_value = routed_experts_weights_of_layer[layer_id][-1]
         assert torch.all(expect_value == actual_value), f'{expect_value=} {actual_value=} {layer_id=}'
 
