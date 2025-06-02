@@ -235,8 +235,12 @@ class ExpertLocationMetadata:
             "logical_to_all_physical_map_num_valid",
             "logical_to_rank_dispatch_physical_map",
         ]:
-            src = getattr(other, field)
-            dst = getattr(self, field)
+            def _get(obj: ExpertLocationMetadata):
+                value = getattr(obj, field)
+                return value[update_layer_ids] if value is not None else None
+
+            src = _get(other)
+            dst = _get(self)
             assert (src is not None) == (dst is not None)
             if dst is not None:
                 dst[...] = src
