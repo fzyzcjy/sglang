@@ -18,12 +18,13 @@ from typing import Dict, List, Optional, Tuple
 import einops
 import torch
 import torch.distributed
+from torch.distributed import P2POp
+
 from sglang.srt.managers.expert_location import (
     ExpertLocationMetadata,
     get_global_expert_location_metadata,
 )
 from sglang.srt.utils import get_bool_env_var
-from torch.distributed import P2POp
 
 logger = logging.getLogger(__name__)
 

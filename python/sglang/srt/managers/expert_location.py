@@ -21,6 +21,7 @@ from typing import List, Optional
 import torch
 import torch.distributed
 import torch.nn.functional as F
+
 from sglang.srt.configs.model_config import ModelConfig
 from sglang.srt.managers import eplb_algorithms
 from sglang.srt.model_loader import get_model_architecture
@@ -238,6 +239,7 @@ class ExpertLocationMetadata:
             "logical_to_all_physical_map_num_valid",
             "logical_to_rank_dispatch_physical_map",
         ]:
+
             def _get(obj: ExpertLocationMetadata):
                 value = getattr(obj, field)
                 return value[update_layer_ids] if value is not None else None
@@ -338,8 +340,8 @@ def compute_logical_to_rank_dispatch_physical_map(
                 logical_to_all_physical_map, layer_id, logical_expert_id
             )
             output_partial = logical_to_rank_dispatch_physical_map[
-                             :, layer_id, logical_expert_id
-                             ]
+                :, layer_id, logical_expert_id
+            ]
 
             for gpu_id in range(num_gpus):
                 same_gpu_physical_expert_ids = [
@@ -348,7 +350,7 @@ def compute_logical_to_rank_dispatch_physical_map(
                     if _compute_gpu_id_of_physical_expert(
                         physical_expert_id, num_local_physical_experts
                     )
-                       == gpu_id
+                    == gpu_id
                 ]
                 if len(same_gpu_physical_expert_ids) > 0:
                     output_partial[gpu_id] = same_gpu_physical_expert_ids[0]
