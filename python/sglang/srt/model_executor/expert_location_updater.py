@@ -475,7 +475,7 @@ def _log_p2p_op_metrics(
     world_size: int,
     self_node_id: int,
 ):
-    texts = []
+    text = ""
     all_ops = [op for _, ops in p2p_op_infos for op in ops]
 
     for direction, ops in _group_by(all_ops, _get_direction_from_op).items():
@@ -493,15 +493,14 @@ def _log_p2p_op_metrics(
         nbytes_curr_node = nbytes_of_node[self_node_id]
         nbytes_cross_node = torch.sum(nbytes_curr_node) - nbytes_curr_node
 
-        texts.append(
-            f"[{direction}] "
-            f"nbytes_of_gpu={nbytes_of_gpu.tolist()} "
-            f"nbytes_of_node={nbytes_of_node.tolist()} "
-            f"nbytes_curr_node={nbytes_curr_node.item()} "
-            f"nbytes_cross_node={nbytes_cross_node.item()} "
+        text += (
+            f"{direction}_nbytes_of_gpu={nbytes_of_gpu.tolist()} "
+            f"{direction}_nbytes_of_node={nbytes_of_node.tolist()} "
+            f"{direction}_nbytes_curr_node={nbytes_curr_node.item()} "
+            f"{direction}_nbytes_cross_node={nbytes_cross_node.item()} "
         )
 
-    logger.info(" ; ".join(texts))
+    logger.info("[ExpertLocationUpdater] {text}")
 
 
 def _get_direction_from_op(op: P2POp):
