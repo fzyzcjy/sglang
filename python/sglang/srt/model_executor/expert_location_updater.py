@@ -22,6 +22,7 @@ from sglang.srt.managers.expert_location import (
     ExpertLocationMetadata,
     get_global_expert_location_metadata,
 )
+from sglang.srt.utils import get_bool_env_var
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,27 @@ def _update_expert_weights(
     nnodes: int,
     rank: int,
 ):
+    if get_bool_env_var("SGLANG_HACK_EXPERT_LOCATION_UPDATER_USE_TEMP"):
+        from sglang.srt.model_executor import expert_location_updater_temp
+
+        layer_ids = list(sorted(routed_experts_weights_of_layer.keys()))
+
+        def _get_indices_from_meta(meta: ExpertLocationMetadata):
+            return meta.physical_to_logical_map[layer_ids, :]
+
+        return expert_location_updater_temp.expert_model_parallel_shuffle_inplace(
+            origin_global_experts_indices=_get_indices_from_meta(
+                old_expert_location_metadata
+            ),
+            current_global_experts_indices=_get_indices_from_meta(
+                new_expert_location_metadata
+            ),
+            experts_weight=[
+                routed_experts_weights_of_layer[layer_id] for layer_id in layer_ids
+            ],
+            ep=torch.distributed.group.WORLD,
+        )
+
     temp_buffers = create_temp_buffers(
         next(iter(routed_experts_weights_of_layer.values()))
     )
