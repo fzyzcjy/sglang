@@ -235,8 +235,11 @@ class ExpertLocationMetadata:
             "logical_to_all_physical_map_num_valid",
             "logical_to_rank_dispatch_physical_map",
         ]:
+            src = getattr(other, field)
             dst = getattr(self, field)
-            dst[...] = getattr(other, field)
+            assert (src is not None) == (dst is not None)
+            if dst is not None:
+                dst[...] = src
 
     # -------------------------------- usage ------------------------------------
 
