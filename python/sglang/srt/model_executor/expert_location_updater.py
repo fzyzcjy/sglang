@@ -84,7 +84,7 @@ def _update_expert_weights(
         new_expert_location_metadata.physical_to_logical_map.tolist()
     )
 
-    for layer_id in sorted(routed_experts_weights_of_layer.keys()):
+    for layer_id in update_layer_ids:
         update_expert_weights_single_layer(
             routed_experts_weights=routed_experts_weights_of_layer[layer_id],
             temp_buffers=temp_buffers,
