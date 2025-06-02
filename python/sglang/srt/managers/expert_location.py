@@ -239,11 +239,11 @@ class ExpertLocationMetadata:
                 value = getattr(obj, field)
                 return value[update_layer_ids] if value is not None else None
 
-            src = _get(other)
-            dst = _get(self)
-            assert (src is not None) == (dst is not None)
-            if dst is not None:
-                dst[...] = src
+            other_field = _get(other)
+            self_field = _get(self)
+            assert (other_field is not None) == (self_field is not None)
+            if self_field is not None:
+                self_field[...] = other_field
 
     # -------------------------------- usage ------------------------------------
 
