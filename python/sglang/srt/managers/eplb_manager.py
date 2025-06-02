@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List
 
 import torch.cuda
 from sglang.srt.managers.expert_distribution import (
@@ -73,4 +73,5 @@ class EPLBManager:
         logger.info(msg)
 
     def _compute_update_layer_ids_chunks(self) -> List[List[int]]:
+        all_layer_ids = sorted(list(self._model_runner.model.routed_experts_weights_of_layer.keys()))
         return TODO
