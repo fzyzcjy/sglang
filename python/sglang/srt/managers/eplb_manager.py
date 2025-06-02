@@ -54,7 +54,7 @@ class EPLBManager:
             self._server_args, self._model_runner.model_config, logical_count
         )
 
-        if TODO:
+        if self._eplb_rebalance_layers_per_chunk is not None:
             yield
 
         update_layer_ids_chunks = self._compute_update_layer_ids_chunks()
