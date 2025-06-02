@@ -19,6 +19,7 @@ class EPLBManager:
         super().__init__()
         self._model_runner = model_runner
         self._server_args = model_runner.server_args
+        self._eplb_rebalance_layers_per_chunk = self._server_args.eplb_rebalance_layers_per_chunk
 
         # Otherwise, the circular buffer will contain stale data. If the case is needed, it can be implemented.
         assert (
@@ -40,7 +41,7 @@ class EPLBManager:
     def rebalance(self):
         logger.info("[EPLBManager] rebalance start")
 
-        enable_timing = TODO
+        enable_timing = self._eplb_rebalance_layers_per_chunk is None
 
         if enable_timing:
             torch.cuda.synchronize()
@@ -74,4 +75,9 @@ class EPLBManager:
 
     def _compute_update_layer_ids_chunks(self) -> List[List[int]]:
         all_layer_ids = sorted(list(self._model_runner.model.routed_experts_weights_of_layer.keys()))
+
+        chunk_size = self._eplb_rebalance_layers_per_chunk
+        if chunk_size is None:
+            chunk_size = 1000000
+
         return TODO
