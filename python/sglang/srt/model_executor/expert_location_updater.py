@@ -59,6 +59,13 @@ class ExpertLocationUpdater:
         )
 
 
+def _update_expert_weights(**kwargs):
+    if get_bool_env_var("SGLANG_EXPERT_LOCATION_UPDATER_CANARY", "true"):
+        return _update_expert_weights_with_canary(**kwargs)
+    else:
+        return _update_expert_weights_raw(**kwargs)
+
+
 def _update_expert_weights_with_canary(
     routed_experts_weights_of_layer: Dict[int, List[torch.Tensor]],
     old_expert_location_metadata: ExpertLocationMetadata,
