@@ -18,13 +18,12 @@ from typing import Dict, List, Optional, Tuple
 import einops
 import torch
 import torch.distributed
-from torch.distributed import P2POp
-
 from sglang.srt.managers.expert_location import (
     ExpertLocationMetadata,
     get_global_expert_location_metadata,
 )
 from sglang.srt.utils import get_bool_env_var
+from torch.distributed import P2POp
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +46,12 @@ class ExpertLocationUpdater:
 
         old_expert_location_metadata = get_global_expert_location_metadata()
         _update_expert_weights(
-            routed_experts_weights_of_layer,
-            old_expert_location_metadata,
-            new_expert_location_metadata,
-            nnodes,
-            rank,
+            routed_experts_weights_of_layer=routed_experts_weights_of_layer,
+            old_expert_location_metadata=old_expert_location_metadata,
+            new_expert_location_metadata=new_expert_location_metadata,
+            update_layer_ids=update_layer_ids,
+            nnodes=nnodes,
+            rank=rank,
         )
         old_expert_location_metadata.update(new_expert_location_metadata)
 
@@ -60,6 +60,7 @@ def _update_expert_weights(
     routed_experts_weights_of_layer: Dict[int, List[torch.Tensor]],
     old_expert_location_metadata: ExpertLocationMetadata,
     new_expert_location_metadata: ExpertLocationMetadata,
+    update_layer_ids: List[int],
     nnodes: int,
     rank: int,
 ):
