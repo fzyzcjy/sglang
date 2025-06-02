@@ -108,9 +108,11 @@ def _update_expert_weights_with_canary(
         # can optimize speed if needed
         expect_value = _get_canary_value(new_expert_location_metadata, layer_id)
         actual_value = routed_experts_weights_of_layer[layer_id][-1].cpu()
-        assert torch.all(
-            expect_value == actual_value
-        ), f"{expect_value=} {actual_value=} {layer_id=}"
+        assert torch.all(expect_value == actual_value), (
+            f"{expect_value=} {actual_value=} {layer_id=} "
+            f"{old_expert_location_metadata.physical_to_logical_map_cpu.tolist()=} "
+            f"{new_expert_location_metadata.physical_to_logical_map_cpu.tolist()=} "
+        )
 
 
 def _update_expert_weights_raw(
