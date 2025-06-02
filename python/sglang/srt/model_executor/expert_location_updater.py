@@ -137,6 +137,9 @@ def update_expert_weights_single_layer(
     assert isinstance(old_physical_to_logical_map, list)
     assert isinstance(new_physical_to_logical_map, list)
 
+    if get_bool_env_var("SGLANG_HACK_EXPERT_LOCATION_UPDATER_EXTRA_BARRIER"):
+        torch.distributed.barrier()
+
     output_logs = [] if debug else None
 
     num_physical_experts = len(old_physical_to_logical_map)
