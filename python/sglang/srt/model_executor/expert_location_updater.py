@@ -18,13 +18,14 @@ from typing import Dict, List, Optional, Tuple
 import einops
 import torch
 import torch.distributed
+from torch.distributed import P2POp
+
 from sglang.srt.managers.expert_location import (
     ExpertLocationMetadata,
     get_global_expert_location_metadata,
 )
 from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.utils import get_bool_env_var
-from torch.distributed import P2POp
 
 logger = logging.getLogger(__name__)
 
@@ -78,13 +79,19 @@ def _update_expert_weights_with_canary(
     num_local_physical_experts = old_expert_location_metadata.num_local_physical_experts
 
     def _get_canary_value(meta: ExpertLocationMetadata, layer_id: int):
-        return meta.physical_to_logical_map_cpu[layer_id,
-               num_local_physical_experts * rank:num_local_physical_experts * (rank + 1)]
+        return meta.physical_to_logical_map_cpu[
+            layer_id,
+            num_local_physical_experts * rank : num_local_physical_experts * (rank + 1),
+        ]
 
-    routed_experts_weights_of_layer = {k: [x for x in v] for k, v in routed_experts_weights_of_layer.items()}
+    routed_experts_weights_of_layer = {
+        k: [x for x in v] for k, v in routed_experts_weights_of_layer.items()
+    }
     for layer_id in update_layer_ids:
-        canary_tensor = _get_canary_value(old_expert_location_metadata, layer_id).clone().to(
-            device=global_server_args_dict["device"], non_blocking=True
+        canary_tensor = (
+            _get_canary_value(old_expert_location_metadata, layer_id)
+            .clone()
+            .to(device=global_server_args_dict["device"], non_blocking=True)
         )
         routed_experts_weights_of_layer[layer_id].append(canary_tensor)
 
@@ -101,7 +108,9 @@ def _update_expert_weights_with_canary(
     for layer_id in update_layer_ids:
         expect_value = _get_canary_value(new_expert_location_metadata, layer_id)
         actual_value = routed_experts_weights_of_layer[layer_id][-1]
-        assert torch.all(expect_value == actual_value), f'{expect_value=} {actual_value=} {layer_id=}'
+        assert torch.all(
+            expect_value == actual_value
+        ), f"{expect_value=} {actual_value=} {layer_id=}"
 
 
 def _update_expert_weights_raw(
@@ -114,7 +123,9 @@ def _update_expert_weights_raw(
 ):
     log_metrics = get_bool_env_var("SGLANG_EXPERT_LOCATION_UPDATER_LOG_METRICS")
 
-    temp_buffers = create_temp_buffers(routed_experts_weights_of_layer[update_layer_ids[0]])
+    temp_buffers = create_temp_buffers(
+        routed_experts_weights_of_layer[update_layer_ids[0]]
+    )
 
     world_size = torch.distributed.get_world_size()
     num_local_physical_experts = old_expert_location_metadata.num_local_physical_experts
