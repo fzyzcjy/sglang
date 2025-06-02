@@ -612,10 +612,15 @@ class ModelRunner:
         self,
         new_expert_location_metadata: ExpertLocationMetadata,
         update_layer_ids: List[int],
+        old_physical_to_logical_map_cpu: List[List[int]],
+        new_physical_to_logical_map_cpu: List[List[int]],
     ):
         self.expert_location_updater.update(
             self.model.routed_experts_weights_of_layer,
-            new_expert_location_metadata,
+            old_expert_location_metadata=get_global_expert_location_metadata(),
+            new_expert_location_metadata=new_expert_location_metadata,
+            old_physical_to_logical_map_cpu=old_physical_to_logical_map_cpu,
+            new_physical_to_logical_map_cpu=new_physical_to_logical_map_cpu,
             update_layer_ids=update_layer_ids,
             nnodes=self.server_args.nnodes,
             rank=self.tp_rank,
