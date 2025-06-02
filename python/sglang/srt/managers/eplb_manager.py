@@ -3,7 +3,6 @@ import time
 from typing import TYPE_CHECKING
 
 import torch.cuda
-
 from sglang.srt.managers.expert_distribution import (
     get_global_expert_distribution_recorder,
 )
@@ -40,8 +39,12 @@ class EPLBManager:
 
     def rebalance(self):
         logger.info("[EPLBManager] rebalance start")
-        torch.cuda.synchronize()
-        time_start = time.time()
+
+        enable_timing = TODO
+
+        if enable_timing:
+            torch.cuda.synchronize()
+            time_start = time.time()
 
         logical_count = get_global_expert_distribution_recorder().dump_record(
             output_mode="object"
@@ -54,6 +57,9 @@ class EPLBManager:
             update_layer_ids=TODO,
         )
 
-        torch.cuda.synchronize()
-        time_end = time.time()
-        logger.info(f"[EPLBManager] rebalance end time={time_end - time_start:.3f}s")
+        msg = f"[EPLBManager] rebalance end"
+        if enable_timing:
+            torch.cuda.synchronize()
+            time_end = time.time()
+            msg += f" time={time_end - time_start:.3f}s"
+        logger.info(msg)
