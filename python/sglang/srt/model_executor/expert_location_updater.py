@@ -47,12 +47,12 @@ class ExpertLocationUpdater:
 
         _update_expert_weights(
             routed_experts_weights_of_layer=routed_experts_weights_of_layer,
-            old_physical_to_logical_map_cpu=old_physical_to_logical_map_cpu,
-            new_physical_to_logical_map_cpu=new_physical_to_logical_map_cpu,
+            old_physical_to_logical_map=old_physical_to_logical_map,
+            new_physical_to_logical_map=new_physical_to_logical_map,
             update_layer_ids=update_layer_ids,
             nnodes=nnodes,
             rank=rank,
-            num_local_physical_experts=new_expert_location_metadata.num_local_physical_experts,
+            num_local_physical_experts=num_local_physical_experts,
         )
         old_expert_location_metadata.update(
             new_expert_location_metadata,
@@ -62,8 +62,8 @@ class ExpertLocationUpdater:
 
 def _update_expert_weights(
     routed_experts_weights_of_layer: Dict[int, List[torch.Tensor]],
-    old_physical_to_logical_map_cpu: List[List[int]],
-    new_physical_to_logical_map_cpu: List[List[int]],
+    old_physical_to_logical_map: List[List[int]],
+    new_physical_to_logical_map: List[List[int]],
     update_layer_ids: List[int],
     nnodes: int,
     rank: int,
@@ -82,8 +82,8 @@ def _update_expert_weights(
         update_expert_weights_single_layer(
             routed_experts_weights=routed_experts_weights_of_layer[layer_id],
             temp_buffers=temp_buffers,
-            old_physical_to_logical_map=old_physical_to_logical_map_cpu[layer_id],
-            new_physical_to_logical_map=new_physical_to_logical_map_cpu[layer_id],
+            old_physical_to_logical_map=old_physical_to_logical_map[layer_id],
+            new_physical_to_logical_map=new_physical_to_logical_map[layer_id],
             num_local_physical_experts=num_local_physical_experts,
             num_gpu_per_node=num_gpu_per_node,
             rank=rank,
