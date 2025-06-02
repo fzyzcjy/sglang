@@ -81,6 +81,7 @@ def _update_expert_weights_with_canary(
         return meta.physical_to_logical_map_cpu[layer_id,
                num_local_physical_experts * rank:num_local_physical_experts * (rank + 1)]
 
+    routed_experts_weights_of_layer = {k: [x for x in v] for k, v in routed_experts_weights_of_layer.items()}
     for layer_id in update_layer_ids:
         canary_tensor = _get_canary_value(old_expert_location_metadata, layer_id).clone().to(
             device=global_server_args_dict["device"], non_blocking=True
