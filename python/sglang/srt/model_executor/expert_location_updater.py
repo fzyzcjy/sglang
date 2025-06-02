@@ -18,13 +18,12 @@ from typing import Dict, List, Optional, Tuple
 import einops
 import torch
 import torch.distributed
-from torch.distributed import P2POp
-
 from sglang.srt.managers.expert_location import (
     ExpertLocationMetadata,
     get_global_expert_location_metadata,
 )
 from sglang.srt.utils import get_bool_env_var
+from torch.distributed import P2POp
 
 logger = logging.getLogger(__name__)
 
@@ -78,19 +77,12 @@ def _update_expert_weights(
     num_local_physical_experts = old_expert_location_metadata.num_local_physical_experts
     num_gpu_per_node = world_size // nnodes
 
-    old_physical_to_logical_map = (
-        old_expert_location_metadata.physical_to_logical_map_cpu.tolist()
-    )
-    new_physical_to_logical_map = (
-        new_expert_location_metadata.physical_to_logical_map_cpu.tolist()
-    )
-
     for layer_id in update_layer_ids:
         update_expert_weights_single_layer(
             routed_experts_weights=routed_experts_weights_of_layer[layer_id],
             temp_buffers=temp_buffers,
-            old_physical_to_logical_map=old_physical_to_logical_map[layer_id],
-            new_physical_to_logical_map=new_physical_to_logical_map[layer_id],
+            old_physical_to_logical_map=old_expert_location_metadata.physical_to_logical_map_cpu[layer_id].tolist(),
+            new_physical_to_logical_map=new_expert_location_metadata.physical_to_logical_map_cpu[layer_id].tolist(),
             num_local_physical_experts=num_local_physical_experts,
             num_gpu_per_node=num_gpu_per_node,
             rank=rank,
