@@ -86,7 +86,7 @@ def topk_ids_logical_to_physical(
         return _topk_ids_logical_to_physical_dynamic(topk_ids, info)
     if info.ep_dispatch_algorithm == "fake_grouped_uniform":
         return _topk_ids_logical_to_physical_fake_grouped_uniform(topk_ids, info)
-    raise NotImplementedError
+    raise NotImplementedError(f"Unknown algorithm {info.ep_dispatch_algorithm}")
 
 
 def _topk_ids_logical_to_physical_static(
