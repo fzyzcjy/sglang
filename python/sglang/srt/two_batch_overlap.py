@@ -41,6 +41,10 @@ def compute_split_seq_index(
         assert extend_lens is not None
         return _split_array_by_half_sum(extend_lens)
     elif forward_mode.is_decode():
+        if get_bool_env_var("SGLANG_HACK_TBO_UNEVEN_SPLIT"):
+            print("HACK: tbo uneven split")
+            return num_tokens // 3
+
         return num_tokens // 2
     elif forward_mode.is_idle():
         assert num_tokens == 0

@@ -113,6 +113,7 @@ def _topk_ids_logical_to_physical_dynamic(
     topk_ids = topk_ids.view(topk_ids_original_shape)
     return topk_ids
 
+
 def _topk_ids_logical_to_physical_fake_uniform(
     topk_ids: torch.Tensor, info: Optional[ExpertLocationDispatchInfo]
 ) -> torch.Tensor:
@@ -124,7 +125,6 @@ def _topk_ids_logical_to_physical_fake_uniform(
         dtype=topk_ids.dtype,
         device=topk_ids.device,
     )
-
 
 
 @torch.compile(dynamic=True, backend=get_compiler_backend())
