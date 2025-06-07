@@ -3,7 +3,6 @@ import logging
 from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
 
 import torch
-
 from sglang.srt.layers.attention.base_attn_backend import AttentionBackend
 from sglang.srt.layers.communicator import (
     CommunicateContext,
@@ -41,9 +40,12 @@ def compute_split_seq_index(
         assert extend_lens is not None
         return _split_array_by_half_sum(extend_lens)
     elif forward_mode.is_decode():
+        # --------------------------------------------
         if get_bool_env_var("SGLANG_HACK_TBO_UNEVEN_SPLIT"):
-            print("HACK: tbo uneven split")
-            return num_tokens // 3
+            if 64 <= num_tokens <= 100:
+                return 32
+            return num_tokens // 2
+        # --------------------------------------------
 
         return num_tokens // 2
     elif forward_mode.is_idle():
