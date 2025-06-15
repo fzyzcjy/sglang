@@ -25,14 +25,12 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from tqdm import tqdm
-
-from sglang.srt import debug_utils
 from transformers import PretrainedConfig
 
 from sglang.srt.distributed import (
     get_tensor_model_parallel_world_size,
     parallel_state,
-    tensor_model_parallel_all_reduce, get_tensor_model_parallel_rank,
+    tensor_model_parallel_all_reduce,
 )
 from sglang.srt.layers.activation import SiluAndMul
 from sglang.srt.layers.communicator import (
@@ -945,8 +943,6 @@ class DeepseekV2AttentionMLA(nn.Module):
             q, latent_cache = self.fused_qkv_a_proj_with_mqa(hidden_states)[0].split(
                 [self.q_lora_rank, self.kv_lora_rank + self.qk_rope_head_dim], dim=-1
             )
-            debug_utils.dumper.dump("MLA__q", q, layer_id=self.layer_id)
-            debug_utils.dumper.dump("MLA__latent_cache", q, layer_id=self.layer_id)
             k_nope = latent_cache[..., : self.kv_lora_rank]
 
             # overlap qk norm
@@ -1022,7 +1018,6 @@ class DeepseekV2AttentionMLA(nn.Module):
             attn_output = self.attn_mqa(
                 q_nope_out, k_nope, k_nope, forward_batch, q_rope=q_pe, k_rope=k_pe
             )
-            debug_utils.dumper.dump("MLA__attn_output", attn_output, layer_id=self.layer_id)
         else:
             q = torch.cat([q_nope_out, q_pe], dim=-1)
             k = torch.cat([k_nope, k_pe], dim=-1)
@@ -1484,12 +1479,9 @@ class DeepseekV2DecoderLayer(nn.Module):
         residual: Optional[torch.Tensor],
         zero_allocator: BumpAllocator,
     ) -> torch.Tensor:
-        debug_utils.dumper.dump("Layer_start__hidden_states", hidden_states, layer_id=self.layer_id)
-
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states, residual, forward_batch
         )
-        debug_utils.dumper.dump("Layer_after_prepare_attn__hidden_states", hidden_states, layer_id=self.layer_id)
 
         hidden_states = self.self_attn(
             positions=positions,
@@ -1497,20 +1489,16 @@ class DeepseekV2DecoderLayer(nn.Module):
             forward_batch=forward_batch,
             zero_allocator=zero_allocator,
         )
-        debug_utils.dumper.dump("Layer_after_self_attn__hidden_states", hidden_states, layer_id=self.layer_id)
 
         hidden_states, residual = self.layer_communicator.prepare_mlp(
             hidden_states, residual, forward_batch
         )
-        debug_utils.dumper.dump("Layer_after_prepare_mlp__hidden_states", hidden_states, layer_id=self.layer_id)
 
         hidden_states = self.mlp(hidden_states, forward_batch)
-        debug_utils.dumper.dump("Layer_after_mlp__hidden_states", hidden_states, layer_id=self.layer_id)
 
         hidden_states, residual = self.layer_communicator.postprocess_layer(
             hidden_states, residual, forward_batch
         )
-        debug_utils.dumper.dump("Layer_end__hidden_states", hidden_states, layer_id=self.layer_id)
 
         return hidden_states, residual
 
@@ -1762,13 +1750,7 @@ class DeepseekV2ForCausalLM(nn.Module):
         forward_batch: ForwardBatch,
         input_embeds: torch.Tensor = None,
     ) -> torch.Tensor:
-        print(f"CausalLM.forward [{get_tensor_model_parallel_rank()}] {forward_batch.forward_mode=}")
-        debug_utils.dumper.dump("CausalLM_start__input_ids", input_ids)
-        debug_utils.dumper.dump("CausalLM_start__positions", positions)
-
         hidden_states = self.model(input_ids, positions, forward_batch, input_embeds)
-
-        debug_utils.dumper.dump("CausalLM_end__hidden_states", hidden_states)
 
         return self.logits_processor(
             input_ids, hidden_states, self.lm_head, forward_batch

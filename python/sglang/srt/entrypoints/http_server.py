@@ -848,8 +848,7 @@ def _wait_and_warmup(
         if server_args.dp_size == 1:
             json_data["input_ids"] = json_data["input_ids"][0]
     else:
-        # json_data["text"] = ["The capital city of France is"] * server_args.dp_size
-        json_data["text"] = ["1+1=2, 1+2=3, 1+3=4, 1+4=5, 1+5="]
+        json_data["text"] = ["The capital city of France is"] * server_args.dp_size
         # TODO Workaround the bug that embedding errors for list of size 1
         if server_args.dp_size == 1:
             json_data["text"] = json_data["text"][0]
