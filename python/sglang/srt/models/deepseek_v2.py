@@ -910,7 +910,7 @@ class DeepseekV2AttentionMLA(nn.Module):
         q_pe, k_pe = self.rotary_emb(positions, q_pe, k_pe)
         q[..., self.qk_nope_head_dim :] = q_pe
 
-        k = kv[..., self.qk_nope_head_dim + self.qk_rope_head_dim]
+        k = kv[..., :self.qk_nope_head_dim + self.qk_rope_head_dim]
         k[..., self.qk_nope_head_dim:] = k_pe
 
         latent_cache[:, :, : self.kv_lora_rank] = kv_a.unsqueeze(1)
