@@ -854,6 +854,7 @@ def ep_scatter(
     output_tensor_scale: torch.Tensor,
     m_indices: torch.Tensor,
     output_index: torch.Tensor,
+    scale_ue8m0: bool = False,
 ):
     BLOCK_E = 128  # token num of per expert is aligned to 128
     BLOCK_D = 128  # block size of quantization
@@ -864,7 +865,7 @@ def ep_scatter(
     grid = num_experts
 
     scale_hidden_size = hidden_size // BLOCK_D
-    if deep_gemm_wrapper.DEEPGEMM_SCALE_UE8M0:
+    if scale_ue8m0:
         scale_hidden_size = ceil_div(scale_hidden_size, 4)
 
     assert m_indices.shape[0] % BLOCK_E == 0
