@@ -5,6 +5,7 @@ import torch
 import triton
 
 from sglang.math_utils import ceil_div
+from sglang.srt.layers.quantization import deep_gemm_wrapper
 from sglang.srt.layers.quantization.fp8_kernel import per_token_group_quant_fp8
 from sglang.srt.utils import dispose_tensor, is_cuda
 
@@ -862,11 +863,13 @@ def ep_scatter(
     # grid = (triton.cdiv(hidden_size, BLOCK_D), num_experts)
     grid = num_experts
 
+    scale_hidden_size = hidden_size // BLOCK_D
+    if deep_gemm_wrapper.DEEPGEMM_SCALE_UE8M0:
+        scale_hidden_size = ceil_div(scale_hidden_size, 4)
+
     assert m_indices.shape[0] % BLOCK_E == 0
     assert recv_x_scale.dtype == output_tensor_scale.dtype
-    assert recv_x_scale.shape[1] == output_tensor_scale.shape[1]
-
-    scale_hidden_size = hidden_size // BLOCK_D
+    assert recv_x_scale.shape[1] == output_tensor_scale.shape[1] == scale_hidden_size
 
     _fwd_kernel_ep_scatter_1[(grid,)](
         num_recv_tokens_per_expert,
