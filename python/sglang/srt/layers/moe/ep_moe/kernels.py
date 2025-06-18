@@ -866,6 +866,8 @@ def ep_scatter(
     assert recv_x_scale.dtype == output_tensor_scale.dtype
     assert recv_x_scale.shape[1] == output_tensor_scale.shape[1]
 
+    scale_hidden_size = hidden_size // BLOCK_D
+
     _fwd_kernel_ep_scatter_1[(grid,)](
         num_recv_tokens_per_expert,
         expert_start_loc,
@@ -903,8 +905,8 @@ def ep_scatter(
         num_warps=num_warps,
         HIDDEN_SIZE=hidden_size,
         HIDDEN_SIZE_PAD=triton.next_power_of_2(hidden_size),
-        SCALE_HIDDEN_SIZE=hidden_size // BLOCK_D,
-        SCALE_HIDDEN_SIZE_PAD=triton.next_power_of_2(hidden_size // BLOCK_D),
+        SCALE_HIDDEN_SIZE=scale_hidden_size,
+        SCALE_HIDDEN_SIZE_PAD=triton.next_power_of_2(scale_hidden_size),
     )
     return
 
