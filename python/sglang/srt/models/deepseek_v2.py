@@ -1975,8 +1975,6 @@ class DeepseekV2ForCausalLM(nn.Module):
                         experts.w2_weight_fp8,
                     ]:
                         requant_weight_ue8m0_inplace(w[0], w[1], weight_block_size)
-                        print("HACK: transpose moe weight")
-                        w[0].data = w[0].data.mT.contiguous().mT
             else:
                 mlp = layer.mlp
                 assert isinstance(mlp, DeepseekV2MLP)
