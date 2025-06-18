@@ -905,14 +905,12 @@ class DeepseekV2AttentionMLA(nn.Module):
         kv_a = self.kv_a_layernorm(kv_a.contiguous())
         kv = self.kv_b_proj(kv_a)[0]
         kv = kv.view(-1, self.num_local_heads, self.qk_nope_head_dim + self.v_head_dim)
-        k_nope = kv[..., : self.qk_nope_head_dim]
         v = kv[..., self.qk_nope_head_dim :]
         k_pe = latent_cache[:, :, self.kv_lora_rank :]
-        q_pe, k_pe = self.rotary_emb(positions, q_pe, k_pe)
-        q[..., self.qk_nope_head_dim :] = q_pe
-        k = torch.empty_like(q)
-        k[..., : self.qk_nope_head_dim] = k_nope
-        k[..., self.qk_nope_head_dim :] = k_pe
+
+        q_pe_output, k_pe_output = self.rotary_emb(positions, q_pe, k_pe)
+        assert q_pe_output.data_ptr() == q_pe.data_ptr()
+        assert k_pe_output.data_ptr() == k_pe.data_ptr()
 
         latent_cache[:, :, : self.kv_lora_rank] = kv_a.unsqueeze(1)
         latent_cache[:, :, self.kv_lora_rank :] = k_pe
@@ -922,7 +920,7 @@ class DeepseekV2AttentionMLA(nn.Module):
             self.attn_mha, forward_batch.out_cache_loc, latent_cache, None
         )
 
-        return q, k, v, forward_batch
+        return q, kv, v, forward_batch
 
     def forward_normal_core(self, q, k, v, forward_batch):
         attn_output = self.attn_mha(q, k, v, forward_batch, save_kv_cache=False)
