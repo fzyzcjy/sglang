@@ -864,6 +864,7 @@ def ep_scatter(
 
     assert m_indices.shape[0] % BLOCK_E == 0
     assert recv_x_scale.dtype == output_tensor_scale.dtype
+    assert recv_x_scale.shape[1] == output_tensor_scale.shape[1]
 
     _fwd_kernel_ep_scatter_1[(grid,)](
         num_recv_tokens_per_expert,
