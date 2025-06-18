@@ -853,7 +853,6 @@ def ep_scatter(
     output_tensor_scale: torch.Tensor,
     m_indices: torch.Tensor,
     output_index: torch.Tensor,
-    scale_ue8m0: bool = False,
 ):
     BLOCK_E = 128  # token num of per expert is aligned to 128
     BLOCK_D = 128  # block size of quantization
