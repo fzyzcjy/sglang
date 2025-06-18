@@ -818,7 +818,10 @@ def _fwd_kernel_ep_scatter_2(
         token_id = token_id_int32.to(tl.int64)
         to_copy = tl.load(recv_x + token_id * recv_x_stride0 + offset_in, mask=mask)
         to_copy_s = tl.load(
-            recv_x_scale + token_id * recv_x_scale_stride0 + index_in_s * recv_x_scale_stride1, mask=mask_s
+            recv_x_scale
+            + token_id * recv_x_scale_stride0
+            + index_in_s * recv_x_scale_stride1,
+            mask=mask_s,
         )
 
         for topk_idx_int32 in tl.range(0, topk_num, 1, num_stages=4):
@@ -839,7 +842,11 @@ def _fwd_kernel_ep_scatter_2(
                     output_tensor_scale + dest_token_index * output_tensor_scale_stride0
                 )
                 tl.store(output_tensor_ptr + offset_in, to_copy, mask=mask)
-                tl.store(output_tensor_scale_ptr + index_in_s * output_tensor_scale_stride1, to_copy_s, mask=mask_s)
+                tl.store(
+                    output_tensor_scale_ptr + index_in_s * output_tensor_scale_stride1,
+                    to_copy_s,
+                    mask=mask_s,
+                )
 
 
 # copy from https://github.com/ModelTC/lightllm/blob/main/lightllm/common/fused_moe/deepep_scatter_gather.py
