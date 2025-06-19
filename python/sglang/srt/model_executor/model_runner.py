@@ -220,6 +220,11 @@ class ModelRunner:
             "pp_proxy_tensors" in inspect.signature(self.model.forward).parameters
         )
 
+        if get_bool_env_var("SGLANG_HACK_GC_DISABLE"):
+            print("HACK!!! gc.disable")
+            import gc
+            gc.disable()
+
     def initialize(self, min_per_gpu_memory: float):
         server_args = self.server_args
         self.memory_saver_adapter = TorchMemorySaverAdapter.create(
