@@ -150,7 +150,7 @@ from sglang.srt.utils import (
     pyspy_dump_schedulers,
     set_gpu_proc_affinity,
     set_random_seed,
-    suppress_other_loggers,
+    suppress_other_loggers, configure_gc_logger,
 )
 from sglang.utils import TypeBasedDispatcher, get_exception_traceback
 
@@ -507,6 +507,9 @@ class Scheduler(
             self.server_args.disaggregation_mode
         )
         self.init_disaggregation()
+
+        if get_bool_env_var("SGLANG_GC_LOG"):
+            configure_gc_logger()
 
     def maybe_sleep_on_idle(self):
         if self.idle_sleeper is not None:
