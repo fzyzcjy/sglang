@@ -140,6 +140,7 @@ from sglang.srt.utils import (
     DeepEPMode,
     DynamicGradMode,
     broadcast_pyobj,
+    configure_gc_logger,
     configure_logger,
     disable_request_logging,
     get_available_gpu_memory,
@@ -150,7 +151,7 @@ from sglang.srt.utils import (
     pyspy_dump_schedulers,
     set_gpu_proc_affinity,
     set_random_seed,
-    suppress_other_loggers, configure_gc_logger,
+    suppress_other_loggers,
 )
 from sglang.utils import TypeBasedDispatcher, get_exception_traceback
 

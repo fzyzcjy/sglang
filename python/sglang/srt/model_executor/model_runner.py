@@ -223,6 +223,7 @@ class ModelRunner:
         if get_bool_env_var("SGLANG_HACK_GC_DISABLE"):
             print("HACK!!! gc.disable")
             import gc
+
             gc.disable()
 
     def initialize(self, min_per_gpu_memory: float):
