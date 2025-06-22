@@ -958,6 +958,9 @@ class DeepEPMoE(EPMoE):
             self.w2_weight_scale_inv if self.use_block_quant else self.w2_weight_scale,
         )
 
+        if get_bool_env_var("SGLANG_HACK_EP_DOWN_GEMM_OVERLAP"):
+            self.alt_stream = torch.cuda.Stream()
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -1297,14 +1300,18 @@ class DeepEPMoE(EPMoE):
         down_output = torch.empty(
             (num_groups, m, n), device=down_input.device, dtype=torch.bfloat16
         )
-        deep_gemm_wrapper.grouped_gemm_nt_f8f8bf16_masked(
-            down_input_fp8,
-            self.w2_weight_fp8,
-            down_output,
-            masked_m,
-            expected_m,
-            recipe=(1, 128, 128) if deep_gemm_wrapper.DEEPGEMM_BLACKWELL else None,
-        )
+
+        if get_bool_env_var("SGLANG_HACK_EP_DOWN_GEMM_OVERLAP"):
+            TODO
+        else:
+            deep_gemm_wrapper.grouped_gemm_nt_f8f8bf16_masked(
+                down_input_fp8,
+                self.w2_weight_fp8,
+                down_output,
+                masked_m,
+                expected_m,
+                recipe=(1, 128, 128) if deep_gemm_wrapper.DEEPGEMM_BLACKWELL else None,
+            )
 
         return down_output
 
