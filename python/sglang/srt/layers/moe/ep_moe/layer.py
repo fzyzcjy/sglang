@@ -60,6 +60,8 @@ if _is_hip:
 
 logger = logging.getLogger(__name__)
 
+# temp
+import deep_gemm
 
 class GroupedGemmRunner(torch.nn.Module):
     flashinfer_gemm_warpper = None
@@ -1319,7 +1321,7 @@ class DeepEPMoE(EPMoE):
             expert_slice = slice(0, 1)
             deep_gemm.fp8_m_grouped_gemm_nt_masked(
                 _pick_expert_fp8(down_input_fp8, expert_slice),
-                _pick_expert_fp8(w2_weight_fp8, expert_slice),
+                _pick_expert_fp8(self.w2_weight_fp8, expert_slice),
                 down_output[expert_slice, :, :],
                 masked_m[expert_slice],
                 expected_m,
@@ -1332,7 +1334,7 @@ class DeepEPMoE(EPMoE):
                     expert_slice = slice(1, num_experts)
                     deepgemm_out = deep_gemm.fp8_m_grouped_gemm_nt_masked(
                         _pick_expert_fp8(down_input_fp8, expert_slice),
-                        _pick_expert_fp8(w2_weight_fp8, expert_slice),
+                        _pick_expert_fp8(self.w2_weight_fp8, expert_slice),
                         down_output[expert_slice, :, :],
                         masked_m[expert_slice],
                         expected_m,
@@ -1352,6 +1354,10 @@ class DeepEPMoE(EPMoE):
                 recipe=(1, 128, 128) if deep_gemm_wrapper.DEEPGEMM_BLACKWELL else None,
             )
             return down_output
+
+
+def _pick_expert_fp8(a, expert_slice):
+    return a[0][expert_slice, :, :], a[1][expert_slice, :, :]
 
 
 def get_moe_impl_class():
