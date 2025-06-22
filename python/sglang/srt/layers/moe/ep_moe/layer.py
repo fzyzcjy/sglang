@@ -967,18 +967,6 @@ class DeepEPMoE(EPMoE):
             # TODO if deepgemm not use all SM then make deepep use more
             deepep_num_sms = 32
             self.deepgemm_num_sms_upper_bound = torch.cuda.get_device_properties(device='cuda').multi_processor_count - deepep_num_sms
-            self.actual_deepgemm_num_sms = {
-                # with the "specially treat first expert"
-                4: 119,
-                8: 117,
-                # 48: 113,
-                48: 120,
-            }[torch.distributed.get_world_size()]
-
-            self.down_output_signals_initial_value_cpu = (
-                torch.tensor([self.actual_deepgemm_num_sms] + [0] * (self.num_experts_per_partition - 1), dtype=torch.uint32, device="cpu")
-            )
-
 
     def forward(
         self,
@@ -1322,7 +1310,8 @@ class DeepEPMoE(EPMoE):
         )
 
         if get_bool_env_var("SGLANG_HACK_EP_DOWN_GEMM_OVERLAP") and forward_mode == ForwardMode.DECODE:
-            down_output_signals = self.down_output_signals_initial_value_cpu.to(down_input.device, non_blocking=True)
+            down_output_signals = torch.zeros((self.num_experts_per_partition,), dtype=torch.uint32,
+                                              device=down_input.device)
 
             expert_slice = slice(0, 1)
             deep_gemm.fp8_m_grouped_gemm_nt_masked(
@@ -1347,13 +1336,12 @@ class DeepEPMoE(EPMoE):
                         recipe=(1, 128, 128),
                         d_signals=down_output_signals[expert_slice],
                     )
-                    assert deepgemm_out["num_sms"] == self.actual_deepgemm_num_sms, \
-                        f"{deepgemm_out=} {self.actual_deepgemm_num_sms=} {num_groups=} {m=} {k=}"
+                    actual_deepgemm_num_sms = deepgemm_out["num_sms"]
 
             return dict(
                 tensor=down_output,
                 signals=down_output_signals,
-                signal_expect_value=self.actual_deepgemm_num_sms,
+                signal_expect_value=actual_deepgemm_num_sms,
                 stream_to_join=self.alt_stream,
             )
         else:
