@@ -366,7 +366,7 @@ class CudaGraphRunner:
             forward_batch.can_run_tbo if self.enable_two_batch_overlap else True
         )
 
-        print(f"hi CudaGraphRunner.can_run {is_bs_supported=} {total_batch_size=} {forward_batch.global_num_tokens_cpu=} {capture_hidden_mode_matches=}")
+        print(f"hi CudaGraphRunner.can_run {is_bs_supported=} {total_batch_size=} {forward_batch.can_run_dp_cuda_graph=} {forward_batch.global_num_tokens_cpu=} {capture_hidden_mode_matches=}")
         return (
             is_bs_supported
             and is_encoder_lens_supported
