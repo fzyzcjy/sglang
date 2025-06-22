@@ -595,7 +595,8 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
             info = hidden_states
             hidden_states, src_signals, src_signal_expect_value, stream_to_join = info["tensor"], info["signals"], info["signal_expect_value"], info["stream_to_join"]
         else:
-            src_signals = src_signal_expect_value = stream_to_join = None
+            src_signals = stream_to_join = None
+            src_signal_expect_value = 0
 
         combined_hidden_states, event, hook = buffer.low_latency_combine(
             hidden_states,
