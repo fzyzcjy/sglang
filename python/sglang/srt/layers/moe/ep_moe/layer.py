@@ -1303,6 +1303,7 @@ class DeepEPMoE(EPMoE):
 
         if get_bool_env_var("SGLANG_HACK_EP_DOWN_GEMM_OVERLAP"):
             TODO
+            return dict(tensor=down_output, signals=down_output_signals)
         else:
             deep_gemm_wrapper.grouped_gemm_nt_f8f8bf16_masked(
                 down_input_fp8,
@@ -1312,8 +1313,7 @@ class DeepEPMoE(EPMoE):
                 expected_m,
                 recipe=(1, 128, 128) if deep_gemm_wrapper.DEEPGEMM_BLACKWELL else None,
             )
-
-        return down_output
+            return down_output
 
 
 def get_moe_impl_class():
