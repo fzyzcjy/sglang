@@ -971,7 +971,8 @@ class DeepEPMoE(EPMoE):
                 # with the "specially treat first expert"
                 4: 119,
                 8: 117,
-                48: 113,
+                # 48: 113,
+                48: 120,
             }[torch.distributed.get_world_size()]
 
             self.down_output_signals_initial_value_cpu = (
@@ -1346,7 +1347,8 @@ class DeepEPMoE(EPMoE):
                         recipe=(1, 128, 128),
                         d_signals=down_output_signals[expert_slice],
                     )
-                    assert deepgemm_out["num_sms"] == self.actual_deepgemm_num_sms, f"{deepgemm_out=} {self.actual_deepgemm_num_sms=}"
+                    assert deepgemm_out["num_sms"] == self.actual_deepgemm_num_sms, \
+                        f"{deepgemm_out=} {self.actual_deepgemm_num_sms=} {num_groups=} {m=} {k=}"
 
             return dict(
                 tensor=down_output,
