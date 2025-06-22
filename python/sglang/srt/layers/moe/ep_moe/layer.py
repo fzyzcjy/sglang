@@ -1306,6 +1306,7 @@ class DeepEPMoE(EPMoE):
 
         if get_bool_env_var("SGLANG_HACK_EP_DOWN_GEMM_OVERLAP") and forward_mode == ForwardMode.DECODE:
             # TODO need to change according to DeepEP src code
+            # TODO if deepgemm not use all SM then make deepep use more
             deepep_num_sms = 32
             deepgemm_num_sms_upper_bound = torch.cuda.get_device_properties(device='cuda').multi_processor_count - deepep_num_sms
             actual_deepgemm_num_sms = {
