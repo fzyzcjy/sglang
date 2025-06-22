@@ -1310,6 +1310,7 @@ class DeepEPMoE(EPMoE):
             actual_deepgemm_num_sms = {
                 # with the "specially treat first expert"
                 4: 119,
+                8: 117,
                 48: 120,
             }[torch.distributed.get_world_size()]
 
