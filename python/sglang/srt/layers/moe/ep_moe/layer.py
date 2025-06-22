@@ -1302,7 +1302,45 @@ class DeepEPMoE(EPMoE):
         )
 
         if get_bool_env_var("SGLANG_HACK_EP_DOWN_GEMM_OVERLAP"):
-            TODO
+            # TODO need to change according to DeepEP src code
+            deepep_num_sms = 32
+            deepgemm_num_sms_upper_bound = torch.cuda.get_device_properties(device='cuda').multi_processor_count - deepep_num_sms
+            actual_deepgemm_num_sms = {
+                # with the "specially treat first expert"
+                4: 119,
+                48: 120,
+            }[torch.distributed.get_world_size()]
+
+            down_output_signals = (
+                torch.tensor([actual_deepgemm_num_sms] + [0] * (num_local_experts - 1), dtype=torch.uint32, device="cpu")
+                .to(down_input.device, non_blocking=True)
+            )
+
+            expert_slice = slice(0, 1)
+            deep_gemm.fp8_m_grouped_gemm_nt_masked(
+                _pick_expert_fp8(down_input_fp8, expert_slice),
+                _pick_expert_fp8(w2_weight_fp8, expert_slice),
+                down_output[expert_slice, :, :],
+                masked_m[expert_slice],
+                expected_m,
+                recipe=(1, 128, 128),
+            )
+
+            self.alt_stream.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(self.alt_stream):
+                with deep_gemm_wrapper.configure_deep_gemm_num_sms(deepgemm_num_sms_upper_bound):
+                    expert_slice = slice(1, num_experts)
+                    deepgemm_out = deep_gemm.fp8_m_grouped_gemm_nt_masked(
+                        _pick_expert_fp8(down_input_fp8, expert_slice),
+                        _pick_expert_fp8(w2_weight_fp8, expert_slice),
+                        down_output[expert_slice, :, :],
+                        masked_m[expert_slice],
+                        expected_m,
+                        recipe=(1, 128, 128),
+                        d_signals=down_output_signals[expert_slice],
+                    )
+                    assert deepgemm_out["num_sms"] == actual_deepgemm_num_sms, f"{deepgemm_out=} {actual_deepgemm_num_sms=}"
+
             return dict(tensor=down_output, signals=down_output_signals)
         else:
             deep_gemm_wrapper.grouped_gemm_nt_f8f8bf16_masked(
