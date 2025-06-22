@@ -1312,7 +1312,7 @@ class DeepEPMoE(EPMoE):
                 # with the "specially treat first expert"
                 4: 119,
                 8: 117,
-                48: 120,
+                48: 113,
             }[torch.distributed.get_world_size()]
 
             down_output_signals = (
