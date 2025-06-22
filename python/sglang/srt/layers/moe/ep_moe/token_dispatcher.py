@@ -592,9 +592,10 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
         buffer = self._get_buffer()
 
         if get_bool_env_var("SGLANG_HACK_EP_DOWN_GEMM_OVERLAP"):
-            hidden_states, src_signals, src_signal_expect_value = hidden_states["tensor"], hidden_states["signals"], hidden_states["signal_expect_value"]
+            info = hidden_states
+            hidden_states, src_signals, src_signal_expect_value, stream_to_join = info["tensor"], info["signals"], info["signal_expect_value"], info["stream_to_join"]
         else:
-            src_signals = src_signal_expect_value = None
+            src_signals = src_signal_expect_value = stream_to_join = None
 
         combined_hidden_states, event, hook = buffer.low_latency_combine(
             hidden_states,
@@ -607,6 +608,10 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
             src_signal_expect_value=src_signal_expect_value,
         )
         self.handle = None
+
+        if stream_to_join is not None:
+            torch.cuda.current_stream().wait_stream(stream_to_join)
+
         return combined_hidden_states, event, hook
 
     def _get_buffer(self):
