@@ -1316,7 +1316,7 @@ class DeepEPMoE(EPMoE):
             }[torch.distributed.get_world_size()]
 
             down_output_signals = (
-                torch.tensor([actual_deepgemm_num_sms] + [0] * (self.num_experts_per_partition - 1), dtype=torch.uint32, device="cpu")
+                torch.tensor([actual_deepgemm_num_sms] + [0] * (self.num_experts_per_partition - 1), dtype=torch.uint32, device="cpu", pin_memory=True)
                 .to(down_input.device, non_blocking=True)
             )
 
