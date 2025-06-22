@@ -6,7 +6,7 @@ from sglang.srt.managers.expert_distribution import (
     get_global_expert_distribution_recorder,
 )
 from sglang.srt.managers.schedule_batch import global_server_args_dict
-from sglang.srt.utils import DeepEPMode, get_int_env_var, load_json_config
+from sglang.srt.utils import DeepEPMode, get_int_env_var, load_json_config, get_bool_env_var
 
 try:
     from deep_ep import Buffer, Config
@@ -590,6 +590,12 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
         topk_weights: torch.Tensor,
     ):
         buffer = self._get_buffer()
+
+        if get_bool_env_var("SGLANG_HACK_EP_DOWN_GEMM_OVERLAP"):
+            hidden_states, src_signals, src_signal_expect_value = hidden_states["tensor"], hidden_states["signals"], hidden_states["signal_expect_value"]
+        else:
+            src_signals = None
+
         combined_hidden_states, event, hook = buffer.low_latency_combine(
             hidden_states,
             topk_idx,
@@ -597,6 +603,8 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
             self.handle,
             async_finish=not self.return_recv_hook,
             return_recv_hook=self.return_recv_hook,
+            src_signals=src_signals,
+            src_signal_expect_value=src_signal_expect_value,
         )
         self.handle = None
         return combined_hidden_states, event, hook

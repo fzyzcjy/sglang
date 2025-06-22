@@ -1343,7 +1343,7 @@ class DeepEPMoE(EPMoE):
                     )
                     assert deepgemm_out["num_sms"] == actual_deepgemm_num_sms, f"{deepgemm_out=} {actual_deepgemm_num_sms=}"
 
-            return dict(tensor=down_output, signals=down_output_signals)
+            return dict(tensor=down_output, signals=down_output_signals, signal_expect_value=actual_deepgemm_num_sms)
         else:
             deep_gemm_wrapper.grouped_gemm_nt_f8f8bf16_masked(
                 down_input_fp8,
