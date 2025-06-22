@@ -984,7 +984,7 @@ class DeepEPMoE(EPMoE):
             else:
                 return self.forward_normal(hidden_states, reorder_topk_ids, seg_indptr)
         elif resolved_deepep_mode == DeepEPMode.low_latency:
-            return self.forward_deepgemm_masked(hidden_states, masked_m, expected_m)
+            return self.forward_deepgemm_masked(hidden_states, masked_m, expected_m, forward_mode)
         else:
             raise ValueError(f"Invalid deepep_mode: {self.deepep_mode}")
 
@@ -1236,6 +1236,7 @@ class DeepEPMoE(EPMoE):
         hidden_states_fp8: Tuple[torch.Tensor, torch.Tensor],
         masked_m: torch.Tensor,
         expected_m: int,
+        forward_mode: ForwardMode,
     ):
         assert self.quant_method is not None
         assert self.activation == "silu"
@@ -1303,7 +1304,7 @@ class DeepEPMoE(EPMoE):
             (num_groups, m, n), device=down_input.device, dtype=torch.bfloat16
         )
 
-        if get_bool_env_var("SGLANG_HACK_EP_DOWN_GEMM_OVERLAP"):
+        if get_bool_env_var("SGLANG_HACK_EP_DOWN_GEMM_OVERLAP") and forward_mode == ForwardMode.DECODE:
             # TODO need to change according to DeepEP src code
             deepep_num_sms = 32
             deepgemm_num_sms_upper_bound = torch.cuda.get_device_properties(device='cuda').multi_processor_count - deepep_num_sms

@@ -591,7 +591,7 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
     ):
         buffer = self._get_buffer()
 
-        if get_bool_env_var("SGLANG_HACK_EP_DOWN_GEMM_OVERLAP"):
+        if isinstance(hidden_states, dict):
             info = hidden_states
             hidden_states, src_signals, src_signal_expect_value, stream_to_join = info["tensor"], info["signals"], info["signal_expect_value"], info["stream_to_join"]
         else:
