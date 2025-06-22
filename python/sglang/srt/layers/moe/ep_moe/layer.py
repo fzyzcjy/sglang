@@ -892,6 +892,8 @@ class Fp8EPMoEMethod(Fp8MoEMethod):
     ) -> torch.Tensor:
         raise NotImplementedError
 
+_deep_ep_moe_alt_stream = None
+
 
 class DeepEPMoE(EPMoE):
     """
@@ -961,7 +963,9 @@ class DeepEPMoE(EPMoE):
         )
 
         if get_bool_env_var("SGLANG_HACK_EP_DOWN_GEMM_OVERLAP"):
-            self.alt_stream = torch.cuda.Stream()
+            global _deep_ep_moe_alt_stream
+            if _deep_ep_moe_alt_stream is None:
+                _deep_ep_moe_alt_stream = torch.cuda.Stream()
 
             # TODO need to change according to DeepEP src code
             # TODO if deepgemm not use all SM then make deepep use more
@@ -1323,8 +1327,8 @@ class DeepEPMoE(EPMoE):
                 recipe=(1, 128, 128),
             )
 
-            self.alt_stream.wait_stream(torch.cuda.current_stream())
-            with torch.cuda.stream(self.alt_stream):
+            _deep_ep_moe_alt_stream.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(_deep_ep_moe_alt_stream):
                 with deep_gemm_wrapper.configure_deep_gemm_num_sms(self.deepgemm_num_sms_upper_bound):
                     expert_slice = slice(1, self.num_experts_per_partition)
                     deepgemm_out = deep_gemm.fp8_m_grouped_gemm_nt_masked(
@@ -1342,7 +1346,7 @@ class DeepEPMoE(EPMoE):
                 tensor=down_output,
                 signals=down_output_signals,
                 signal_expect_value=actual_deepgemm_num_sms,
-                stream_to_join=self.alt_stream,
+                stream_to_join=_deep_ep_moe_alt_stream,
             )
         else:
             deep_gemm_wrapper.grouped_gemm_nt_f8f8bf16_masked(
