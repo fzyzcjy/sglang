@@ -594,7 +594,7 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
         if get_bool_env_var("SGLANG_HACK_EP_DOWN_GEMM_OVERLAP"):
             hidden_states, src_signals, src_signal_expect_value = hidden_states["tensor"], hidden_states["signals"], hidden_states["signal_expect_value"]
         else:
-            src_signals = None
+            src_signals = src_signal_expect_value = None
 
         combined_hidden_states, event, hook = buffer.low_latency_combine(
             hidden_states,
