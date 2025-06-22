@@ -1314,7 +1314,7 @@ class DeepEPMoE(EPMoE):
             }[torch.distributed.get_world_size()]
 
             down_output_signals = (
-                torch.tensor([actual_deepgemm_num_sms] + [0] * (num_local_experts - 1), dtype=torch.uint32, device="cpu")
+                torch.tensor([actual_deepgemm_num_sms] + [0] * (self.num_experts_per_partition - 1), dtype=torch.uint32, device="cpu")
                 .to(down_input.device, non_blocking=True)
             )
 
@@ -1331,7 +1331,7 @@ class DeepEPMoE(EPMoE):
             self.alt_stream.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(self.alt_stream):
                 with deep_gemm_wrapper.configure_deep_gemm_num_sms(deepgemm_num_sms_upper_bound):
-                    expert_slice = slice(1, num_experts)
+                    expert_slice = slice(1, self.num_experts_per_partition)
                     deepgemm_out = deep_gemm.fp8_m_grouped_gemm_nt_masked(
                         _pick_expert_fp8(down_input_fp8, expert_slice),
                         _pick_expert_fp8(self.w2_weight_fp8, expert_slice),
