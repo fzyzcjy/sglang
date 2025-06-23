@@ -1314,6 +1314,17 @@ class DeepEPMoE(EPMoE):
         )
 
         if get_bool_env_var("SGLANG_HACK_EP_DOWN_GEMM_OVERLAP") and forward_mode == ForwardMode.DECODE:
+            from deep_gemm.utils.layout import transform_sf_into_required_layout
+
+            # ref: DeepGEMM dispatch.py
+            del down_input_scale
+            down_input_fp8 = (down_input_fp8[0], transform_sf_into_required_layout(
+                down_input_fp8[1],
+                mn=down_input.shape[1], k=down_input.shape[2],
+                recipe=(1, 128, 128),
+                num_groups=num_groups, is_sfa=True,
+            ))
+
             down_output_signals = torch.zeros((self.num_experts_per_partition,), dtype=torch.uint32,
                                               device=down_input.device)
 
