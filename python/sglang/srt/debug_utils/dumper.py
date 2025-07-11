@@ -16,7 +16,7 @@ class _Dumper:
     """
 
     def __init__(self):
-        self._enable = get_bool_env_var("SGLANG_DUMPER_ENABLE", "true")
+        self._enable = get_bool_env_var("SGLANG_DUMPER_ENABLE")
         self._base_dir = Path(os.environ.get("SGLANG_DUMPER_DIR", "/tmp"))
         self._enable_write_file = get_bool_env_var("SGLANG_DUMPER_WRITE_FILE", "1")
         self._partial_name = str(time.time())
