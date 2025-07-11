@@ -44,7 +44,7 @@ class _Dumper:
         full_filename = "___".join(f"{k}={v}" for k, v in full_kwargs.items()) + ".pt"
         path = self._base_dir / f"sglang_dump_{self._partial_name}" / full_filename
 
-        sample_value = _get_sample_value(name, value)
+        sample_value = get_truncated_value(value)
 
         print(
             f"[{rank}, {time.time()}] {path} "
@@ -66,12 +66,12 @@ def _get_partial_name():
     return object_list[0]
 
 
-def _get_sample_value(name, value):
+def get_truncated_value(value):
     if value is None:
         return None
 
     if isinstance(value, tuple):
-        return [_get_sample_value(name, x) for x in value]
+        return [get_truncated_value(x) for x in value]
 
     if not isinstance(value, torch.Tensor):
         return None
