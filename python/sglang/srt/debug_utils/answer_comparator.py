@@ -14,9 +14,13 @@ def main(args):
     with pl.Config(fmt_str_lengths=10000, tbl_cols=-1, tbl_rows=-1):
         print(df_correctness_delta)
 
-    print("====== Concrete Examples ======")
-    with pl.Config(fmt_str_lengths=10000, tbl_cols=-1, tbl_rows=-1):
-        print(df_meta)
+    for name, df in [
+        ("Good->Bad", df_meta.filter(pl.col("correctness_delta") < 0)),
+        ("Bad->Good", df_meta.filter(pl.col("correctness_delta") > 0)),
+    ]:
+        print(f"====== Concrete Examples: {name} ======")
+        with pl.Config(fmt_str_lengths=10000, tbl_cols=-1, tbl_rows=-1):
+            print(df)
 
 
 def _compute_df_input(args):
