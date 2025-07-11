@@ -95,7 +95,7 @@ def main(args):
     )
     latency = time.perf_counter() - tic
 
-    raw_result_dumper = BenchRawResultDumper()
+    raw_result_dumper = BenchRawResultDumper(path=args.raw_result_file)
     preds = []
     for i in range(len(states)):
         preds.append(get_answer_value(states[i]["answer"]))
