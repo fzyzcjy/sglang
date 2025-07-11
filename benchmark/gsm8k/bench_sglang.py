@@ -98,8 +98,9 @@ def main(args):
     raw_result_dumper = BenchRawResultDumper(path=args.raw_result_file)
     preds = []
     for i in range(len(states)):
-        preds.append(get_answer_value(states[i]["answer"]))
-        raw_result_dumper.process(states[i])
+        pred = get_answer_value(states[i]["answer"])
+        preds.append(pred)
+        raw_result_dumper.process(states[i], correct=pred == labels[i])
 
     # Compute accuracy
     acc = np.mean(np.array(preds) == np.array(labels))

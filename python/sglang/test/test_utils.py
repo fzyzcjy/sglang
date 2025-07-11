@@ -1261,7 +1261,7 @@ class BenchRawResultDumper:
         self._path = path
         self._rows = []
 
-    def process(self, state):
+    def process(self, state, correct: bool):
         if not self._enable:
             return
         assert isinstance(state, ProgramState)
@@ -1273,7 +1273,7 @@ class BenchRawResultDumper:
             prompt_id=TODO,
             prompt=prompt,
             answer=answer,
-            correct=TODO,
+            correct=correct,
         ))
 
     def save(self):
