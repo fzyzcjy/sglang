@@ -7,7 +7,7 @@ import polars as pl
 
 def main(args):
     df_target = read_meta(args.target_path)
-    df_target = df_target.sort("forward_pass_id", "dump_index", "rank")
+    df_target = df_target.sort("rank", "dump_index")
     assert all(c in df_target.columns for c in ["rank", "forward_pass_id", "dump_index", "name"])
 
     for row in df_target.iter_rows(named=True):
