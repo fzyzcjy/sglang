@@ -1,3 +1,4 @@
+import torch
 import argparse
 from pathlib import Path
 
@@ -10,6 +11,8 @@ def main(args):
     assert all(c in df_target.columns for c in ["rank", "forward_pass_id", "dump_index", "name"])
 
     for row in df_target.iter_rows(named=True):
+        tensor_baseline = torch.load(Path(args.baseline_path) / row["filename"], weights_only=True)
+        tensor_target = torch.load(Path(args.target_path) / row["filename"], weights_only=True)
         TODO
 
 
