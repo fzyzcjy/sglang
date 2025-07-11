@@ -14,6 +14,8 @@ from sglang.test.test_utils import (
 )
 from sglang.utils import download_and_cache_file, dump_state_text, read_jsonl
 
+from python.sglang.test.test_utils import BenchRawResultDumper
+
 INVALID = -9999999
 
 
@@ -93,9 +95,11 @@ def main(args):
     )
     latency = time.perf_counter() - tic
 
+    raw_result_dumper = BenchRawResultDumper()
     preds = []
     for i in range(len(states)):
         preds.append(get_answer_value(states[i]["answer"]))
+        raw_result_dumper.process(states[i])
 
     # Compute accuracy
     acc = np.mean(np.array(preds) == np.array(labels))
@@ -115,6 +119,7 @@ def main(args):
 
     # Dump results
     dump_state_text(f"tmp_output_{args.backend}.txt", states)
+    raw_result_dumper.save()
 
     with open(args.result_file, "a") as fout:
         value = {

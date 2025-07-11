@@ -1256,12 +1256,19 @@ class CustomTestCase(unittest.TestCase):
 
 
 class BenchRawResultDumper:
-    def __init__(self):
+    def __init__(self, path: str):
+        self._enable = path != ""
+        self._path = path
         self._rows = []
 
-    def __call__(self, state):
+    def process(self, state):
+        if not self._enable:
+            return
         assert isinstance(state, ProgramState)
         self._rows.append(TODO)
 
-    def save(self, path):
-        Path(path).write_text("\n".join(json.dumps(row) for row in self._rows))
+    def save(self):
+        if not self._enable:
+            return
+        print(f"BenchRawResultDumper save results to {self._path}")
+        Path(self._path).write_text("\n".join(json.dumps(row) for row in self._rows))
