@@ -1270,8 +1270,10 @@ class BenchRawResultDumper:
         prompt = _ensure_remove_suffix(state.text(), answer)
 
         self._rows.append(dict(
+            prompt_id=TODO,
             prompt=prompt,
             answer=answer,
+            correct=TODO,
         ))
 
     def save(self):
