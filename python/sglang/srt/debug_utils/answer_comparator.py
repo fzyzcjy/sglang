@@ -11,7 +11,7 @@ def main(args):
         ]
         for i, p in paths
     ])
-    assert all(c in df_input.columns for c in ["category", "trial_index", "prompt_id", "prompt", "answer"])
+    assert all(c in df_input.columns for c in ["category", "trial_index", "prompt_id", "prompt", "answer", "correct"])
 
     df_meta = pl.DataFrame([
         dict(
@@ -20,6 +20,10 @@ def main(args):
         )
         for prompt_id in sorted(df_input["prompt_id"].to_list())
     ])
+
+    df_meta = df_meta.with_columns(
+        correct_delta=pl.col("correct_target") - pl.col("correct_baseline"),
+    )
 
     TODO
 
@@ -31,8 +35,13 @@ def _read_df_raw(path: str, category: str, trial_index: int):
 def _handle_one_prompt(df_one_prompt: pl.DataFrame):
     df_one_prompt = df_one_prompt.sort("category", "trial_index")
     assert len(set(df_one_prompt["prompt"])) == 1
-    
+
+    df_baseline = TODO
+    df_target = TODO
+
     return dict(
+        correct_baseline=df_baseline["correct"].mean(),
+        correct_target=df_target["correct"].mean(),
         TODO=TODO,
     )
 
