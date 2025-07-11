@@ -1265,10 +1265,21 @@ class BenchRawResultDumper:
         if not self._enable:
             return
         assert isinstance(state, ProgramState)
-        self._rows.append(TODO)
+
+        answer = state["answer"]
+        prompt = _ensure_remove_suffix(state.text(), answer)
+
+        self._rows.append(dict(
+            prompt=prompt,
+            answer=answer,
+        ))
 
     def save(self):
         if not self._enable:
             return
         print(f"BenchRawResultDumper save results to {self._path}")
         Path(self._path).write_text("\n".join(json.dumps(row) for row in self._rows))
+
+def _ensure_remove_suffix(text: str, suffix: str):
+    assert text.endswith(suffix)
+    return text.removesuffix(suffix)
