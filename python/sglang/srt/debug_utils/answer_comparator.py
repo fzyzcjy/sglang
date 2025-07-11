@@ -22,8 +22,9 @@ def main(args):
     ])
 
     df_meta = df_meta.with_columns(
-        correct_delta=pl.col("correct_target") - pl.col("correct_baseline"),
+        correctness_drop=pl.col("correctness_baseline") - pl.col("correctness_target"),
     )
+    df_meta = df_meta.sort("correctness_drop", descending=True)
 
     TODO
 
@@ -40,8 +41,8 @@ def _handle_one_prompt(df_one_prompt: pl.DataFrame):
     df_target = TODO
 
     return dict(
-        correct_baseline=df_baseline["correct"].mean(),
-        correct_target=df_target["correct"].mean(),
+        correctness_baseline=df_baseline["correct"].mean(),
+        correctness_target=df_target["correct"].mean(),
         TODO=TODO,
     )
 
