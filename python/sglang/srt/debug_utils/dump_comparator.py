@@ -4,6 +4,9 @@ from pathlib import Path
 
 
 def main(args):
+    df_baseline = read_meta(args.baseline_path)
+    df_target = read_meta(args.target_path)
+
     TODO
 
 
