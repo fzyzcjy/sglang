@@ -1,13 +1,22 @@
-import polars as pl
 import argparse
 from pathlib import Path
+
+import polars as pl
 
 
 def main(args):
     df_baseline = read_meta(args.baseline_path)
     df_target = read_meta(args.target_path)
+    assert all(c in df_target.columns for c in ["rank", "forward_pass_id", "name"])
 
-    TODO
+    for forward_pass_id in sorted(set(df_target["forward_pass_id"].to_list())):
+        for rank in sorted(set(df_target["rank"].to_list())):
+            names = df_target.filter(
+                (pl.col("rank") == rank)
+                & (pl.col("forward_pass_id") == forward_pass_id)
+            )["name"].to_list()
+            for name in names:
+                TODO
 
 
 def read_meta(path):
@@ -20,10 +29,12 @@ def read_meta(path):
         for kv in p.stem.split("___"):
             k, v = kv.split("=")
             full_kwargs[k] = v
-        rows.append({
-            path: str(p),
-            **full_kwargs,
-        })
+        rows.append(
+            {
+                path: str(p),
+                **full_kwargs,
+            }
+        )
 
     return pl.DataFrame(rows)
 

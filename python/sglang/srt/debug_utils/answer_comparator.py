@@ -53,7 +53,7 @@ def _compute_df_meta(df_input: pl.DataFrame):
     df_meta = pl.DataFrame(
         [
             _handle_one_prompt(df_input.filter(pl.col("prompt_id") == prompt_id))
-            for prompt_id in sorted(df_input["prompt_id"].to_list())
+            for prompt_id in sorted(set(df_input["prompt_id"].to_list()))
         ]
     )
     df_meta = df_meta.with_columns(
