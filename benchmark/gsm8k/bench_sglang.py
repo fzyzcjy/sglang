@@ -14,7 +14,7 @@ from sglang.test.test_utils import (
 )
 from sglang.utils import download_and_cache_file, dump_state_text, read_jsonl
 
-from python.sglang.test.test_utils import BenchRawResultDumper
+from python.sglang.test.test_utils import BenchRawResultDumper, dump_bench_raw_result
 
 INVALID = -9999999
 
@@ -117,7 +117,12 @@ def main(args):
 
     # Dump results
     dump_state_text(f"tmp_output_{args.backend}.txt", states)
-
+    dump_bench_raw_result(
+        path=args.raw_result_file,
+        states=states,
+        preds=preds,
+        labels=labels,
+    )
 
     with open(args.result_file, "a") as fout:
         value = {
