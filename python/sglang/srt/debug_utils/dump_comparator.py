@@ -11,11 +11,11 @@ def main(args):
     assert all(c in df_target.columns for c in ["rank", "forward_pass_id", "dump_index", "name"])
 
     for row in df_target.iter_rows(named=True):
-        x_baseline = torch.load(Path(args.baseline_path) / row["filename"], weights_only=True)
-        x_target = torch.load(Path(args.target_path) / row["filename"], weights_only=True)
-        info = check_tensor_pair(x_baseline=x_baseline, x_target=x_target)
         print(f"Check: {row['filename']}")
-        print(TODO)
+        check_tensor_pair(
+            path_baseline=Path(args.baseline_path) / row["filename"],
+            path_target=Path(args.target_path) / row["filename"],
+        )
 
 
 def read_meta(directory):
@@ -38,7 +38,13 @@ def read_meta(directory):
     return pl.DataFrame(rows)
 
 
-def check_tensor_pair(x_baseline: torch.Tensor, x_target: torch.Tensor):
+def check_tensor_pair(path_baseline, path_target):
+    x_baseline = torch.load(path_baseline, weights_only=True)
+    x_target = torch.load(path_target, weights_only=True)
+
+    if x_baseline.shape != x_target.shape:
+        continue
+
     return TODO
 
 
