@@ -1,9 +1,9 @@
-import torch.distributed as dist
 import os
 import time
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 
 from sglang.srt.utils import get_bool_env_var
 
