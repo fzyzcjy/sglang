@@ -11,6 +11,7 @@ def main(args):
     assert all(c in df_target.columns for c in ["rank", "forward_pass_id", "dump_index", "name"])
 
     for row in df_target.iter_rows(named=True):
+        print()
         print(f"Check: {row['filename']}")
         check_tensor_pair(
             path_baseline=Path(args.baseline_path) / row["filename"],
@@ -43,9 +44,8 @@ def check_tensor_pair(path_baseline, path_target):
     x_target = torch.load(path_target, weights_only=True)
 
     if x_baseline.shape != x_target.shape:
-        continue
-
-    return TODO
+        print(f"❌ Shape mismatch: {x_baseline.shape=} {x_target.shape=}")
+        return
 
 
 if __name__ == "__main__":
