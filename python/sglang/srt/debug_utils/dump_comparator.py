@@ -15,6 +15,8 @@ def main(args):
         tensor_target = torch.load(Path(args.target_path) / row["filename"], weights_only=True)
         TODO
 
+        print(f"Check: {row['filename']}")
+
 
 def read_meta(directory):
     directory = Path(directory)
@@ -34,6 +36,10 @@ def read_meta(directory):
         )
 
     return pl.DataFrame(rows)
+
+
+def check_tensor_pair(x_baseline: torch.Tensor, x_target: torch.Tensor):
+    TODO
 
 
 if __name__ == "__main__":
