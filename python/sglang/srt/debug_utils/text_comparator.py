@@ -81,11 +81,9 @@ def _handle_one_prompt(df_one_prompt: pl.DataFrame):
     outputs_target = df_target["output"].to_list()
 
     output_same_prefix_len = max(
-        [
-            _compute_str_prefix_len(output_baseline, output_target)
-            for output_baseline in outputs_baseline
-            for output_target in outputs_target
-        ]
+        _compute_str_prefix_len(output_baseline, output_target)
+        for output_baseline in outputs_baseline
+        for output_target in outputs_target
     )
 
     return dict(
