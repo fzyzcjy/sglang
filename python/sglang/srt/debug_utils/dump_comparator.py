@@ -44,8 +44,8 @@ def check_tensor_pair(path_baseline, path_target):
     x_target = torch.load(path_target, weights_only=True)
 
     print(
-        f"[shape] {x_baseline.shape} vs {x_target.shape}\n"
-        f"[dtype] {x_baseline.dtype} vs {x_target.dtype}\n"
+        f"[shape] {x_baseline.shape} vs {x_target.shape}\t"
+        f"[dtype] {x_baseline.dtype} vs {x_target.dtype}"
     )
 
     if x_baseline.shape != x_target.shape:
