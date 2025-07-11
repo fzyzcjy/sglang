@@ -13,12 +13,11 @@ def main(args):
     assert all(c in df_target.columns for c in ["rank", "forward_pass_id", "dump_index", "name"])
 
     for row in df_target.iter_rows(named=True):
+        path_baseline = Path(args.baseline_path) / row["filename"]
+        path_target = Path(args.target_path) / row["filename"]
+        print(f"Check: {str(path_target)}")
+        check_tensor_pair(path_baseline=path_baseline, path_target=path_target)
         print()
-        print(f"Check: {row['filename']}")
-        check_tensor_pair(
-            path_baseline=Path(args.baseline_path) / row["filename"],
-            path_target=Path(args.target_path) / row["filename"],
-        )
 
 
 def read_meta(directory):
