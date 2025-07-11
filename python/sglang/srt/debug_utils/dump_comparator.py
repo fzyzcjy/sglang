@@ -1,8 +1,16 @@
 import argparse
+from pathlib import Path
 
 
 def main(args):
     TODO
+
+
+def read_meta(path):
+    path = Path(path)
+    assert path.is_dir()
+
+    return TODO
 
 
 if __name__ == "__main__":
