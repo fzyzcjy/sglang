@@ -10,11 +10,10 @@ import numpy as np
 from sglang.api import set_default_backend
 from sglang.test.test_utils import (
     add_common_sglang_args_and_parse,
+    dump_bench_raw_result,
     select_sglang_backend,
 )
 from sglang.utils import download_and_cache_file, dump_state_text, read_jsonl
-
-from python.sglang.test.test_utils import BenchRawResultDumper, dump_bench_raw_result
 
 INVALID = -9999999
 

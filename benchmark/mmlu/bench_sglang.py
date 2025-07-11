@@ -9,10 +9,9 @@ import tiktoken
 
 from sglang.test.test_utils import (
     add_common_sglang_args_and_parse,
+    dump_bench_raw_result,
     select_sglang_backend,
 )
-
-from python.sglang.test.test_utils import dump_bench_raw_result
 
 choices = ["A", "B", "C", "D"]
 

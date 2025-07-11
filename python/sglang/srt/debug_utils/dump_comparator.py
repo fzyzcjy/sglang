@@ -1,8 +1,8 @@
-import torch
 import argparse
 from pathlib import Path
 
 import polars as pl
+import torch
 
 from sglang.srt.debug_utils.dumper import get_truncated_value
 
@@ -10,7 +10,10 @@ from sglang.srt.debug_utils.dumper import get_truncated_value
 def main(args):
     df_target = read_meta(args.target_path)
     df_target = df_target.sort("rank", "dump_index")
-    assert all(c in df_target.columns for c in ["rank", "forward_pass_id", "dump_index", "name"])
+    assert all(
+        c in df_target.columns
+        for c in ["rank", "forward_pass_id", "dump_index", "name"]
+    )
 
     for row in df_target.iter_rows(named=True):
         path_baseline = Path(args.baseline_path) / row["filename"]
