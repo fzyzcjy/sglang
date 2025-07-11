@@ -61,6 +61,13 @@ class _Dumper:
         self._partial_name = _get_partial_name()
 
 def _get_partial_name():
+    rank = dist.get_rank()
+    if rank == 0:
+        partial_name = str(time.time())
+    else:
+        partial_name = None
+    
+
     return TODO
 
 def _get_sample_value(name, value):
