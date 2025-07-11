@@ -2,7 +2,6 @@ import argparse
 import json
 
 import polars as pl
-from tqdm.auto import tqdm
 
 
 def main(args):
