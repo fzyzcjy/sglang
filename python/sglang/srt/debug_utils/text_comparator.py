@@ -13,9 +13,17 @@ def main(args):
 
     df_meta = _compute_df_meta(df_input)
 
+    df_correctness_per_trial = (
+        df_meta.group_by("category", "trial_index", maintain_order=True)
+        .agg(pl.col("correct").mean())
+    )
     df_correctness_delta = (
         df_meta.group_by("correctness_delta").count().sort("correctness_delta")
     )
+
+    print("====== Correctness per trial ======")
+    with pl.Config(fmt_str_lengths=10000, tbl_cols=-1, tbl_rows=-1):
+        print(df_correctness_per_trial)
 
     print("====== Correctness Delta (-1.0 means all-right becomes all-wrong) ======")
     with pl.Config(fmt_str_lengths=10000, tbl_cols=-1, tbl_rows=-1):
