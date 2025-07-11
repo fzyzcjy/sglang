@@ -25,7 +25,7 @@ def main(args):
 
     print(f"Dump output to {args.output_path}")
     Path(args.output_path).write_text(json.dumps(dict(
-        df_meta=df_meta.to_dict(),
+        df_meta=df_meta.to_dicts(),
         df_good_to_bad=df_good_to_bad.to_dicts(),
         df_bad_to_good=df_bad_to_good.to_dicts(),
     )))
