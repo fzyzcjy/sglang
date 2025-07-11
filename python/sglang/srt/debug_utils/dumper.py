@@ -1,6 +1,7 @@
 import os
 import time
 from pathlib import Path
+from typing import Optional
 
 import torch
 import torch.distributed as dist
@@ -19,16 +20,19 @@ class _Dumper:
         self.enable = get_bool_env_var("SGLANG_DUMPER_ENABLE")
         self._base_dir = Path(os.environ.get("SGLANG_DUMPER_DIR", "/tmp"))
         self._enable_write_file = get_bool_env_var("SGLANG_DUMPER_WRITE_FILE", "1")
-        self._partial_name = str(time.time())
+        self._partial_name: Optional[str] = None
         self.forward_pass_id = None
 
     def dump(self, name, value, **kwargs):
         if not self.enable:
             return
 
+        self._ensure_partial_name()
+
         rank = dist.get_rank()
         full_kwargs = dict(
             forward_pass_id=self.forward_pass_id,
+            rank=rank,
             name=name,
             **kwargs,
         )
@@ -37,7 +41,7 @@ class _Dumper:
             self._base_dir / f"sglang_dump_{self._partial_name}_{rank}" / full_filename
         )
 
-        sample_value = self._get_sample_value(name, value)
+        sample_value = _get_sample_value(name, value)
 
         print(
             f"[{rank}, {time.time()}] {path} "
@@ -51,23 +55,31 @@ class _Dumper:
             path.parent.mkdir(parents=True, exist_ok=True)
             torch.save(value, str(path))
 
-    def _get_sample_value(self, name, value):
-        if value is None:
-            return None
+    def _ensure_partial_name(self):
+        if self._partial_name is not None:
+            return
+        self._partial_name = _get_partial_name()
 
-        if isinstance(value, tuple):
-            return [self._get_sample_value(name, x) for x in value]
+def _get_partial_name():
+    return TODO
 
-        if not isinstance(value, torch.Tensor):
-            return None
+def _get_sample_value(name, value):
+    if value is None:
+        return None
 
-        if value.numel() < 200:
-            return value
+    if isinstance(value, tuple):
+        return [_get_sample_value(name, x) for x in value]
 
-        slices = [
-            slice(0, 5) if dim_size > 200 else slice(None) for dim_size in value.shape
-        ]
-        return value[tuple(slices)]
+    if not isinstance(value, torch.Tensor):
+        return None
+
+    if value.numel() < 200:
+        return value
+
+    slices = [
+        slice(0, 5) if dim_size > 200 else slice(None) for dim_size in value.shape
+    ]
+    return value[tuple(slices)]
 
 
 dumper = _Dumper()
