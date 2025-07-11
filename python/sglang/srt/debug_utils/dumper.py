@@ -62,13 +62,9 @@ class _Dumper:
 
 def _get_partial_name():
     rank = dist.get_rank()
-    if rank == 0:
-        partial_name = str(time.time())
-    else:
-        partial_name = None
-    
-
-    return TODO
+    object_list = [str(time.time()) if rank == 0 else None]
+    dist.broadcast_object_list(object_list, device="cuda")
+    return object_list[0]
 
 def _get_sample_value(name, value):
     if value is None:
