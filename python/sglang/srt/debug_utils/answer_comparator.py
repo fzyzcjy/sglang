@@ -77,6 +77,14 @@ def _handle_one_prompt(df_one_prompt: pl.DataFrame):
     )
 
 
+def _compute_str_prefix_len(a: str, b: str) -> int:
+    min_len = min(len(a), len(b))
+    for i in range(min_len):
+        if a[i] != b[i]:
+            return i
+    return min_len
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--baseline-path", type=str, nargs="+")
