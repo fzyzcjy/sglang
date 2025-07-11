@@ -4,6 +4,8 @@ from pathlib import Path
 
 import polars as pl
 
+from sglang.srt.debug_utils.dumper import get_truncated_value
+
 
 def main(args):
     df_target = read_meta(args.target_path)
@@ -55,6 +57,17 @@ def check_tensor_pair(path_baseline, path_target):
     abs_diff = (x_target - x_baseline).abs()
     max_diff = abs_diff.max().item()
     mean_diff = abs_diff.mean().item()
+
+    is_large_diff = max_diff > 1e-3
+
+    print(
+        f"{'❌ ' if is_large_diff else ''}"
+        f"max_diff={max_diff:.3f} mean_diff={mean_diff:.3f} "
+    )
+
+    if is_large_diff:
+        print(f"x_baseline(sample)={get_truncated_value(x_baseline)}")
+        print(f"x_target(sample)={get_truncated_value(x_target)}")
 
 
 if __name__ == "__main__":
