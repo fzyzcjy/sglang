@@ -14,7 +14,7 @@ def main(args):
 
     df_meta = _compute_df_meta(df_input)
 
-    df_correctness_per_trial = df_meta.group_by(
+    df_correctness_per_trial = df_input.group_by(
         "category", "trial_index", maintain_order=True
     ).agg(pl.col("correct").mean())
     df_correctness_delta = (
