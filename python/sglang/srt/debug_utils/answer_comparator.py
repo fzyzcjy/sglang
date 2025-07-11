@@ -11,6 +11,7 @@ def main(args):
         ]
         for i, p in paths
     ])
+    assert all(c in df.columns for c in ["category", "trial_index", "prompt_id", "prompt", "answer"])
 
     TODO
 
