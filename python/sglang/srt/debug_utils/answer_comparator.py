@@ -10,11 +10,13 @@ def main(args):
 
     df_correctness_delta = df_meta.group_by("correctness_delta").count().sort("correctness_delta")
 
-    print("====== Correctness Delta Information (-1.0 means all-right becomes all-wrong) ======")
-    with pl.Config(tbl_rows=10000):
+    print("====== Correctness Delta (-1.0 means all-right becomes all-wrong) ======")
+    with pl.Config(fmt_str_lengths=10000, tbl_cols=-1, tbl_rows=-1):
         print(df_correctness_delta)
 
-    TODO
+    print("====== Concrete Examples ======")
+    with pl.Config(fmt_str_lengths=10000, tbl_cols=-1, tbl_rows=-1):
+        print(df_meta)
 
 
 def _compute_df_input(args):
