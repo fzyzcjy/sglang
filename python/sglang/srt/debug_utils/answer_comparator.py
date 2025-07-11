@@ -26,8 +26,10 @@ def main(args):
     )
     df_meta = df_meta.sort("correctness_delta", "answer_same_prefix_len")
 
-    df_correctness_delta = df_meta.group_by("correctness_delta").count()
+    df_correctness_delta = df_meta.group_by("correctness_delta").count().sort("correctness_delta")
+
     print("====== Correctness Delta Information ======")
+    print(df_correctness_delta)
 
     TODO
 
