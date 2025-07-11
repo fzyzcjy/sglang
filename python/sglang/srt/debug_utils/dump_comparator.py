@@ -10,6 +10,17 @@ def read_meta(path):
     path = Path(path)
     assert path.is_dir()
 
+    rows = []
+    for p in path.glob("*.pt"):
+        full_kwargs = {}
+        for kv in p.stem.split("___"):
+            k, v = kv.split("=")
+            full_kwargs[k] = v
+        rows.append({
+            path: str(p),
+            **full_kwargs,
+        })
+
     return TODO
 
 
