@@ -60,11 +60,17 @@ def _handle_one_prompt(df_one_prompt: pl.DataFrame):
     answers_baseline = df_baseline["answer"].to_list()
     answers_target = df_baseline["target"].to_list()
 
+    answer_same_prefix_len = max([
+        _compute_str_prefix_len(answer_baseline, answer_target)
+        for answer_baseline in answers_baseline
+        for answer_target in answers_target
+    ])
+
     return dict(
         prompt_id=df_one_prompt[0, "prompt_id"],
         correctness_baseline=df_baseline["correct"].mean(),
         correctness_target=df_target["correct"].mean(),
-        answer_same_prefix_len=TODO,
+        answer_same_prefix_len=answer_same_prefix_len,
         prompt=df_one_prompt[0, "prompt"],
         answers_baseline=answers_baseline,
         answers_target=answers_target,
