@@ -100,7 +100,7 @@ def main(args):
     for i in range(len(states)):
         pred = get_answer_value(states[i]["answer"])
         preds.append(pred)
-        raw_result_dumper.process(states[i], correct=pred == labels[i])
+        raw_result_dumper.process(state=states[i], correct=pred == labels[i])
 
     # Compute accuracy
     acc = np.mean(np.array(preds) == np.array(labels))
