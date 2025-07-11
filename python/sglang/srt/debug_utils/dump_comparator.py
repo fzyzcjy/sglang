@@ -1,3 +1,4 @@
+import polars as pl
 import argparse
 from pathlib import Path
 
@@ -21,7 +22,7 @@ def read_meta(path):
             **full_kwargs,
         })
 
-    return TODO
+    return pl.DataFrame(rows)
 
 
 if __name__ == "__main__":
