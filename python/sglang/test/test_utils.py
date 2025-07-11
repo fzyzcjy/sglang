@@ -2,6 +2,7 @@
 
 import argparse
 import copy
+import json
 import logging
 import os
 import random
@@ -13,6 +14,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable, List, Optional, Tuple
 
@@ -25,6 +27,7 @@ from sglang.bench_serving import run_benchmark
 from sglang.global_config import global_config
 from sglang.lang.backend.openai import OpenAI
 from sglang.lang.backend.runtime_endpoint import RuntimeEndpoint
+from sglang.lang.interpreter import ProgramState
 from sglang.srt.utils import (
     get_bool_env_var,
     get_device,
@@ -337,6 +340,7 @@ def add_common_sglang_args_and_parse(parser: argparse.ArgumentParser):
         help="Device type (auto/cuda/rocm/cpu). Auto will detect available platforms",
     )
     parser.add_argument("--result-file", type=str, default="result.jsonl")
+    parser.add_argument("--raw-result-file", type=str)
     args = parser.parse_args()
 
     return args
@@ -1249,3 +1253,15 @@ class CustomTestCase(unittest.TestCase):
             lambda: super(CustomTestCase, self)._callTestMethod(method),
             max_retry=max_retry,
         )
+
+
+class BenchRawResultDumper:
+    def __init__(self):
+        self._rows = []
+
+    def __call__(self, state):
+        assert isinstance(state, ProgramState)
+        self._rows.append(TODO)
+
+    def save(self, path):
+        Path(path).write_text("\n".join(json.dumps(row) for row in self._rows))
