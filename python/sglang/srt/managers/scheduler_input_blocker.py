@@ -11,6 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
+from contextlib import contextmanager
 from enum import Enum, auto
 from typing import Any, List, Optional
 
@@ -88,3 +89,12 @@ class _State(Enum):
     UNBLOCKED = auto()
     BLOCKED = auto()
     GLOBAL_UNBLOCK_BARRIER = auto()
+
+
+@contextmanager
+def input_blocker_guard_region(send_to_scheduler):
+    send_to_scheduler.send_pyobj(BlockReqInput(BlockReqType.BLOCK))
+    try:
+        yield
+    finally:
+        send_to_scheduler.send_pyobj(BlockReqInput(BlockReqType.UNBLOCK))
