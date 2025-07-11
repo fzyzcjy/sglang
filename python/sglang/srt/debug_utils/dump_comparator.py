@@ -11,11 +11,11 @@ def main(args):
     assert all(c in df_target.columns for c in ["rank", "forward_pass_id", "dump_index", "name"])
 
     for row in df_target.iter_rows(named=True):
-        tensor_baseline = torch.load(Path(args.baseline_path) / row["filename"], weights_only=True)
-        tensor_target = torch.load(Path(args.target_path) / row["filename"], weights_only=True)
-        TODO
-
+        x_baseline = torch.load(Path(args.baseline_path) / row["filename"], weights_only=True)
+        x_target = torch.load(Path(args.target_path) / row["filename"], weights_only=True)
+        info = check_tensor_pair(x_baseline=x_baseline, x_target=x_target)
         print(f"Check: {row['filename']}")
+        print(TODO)
 
 
 def read_meta(directory):
@@ -39,7 +39,7 @@ def read_meta(directory):
 
 
 def check_tensor_pair(x_baseline: torch.Tensor, x_target: torch.Tensor):
-    TODO
+    return TODO
 
 
 if __name__ == "__main__":
