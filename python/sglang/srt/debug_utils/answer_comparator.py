@@ -8,7 +8,7 @@ def main(args):
     df_input = _compute_df_input(args)
     assert all(
         c in df_input.columns
-        for c in ["category", "trial_index", "prompt_id", "prompt", "answer", "correct"]
+        for c in ["category", "trial_index", "prompt_id", "prompt", "output", "correct"]
     )
 
     df_meta = _compute_df_meta(df_input)
@@ -59,7 +59,7 @@ def _compute_df_meta(df_input: pl.DataFrame):
     df_meta = df_meta.with_columns(
         correctness_delta=pl.col("correctness_target") - pl.col("correctness_baseline"),
     )
-    df_meta = df_meta.sort("correctness_delta", "answer_same_prefix_len")
+    df_meta = df_meta.sort("correctness_delta", "output_same_prefix_len")
     return df_meta
 
 
@@ -70,14 +70,14 @@ def _handle_one_prompt(df_one_prompt: pl.DataFrame):
     df_baseline = df_one_prompt.filter(pl.col("category") == "baseline")
     df_target = df_one_prompt.filter(pl.col("category") == "target")
 
-    answers_baseline = df_baseline["answer"].to_list()
-    answers_target = df_baseline["target"].to_list()
+    outputs_baseline = df_baseline["output"].to_list()
+    outputs_target = df_baseline["target"].to_list()
 
-    answer_same_prefix_len = max(
+    output_same_prefix_len = max(
         [
-            _compute_str_prefix_len(answer_baseline, answer_target)
-            for answer_baseline in answers_baseline
-            for answer_target in answers_target
+            _compute_str_prefix_len(output_baseline, output_target)
+            for output_baseline in outputs_baseline
+            for output_target in outputs_target
         ]
     )
 
@@ -85,10 +85,10 @@ def _handle_one_prompt(df_one_prompt: pl.DataFrame):
         prompt_id=df_one_prompt[0, "prompt_id"],
         correctness_baseline=df_baseline["correct"].mean(),
         correctness_target=df_target["correct"].mean(),
-        answer_same_prefix_len=answer_same_prefix_len,
+        output_same_prefix_len=output_same_prefix_len,
         prompt_escaped=json.dumps(df_one_prompt[0, "prompt"]),
-        answers_baseline=answers_baseline,
-        answers_target=answers_target,
+        outputs_baseline=outputs_baseline,
+        outputs_target=outputs_target,
     )
 
 

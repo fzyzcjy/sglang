@@ -95,12 +95,9 @@ def main(args):
     )
     latency = time.perf_counter() - tic
 
-    raw_result_dumper = BenchRawResultDumper(path=args.raw_result_file)
     preds = []
     for i in range(len(states)):
-        pred = get_answer_value(states[i]["answer"])
-        preds.append(pred)
-        raw_result_dumper.process(state=states[i], correct=pred == labels[i])
+        preds.append(get_answer_value(states[i]["answer"]))
 
     # Compute accuracy
     acc = np.mean(np.array(preds) == np.array(labels))
@@ -120,7 +117,7 @@ def main(args):
 
     # Dump results
     dump_state_text(f"tmp_output_{args.backend}.txt", states)
-    raw_result_dumper.save()
+
 
     with open(args.result_file, "a") as fout:
         value = {

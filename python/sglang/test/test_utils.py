@@ -1255,6 +1255,12 @@ class CustomTestCase(unittest.TestCase):
         )
 
 
+def dump_bench_raw_result(
+    preds: List[str],
+    answers: List[str],
+):
+    TODO
+
 class BenchRawResultDumper:
     def __init__(self, path: str):
         self._enable = path != ""
@@ -1266,13 +1272,13 @@ class BenchRawResultDumper:
             return
         assert isinstance(state, ProgramState)
 
-        answer = state["answer"]
-        prompt = _ensure_remove_suffix(state.text(), answer)
+        output = state["answer"]
+        prompt = _ensure_remove_suffix(state.text(), output)
 
         self._rows.append(dict(
             prompt_id=TODO,
             prompt=prompt,
-            answer=answer,
+            output=output,
             correct=correct,
         ))
 
