@@ -78,7 +78,7 @@ def _handle_one_prompt(df_one_prompt: pl.DataFrame):
     df_target = df_one_prompt.filter(pl.col("category") == "target")
 
     outputs_baseline = df_baseline["output"].to_list()
-    outputs_target = df_baseline["target"].to_list()
+    outputs_target = df_target["output"].to_list()
 
     output_same_prefix_len = max(
         [
