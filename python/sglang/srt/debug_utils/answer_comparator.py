@@ -1,3 +1,4 @@
+import json
 import polars as pl
 import argparse
 
@@ -71,7 +72,7 @@ def _handle_one_prompt(df_one_prompt: pl.DataFrame):
         correctness_baseline=df_baseline["correct"].mean(),
         correctness_target=df_target["correct"].mean(),
         answer_same_prefix_len=answer_same_prefix_len,
-        prompt=df_one_prompt[0, "prompt"],
+        prompt_escaped=json.dumps(df_one_prompt[0, "prompt"]),
         answers_baseline=answers_baseline,
         answers_target=answers_target,
     )
