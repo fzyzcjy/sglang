@@ -99,7 +99,7 @@ def _handle_one_prompt(df_one_prompt: pl.DataFrame):
         correctness_baseline=df_baseline["correct"].mean(),
         correctness_target=df_target["correct"].mean(),
         output_same_prefix_len=output_same_prefix_len,
-        prompt_escaped=json.dumps(df_one_prompt[0, "prompt"]),
+        prompt=df_one_prompt[0, "prompt"],
         outputs_baseline=outputs_baseline,
         outputs_target=outputs_target,
     )
