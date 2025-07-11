@@ -29,6 +29,9 @@ def _read_df_raw(path: str, category: str, trial_index: int):
 
 
 def _handle_one_prompt(df_one_prompt: pl.DataFrame):
+    df_one_prompt = df_one_prompt.sort("category", "trial_index")
+    assert len(set(df_one_prompt["prompt"])) == 1
+    
     return dict(
         TODO=TODO,
     )
