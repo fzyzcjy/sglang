@@ -69,6 +69,7 @@ from sglang.srt.managers.io_struct import (
     BatchMultimodalOut,
     BatchStrOut,
     BatchTokenIDOut,
+    BlockReqType,
     CloseSessionReqInput,
     ConfigureLoggingReq,
     EmbeddingReqInput,
@@ -110,7 +111,7 @@ from sglang.srt.managers.io_struct import (
     UpdateWeightsFromDistributedReqInput,
     UpdateWeightsFromDistributedReqOutput,
     UpdateWeightsFromTensorReqInput,
-    UpdateWeightsFromTensorReqOutput, BlockReqType,
+    UpdateWeightsFromTensorReqOutput,
 )
 from sglang.srt.managers.multimodal_processor import get_mm_processor, import_processors
 from sglang.srt.managers.scheduler_input_blocker import input_blocker_guard_region
@@ -792,8 +793,12 @@ class TokenizerManager:
                     for i in range(batch_size):
                         tmp_obj = obj[i]
                         tokenized_obj = await self._tokenize_one_request(tmp_obj)
-                        state = self._send_one_request(tmp_obj, tokenized_obj, created_time)
-                        generators.append(self._wait_one_response(tmp_obj, state, request))
+                        state = self._send_one_request(
+                            tmp_obj, tokenized_obj, created_time
+                        )
+                        generators.append(
+                            self._wait_one_response(tmp_obj, state, request)
+                        )
                         rids.append(tmp_obj.rid)
         else:
             # FIXME: When using batch and parallel_sample_num together, the perf is not optimal.

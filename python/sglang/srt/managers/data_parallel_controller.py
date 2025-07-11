@@ -26,8 +26,9 @@ import zmq
 
 from sglang.srt.layers.dp_attention import compute_dp_attention_world_info
 from sglang.srt.managers.io_struct import (
+    BlockReqInput,
     TokenizedEmbeddingReqInput,
-    TokenizedGenerateReqInput, BlockReqInput,
+    TokenizedGenerateReqInput,
 )
 from sglang.srt.managers.schedule_batch import Req
 from sglang.srt.managers.scheduler import run_scheduler_process
