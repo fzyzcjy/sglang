@@ -45,7 +45,7 @@ def _compute_df_input(args):
                 ("baseline", args.baseline_path),
                 ("target", args.target_path),
             ]
-            for i, p in paths
+            for i, p in enumerate(paths)
         ]
     )
 
