@@ -40,10 +40,7 @@ def _read_df_raw(path: str, category: str, trial_index: int):
 
 def _compute_df_meta(df_input: pl.DataFrame):
     df_meta = pl.DataFrame([
-        dict(
-            prompt_id=prompt_id,
-            **_handle_one_prompt(df_input.filter(pl.col("prompt_id") == prompt_id)),
-        )
+        _handle_one_prompt(df_input.filter(pl.col("prompt_id") == prompt_id))
         for prompt_id in sorted(df_input["prompt_id"].to_list())
     ])
     df_meta = df_meta.with_columns(
@@ -61,9 +58,11 @@ def _handle_one_prompt(df_one_prompt: pl.DataFrame):
     df_target = TODO
 
     return dict(
+        prompt_id=df_one_prompt[0, "prompt_id"],
         correctness_baseline=df_baseline["correct"].mean(),
         correctness_target=df_target["correct"].mean(),
         answer_same_prefix_len=TODO,
+        prompt=df_one_prompt[0, "prompt"],
     )
 
 
