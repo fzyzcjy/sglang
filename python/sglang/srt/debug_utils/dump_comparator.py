@@ -47,6 +47,10 @@ def check_tensor_pair(path_baseline, path_target):
         print(f"❌ Shape mismatch: {x_baseline.shape=} {x_target.shape=}")
         return
 
+    abs_diff = (x_target - x_baseline).abs()
+    max_diff = abs_diff.max().item()
+    mean_diff = abs_diff.mean().item()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
