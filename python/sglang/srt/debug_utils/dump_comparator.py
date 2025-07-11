@@ -5,7 +5,6 @@ import polars as pl
 
 
 def main(args):
-    df_baseline = read_meta(args.baseline_path)
     df_target = read_meta(args.target_path)
     assert all(c in df_target.columns for c in ["rank", "forward_pass_id", "name"])
 
@@ -19,19 +18,19 @@ def main(args):
                 TODO
 
 
-def read_meta(path):
-    path = Path(path)
-    assert path.is_dir()
+def read_meta(directory):
+    directory = Path(directory)
+    assert directory.is_dir()
 
     rows = []
-    for p in path.glob("*.pt"):
+    for p in directory.glob("*.pt"):
         full_kwargs = {}
         for kv in p.stem.split("___"):
             k, v = kv.split("=")
             full_kwargs[k] = v
         rows.append(
             {
-                path: str(p),
+                "filename": str(p.name),
                 **full_kwargs,
             }
         )
