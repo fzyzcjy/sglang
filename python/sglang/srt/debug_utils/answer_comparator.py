@@ -28,8 +28,9 @@ def main(args):
 
     df_correctness_delta = df_meta.group_by("correctness_delta").count().sort("correctness_delta")
 
-    print("====== Correctness Delta Information ======")
-    print(df_correctness_delta)
+    print("====== Correctness Delta Information (-1.0 means all-right becomes all-wrong) ======")
+    with pl.Config(tbl_rows=10000):
+        print(df_correctness_delta)
 
     TODO
 
