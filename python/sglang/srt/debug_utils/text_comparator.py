@@ -51,7 +51,7 @@ def _compute_df_input(args):
 
 
 def _read_df_raw(path: str, category: str, trial_index: int):
-    return pl.read_json(path).with_columns(
+    return pl.read_ndjson(path).with_columns(
         category=pl.lit(category), trial_index=trial_index
     )
 
