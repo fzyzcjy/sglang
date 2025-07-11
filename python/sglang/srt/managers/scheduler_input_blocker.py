@@ -77,6 +77,7 @@ class SchedulerInputBlocker:
         self._global_unblock_barrier.local_arrive()
 
     def _handle_arrive_unblock_barrier(self):
+        logger.info(f"Arrived at unblock barrier ({len(self._pending_reqs)=})")
         self._change_state(
             original=_State.GLOBAL_UNBLOCK_BARRIER, target=_State.UNBLOCKED
         )
