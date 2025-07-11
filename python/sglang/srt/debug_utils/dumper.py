@@ -27,7 +27,8 @@ class _Dumper:
         if not self.enable:
             return
 
-        self._ensure_partial_name()
+        if self._partial_name is None:
+            self._partial_name = _get_partial_name()
 
         rank = dist.get_rank()
         full_kwargs = dict(
@@ -54,11 +55,6 @@ class _Dumper:
         if self._enable_write_file:
             path.parent.mkdir(parents=True, exist_ok=True)
             torch.save(value, str(path))
-
-    def _ensure_partial_name(self):
-        if self._partial_name is not None:
-            return
-        self._partial_name = _get_partial_name()
 
 
 def _get_partial_name():
