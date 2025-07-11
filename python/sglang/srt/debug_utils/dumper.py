@@ -39,7 +39,7 @@ class _Dumper:
         )
         full_filename = "___".join(f"{k}={v}" for k, v in full_kwargs.items()) + ".pt"
         path = (
-            self._base_dir / f"sglang_dump_{self._partial_name}_{rank}" / full_filename
+            self._base_dir / f"sglang_dump_{self._partial_name}" / full_filename
         )
 
         sample_value = _get_sample_value(name, value)
