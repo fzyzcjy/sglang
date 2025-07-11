@@ -58,10 +58,11 @@ def _read_df_raw(path: str, category: str, trial_index: int):
 
 
 def _compute_df_meta(df_input: pl.DataFrame):
+    df_input = df_input.sort("prompt_id", "category", "trial_index")
     df_meta = pl.DataFrame(
         [
-            _handle_one_prompt(df_input.filter(pl.col("prompt_id") == prompt_id))
-            for prompt_id in tqdm(sorted(set(df_input["prompt_id"].to_list())))
+            _handle_one_prompt(df_one_prompt)
+            for df_one_prompt in df_input.partition_by("prompt_id", maintain_order=True)
         ]
     )
     df_meta = df_meta.with_columns(
@@ -72,7 +73,6 @@ def _compute_df_meta(df_input: pl.DataFrame):
 
 
 def _handle_one_prompt(df_one_prompt: pl.DataFrame):
-    df_one_prompt = df_one_prompt.sort("category", "trial_index")
     assert len(set(df_one_prompt["prompt"])) == 1
 
     df_baseline = df_one_prompt.filter(pl.col("category") == "baseline")
