@@ -54,8 +54,8 @@ def _handle_one_prompt(df_one_prompt: pl.DataFrame):
     df_one_prompt = df_one_prompt.sort("category", "trial_index")
     assert len(set(df_one_prompt["prompt"])) == 1
 
-    df_baseline = TODO
-    df_target = TODO
+    df_baseline = df_one_prompt.filter(pl.col("category") == "baseline")
+    df_target = df_one_prompt.filter(pl.col("category") == "target")
 
     answers_baseline = df_baseline["answer"].to_list()
     answers_target = df_baseline["target"].to_list()
