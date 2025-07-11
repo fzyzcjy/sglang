@@ -6,16 +6,11 @@ import polars as pl
 
 def main(args):
     df_target = read_meta(args.target_path)
-    assert all(c in df_target.columns for c in ["rank", "forward_pass_id", "name"])
+    df_target = df_target.sort("rank", "forward_pass_id", "dump_index")
+    assert all(c in df_target.columns for c in ["rank", "forward_pass_id", "dump_index", "name"])
 
-    for forward_pass_id in sorted(set(df_target["forward_pass_id"].to_list())):
-        for rank in sorted(set(df_target["rank"].to_list())):
-            names = df_target.filter(
-                (pl.col("rank") == rank)
-                & (pl.col("forward_pass_id") == forward_pass_id)
-            )["name"].to_list()
-            for name in names:
-                TODO
+    for row in df_target.iter_rows(named=True):
+        TODO
 
 
 def read_meta(directory):
