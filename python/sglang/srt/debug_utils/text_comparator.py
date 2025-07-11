@@ -30,19 +30,20 @@ def main(args):
         df_bad_to_good=df_bad_to_good.to_dicts(),
     )))
 
-    with pl.Config(fmt_str_lengths=10000, tbl_cols=-1, tbl_rows=-1, tbl_width_chars=-1):
-        print("====== Correctness per trial ======")
-        print(df_correctness_per_trial)
+    if not args.disable_print_details:
+        with pl.Config(fmt_str_lengths=10000, tbl_cols=-1, tbl_rows=-1, tbl_width_chars=-1):
+            print("====== Correctness per trial ======")
+            print(df_correctness_per_trial)
 
-        print("====== Correctness Delta (-1.0 means all-right becomes all-wrong) ======")
-        print(df_correctness_delta)
+            print("====== Correctness Delta (-1.0 means all-right becomes all-wrong) ======")
+            print(df_correctness_delta)
 
-        for name, df in [
-            ("Good->Bad", df_good_to_bad),
-            ("Bad->Good", df_bad_to_good),
-        ]:
-            print(f"====== Concrete Examples: {name} ======")
-            print(df)
+            for name, df in [
+                ("Good->Bad", df_good_to_bad),
+                ("Bad->Good", df_bad_to_good),
+            ]:
+                print(f"====== Concrete Examples: {name} ======")
+                print(df)
 
 def _compute_df_input(args):
     return pl.concat(
@@ -117,5 +118,6 @@ if __name__ == "__main__":
     parser.add_argument("--baseline-path", type=str, nargs="+")
     parser.add_argument("--target-path", type=str, nargs="+")
     parser.add_argument("--output-path", type=str, default="/tmp/text_comparator_output.json")
+    parser.add_argument("--disable-print-details", action="store_true")
     args = parser.parse_args()
     main(args)
