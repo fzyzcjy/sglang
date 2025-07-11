@@ -1256,37 +1256,28 @@ class CustomTestCase(unittest.TestCase):
 
 
 def dump_bench_raw_result(
-    preds: List[str],
-    answers: List[str],
+    path: str,
+    states,
+    preds,
+    labels,
 ):
-    TODO
+    if path == "":
+        return
 
-class BenchRawResultDumper:
-    def __init__(self, path: str):
-        self._enable = path != ""
-        self._path = path
-        self._rows = []
-
-    def process(self, state, correct: bool):
-        if not self._enable:
-            return
-        assert isinstance(state, ProgramState)
-
+    rows = []
+    for i in range(len(states)):
+        state = states[i]
         output = state["answer"]
         prompt = _ensure_remove_suffix(state.text(), output)
-
-        self._rows.append(dict(
-            prompt_id=TODO,
+        rows.append(dict(
+            prompt_id=i,
             prompt=prompt,
             output=output,
-            correct=correct,
+            correct=bool(preds[i] == labels[i]),
         ))
 
-    def save(self):
-        if not self._enable:
-            return
-        print(f"BenchRawResultDumper save results to {self._path}")
-        Path(self._path).write_text("\n".join(json.dumps(row) for row in self._rows))
+    print(f"BenchRawResultDumper save results to {path}")
+    Path(path).write_text("\n".join(json.dumps(row) for row in rows))
 
 def _ensure_remove_suffix(text: str, suffix: str):
     assert text.endswith(suffix)
