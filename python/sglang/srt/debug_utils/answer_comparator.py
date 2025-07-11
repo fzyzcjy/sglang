@@ -22,9 +22,12 @@ def main(args):
     ])
 
     df_meta = df_meta.with_columns(
-        correctness_drop=pl.col("correctness_baseline") - pl.col("correctness_target"),
+        correctness_delta=pl.col("correctness_target") - pl.col("correctness_baseline"),
     )
-    df_meta = df_meta.sort("correctness_drop", "answer_same_prefix_len", descending=[True, False])
+    df_meta = df_meta.sort("correctness_delta", "answer_same_prefix_len")
+
+    df_correctness_delta = df_meta.group_by("correctness_delta").count()
+    print("====== Correctness Delta Information ======")
 
     TODO
 
