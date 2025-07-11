@@ -57,12 +57,17 @@ def _handle_one_prompt(df_one_prompt: pl.DataFrame):
     df_baseline = TODO
     df_target = TODO
 
+    answers_baseline = df_baseline["answer"].to_list()
+    answers_target = df_baseline["target"].to_list()
+
     return dict(
         prompt_id=df_one_prompt[0, "prompt_id"],
         correctness_baseline=df_baseline["correct"].mean(),
         correctness_target=df_target["correct"].mean(),
         answer_same_prefix_len=TODO,
         prompt=df_one_prompt[0, "prompt"],
+        answers_baseline=answers_baseline,
+        answers_target=answers_target,
     )
 
 
