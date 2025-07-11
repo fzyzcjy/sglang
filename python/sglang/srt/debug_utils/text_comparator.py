@@ -18,14 +18,14 @@ def main(args):
         "category", "trial_index", maintain_order=True
     ).agg(pl.col("correct").mean())
     df_correctness_delta = (
-        df_meta.group_by("correctness_delta").count().sort("correctness_delta")
+        df_meta.group_by("correctness_delta").len().sort("correctness_delta")
     )
     df_good_to_bad = df_meta.filter(pl.col("correctness_delta") < 0)
     df_bad_to_good = df_meta.filter(pl.col("correctness_delta") > 0)
 
     print(f"Dump output to {args.output_path}")
     Path(args.output_path).write_text(json.dumps(dict(
-        df_meta=df_meta,
+        df_meta=df_meta.to_dict(),
         df_good_to_bad=df_good_to_bad.to_dicts(),
         df_bad_to_good=df_bad_to_good.to_dicts(),
     )))
