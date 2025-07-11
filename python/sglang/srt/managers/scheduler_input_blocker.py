@@ -18,6 +18,8 @@ from typing import Any, List, Optional
 from sglang.srt.managers.io_struct import BlockReqInput, BlockReqType
 from sglang.srt.poll_based_barrier import PollBasedBarrier
 
+logger = logging.getLogger(__name__)
+
 
 class SchedulerInputBlocker:
     def __init__(self, noop: bool):
@@ -64,9 +66,11 @@ class SchedulerInputBlocker:
                 return []
 
     def _execute_block_req(self):
+        logger.info("Handle block req")
         self._change_state(original=_State.UNBLOCKED, target=_State.BLOCKED)
 
     def _execute_unblock_req(self):
+        logger.info("Handle unblock req")
         self._change_state(
             original=_State.BLOCKED, target=_State.GLOBAL_UNBLOCK_BARRIER
         )
