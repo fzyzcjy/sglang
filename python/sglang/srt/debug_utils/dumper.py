@@ -1,3 +1,4 @@
+import torch.distributed as dist
 import os
 import time
 from pathlib import Path
@@ -25,9 +26,7 @@ class _Dumper:
         if not self._enable:
             return
 
-        from sglang.srt.distributed import get_tensor_model_parallel_rank
-
-        rank = get_tensor_model_parallel_rank()
+        rank = dist.get_rank()
         full_kwargs = dict(
             forward_pass_id=self.forward_pass_id,
             name=name,
