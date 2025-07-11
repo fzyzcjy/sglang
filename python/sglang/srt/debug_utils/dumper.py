@@ -21,11 +21,14 @@ class _Dumper:
         self._base_dir = Path(os.environ.get("SGLANG_DUMPER_DIR", "/tmp"))
         self._enable_write_file = get_bool_env_var("SGLANG_DUMPER_WRITE_FILE", "1")
         self._partial_name: Optional[str] = None
+        self._dump_index = 0
         self.forward_pass_id = None
 
     def dump(self, name, value, **kwargs):
         if not self.enable:
             return
+
+        self._dump_index += 1
 
         if self._partial_name is None:
             self._partial_name = _get_partial_name()
@@ -35,6 +38,7 @@ class _Dumper:
             forward_pass_id=self.forward_pass_id,
             rank=rank,
             name=name,
+            dump_index=self._dump_index,
             **kwargs,
         )
         full_filename = "___".join(f"{k}={v}" for k, v in full_kwargs.items()) + ".pt"
