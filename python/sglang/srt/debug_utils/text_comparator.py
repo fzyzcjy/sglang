@@ -20,20 +20,18 @@ def main(args):
         df_meta.group_by("correctness_delta").count().sort("correctness_delta")
     )
 
-    print("====== Correctness per trial ======")
-    with pl.Config(fmt_str_lengths=10000, tbl_cols=-1, tbl_rows=-1):
+    with pl.Config(fmt_str_lengths=10000, tbl_cols=-1, tbl_rows=-1, tbl_width_chars=-1):
+        print("====== Correctness per trial ======")
         print(df_correctness_per_trial)
 
-    print("====== Correctness Delta (-1.0 means all-right becomes all-wrong) ======")
-    with pl.Config(fmt_str_lengths=10000, tbl_cols=-1, tbl_rows=-1):
+        print("====== Correctness Delta (-1.0 means all-right becomes all-wrong) ======")
         print(df_correctness_delta)
 
-    for name, df in [
-        ("Good->Bad", df_meta.filter(pl.col("correctness_delta") < 0)),
-        ("Bad->Good", df_meta.filter(pl.col("correctness_delta") > 0)),
-    ]:
-        print(f"====== Concrete Examples: {name} ======")
-        with pl.Config(fmt_str_lengths=10000, tbl_cols=-1, tbl_rows=-1):
+        for name, df in [
+            ("Good->Bad", df_meta.filter(pl.col("correctness_delta") < 0)),
+            ("Bad->Good", df_meta.filter(pl.col("correctness_delta") > 0)),
+        ]:
+            print(f"====== Concrete Examples: {name} ======")
             print(df)
 
 
