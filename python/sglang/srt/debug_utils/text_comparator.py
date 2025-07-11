@@ -1,5 +1,6 @@
 import argparse
 import json
+from pathlib import Path
 
 import polars as pl
 
@@ -19,6 +20,15 @@ def main(args):
     df_correctness_delta = (
         df_meta.group_by("correctness_delta").count().sort("correctness_delta")
     )
+    df_good_to_bad = df_meta.filter(pl.col("correctness_delta") < 0)
+    df_bad_to_good = df_meta.filter(pl.col("correctness_delta") > 0)
+
+    print(f"Dump output to {args.output_path}")
+    Path(args.output_path).write_text(json.dumps(dict(
+        df_meta=df_meta,
+        df_good_to_bad=df_good_to_bad.to_dicts(),
+        df_bad_to_good=df_bad_to_good.to_dicts(),
+    )))
 
     with pl.Config(fmt_str_lengths=10000, tbl_cols=-1, tbl_rows=-1, tbl_width_chars=-1):
         print("====== Correctness per trial ======")
@@ -28,12 +38,11 @@ def main(args):
         print(df_correctness_delta)
 
         for name, df in [
-            ("Good->Bad", df_meta.filter(pl.col("correctness_delta") < 0)),
-            ("Bad->Good", df_meta.filter(pl.col("correctness_delta") > 0)),
+            ("Good->Bad", df_good_to_bad),
+            ("Bad->Good", df_bad_to_good),
         ]:
             print(f"====== Concrete Examples: {name} ======")
             print(df)
-
 
 def _compute_df_input(args):
     return pl.concat(
@@ -107,5 +116,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--baseline-path", type=str, nargs="+")
     parser.add_argument("--target-path", type=str, nargs="+")
+    parser.add_argument("--output-path", type=str, default="/tmp/text_comparator_output.json")
     args = parser.parse_args()
     main(args)
