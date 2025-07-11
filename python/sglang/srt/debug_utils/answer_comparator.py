@@ -24,7 +24,7 @@ def main(args):
     df_meta = df_meta.with_columns(
         correctness_drop=pl.col("correctness_baseline") - pl.col("correctness_target"),
     )
-    df_meta = df_meta.sort("correctness_drop", descending=True)
+    df_meta = df_meta.sort("correctness_drop", "answer_same_prefix_len", descending=[True, False])
 
     TODO
 
@@ -43,7 +43,7 @@ def _handle_one_prompt(df_one_prompt: pl.DataFrame):
     return dict(
         correctness_baseline=df_baseline["correct"].mean(),
         correctness_target=df_target["correct"].mean(),
-        TODO=TODO,
+        answer_same_prefix_len=TODO,
     )
 
 
