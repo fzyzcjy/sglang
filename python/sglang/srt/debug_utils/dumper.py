@@ -6,8 +6,6 @@ from typing import Optional
 import torch
 import torch.distributed as dist
 
-from sglang.srt.utils import get_bool_env_var
-
 
 class _Dumper:
     """Utility to dump tensors, which can be useful when comparison checking models.
@@ -17,9 +15,10 @@ class _Dumper:
     """
 
     def __init__(self):
-        self._enable = get_bool_env_var("SGLANG_DUMPER_ENABLE", "1")
+        # Do not import `sglang` to make this file standalone
+        self._enable = bool(int(os.environ.get("SGLANG_DUMPER_ENABLE", "1")))
         self._base_dir = Path(os.environ.get("SGLANG_DUMPER_DIR", "/tmp"))
-        self._enable_write_file = get_bool_env_var("SGLANG_DUMPER_WRITE_FILE", "1")
+        self._enable_write_file = bool(int(os.environ.get("SGLANG_DUMPER_WRITE_FILE", "1")))
         self._partial_name: Optional[str] = None
         self._dump_index = 0
         self.forward_pass_id = None
