@@ -69,7 +69,7 @@ def _transform_df_input(df: pl.DataFrame):
     if "doc_id" in df.columns:
         print("Transform mode: lm_eval")
 
-        filter_names = df["filter"].unique(maintain_order=True)
+        filter_names = df["filter"].unique(maintain_order=True).to_list()
         if len(filter_names) > 1:
             filter_name = filter_names[0]
             print(f"Choose {filter_name=} among {filter_names}")
