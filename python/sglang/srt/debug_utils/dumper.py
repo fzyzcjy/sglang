@@ -17,7 +17,7 @@ class _Dumper:
     Import from non-SGLang system:
     ```
     import sys
-    sys.path.append("/path/to/sglang/srt/debug_utils")
+    sys.path.append("/YOUR_PATH/sglang/python/sglang/srt/debug_utils")
     from dumper import dumper
     ```
 
