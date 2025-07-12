@@ -1,4 +1,6 @@
 import argparse
+import functools
+import itertools
 from pathlib import Path
 
 import polars as pl
@@ -19,7 +21,14 @@ def main(args):
         for c in ["rank", "forward_pass_id", "dump_index", "name"]
     )
 
+    df_baseline = read_meta(args.baseline_path)
+
     for row in df_target.iter_rows(named=True):
+        row_baseline = df_baseline.filter(
+            (pl.col("forward_pass_id") == row["forward_pass_id"] - args.start_id + args.baseline_start_id)
+            & (pl.col("rank") == row["rank"])
+            & (pl.col("name") == row["name"])
+        )
         path_baseline = Path(args.baseline_path) / row["filename"]
         path_target = Path(args.target_path) / row["filename"]
         print(f"Check: {str(path_target)}")
