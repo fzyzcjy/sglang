@@ -59,9 +59,9 @@ def _compute_df_input(args):
 
 
 def _read_df_raw(path: str, category: str, trial_index: int):
-    return pl.read_ndjson(path).with_columns(
-        category=pl.lit(category), trial_index=trial_index
-    )
+    df = pl.read_ndjson(path)
+    df = df.with_columns(category=pl.lit(category), trial_index=trial_index)
+    return df
 
 
 def _compute_df_meta(df_input: pl.DataFrame):
