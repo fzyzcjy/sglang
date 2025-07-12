@@ -30,6 +30,7 @@ class _Dumper:
 
     def on_forward_pass_start(self):
         self._forward_pass_id += 1
+        print(f"[Dumper] [{time.time()}] on_forward_pass_start id={self._forward_pass_id}")
 
     def dump(self, name, value, **kwargs):
         if not self._enable:
@@ -57,7 +58,7 @@ class _Dumper:
         sample_value = get_truncated_value(value)
 
         print(
-            f"[{rank}, {time.time()}] {path} "
+            f"[Dumper] [{rank}, {time.time()}] {path} "
             f"type={type(value)} "
             f"shape={value.shape if isinstance(value, torch.Tensor) else None} "
             f"dtype={value.dtype if isinstance(value, torch.Tensor) else None} "
