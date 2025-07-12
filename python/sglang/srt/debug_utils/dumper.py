@@ -13,7 +13,7 @@ class _Dumper:
     Example usage:
     dumper.on_forward_pass_start()
     dumper.dump("layer_start__hidden_states", hidden_states, layer_id=self.layer_id)
-    
+
     Related: `sglang.srt.debug_utils.dump_comparator` for dump comparison
     """
 

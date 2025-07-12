@@ -63,7 +63,7 @@ def check_tensor_pair(path_baseline, path_target):
     is_large_diff = max_diff > 1e-3
 
     print(
-        f"{'❌ ' if is_large_diff else ''}"
+        f"{'❌' if is_large_diff else '✅'} "
         f"max_diff={max_diff:.3f} mean_diff={mean_diff:.3f} "
     )
 
