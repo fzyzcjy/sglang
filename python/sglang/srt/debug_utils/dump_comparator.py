@@ -76,5 +76,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--baseline-path", type=str)
     parser.add_argument("--target-path", type=str)
+    parser.add_argument("--start-id", type=int, default=0)
+    parser.add_argument("--end-id", type=int, default=1000000)
+    parser.add_argument("--baseline-start-id", type=int, default=0)
     args = parser.parse_args()
     main(args)
