@@ -31,7 +31,6 @@ from sglang.srt.configs.load_config import LoadConfig
 from sglang.srt.configs.model_config import AttentionArch, ModelConfig
 from sglang.srt.configs.update_config import adjust_config_with_unaligned_cpu_tp
 from sglang.srt.constants import GPU_MEMORY_TYPE_WEIGHTS
-from sglang.srt.debug_utils.dumper import dumper
 from sglang.srt.distributed import (
     get_tp_group,
     get_world_group,
@@ -1465,9 +1464,6 @@ class ModelRunner:
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ) -> Tuple[Union[LogitsProcessorOutput, PPProxyTensors], bool]:
         self.forward_pass_id += 1
-
-        if dumper.enable:
-            dumper.forward_pass_id = self.forward_pass_id
 
         with get_global_expert_distribution_recorder().with_forward_pass(
             self.forward_pass_id,
