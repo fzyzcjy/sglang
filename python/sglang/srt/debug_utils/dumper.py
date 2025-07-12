@@ -37,7 +37,9 @@ class _Dumper:
 
     def on_forward_pass_start(self):
         self._forward_pass_id += 1
-        print(f"[Dumper] [{time.time()}] on_forward_pass_start id={self._forward_pass_id}")
+        print(
+            f"[Dumper] [{time.time()}] on_forward_pass_start id={self._forward_pass_id}"
+        )
 
     def dump(self, name, value, **kwargs):
         if not self._enable:

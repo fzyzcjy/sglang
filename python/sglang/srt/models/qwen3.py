@@ -223,7 +223,9 @@ class Qwen3DecoderLayer(nn.Module):
         residual: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         x = hidden_states + (residual if residual is not None else 0)
-        dumper.dump("layer_start__hidden_states_plus_residual", x, layer_id=self.layer_id)
+        dumper.dump(
+            "layer_start__hidden_states_plus_residual", x, layer_id=self.layer_id
+        )
 
         # Self Attention
         hidden_states, residual = self.layer_communicator.prepare_attn(
