@@ -36,7 +36,7 @@ def main(args):
                 [
                     pl.col(col) == row[col]
                     for col in row.keys()
-                    if col not in ["forward_pass_id", "dump_index"]
+                    if col not in ["forward_pass_id", "dump_index", "filename"]
                 ],
             )
         )
