@@ -31,7 +31,7 @@ def main(args):
     )))
 
     if not args.disable_print_details:
-        with pl.Config(fmt_str_lengths=10000, tbl_cols=-1, tbl_rows=-1, tbl_width_chars=-1):
+        with pl.Config(fmt_str_lengths=10000, tbl_cols=-1, tbl_rows=-1, tbl_width_chars=-1, tbl_formatting="UTF8_FULL"):
             print("====== Correctness per trial ======")
             print(df_correctness_per_trial)
 
@@ -114,7 +114,6 @@ def _handle_one_prompt(df_one_prompt: pl.DataFrame):
 
     outputs_baseline = df_baseline["output"].to_list()
     outputs_target = df_target["output"].to_list()
-    assert len(outputs_baseline) == 1, f"{df_baseline=}"
 
     output_same_prefix_len = max(
         _compute_str_prefix_len(output_baseline, output_target)
