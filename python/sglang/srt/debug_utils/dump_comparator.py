@@ -89,19 +89,33 @@ def check_tensor_pair(path_baseline, path_target):
         return
 
     raw_abs_diff = (x_target - x_baseline).abs()
+
     max_abs_diff = raw_abs_diff.max().item()
     mean_abs_diff = raw_abs_diff.mean().item()
+    rel_diff = _calc_rel_diff(x_target, x_baseline)
 
     needs_print = max_abs_diff > 1e-3
 
-    print(
-        f"{'❌' if is_large_diff else '✅'} "
-        f"max_abs_diff={max_abs_diff:.3f} mean_abs_diff={mean_abs_diff:.3f} "
-    )
+    print('\t'.join(
+        f"{'❌' if value > 1e-3 else '✅'} {name}={value}"
+        for name, value in [
+            ("rel_diff", rel_diff),
+            ("max_abs_diff", max_abs_diff),
+            ("mean_abs_diff", mean_abs_diff),
+        ]
+    ))
 
     if needs_print:
         print(f"x_baseline(sample)={get_truncated_value(x_baseline)}")
         print(f"x_target(sample)={get_truncated_value(x_target)}")
+
+
+# Copied from DeepGEMM
+def _calc_rel_diff(x: torch.Tensor, y: torch.Tensor):
+    x, y = x.double(), y.double()
+    denominator = (x * x + y * y).sum()
+    sim = 2 * (x * y).sum() / denominator
+    return 1 - sim
 
 
 if __name__ == "__main__":
