@@ -6,7 +6,7 @@ import polars as pl
 
 
 def main(args):
-    df_input = _compute_df_input(args)
+    df_input = _transform_df_input(_compute_df_raw(args))
     assert all(
         c in df_input.columns
         for c in ["category", "trial_index", "prompt_id", "prompt", "output", "correct"]
@@ -45,14 +45,15 @@ def main(args):
                 print(f"====== Concrete Examples: {name} ======")
                 print(df)
 
-def _compute_df_input(args):
+
+def _compute_df_raw(args):
     return pl.concat(
         [
             _read_df_raw(p, category=category, trial_index=i)
             for category, paths in [
-                ("baseline", args.baseline_path),
-                ("target", args.target_path),
-            ]
+            ("baseline", args.baseline_path),
+            ("target", args.target_path),
+        ]
             for i, p in enumerate(paths)
         ]
     )
@@ -62,6 +63,17 @@ def _read_df_raw(path: str, category: str, trial_index: int):
     return pl.read_ndjson(path).with_columns(
         category=pl.lit(category), trial_index=trial_index
     )
+
+
+def _transform_df_input(df: pl.DataFrame):
+    if "doc_id" in df.columns:
+        print("Transform mode: lm_eval")
+        return TODO
+    elif "prompt_id" in df.columns:
+        print("Transform mode: SGLang bench")
+        return TODO
+    else:
+        raise Exception(f"Unknown data: {df.columns}")
 
 
 def _compute_df_meta(df_input: pl.DataFrame):
