@@ -47,7 +47,12 @@ def read_meta(directory):
             }
         )
 
-    return pl.DataFrame(rows)
+    df = pl.DataFrame(rows)
+    df = df.with_columns(
+        pl.col("forward_pass_id").cast(int),
+        pl.col("rank").cast(int),
+    )
+    return df
 
 
 def check_tensor_pair(path_baseline, path_target):
