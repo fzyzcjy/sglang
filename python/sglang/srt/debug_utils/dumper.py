@@ -17,7 +17,7 @@ class _Dumper:
     """
 
     def __init__(self):
-        self.enable = get_bool_env_var("SGLANG_DUMPER_ENABLE")
+        self._enable = get_bool_env_var("SGLANG_DUMPER_ENABLE", "1")
         self._base_dir = Path(os.environ.get("SGLANG_DUMPER_DIR", "/tmp"))
         self._enable_write_file = get_bool_env_var("SGLANG_DUMPER_WRITE_FILE", "1")
         self._partial_name: Optional[str] = None
@@ -25,7 +25,7 @@ class _Dumper:
         self.forward_pass_id = None
 
     def dump(self, name, value, **kwargs):
-        if not self.enable:
+        if not self._enable:
             return
 
         self._dump_index += 1
