@@ -11,14 +11,17 @@ class _Dumper:
     """Utility to dump tensors, which can be useful when comparison checking models.
 
     Example usage:
-    debug_utils.dumper.dump("layer_start_hidden_states", hidden_states, layer_id=self.layer_id)
+    dumper.on_forward_pass_start()
+    dumper.dump("layer_start__hidden_states", hidden_states, layer_id=self.layer_id)
     """
 
     def __init__(self):
         # Do not import `sglang` to make this file standalone
         self._enable = bool(int(os.environ.get("SGLANG_DUMPER_ENABLE", "1")))
         self._base_dir = Path(os.environ.get("SGLANG_DUMPER_DIR", "/tmp"))
-        self._enable_write_file = bool(int(os.environ.get("SGLANG_DUMPER_WRITE_FILE", "1")))
+        self._enable_write_file = bool(
+            int(os.environ.get("SGLANG_DUMPER_WRITE_FILE", "1"))
+        )
         self._partial_name: Optional[str] = None
         self._dump_index = 0
         self._forward_pass_id = 0
@@ -30,7 +33,9 @@ class _Dumper:
         if not self._enable:
             return
 
-        assert self._forward_pass_id >= 1, "Do you forget to call `dumper.on_forward_pass_start()`?"
+        assert (
+            self._forward_pass_id >= 1
+        ), "Do you forget to call `dumper.on_forward_pass_start()`?"
         self._dump_index += 1
 
         if self._partial_name is None:

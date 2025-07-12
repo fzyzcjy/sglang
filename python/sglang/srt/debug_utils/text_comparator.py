@@ -4,12 +4,13 @@ from pathlib import Path
 
 import polars as pl
 
-_DESCRIPTION = '''Compare and find differences to benchmark outputs.
+_DESCRIPTION = """Compare and find differences to benchmark outputs.
 
 Supported inputs:
 * The samples jsonl from `lm_eval --log_samples --output_path FOLDER_NAME`
 * The output from `gsm8k/bench_sglang.py --raw-result-file FILE_NAME` (or mmlu)
-'''
+"""
+
 
 def main(args):
     df_input = _transform_df_input(_compute_df_raw(args))
@@ -30,18 +31,30 @@ def main(args):
     df_bad_to_good = df_meta.filter(pl.col("correctness_delta") > 0)
 
     print(f"Dump output to {args.output_path}")
-    Path(args.output_path).write_text(json.dumps(dict(
-        df_meta=df_meta.to_dicts(),
-        df_good_to_bad=df_good_to_bad.to_dicts(),
-        df_bad_to_good=df_bad_to_good.to_dicts(),
-    )))
+    Path(args.output_path).write_text(
+        json.dumps(
+            dict(
+                df_meta=df_meta.to_dicts(),
+                df_good_to_bad=df_good_to_bad.to_dicts(),
+                df_bad_to_good=df_bad_to_good.to_dicts(),
+            )
+        )
+    )
 
     if not args.disable_print_details:
-        with pl.Config(fmt_str_lengths=10000, tbl_cols=-1, tbl_rows=-1, tbl_width_chars=-1, tbl_formatting="UTF8_FULL"):
+        with pl.Config(
+            fmt_str_lengths=10000,
+            tbl_cols=-1,
+            tbl_rows=-1,
+            tbl_width_chars=-1,
+            tbl_formatting="UTF8_FULL",
+        ):
             print("====== Correctness per trial ======")
             print(df_correctness_per_trial)
 
-            print("====== Correctness Delta (-1.0 means all-right becomes all-wrong) ======")
+            print(
+                "====== Correctness Delta (-1.0 means all-right becomes all-wrong) ======"
+            )
             print(df_correctness_delta)
 
             for name, df in [
@@ -57,9 +70,9 @@ def _compute_df_raw(args):
         [
             _read_df_raw(p, category=category, trial_index=i)
             for category, paths in [
-            ("baseline", args.baseline_path),
-            ("target", args.target_path),
-        ]
+                ("baseline", args.baseline_path),
+                ("target", args.target_path),
+            ]
             for i, p in enumerate(paths)
         ]
     )
@@ -82,7 +95,8 @@ def _transform_df_input(df: pl.DataFrame):
             df = df.filter(pl.col("filter") == filter_name)
 
         df = df.select(
-            pl.col("category"), pl.col("trial_index"),
+            pl.col("category"),
+            pl.col("trial_index"),
             prompt_id=pl.col("doc_id"),
             prompt=pl.col("arguments").struct.field("gen_args_0").struct.field("arg_0"),
             output=pl.col("resps").list.get(0).list.get(0),
@@ -150,7 +164,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=_DESCRIPTION)
     parser.add_argument("--baseline-path", type=str, nargs="+")
     parser.add_argument("--target-path", type=str, nargs="+")
-    parser.add_argument("--output-path", type=str, default="/tmp/text_comparator_output.json")
+    parser.add_argument(
+        "--output-path", type=str, default="/tmp/text_comparator_output.json"
+    )
     parser.add_argument("--disable-print-details", action="store_true")
     args = parser.parse_args()
     main(args)
