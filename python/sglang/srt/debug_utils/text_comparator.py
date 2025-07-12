@@ -71,9 +71,9 @@ def _transform_df_input(df: pl.DataFrame):
         return df.select(
             pl.col("category"), pl.col("trial_index"),
             prompt_id=pl.col("doc_id"),
-            prompt=TODO,
-            output=TODO,
-            correct=TODO,
+            prompt=pl.col("arguments").struct.field("gen_args_0").struct.field("arg_0"),
+            output=pl.col("resps").list.get(0).list.get(0),
+            correct=pl.col("exact_match").cast(bool),
         )
     elif "prompt_id" in df.columns:
         print("Transform mode: SGLang bench")
