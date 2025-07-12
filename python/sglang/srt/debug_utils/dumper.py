@@ -21,12 +21,16 @@ class _Dumper:
         self._enable_write_file = bool(int(os.environ.get("SGLANG_DUMPER_WRITE_FILE", "1")))
         self._partial_name: Optional[str] = None
         self._dump_index = 0
-        self.forward_pass_id = None
+        self._forward_pass_id = 0
+
+    def on_forward_pass_start(self):
+        self._forward_pass_id += 1
 
     def dump(self, name, value, **kwargs):
         if not self._enable:
             return
 
+        assert self._forward_pass_id >= 1, "Do you forget to call `dumper.on_forward_pass_start()`?"
         self._dump_index += 1
 
         if self._partial_name is None:
@@ -34,7 +38,7 @@ class _Dumper:
 
         rank = dist.get_rank()
         full_kwargs = dict(
-            forward_pass_id=self.forward_pass_id,
+            forward_pass_id=self._forward_pass_id,
             rank=rank,
             name=name,
             dump_index=self._dump_index,
