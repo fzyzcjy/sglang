@@ -68,6 +68,13 @@ def _read_df_raw(path: str, category: str, trial_index: int):
 def _transform_df_input(df: pl.DataFrame):
     if "doc_id" in df.columns:
         print("Transform mode: lm_eval")
+
+        filter_names = df["filter"].unique(maintain_order=True)
+        if len(filter_names) > 1:
+            filter_name = filter_names[0]
+            print(f"Choose {filter_name=} among {filter_names}")
+            df = df.filter(pl.col("filter") == filter_name)
+
         df = df.select(
             pl.col("category"), pl.col("trial_index"),
             prompt_id=pl.col("doc_id"),
@@ -75,12 +82,6 @@ def _transform_df_input(df: pl.DataFrame):
             output=pl.col("resps").list.get(0).list.get(0),
             correct=pl.col("exact_match").cast(bool),
         )
-
-        filter_names = df["filter"].unique(maintain_order=True)
-        if len(filter_names) > 1:
-            filter_name = filter_names[0]
-            print(f"Choose {filter_name=} among {filter_names}")
-            df = df.filter(pl.col("filter") == filter_name)
 
         return df
     elif "prompt_id" in df.columns:
