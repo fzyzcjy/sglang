@@ -1,4 +1,5 @@
 import argparse
+import re
 from pathlib import Path
 
 import polars as pl
@@ -20,9 +21,11 @@ def main(args):
     )
 
     for row in df_target.iter_rows(named=True):
-        path_baseline = Path(args.baseline_path) / row["filename"]
+        baseline_id = row["forward_pass_id"] - args.start_id + args.baseline_start_id
+        baseline_filename = re.sub(r"forward_pass_id=(\d+)", f"forward_pass_id={baseline_id}", row["filename"])
+        path_baseline = Path(args.baseline_path) / baseline_filename
         path_target = Path(args.target_path) / row["filename"]
-        print(f"Check: {str(path_target)}")
+        print(f"Check: target={str(path_target)} baseline={str(path_baseline)}")
         check_tensor_pair(path_baseline=path_baseline, path_target=path_target)
         print()
 
