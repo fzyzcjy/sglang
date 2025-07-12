@@ -4,6 +4,12 @@ from pathlib import Path
 
 import polars as pl
 
+_DESCRIPTION = '''Compare and find differences to benchmark outputs.
+
+Supported inputs:
+* The samples jsonl from `lm_eval --log_samples --output_path FOLDER_NAME`
+* The output from `gsm8k/bench_sglang.py --raw-result-file FILE_NAME` (or mmlu)
+'''
 
 def main(args):
     df_input = _transform_df_input(_compute_df_raw(args))
@@ -141,7 +147,7 @@ def _compute_str_prefix_len(a: str, b: str) -> int:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=_DESCRIPTION)
     parser.add_argument("--baseline-path", type=str, nargs="+")
     parser.add_argument("--target-path", type=str, nargs="+")
     parser.add_argument("--output-path", type=str, default="/tmp/text_comparator_output.json")
