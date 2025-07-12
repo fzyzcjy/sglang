@@ -68,10 +68,16 @@ def _read_df_raw(path: str, category: str, trial_index: int):
 def _transform_df_input(df: pl.DataFrame):
     if "doc_id" in df.columns:
         print("Transform mode: lm_eval")
-        return TODO
+        return df.select(
+            pl.col("category"), pl.col("trial_index"),
+            prompt_id=pl.col("doc_id"),
+            prompt=TODO,
+            output=TODO,
+            correct=TODO,
+        )
     elif "prompt_id" in df.columns:
         print("Transform mode: SGLang bench")
-        return TODO
+        return df
     else:
         raise Exception(f"Unknown data: {df.columns}")
 
