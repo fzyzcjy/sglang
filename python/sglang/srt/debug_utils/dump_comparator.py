@@ -20,10 +20,15 @@ def main(args):
         for c in ["rank", "forward_pass_id", "dump_index", "name"]
     )
 
+    df_baseline = read_meta(args.baseline_path)
+
     for row in df_target.iter_rows(named=True):
-        baseline_id = row["forward_pass_id"] - args.start_id + args.baseline_start_id
-        baseline_filename = re.sub(r"forward_pass_id=(\d+)", f"forward_pass_id={baseline_id}", row["filename"])
-        path_baseline = Path(args.baseline_path) / baseline_filename
+        row_baseline = df_baseline.filter(
+            (pl.col("forward_pass_id") == row["forward_pass_id"] - args.start_id + args.baseline_start_id)
+            & (pl.col("rank") == row["rank"])
+            & (pl.col("name") == row["name"])
+        )
+        path_baseline = Path(args.baseline_path) / row_baseline["filename"]
         path_target = Path(args.target_path) / row["filename"]
         print(f"Check: target={str(path_target)} baseline={str(path_baseline)}")
         check_tensor_pair(path_baseline=path_baseline, path_target=path_target)
