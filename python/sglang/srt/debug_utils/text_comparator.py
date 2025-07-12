@@ -68,13 +68,21 @@ def _read_df_raw(path: str, category: str, trial_index: int):
 def _transform_df_input(df: pl.DataFrame):
     if "doc_id" in df.columns:
         print("Transform mode: lm_eval")
-        return df.select(
+        df = df.select(
             pl.col("category"), pl.col("trial_index"),
             prompt_id=pl.col("doc_id"),
             prompt=pl.col("arguments").struct.field("gen_args_0").struct.field("arg_0"),
             output=pl.col("resps").list.get(0).list.get(0),
             correct=pl.col("exact_match").cast(bool),
         )
+
+        filter_names = df["filter"].unique(maintain_order=True)
+        if len(filter_names) > 1:
+            filter_name = filter_names[0]
+            print(f"Choose {filter_name=} among {filter_names}")
+            df = df.filter(pl.col("filter") == filter_name)
+
+        return df
     elif "prompt_id" in df.columns:
         print("Transform mode: SGLang bench")
         return df
@@ -105,6 +113,7 @@ def _handle_one_prompt(df_one_prompt: pl.DataFrame):
 
     outputs_baseline = df_baseline["output"].to_list()
     outputs_target = df_target["output"].to_list()
+    assert len(outputs_baseline) == 1, f"{df_baseline=}"
 
     output_same_prefix_len = max(
         _compute_str_prefix_len(output_baseline, output_target)
