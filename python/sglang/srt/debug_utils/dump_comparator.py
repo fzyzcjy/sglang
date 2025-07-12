@@ -88,18 +88,18 @@ def check_tensor_pair(path_baseline, path_target):
         print(f"❌ Shape mismatch")
         return
 
-    abs_diff = (x_target - x_baseline).abs()
-    max_diff = abs_diff.max().item()
-    mean_diff = abs_diff.mean().item()
+    raw_abs_diff = (x_target - x_baseline).abs()
+    max_abs_diff = raw_abs_diff.max().item()
+    mean_abs_diff = raw_abs_diff.mean().item()
 
-    is_large_diff = max_diff > 1e-3
+    needs_print = max_abs_diff > 1e-3
 
     print(
         f"{'❌' if is_large_diff else '✅'} "
-        f"max_diff={max_diff:.3f} mean_diff={mean_diff:.3f} "
+        f"max_abs_diff={max_abs_diff:.3f} mean_abs_diff={mean_abs_diff:.3f} "
     )
 
-    if is_large_diff:
+    if needs_print:
         print(f"x_baseline(sample)={get_truncated_value(x_baseline)}")
         print(f"x_target(sample)={get_truncated_value(x_target)}")
 
