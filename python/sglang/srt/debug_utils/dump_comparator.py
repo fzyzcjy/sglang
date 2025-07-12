@@ -1,4 +1,5 @@
 import argparse
+import functools
 import re
 from pathlib import Path
 
@@ -25,8 +26,11 @@ def main(args):
     for row in df_target.iter_rows(named=True):
         row_baseline = df_baseline.filter(
             (pl.col("forward_pass_id") == row["forward_pass_id"] - args.start_id + args.baseline_start_id)
-            & (pl.col("rank") == row["rank"])
-            & (pl.col("name") == row["name"])
+            & functools.reduce(lambda a, b: a & b, [
+                pl.col(col) == row[col]
+                for col in row.keys()
+                if col not in ["forward_pass_id", "dump_index"]
+            ])
         )
         path_baseline = Path(args.baseline_path) / row_baseline["filename"]
         path_target = Path(args.target_path) / row["filename"]
