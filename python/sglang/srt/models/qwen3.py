@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import torch
 from torch import nn
 
+from sglang.srt.debug_utils.dumper import dumper
 from sglang.srt.distributed import (
     get_pp_group,
     get_tensor_model_parallel_rank,
@@ -170,6 +171,7 @@ class Qwen3DecoderLayer(nn.Module):
     ) -> None:
         super().__init__()
         self.hidden_size = config.hidden_size
+        self.layer_id = layer_id
         rope_theta = getattr(config, "rope_theta", 1000000)
         rope_scaling = getattr(config, "rope_scaling", None)
         max_position_embeddings = getattr(config, "max_position_embeddings", 32768)
@@ -220,6 +222,9 @@ class Qwen3DecoderLayer(nn.Module):
         forward_batch: ForwardBatch,
         residual: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        x = hidden_states + (residual if residual is not None else 0)
+        dumper.dump("layer_start__hidden_states_plus_residual", x, layer_id=self.layer_id)
+
         # Self Attention
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states, residual, forward_batch
@@ -341,6 +346,7 @@ class Qwen3ForCausalLM(nn.Module):
         get_embedding: bool = False,
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ) -> torch.Tensor:
+        dumper.on_forward_pass_start()
         hidden_states = self.model(
             input_ids,
             positions,
