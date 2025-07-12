@@ -24,7 +24,7 @@ def main(args):
     df_baseline = read_meta(args.baseline_path)
 
     for row in df_target.iter_rows(named=True):
-        row_baseline = df_baseline.filter(
+        rows_baseline = df_baseline.filter(
             (pl.col("forward_pass_id") == row["forward_pass_id"] - args.start_id + args.baseline_start_id)
             & functools.reduce(lambda a, b: a & b, [
                 pl.col(col) == row[col]
@@ -32,6 +32,9 @@ def main(args):
                 if col not in ["forward_pass_id", "dump_index"]
             ])
         )
+        assert len(rows_baseline) == 1, f"{rows_baseline=}"
+        row_baseline = rows_baseline.to_dicts()[0]
+        
         path_baseline = Path(args.baseline_path) / row_baseline["filename"]
         path_target = Path(args.target_path) / row["filename"]
         print(f"Check: target={str(path_target)} baseline={str(path_baseline)}")
@@ -41,7 +44,7 @@ def main(args):
 
 def read_meta(directory):
     directory = Path(directory)
-    assert directory.is_dir()
+    assert directory.is_dir(), f"{directory=} should be a directory"
 
     rows = []
     for p in directory.glob("*.pt"):
