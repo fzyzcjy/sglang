@@ -20,6 +20,13 @@ if TYPE_CHECKING:
 from sgl_kernel import merge_state_v2
 from sgl_kernel.flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
 
+def print_fn_kwargs(fn_kwargs):
+    for k, v in fn_kwargs.items():
+        msg = f"[{k}]"
+        if isinstance(v, torch.Tensor):
+            msg += f"{v.shape=} {v.dtype=} {v.strides()=} "
+        msg += f"{v=}"
+        printf(msg)
 
 @dataclass
 class FlashAttentionMetadata:
@@ -630,8 +637,6 @@ class FlashAttentionBackend(AttentionBackend):
         q_rope: Optional[torch.Tensor] = None,
         k_rope: Optional[torch.Tensor] = None,
     ):
-        if torch.distributed.get_rank() == 0:
-            print(f"backend.forward_extend START")
         if k is not None:
             assert v is not None
             if save_kv_cache:
@@ -654,6 +659,8 @@ class FlashAttentionBackend(AttentionBackend):
 
         # Use precomputed metadata across all layers
         metadata = self.forward_metadata
+        if torch.distributed.get_rank() == 0:
+            print(f"backend.forward_extend {metadata=}")
 
         # Calculate window size (can be moved to metadata if layer properties don't change)
         # we don't do layer.sliding_window_size - 1 since in model.get_attention_sliding_window_size() we already - 1
@@ -707,6 +714,7 @@ class FlashAttentionBackend(AttentionBackend):
 
         # Use Flash Attention for prefill
         if not self.use_mla:
+            raise Exception("this should not be visited")
             # Do multi-head attention
             key_cache, value_cache = forward_batch.token_to_kv_pool.get_kv_buffer(
                 layer.layer_id
@@ -776,6 +784,8 @@ class FlashAttentionBackend(AttentionBackend):
                 and not forward_batch.forward_mode.is_draft_extend()
             ):
                 # Do multi-head attention with chunked prefix cache
+                if torch.distributed.get_rank() == 0:
+                    print(f"backend branch = MHA + chunked prefix cache")
 
                 if forward_batch.attn_attend_prefix_cache:
                     # MHA for chunked prefix kv cache when running model with MLA
@@ -815,6 +825,9 @@ class FlashAttentionBackend(AttentionBackend):
                 return output, lse
             else:
                 # Do absorbed multi-latent attention
+                if torch.distributed.get_rank() == 0:
+                    print(f"backend branch = MLA")
+
                 kv_cache = forward_batch.token_to_kv_pool.get_key_buffer(
                     layer.layer_id
                 ).to(q.dtype)
@@ -839,7 +852,7 @@ class FlashAttentionBackend(AttentionBackend):
                     q_nope = q_all[:, :, : layer.v_head_dim]
                     q_rope = q_all[:, :, layer.v_head_dim :]
 
-                result = flash_attn_with_kvcache(
+                fn_kwargs = dict(
                     q=q_rope,
                     k_cache=k_rope_cache,
                     v_cache=c_kv_cache,
@@ -856,7 +869,12 @@ class FlashAttentionBackend(AttentionBackend):
                     v_descale=v_descale,
                     return_softmax_lse=use_cascade_attn,
                 )
+                if torch.distributed.get_rank() == 0:
+                    print_fn_kwargs(fn_kwargs)
+
+                result = flash_attn_with_kvcache(**fn_kwargs)
                 if use_cascade_attn:
+                    raise Exception("this should not be visited")
                     o, softmax_lse, *rest = result
                     o_expand, softmax_lse_expand, *rest_expand = (
                         flash_attn_with_kvcache(
@@ -901,8 +919,6 @@ class FlashAttentionBackend(AttentionBackend):
         q_rope: Optional[torch.Tensor] = None,
         k_rope: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        if torch.distributed.get_rank() == 0:
-            print(f"backend.forward_decode START")
         if k is not None:
             assert v is not None
             if save_kv_cache:
@@ -932,6 +948,9 @@ class FlashAttentionBackend(AttentionBackend):
             and (hasattr(layer, "use_irope") and layer.use_irope)
         )
 
+        if torch.distributed.get_rank() == 0:
+            print(f"backend.forward_decode {metadata=}")
+
         # When Spec Decode enabled, forward_decode would be called with two mode:
         # 1. DRAFT_DECODE: we enable cascade attention when top_k > 1
         # 2. IDLE: we don’t need cascade attention, spec_info will be none in this case
@@ -960,6 +979,7 @@ class FlashAttentionBackend(AttentionBackend):
             q_rope = q_rope.to(self.kv_cache_dtype) if q_rope is not None else None
             k_rope = k_rope.to(self.kv_cache_dtype) if k_rope is not None else None
         if not self.use_mla:
+            raise Exception("this should not be visited")
             # Do multi-head attention
 
             key_cache, value_cache = forward_batch.token_to_kv_pool.get_kv_buffer(
@@ -1092,7 +1112,7 @@ class FlashAttentionBackend(AttentionBackend):
                 q_rope = q_all[:, :, layer.v_head_dim :]
             max_seqlen_q = metadata.max_seq_len_q
 
-            result = flash_attn_with_kvcache(
+            fn_kwargs = dict(
                 q=q_rope,
                 k_cache=k_rope_cache,
                 v_cache=c_kv_cache,
@@ -1109,7 +1129,12 @@ class FlashAttentionBackend(AttentionBackend):
                 v_descale=v_descale,
                 return_softmax_lse=use_cascade_attn,  # softmax_lse is needed for merge states
             )
+            if torch.distributed.get_rank() == 0:
+                print_fn_kwargs(fn_kwargs)
+
+            result = flash_attn_with_kvcache(**fn_kwargs)
             if use_cascade_attn:
+                raise Exception("this should not be visited")
                 o, softmax_lse, *rest = result
                 o_expand, softmax_lse_expand, *rest_expand = flash_attn_with_kvcache(
                     q=q_rope,
