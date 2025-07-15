@@ -24,9 +24,9 @@ def print_fn_kwargs(fn_kwargs):
     for k, v in fn_kwargs.items():
         msg = f"[{k}]"
         if isinstance(v, torch.Tensor):
-            msg += f"{v.shape=} {v.dtype=} {v.strides()=} "
+            msg += f"{v.shape=} {v.dtype=} {v.stride()=} "
         msg += f"{v=}"
-        printf(msg)
+        print(msg)
 
 @dataclass
 class FlashAttentionMetadata:
