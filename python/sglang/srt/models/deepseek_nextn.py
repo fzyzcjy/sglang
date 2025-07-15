@@ -83,6 +83,8 @@ class DeepseekModelNextN(nn.Module):
         forward_batch: ForwardBatch,
         input_embeds: torch.Tensor = None,
     ) -> torch.Tensor:
+        if torch.distributed.get_rank() == 0:
+            print(f"dpsk nextn causlalm forward_pass {forward_batch.forward_mode=} {input_ids=} {positions=}")
         zero_allocator = BumpAllocator(
             buffer_size=2,
             dtype=torch.float32,
