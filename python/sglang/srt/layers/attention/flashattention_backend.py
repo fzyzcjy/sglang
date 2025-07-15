@@ -630,6 +630,8 @@ class FlashAttentionBackend(AttentionBackend):
         q_rope: Optional[torch.Tensor] = None,
         k_rope: Optional[torch.Tensor] = None,
     ):
+        if torch.distributed.get_rank() == 0:
+            print(f"backend.forward_extend START")
         if k is not None:
             assert v is not None
             if save_kv_cache:
@@ -899,6 +901,8 @@ class FlashAttentionBackend(AttentionBackend):
         q_rope: Optional[torch.Tensor] = None,
         k_rope: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
+        if torch.distributed.get_rank() == 0:
+            print(f"backend.forward_decode START")
         if k is not None:
             assert v is not None
             if save_kv_cache:

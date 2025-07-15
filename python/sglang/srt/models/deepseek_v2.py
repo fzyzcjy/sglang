@@ -1176,6 +1176,8 @@ class DeepseekV2AttentionMLA(nn.Module):
         return q, k, v, forward_batch
 
     def forward_normal_core(self, q, k, v, forward_batch):
+        if torch.distributed.get_rank() == 0:
+            print(f"dpsk.forward_normal_core {self.layer_id=}")
         attn_output = self.attn_mha(q, k, v, forward_batch, save_kv_cache=False)
         attn_output = attn_output.reshape(-1, self.num_local_heads * self.v_head_dim)
         output, _ = self.o_proj(attn_output)
@@ -1267,6 +1269,8 @@ class DeepseekV2AttentionMLA(nn.Module):
     def forward_absorb_core(
         self, q_pe, k_pe, q_nope_out, k_nope, forward_batch, zero_allocator
     ):
+        if torch.distributed.get_rank() == 0:
+            print(f"dpsk.forward_absorb_core {self.layer_id=}")
         if (
             self.attention_backend == "fa3"
             or self.attention_backend == "flashinfer"
