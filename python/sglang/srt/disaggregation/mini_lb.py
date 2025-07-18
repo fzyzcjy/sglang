@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import ORJSONResponse, Response, StreamingResponse
 
 from sglang.srt.disaggregation.utils import PDRegistryRequest
+from sglang.srt.utils import get_bool_env_var
 
 AIOHTTP_STREAM_READ_CHUNK_SIZE = (
     1024 * 64
@@ -345,7 +346,15 @@ async def handle_completion_request(request_data: dict):
     return await _forward_to_backend(request_data, "v1/completions")
 
 
+_next_bootstrap_room = 1
+
 def _generate_bootstrap_room():
+    if get_bool_env_var("SGLANG_HACK_SEQ_BOOTSTRAP_ROOM"):
+        print("Use seq bootstrap room")
+        global _next_bootstrap_room
+        _next_bootstrap_room += 1
+        return _next_bootstrap_room
+
     return random.randint(0, 2**63 - 1)
 
 
