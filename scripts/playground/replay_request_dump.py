@@ -51,6 +51,10 @@ def run_one_request_internal(record):
         if recorded_completion_tokens:
             json_data["sampling_params"]["max_new_tokens"] = recorded_completion_tokens
 
+    if json_data["sampling_params"]["presence_penalty"] == 0.0:
+        print("HACK! skip presence_penalty=0 cases")
+        return
+
     print(f"hi run_one_request_internal {json_data=}")
     response = requests.post(
         f"http://{args.host}:{args.port}/generate",
