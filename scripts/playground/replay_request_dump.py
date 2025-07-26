@@ -36,7 +36,9 @@ def read_records(files):
 
 def run_one_request_internal(record):
     (req, output, replay_init_time, start_time, end_time, idx) = record
-    time.sleep(max(0, start_time - (time.time() - replay_init_time)))
+    
+    print("HACK! skip sleep")
+    # time.sleep(max(0, start_time - (time.time() - replay_init_time)))
 
     if "completion_tokens" in output.get("meta_info", {}):
         recorded_completion_tokens = output["meta_info"]["completion_tokens"]
