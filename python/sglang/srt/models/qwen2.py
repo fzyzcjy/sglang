@@ -315,6 +315,7 @@ class Qwen2Model(nn.Module):
     ) -> Union[torch.Tensor, PPProxyTensors]:
         if self.pp_group.is_first_rank:
             if input_embeds is None:
+                print(f"hi forward call embed_tokens {self.embed_tokens.num_embeddings=} {[(name, w.shape) for name, w in self.embed_tokens.named_parameters()]} {self.embed_tokens=}")
                 hidden_states = self.embed_tokens(input_ids)
             else:
                 hidden_states = input_embeds
