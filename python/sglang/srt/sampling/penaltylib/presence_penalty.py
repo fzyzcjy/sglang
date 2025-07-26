@@ -27,6 +27,7 @@ class BatchedPresencePenalizer(_BatchedPenalizer):
             dtype=torch.float32,
             device=self.orchestrator.device,
         )
+        print(f"hi {id(self)=} prepare {self.cumulated_presence_penalties.shape=}")
 
         self.presence_penalties = (
             torch.tensor(
@@ -40,6 +41,7 @@ class BatchedPresencePenalizer(_BatchedPenalizer):
         ).unsqueeze_(1)
 
     def _cumulate_output_tokens(self, output_ids: torch.Tensor):
+        print(f"hi _cumulate_output_tokens {output_ids.max()=} {output_ids.min()=} {self.cumulated_presence_penalties.shape=} {output_ids=}", flush=True)
         self.cumulated_presence_penalties.scatter_(
             dim=1,
             index=output_ids.unsqueeze(1),
@@ -54,8 +56,10 @@ class BatchedPresencePenalizer(_BatchedPenalizer):
         self.cumulated_presence_penalties = self.cumulated_presence_penalties[
             keep_indices
         ]
+        print(f"hi {id(self)=} filter (after){self.cumulated_presence_penalties.shape=} {keep_indices=}")
 
     def _merge(self, their: "BatchedPresencePenalizer"):
+        print(f"hi {id(self)=} merge (before) {self.cumulated_presence_penalties.shape=} {their.cumulated_presence_penalties.shape=}")
         self.presence_penalties = torch.cat(
             [self.presence_penalties, their.presence_penalties], dim=0
         )

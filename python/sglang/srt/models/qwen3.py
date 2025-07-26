@@ -364,6 +364,8 @@ class Qwen3ForCausalLM(nn.Module):
         get_embedding: bool = False,
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ) -> torch.Tensor:
+        print(f"hi forward {input_ids=} {positions=}")
+
         hidden_states = self.model(
             input_ids,
             positions,
