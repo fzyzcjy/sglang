@@ -424,7 +424,7 @@ class DeepseekV2MoE(nn.Module):
         return [
             x.data
             for name, x in self.experts.named_parameters()
-            if name not in ["correction_bias"]
+            if name not in ["correction_bias", "w13_input_scale_quant", "w2_input_scale_quant"]
         ]
 
     def forward(
