@@ -1227,7 +1227,9 @@ class MooncakeKVReceiver(BaseKVReceiver):
             logger.error(f"Error fetching prefill info from bootstrap: {e}")
             return None
 
-    def _get_prefill_parallel_info_from_server(self) -> Tuple[int, int]:
+    def _get_prefill_parallel_info_from_server(
+        self,
+    ) -> Tuple[Optional[int], Optional[int], Optional[int]]:
         """Fetch the prefill parallel info from the bootstrap server."""
         try:
             url = f"http://{self.bootstrap_addr}/route?engine_rank={-1}&target_dp_group={-1}&target_pp_rank={-1}"
@@ -1243,10 +1245,10 @@ class MooncakeKVReceiver(BaseKVReceiver):
                 logger.error(
                     f"Failed to get prefill parallel info: {response.status_code}, {response.text}"
                 )
-                return None, None
+                return None, None, None
         except Exception as e:
             logger.error(f"Error fetching prefill parallel info from bootstrap: {e}")
-            return None, None
+            return None, None, None
 
     def _register_kv_args(self):
         for bootstrap_info in self.bootstrap_infos:
@@ -1458,7 +1460,7 @@ class MooncakeKVBootstrapServer(BaseKVBootstrapServer):
         engine_rank = request.query.get("engine_rank")
         target_dp_group = request.query.get("target_dp_group")
         target_pp_rank = request.query.get("target_pp_rank")
-        if not engine_rank or not target_dp_group:
+        if not engine_rank or not target_dp_group or not target_pp_rank:
             return web.Response(text="Missing inputs for bootstrap server.", status=400)
 
         # Currently we use engine_rank == -1 and target_dp_group == -1 to sync dp size
