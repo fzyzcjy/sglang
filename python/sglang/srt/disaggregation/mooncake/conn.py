@@ -518,18 +518,21 @@ class MooncakeKVManager(BaseKVManager):
         dst_aux_ptrs: list[int],
         dst_aux_index: int,
     ):
+        src_addr_list = []
+        dst_addr_list = []
+        length_list = []
         prefill_aux_ptrs = self.kv_args.aux_data_ptrs
         prefill_aux_item_lens = self.kv_args.aux_item_lens
         for i, dst_aux_ptr in enumerate(dst_aux_ptrs):
             length = prefill_aux_item_lens[i]
             src_addr = prefill_aux_ptrs[i] + length * prefill_aux_index
             dst_addr = dst_aux_ptrs[i] + length * dst_aux_index
-            status = self.engine.transfer_sync(
-                mooncake_session_id, src_addr, dst_addr, length
-            )
-            if status != 0:
-                return status
-        return 0
+            src_addr_list.append(src_addr)
+            dst_addr_list.append(dst_addr)
+            length_list.append(length)
+        return self.engine.batch_transfer_sync(
+            mooncake_session_id, src_addr_list, dst_addr_list, length_list
+        )
 
     def sync_status_to_decode_endpoint(
         self, remote: str, dst_port: int, room: int, status: int, prefill_rank: int
