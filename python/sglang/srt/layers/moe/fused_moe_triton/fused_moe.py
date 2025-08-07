@@ -1313,7 +1313,7 @@ def moe_sum_reduce_triton(
     return
 
 
-@torch.compile
+# @torch.compile
 def moe_sum_reduce_torch_compile(x, out, routed_scaling_factor):
     torch.sum(x, dim=1, out=out)
     out.mul_(routed_scaling_factor)

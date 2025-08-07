@@ -976,7 +976,7 @@ def compute_position_torch(
     return positions.to(torch.int64), extend_start_loc
 
 
-@torch.compile(dynamic=True, backend=get_compiler_backend(), disable=_is_npu)
+# @torch.compile(dynamic=True, backend=get_compiler_backend(), disable=_is_npu)
 def clamp_position(seq_lens):
     return torch.clamp((seq_lens - 1), min=0).to(torch.int64)
 

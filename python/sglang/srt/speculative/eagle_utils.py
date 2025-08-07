@@ -992,7 +992,7 @@ def get_target_cache_loc(
     )
 
 
-@torch.compile(dynamic=True)
+# @torch.compile(dynamic=True)
 def get_src_tgt_cache_loc(
     seq_lens: torch.Tensor,
     out_cache_loc: torch.Tensor,
@@ -1042,7 +1042,7 @@ def filter_finished_cache_loc_kernel(
     )
 
 
-@torch.compile(dynamic=True)
+# @torch.compile(dynamic=True)
 def create_accept_length_filter(
     accept_length: torch.Tensor,
     unfinished_index_device: torch.Tensor,
@@ -1056,7 +1056,7 @@ def create_accept_length_filter(
     return accept_length_filter
 
 
-@torch.compile(dynamic=True)
+# @torch.compile(dynamic=True)
 def select_top_k_tokens(
     i: int,
     topk_p: torch.Tensor,

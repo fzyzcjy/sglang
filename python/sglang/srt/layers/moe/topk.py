@@ -363,7 +363,7 @@ def fused_topk(
 
 
 # This is used by the Deepseek V2/V3/R1 series models
-@torch.compile(dynamic=True, backend=get_compiler_backend())
+# @torch.compile(dynamic=True, backend=get_compiler_backend())
 def grouped_topk_gpu(
     hidden_states: torch.Tensor,
     gating_output: torch.Tensor,
@@ -455,7 +455,7 @@ def grouped_topk_cpu(
     )
 
 
-@torch.compile(dynamic=True, backend=get_compiler_backend(), disable=_is_npu)
+# @torch.compile(dynamic=True, backend=get_compiler_backend(), disable=_is_npu)
 def biased_grouped_topk_impl(
     hidden_states: torch.Tensor,
     gating_output: torch.Tensor,
@@ -540,7 +540,7 @@ def _mask_topk_ids_padded_region(
     topk_ids[indices >= num_token_non_padded, :] = -1
 
 
-@torch.compile(dynamic=True, backend=get_compiler_backend())
+# @torch.compile(dynamic=True, backend=get_compiler_backend())
 def _biased_grouped_topk_postprocess(
     topk_ids, expert_location_dispatch_info, num_token_non_padded
 ):
