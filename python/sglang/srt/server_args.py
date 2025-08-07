@@ -469,20 +469,8 @@ class ServerArgs:
 
         model_arch = self.get_hf_config().architectures[0]
         if model_arch in ["GptOssForCausalLM"]:
-            if self.attention_backend is None:
-                # default is triton, but we could have trtllm_mha as an option
-                self.attention_backend = "triton"
-            assert (
-                self.attention_backend == "trtllm_mha"
-                or self.attention_backend == "triton"
-            )
-
-            if is_sm100_supported():
-                self.enable_flashinfer_mxfp4_moe = True
-                self.enable_triton_kernel_moe = False
-            else:
-                self.enable_triton_kernel_moe = True
-
+            self.attention_backend = "triton"
+            self.enable_triton_kernel_moe = True
             self.disable_hybrid_swa_memory = True
 
             quantization_config = getattr(
