@@ -239,7 +239,8 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
         weight_dtype = torch.uint8
         scale_dtype = torch.uint8
 
-        intermediate_size *= 2
+        print("HACK: remove a `intermediate_size *= 2`")
+        # intermediate_size *= 2
         mxfp4_block = 32
 
         self.intermediate_size = intermediate_size
