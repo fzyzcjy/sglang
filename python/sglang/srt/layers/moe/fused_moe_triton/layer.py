@@ -794,6 +794,7 @@ class FusedMoE(torch.nn.Module):
             )
 
     def forward(self, hidden_states: torch.Tensor, topk_output: StandardTopKOutput):
+        print(f"hi FusedMoE.forward {hidden_states.shape=} {self.hidden_size=}")
         # hack
         # origin_hidden_states_dim = hidden_states.shape[-1]
         # if self.hidden_size != origin_hidden_states_dim:
