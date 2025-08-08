@@ -558,7 +558,9 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
     ) -> torch.Tensor:
         if self.use_flashinfer:
             # Based on profiling results, we need to quantize x to mxfp8 here to achieve better performance
+            print(f"hi mxfp8_quantize INPUT {x.shape=} {x.dtype=}")
             x_quant, x_scale = mxfp8_quantize(x, False)  # to mxfp8
+            print(f"hi mxfp8_quantize OUTPUT {x_quant.shape=} {x_scale.dtype=}")
             x_scale = x_scale.view(torch.float8_e4m3fn).reshape(-1)
 
             top_k, router_logits = topk_output

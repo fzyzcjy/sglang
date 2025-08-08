@@ -794,14 +794,15 @@ class FusedMoE(torch.nn.Module):
             )
 
     def forward(self, hidden_states: torch.Tensor, topk_output: StandardTopKOutput):
-        origin_hidden_states_dim = hidden_states.shape[-1]
-        if self.hidden_size != origin_hidden_states_dim:
-            hidden_states = torch.nn.functional.pad(
-                hidden_states,
-                (0, self.hidden_size - origin_hidden_states_dim),
-                mode="constant",
-                value=0.0,
-            )
+        # hack
+        # origin_hidden_states_dim = hidden_states.shape[-1]
+        # if self.hidden_size != origin_hidden_states_dim:
+        #     hidden_states = torch.nn.functional.pad(
+        #         hidden_states,
+        #         (0, self.hidden_size - origin_hidden_states_dim),
+        #         mode="constant",
+        #         value=0.0,
+        #     )
         assert self.quant_method is not None
 
         if self.moe_ep_size > 1 and not self.enable_flashinfer_cutlass_moe:
@@ -847,7 +848,8 @@ class FusedMoE(torch.nn.Module):
         if self.reduce_results and (self.moe_tp_size > 1 or self.moe_ep_size > 1):
             final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
 
-        return final_hidden_states[..., :origin_hidden_states_dim].contiguous()
+        # return final_hidden_states[..., :origin_hidden_states_dim].contiguous()
+        return final_hidden_states
 
     @classmethod
     def make_expert_params_mapping(
