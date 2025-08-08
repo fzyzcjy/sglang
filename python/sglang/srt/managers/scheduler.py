@@ -1686,6 +1686,19 @@ class Scheduler(
         """Run a batch."""
         self.forward_ct += 1
 
+        ############################################
+        import cProfile
+        if self.forward_ct == 20:
+            print("Scheduler: start cprofile")
+            self.prof = cProfile.Profile()
+            self.prof.enable()
+        if self.forward_ct == 300:
+            print("Scheduler: end cprofile")
+            self.prof.disable()
+            self.prof.dump_stats(f"/host_home/temp_sglang_server2local/{time.time()}_scheduler.prof")
+            del self.prof
+        ############################################
+
         # Whether to run the profiler
         self._profile_batch_predicate(batch)
         if self.forward_sleep_time is not None:
