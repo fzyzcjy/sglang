@@ -1635,18 +1635,19 @@ class ModelRunner:
     ) -> Tuple[Union[LogitsProcessorOutput, PPProxyTensors], bool]:
         self.forward_pass_id += 1
 
-        ############################################
-        import cProfile
-        if self.forward_pass_id == 20:
-            print("ModelRunner: start cprofile")
-            self.prof = cProfile.Profile()
-            self.prof.enable()
-        if self.forward_pass_id == 300:
-            print("ModelRunner: end cprofile")
-            self.prof.disable()
-            self.prof.dump_stats(f"/host_home/temp_sglang_server2local/{time.time()}_model_runner.prof")
-            del self.prof
-        ############################################
+        # ############################################
+        # if self.tp_rank == 0:
+        #     import cProfile
+        #     if self.forward_pass_id == 20:
+        #         print("ModelRunner: start cprofile")
+        #         self.prof = cProfile.Profile()
+        #         self.prof.enable()
+        #     if self.forward_pass_id == 300:
+        #         print("ModelRunner: end cprofile")
+        #         self.prof.disable()
+        #         self.prof.dump_stats(f"/host_home/temp_sglang_server2local/{time.time()}_model_runner.prof")
+        #         del self.prof
+        # ############################################
 
         with get_global_expert_distribution_recorder().with_forward_pass(
             self.forward_pass_id,
