@@ -1027,27 +1027,28 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         last_loc: torch.Tensor,
         backup_state: bool = False,
     ):
-        num_tokens = len(seq_lens) * self.token_to_kv_pool_allocator.page_size
+        with torch.autograd.profiler.record_function("alloc_paged_token_slots_decode"):
+            num_tokens = len(seq_lens) * self.token_to_kv_pool_allocator.page_size
 
-        self._evict_tree_cache_if_needed(num_tokens)
+            self._evict_tree_cache_if_needed(num_tokens)
 
-        if backup_state:
-            state = self.token_to_kv_pool_allocator.backup_state()
+            if backup_state:
+                state = self.token_to_kv_pool_allocator.backup_state()
 
-        out_cache_loc = self.token_to_kv_pool_allocator.alloc_decode(seq_lens, last_loc)
-        if out_cache_loc is None:
-            error_msg = (
-                f"Decode out of memory. Try to lower your batch size.\n"
-                f"Try to allocate {len(seq_lens)} tokens.\n"
-                f"{self._available_and_evictable_str()}"
-            )
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
+            out_cache_loc = self.token_to_kv_pool_allocator.alloc_decode(seq_lens, last_loc)
+            if out_cache_loc is None:
+                error_msg = (
+                    f"Decode out of memory. Try to lower your batch size.\n"
+                    f"Try to allocate {len(seq_lens)} tokens.\n"
+                    f"{self._available_and_evictable_str()}"
+                )
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
 
-        if backup_state:
-            return out_cache_loc, state
-        else:
-            return out_cache_loc
+            if backup_state:
+                return out_cache_loc, state
+            else:
+                return out_cache_loc
 
     def prepare_encoder_info_extend(self, input_ids: List[int], seq_lens: List[int]):
         self.encoder_lens_cpu = []
@@ -1526,78 +1527,79 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
         )
 
     def prepare_for_decode(self):
-        self.forward_mode = ForwardMode.DECODE
-        bs = len(self.reqs)
+        with torch.autograd.profiler.record_function("prepare_for_decode"):
+            self.forward_mode = ForwardMode.DECODE
+            bs = len(self.reqs)
 
-        if self.spec_algorithm.is_eagle():
-            # if spec decoding is used, the decode batch is prepared inside
-            # `forward_batch_speculative_generation` after running draft models.
-            return
+            if self.spec_algorithm.is_eagle():
+                # if spec decoding is used, the decode batch is prepared inside
+                # `forward_batch_speculative_generation` after running draft models.
+                return
 
-        if self.sampling_info.penalizer_orchestrator.is_required:
-            if self.enable_overlap:
-                # TODO: this can be slow, optimize this.
-                delayed_output_ids = torch.tensor(
-                    [
-                        (
-                            req.output_ids[-1]
-                            if len(req.output_ids)
-                            else req.origin_input_ids[-1]
-                        )
-                        for req in self.reqs
-                    ],
-                    dtype=torch.int64,
-                    device=self.device,
-                )
-                self.sampling_info.penalizer_orchestrator.cumulate_output_tokens(
-                    delayed_output_ids
-                )
+            if self.sampling_info.penalizer_orchestrator.is_required:
+                if self.enable_overlap:
+                    # TODO: this can be slow, optimize this.
+                    delayed_output_ids = torch.tensor(
+                        [
+                            (
+                                req.output_ids[-1]
+                                if len(req.output_ids)
+                                else req.origin_input_ids[-1]
+                            )
+                            for req in self.reqs
+                        ],
+                        dtype=torch.int64,
+                        device=self.device,
+                    )
+                    self.sampling_info.penalizer_orchestrator.cumulate_output_tokens(
+                        delayed_output_ids
+                    )
+                else:
+                    self.sampling_info.penalizer_orchestrator.cumulate_output_tokens(
+                        self.output_ids.to(torch.int64)
+                    )
+
+            # Update fields
+            self.input_ids = self.output_ids
+            self.output_ids = None
+
+            if self.model_config.is_encoder_decoder:
+                locs = self.encoder_lens + self.seq_lens
+                self.prepare_encoder_info_decode()
             else:
-                self.sampling_info.penalizer_orchestrator.cumulate_output_tokens(
-                    self.output_ids.to(torch.int64)
+                locs = self.seq_lens.clone()
+
+            if self.enable_overlap:
+                # Do not use in-place operations in the overlap mode
+                self.seq_lens = self.seq_lens + 1
+                self.orig_seq_lens = self.orig_seq_lens + 1
+            else:
+                # A faster in-place version
+                self.seq_lens.add_(1)
+                self.orig_seq_lens.add_(1)
+            self.seq_lens_sum += bs
+
+            # free memory
+            if isinstance(self.tree_cache, SWAChunkCache):
+                for req in self.reqs:
+                    self.tree_cache.evict_swa(
+                        req, req.seqlen - 1, self.model_config.attention_chunk_size
+                    )
+
+            # Allocate memory
+            if self.token_to_kv_pool_allocator.page_size == 1:
+                self.out_cache_loc = self.alloc_token_slots(bs)
+            else:
+                last_loc = self.req_to_token_pool.req_to_token[
+                    self.req_pool_indices, self.seq_lens - 2
+                ]
+                self.out_cache_loc = self.alloc_paged_token_slots_decode(
+                    self.seq_lens, last_loc
                 )
 
-        # Update fields
-        self.input_ids = self.output_ids
-        self.output_ids = None
-
-        if self.model_config.is_encoder_decoder:
-            locs = self.encoder_lens + self.seq_lens
-            self.prepare_encoder_info_decode()
-        else:
-            locs = self.seq_lens.clone()
-
-        if self.enable_overlap:
-            # Do not use in-place operations in the overlap mode
-            self.seq_lens = self.seq_lens + 1
-            self.orig_seq_lens = self.orig_seq_lens + 1
-        else:
-            # A faster in-place version
-            self.seq_lens.add_(1)
-            self.orig_seq_lens.add_(1)
-        self.seq_lens_sum += bs
-
-        # free memory
-        if isinstance(self.tree_cache, SWAChunkCache):
-            for req in self.reqs:
-                self.tree_cache.evict_swa(
-                    req, req.seqlen - 1, self.model_config.attention_chunk_size
-                )
-
-        # Allocate memory
-        if self.token_to_kv_pool_allocator.page_size == 1:
-            self.out_cache_loc = self.alloc_token_slots(bs)
-        else:
-            last_loc = self.req_to_token_pool.req_to_token[
-                self.req_pool_indices, self.seq_lens - 2
-            ]
-            self.out_cache_loc = self.alloc_paged_token_slots_decode(
-                self.seq_lens, last_loc
+            self.req_to_token_pool.write(
+                (self.req_pool_indices, locs), self.out_cache_loc.to(torch.int32)
             )
-
-        self.req_to_token_pool.write(
-            (self.req_pool_indices, locs), self.out_cache_loc.to(torch.int32)
-        )
 
     def filter_batch(
         self,

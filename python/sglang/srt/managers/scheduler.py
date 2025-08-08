@@ -774,42 +774,43 @@ class Scheduler(
         self.result_queue = deque()
 
         while True:
-            recv_reqs = self.recv_requests()
-            self.process_input_requests(recv_reqs)
+            with torch.autograd.profiler.record_function("event_loop_overlap::loop"):
+                recv_reqs = self.recv_requests()
+                self.process_input_requests(recv_reqs)
 
-            batch = self.get_next_batch_to_run()
-            self.cur_batch = batch
+                batch = self.get_next_batch_to_run()
+                self.cur_batch = batch
 
-            if batch:
-                batch.launch_done = threading.Event()
-                result = self.run_batch(batch)
-                self.result_queue.append((batch.copy(), result))
+                if batch:
+                    batch.launch_done = threading.Event()
+                    result = self.run_batch(batch)
+                    self.result_queue.append((batch.copy(), result))
 
-                if self.last_batch is None:
-                    # Create a dummy first batch to start the pipeline for overlap schedule.
-                    # It is now used for triggering the sampling_info_done event.
-                    tmp_batch = ScheduleBatch(
-                        reqs=None,
-                        forward_mode=ForwardMode.DUMMY_FIRST,
-                        next_batch_sampling_info=self.tp_worker.cur_sampling_info,
+                    if self.last_batch is None:
+                        # Create a dummy first batch to start the pipeline for overlap schedule.
+                        # It is now used for triggering the sampling_info_done event.
+                        tmp_batch = ScheduleBatch(
+                            reqs=None,
+                            forward_mode=ForwardMode.DUMMY_FIRST,
+                            next_batch_sampling_info=self.tp_worker.cur_sampling_info,
+                        )
+                        self.process_batch_result(tmp_batch, None, batch.launch_done)
+
+                if self.last_batch:
+                    # Process the results of the last batch
+                    tmp_batch, tmp_result = self.result_queue.popleft()
+                    tmp_batch.next_batch_sampling_info = (
+                        self.tp_worker.cur_sampling_info if batch else None
                     )
-                    self.process_batch_result(tmp_batch, None, batch.launch_done)
+                    # NOTE: we should use current launched batch's launch_done event Instead of the last batch's
+                    self.process_batch_result(
+                        tmp_batch, tmp_result, batch.launch_done if batch else None
+                    )
+                elif batch is None:
+                    # When the server is idle, do self-check and re-init some states
+                    self.self_check_during_idle()
 
-            if self.last_batch:
-                # Process the results of the last batch
-                tmp_batch, tmp_result = self.result_queue.popleft()
-                tmp_batch.next_batch_sampling_info = (
-                    self.tp_worker.cur_sampling_info if batch else None
-                )
-                # NOTE: we should use current launched batch's launch_done event Instead of the last batch's
-                self.process_batch_result(
-                    tmp_batch, tmp_result, batch.launch_done if batch else None
-                )
-            elif batch is None:
-                # When the server is idle, do self-check and re-init some states
-                self.self_check_during_idle()
-
-            self.last_batch = batch
+                self.last_batch = batch
 
     @DynamicGradMode()
     def event_loop_pp(self):
@@ -1017,12 +1018,13 @@ class Scheduler(
                 )
             recv_reqs = work_reqs + control_reqs
         elif self.tp_size != 1:
-            recv_reqs = broadcast_pyobj(
-                recv_reqs,
-                self.tp_group.rank,
-                self.tp_cpu_group,
-                src=self.tp_group.ranks[0],
-            )
+            with torch.autograd.profiler.record_function("broadcast_pyobj"):
+                recv_reqs = broadcast_pyobj(
+                    recv_reqs,
+                    self.tp_group.rank,
+                    self.tp_cpu_group,
+                    src=self.tp_group.ranks[0],
+                )
         return recv_reqs
 
     def process_input_requests(self, recv_reqs: List):
@@ -1683,83 +1685,84 @@ class Scheduler(
     def run_batch(
         self, batch: ScheduleBatch
     ) -> Union[GenerationBatchResult, EmbeddingBatchResult]:
-        """Run a batch."""
-        self.forward_ct += 1
+        with torch.autograd.profiler.record_function("run_batch"):
+            """Run a batch."""
+            self.forward_ct += 1
 
-        # Whether to run the profiler
-        self._profile_batch_predicate(batch)
-        if self.forward_sleep_time is not None:
-            logger.info(f"Scheduler.run_batch sleep {self.forward_sleep_time}s")
-            time.sleep(self.forward_sleep_time)
+            # Whether to run the profiler
+            self._profile_batch_predicate(batch)
+            if self.forward_sleep_time is not None:
+                logger.info(f"Scheduler.run_batch sleep {self.forward_sleep_time}s")
+                time.sleep(self.forward_sleep_time)
 
-        # Run forward
-        if self.is_generation:
-            if self.spec_algorithm.is_none():
-                model_worker_batch = batch.get_model_worker_batch()
+            # Run forward
+            if self.is_generation:
+                if self.spec_algorithm.is_none():
+                    model_worker_batch = batch.get_model_worker_batch()
 
-                # update the consumer index of hicache to the running batch
-                self.tp_worker.set_hicache_consumer(
-                    model_worker_batch.hicache_consumer_index
-                )
-                if self.pp_group.is_last_rank:
-                    logits_output, next_token_ids, can_run_cuda_graph = (
-                        self.tp_worker.forward_batch_generation(model_worker_batch)
+                    # update the consumer index of hicache to the running batch
+                    self.tp_worker.set_hicache_consumer(
+                        model_worker_batch.hicache_consumer_index
                     )
+                    if self.pp_group.is_last_rank:
+                        logits_output, next_token_ids, can_run_cuda_graph = (
+                            self.tp_worker.forward_batch_generation(model_worker_batch)
+                        )
+                    else:
+                        pp_hidden_states_proxy_tensors, _, can_run_cuda_graph = (
+                            self.tp_worker.forward_batch_generation(model_worker_batch)
+                        )
+                    bid = model_worker_batch.bid
                 else:
-                    pp_hidden_states_proxy_tensors, _, can_run_cuda_graph = (
-                        self.tp_worker.forward_batch_generation(model_worker_batch)
-                    )
-                bid = model_worker_batch.bid
-            else:
-                (
-                    logits_output,
-                    next_token_ids,
-                    bid,
-                    num_accepted_tokens,
-                    can_run_cuda_graph,
-                ) = self.draft_worker.forward_batch_speculative_generation(batch)
-                bs = batch.batch_size()
-                self.spec_num_total_accepted_tokens += num_accepted_tokens + bs
-                self.spec_num_total_forward_ct += bs
-                self.num_generated_tokens += num_accepted_tokens
+                    (
+                        logits_output,
+                        next_token_ids,
+                        bid,
+                        num_accepted_tokens,
+                        can_run_cuda_graph,
+                    ) = self.draft_worker.forward_batch_speculative_generation(batch)
+                    bs = batch.batch_size()
+                    self.spec_num_total_accepted_tokens += num_accepted_tokens + bs
+                    self.spec_num_total_forward_ct += bs
+                    self.num_generated_tokens += num_accepted_tokens
 
-            if self.pp_group.is_last_rank:
-                batch.output_ids = next_token_ids
+                if self.pp_group.is_last_rank:
+                    batch.output_ids = next_token_ids
 
-            # These 2 values are needed for processing the output, but the values can be
-            # modified by overlap schedule. So we have to copy them here so that
-            # we can use the correct values in output processing.
-            if batch.return_logprob or self.spec_algorithm.is_eagle():
-                extend_input_len_per_req = [req.extend_input_len for req in batch.reqs]
-            else:
-                extend_input_len_per_req = None
-            if batch.return_logprob:
-                extend_logprob_start_len_per_req = [
-                    req.extend_logprob_start_len for req in batch.reqs
-                ]
-            else:
-                extend_logprob_start_len_per_req = None
+                # These 2 values are needed for processing the output, but the values can be
+                # modified by overlap schedule. So we have to copy them here so that
+                # we can use the correct values in output processing.
+                if batch.return_logprob or self.spec_algorithm.is_eagle():
+                    extend_input_len_per_req = [req.extend_input_len for req in batch.reqs]
+                else:
+                    extend_input_len_per_req = None
+                if batch.return_logprob:
+                    extend_logprob_start_len_per_req = [
+                        req.extend_logprob_start_len for req in batch.reqs
+                    ]
+                else:
+                    extend_logprob_start_len_per_req = None
 
-            ret = GenerationBatchResult(
-                logits_output=logits_output if self.pp_group.is_last_rank else None,
-                pp_hidden_states_proxy_tensors=(
-                    pp_hidden_states_proxy_tensors
-                    if not self.pp_group.is_last_rank
-                    else None
-                ),
-                next_token_ids=next_token_ids if self.pp_group.is_last_rank else None,
-                extend_input_len_per_req=extend_input_len_per_req,
-                extend_logprob_start_len_per_req=extend_logprob_start_len_per_req,
-                bid=bid,
-                can_run_cuda_graph=can_run_cuda_graph,
-            )
-        else:  # embedding or reward model
-            model_worker_batch = batch.get_model_worker_batch()
-            embeddings = self.tp_worker.forward_batch_embedding(model_worker_batch)
-            ret = EmbeddingBatchResult(
-                embeddings=embeddings, bid=model_worker_batch.bid
-            )
-        return ret
+                ret = GenerationBatchResult(
+                    logits_output=logits_output if self.pp_group.is_last_rank else None,
+                    pp_hidden_states_proxy_tensors=(
+                        pp_hidden_states_proxy_tensors
+                        if not self.pp_group.is_last_rank
+                        else None
+                    ),
+                    next_token_ids=next_token_ids if self.pp_group.is_last_rank else None,
+                    extend_input_len_per_req=extend_input_len_per_req,
+                    extend_logprob_start_len_per_req=extend_logprob_start_len_per_req,
+                    bid=bid,
+                    can_run_cuda_graph=can_run_cuda_graph,
+                )
+            else:  # embedding or reward model
+                model_worker_batch = batch.get_model_worker_batch()
+                embeddings = self.tp_worker.forward_batch_embedding(model_worker_batch)
+                ret = EmbeddingBatchResult(
+                    embeddings=embeddings, bid=model_worker_batch.bid
+                )
+            return ret
 
     def process_batch_result(
         self,
@@ -1767,18 +1770,19 @@ class Scheduler(
         result: Union[GenerationBatchResult, EmbeddingBatchResult],
         launch_done: Optional[threading.Event] = None,
     ):
-        if batch.forward_mode.is_decode():
-            self.process_batch_result_decode(batch, result, launch_done)
-        elif batch.forward_mode.is_extend():
-            self.process_batch_result_prefill(batch, result, launch_done)
-        elif batch.forward_mode.is_idle():
-            if self.enable_overlap:
-                self.tp_worker.resolve_last_batch_result(launch_done)
+        with torch.autograd.profiler.record_function("process_batch_result"):
+            if batch.forward_mode.is_decode():
+                self.process_batch_result_decode(batch, result, launch_done)
+            elif batch.forward_mode.is_extend():
+                self.process_batch_result_prefill(batch, result, launch_done)
+            elif batch.forward_mode.is_idle():
+                if self.enable_overlap:
+                    self.tp_worker.resolve_last_batch_result(launch_done)
+                    self.set_next_batch_sampling_info_done(batch)
+            elif batch.forward_mode.is_dummy_first():
                 self.set_next_batch_sampling_info_done(batch)
-        elif batch.forward_mode.is_dummy_first():
-            self.set_next_batch_sampling_info_done(batch)
 
-        self.maybe_send_health_check_signal()
+            self.maybe_send_health_check_signal()
 
     def maybe_send_health_check_signal(self):
         if self.return_health_check_ct:

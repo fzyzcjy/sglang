@@ -150,59 +150,63 @@ class TpModelWorkerClient:
         batch_lists = [None] * 2
 
         while True:
-            model_worker_batch, future_token_ids_ct, sync_event = self.input_queue.get()
-            if not model_worker_batch:
-                break
+            with torch.autograd.profiler.record_function("forward_thread_func::loop"):
+                with torch.autograd.profiler.record_function("input_queue.get"):
+                    model_worker_batch, future_token_ids_ct, sync_event = self.input_queue.get()
+                if not model_worker_batch:
+                    break
 
-            sync_event.wait()
+                sync_event.wait()
 
-            # Keep a reference of model_worker_batch by storing it into a list.
-            # Otherwise, the tensor members of model_worker_batch will be released
-            # by pytorch and cause CUDA illegal memory access errors.
-            batch_lists[batch_pt % 2] = model_worker_batch
-            batch_pt += 1
+                # Keep a reference of model_worker_batch by storing it into a list.
+                # Otherwise, the tensor members of model_worker_batch will be released
+                # by pytorch and cause CUDA illegal memory access errors.
+                batch_lists[batch_pt % 2] = model_worker_batch
+                batch_pt += 1
 
-            # Create event
-            copy_done = torch.get_device_module(self.device).Event()
+                # Create event
+                copy_done = torch.get_device_module(self.device).Event()
 
-            # Resolve future tokens in the input
-            input_ids = model_worker_batch.input_ids
-            resolve_future_token_ids(input_ids, self.future_token_ids_map)
+                # Resolve future tokens in the input
+                input_ids = model_worker_batch.input_ids
+                with torch.autograd.profiler.record_function("resolve_future_token_ids"):
+                    resolve_future_token_ids(input_ids, self.future_token_ids_map)
 
-            # update the consumer index of hicache to the running batch
-            self.set_hicache_consumer(model_worker_batch.hicache_consumer_index)
-            # Run forward
-            logits_output, next_token_ids, can_run_cuda_graph = (
-                self.worker.forward_batch_generation(
-                    model_worker_batch, model_worker_batch.launch_done
-                )
-            )
-
-            # Update the future token ids map
-            bs = len(model_worker_batch.seq_lens)
-            self.future_token_ids_map[
-                future_token_ids_ct + 1 : future_token_ids_ct + bs + 1
-            ] = next_token_ids
-
-            # Copy results to the CPU
-            if model_worker_batch.return_logprob:
-                logits_output.next_token_logprobs = (
-                    logits_output.next_token_logprobs.to("cpu", non_blocking=True)
-                )
-                if logits_output.input_token_logprobs is not None:
-                    logits_output.input_token_logprobs = (
-                        logits_output.input_token_logprobs.to("cpu", non_blocking=True)
+                # update the consumer index of hicache to the running batch
+                self.set_hicache_consumer(model_worker_batch.hicache_consumer_index)
+                # Run forward
+                with torch.autograd.profiler.record_function("forward_batch_generation"):
+                    logits_output, next_token_ids, can_run_cuda_graph = (
+                        self.worker.forward_batch_generation(
+                            model_worker_batch, model_worker_batch.launch_done
+                        )
                     )
-            if logits_output.hidden_states is not None:
-                logits_output.hidden_states = logits_output.hidden_states.to(
-                    "cpu", non_blocking=True
-                )
-            next_token_ids = next_token_ids.to("cpu", non_blocking=True)
-            copy_done.record()
 
-            self.output_queue.put(
-                (copy_done, logits_output, next_token_ids, can_run_cuda_graph)
-            )
+                # Update the future token ids map
+                bs = len(model_worker_batch.seq_lens)
+                self.future_token_ids_map[
+                    future_token_ids_ct + 1 : future_token_ids_ct + bs + 1
+                ] = next_token_ids
+
+                # Copy results to the CPU
+                if model_worker_batch.return_logprob:
+                    logits_output.next_token_logprobs = (
+                        logits_output.next_token_logprobs.to("cpu", non_blocking=True)
+                    )
+                    if logits_output.input_token_logprobs is not None:
+                        logits_output.input_token_logprobs = (
+                            logits_output.input_token_logprobs.to("cpu", non_blocking=True)
+                        )
+                if logits_output.hidden_states is not None:
+                    logits_output.hidden_states = logits_output.hidden_states.to(
+                        "cpu", non_blocking=True
+                    )
+                next_token_ids = next_token_ids.to("cpu", non_blocking=True)
+                copy_done.record()
+
+                self.output_queue.put(
+                    (copy_done, logits_output, next_token_ids, can_run_cuda_graph)
+                )
 
     def resolve_last_batch_result(self, launch_done: Optional[threading.Event] = None):
         """
@@ -214,7 +218,8 @@ class TpModelWorkerClient:
         )
 
         if launch_done is not None:
-            launch_done.wait()
+            with torch.autograd.profiler.record_function("launch_done.wait"):
+                launch_done.wait()
         copy_done.synchronize()
 
         if logits_output.next_token_logprobs is not None:
