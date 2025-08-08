@@ -501,7 +501,8 @@ class GptOssModel(nn.Module):
             residual = pp_proxy_tensors["residual"]
 
         aux_hidden_states = []
-        for i in range(self.start_layer, self.end_layer):
+        # HACK: few layers
+        for i in range(self.start_layer, 3):
             with get_global_expert_distribution_recorder().with_current_layer(i):
                 if i in self.layers_to_capture:
                     aux_hidden_states.append(hidden_states + residual)
