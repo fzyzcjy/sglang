@@ -135,6 +135,26 @@ UNBALANCED_MODEL_LOADING_TIMEOUT_S = 300
 logger = logging.getLogger(__name__)
 
 
+#####################################################################
+import os
+import ctypes
+class PdlDetector:
+    def __init__(self):
+        self._cdll = None
+
+    def initialize(self):
+        library_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_pdl_detector.so")
+        print(f"PdlDetector.initialize {library_path=}")
+        self._cdll = ctypes.CDLL(library_path)
+        self._cdll.pdlDetectorInit()
+
+    def shutdown(self):
+        print(f"PdlDetector.shutdown")
+        if self._cdll is not None:
+            self._cdll.pdlDetectorShutdown()
+pdl_detector_instance = PdlDetector()
+#####################################################################
+
 class RankZeroFilter(logging.Filter):
     """Filter that only allows INFO level logs from rank 0, but allows all other levels from any rank."""
 
@@ -1634,6 +1654,12 @@ class ModelRunner:
         split_forward_count: int = 1,
     ) -> Tuple[Union[LogitsProcessorOutput, PPProxyTensors], bool]:
         self.forward_pass_id += 1
+
+        if self.tp_rank == 0:
+            if self.forward_pass_id == 25:
+                pdl_detector_instance.initialize()
+            if self.forward_pass_id == 30:
+                pdl_detector_instance.shutdown()
 
         with get_global_expert_distribution_recorder().with_forward_pass(
             self.forward_pass_id,
