@@ -143,7 +143,8 @@ class PdlDetector:
         self._cdll = None
 
     def initialize(self):
-        library_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_pdl_detector.so")
+        # library_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_pdl_detector.so")
+        library_path = "/host_home/primary_synced/tom_sglang_server/misc/pdl_detector/_pdl_detector.so"
         print(f"PdlDetector.initialize {library_path=}")
         self._cdll = ctypes.CDLL(library_path)
         self._cdll.pdlDetectorInit()
