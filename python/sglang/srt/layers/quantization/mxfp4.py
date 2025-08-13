@@ -392,8 +392,6 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             w13_bias = layer.w13_weight_bias.data.to(torch.float32)
             w2_bias = layer.w2_weight_bias.data.to(torch.float32)
 
-            weights_to_dispose = [w13_weight, w2_weight]
-
             # Swap w1 and w3 as the definition of
             # swiglu is different in the trtllm-gen
             def swap_every_two_rows(x, axis=-1):
@@ -486,10 +484,6 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
                 requires_grad=False,
             )
 
-            for w in weights_to_dispose:
-                print(f"hi dispose_tensor {id(w)=} {w.data_ptr()=}")
-                dispose_tensor(w)
-
             return
 
         if self.use_triton_kernels:
@@ -520,6 +514,11 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
 
             self.w13_weight_triton_tensor = w13_weight
             self.w2_weight_triton_tensor = w2_weight
+
+            for w in [w13_weight, w2_weight]:
+                print(f"hi dispose_tensor {id(w)=} {w.data_ptr()=}")
+                dispose_tensor(w)
+
             del layer.w13_weight
             del layer.w2_weight
         else:
