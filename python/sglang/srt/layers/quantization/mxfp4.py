@@ -262,18 +262,18 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
 
         self.hidden_size = hidden_size
         # Fused gate_up_proj (column parallel)
-        w13_weight = torch.nn.Parameter(
-            torch.zeros(
-                layer.num_local_experts,
-                2 * intermediate_size_per_partition_after_pad,
-                hidden_size // 2,
-                dtype=weight_dtype,
-            ),
-            requires_grad=False,
-        )
-        layer.register_parameter("w13_weight", w13_weight)
-        set_weight_attrs(w13_weight, extra_weight_attrs)
-        print(f"hi create w13_weight {id(w13_weight)=} {id(w13_weight.data)=} {w13_weight.data.data_ptr()=} {type(w13_weight)=} {type(w13_weight.data)=}")
+        # w13_weight = torch.nn.Parameter(
+        #     torch.zeros(
+        #         layer.num_local_experts,
+        #         2 * intermediate_size_per_partition_after_pad,
+        #         hidden_size // 2,
+        #         dtype=weight_dtype,
+        #     ),
+        #     requires_grad=False,
+        # )
+        # layer.register_parameter("w13_weight", w13_weight)
+        # set_weight_attrs(w13_weight, extra_weight_attrs)
+        # print(f"hi create w13_weight {id(w13_weight)=} {id(w13_weight.data)=} {w13_weight.data.data_ptr()=} {type(w13_weight)=} {type(w13_weight.data)=}")
 
         # print(f"hi del w13_weight immediately after create")
         # del layer.w13_weight
@@ -519,9 +519,9 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             # self.w13_weight_triton_tensor = w13_weight
             # self.w2_weight_triton_tensor = w2_weight
 
-            print("hi hack del w13_weight")
-            dispose_tensor(layer.w13_weight)
-            del layer.w13_weight
+            # print("hi hack del w13_weight")
+            # dispose_tensor(layer.w13_weight)
+            # del layer.w13_weight
 
             print("hi hack del w2_weight")
             dispose_tensor(layer.w2_weight)
