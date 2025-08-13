@@ -837,6 +837,9 @@ class GptOssForCausalLM(nn.Module):
         for name, weight in weights:
             weight = weight.cuda()
 
+            if "w13_weight" in name:
+                print("hack skip loading w13_weight!")
+
             if "gate_up_proj_blocks" in name:
                 # Handle MLP gate and up projection weights
                 new_name = name.replace("gate_up_proj_blocks", "w13_weight")
