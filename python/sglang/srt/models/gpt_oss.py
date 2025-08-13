@@ -769,17 +769,19 @@ class GptOssForCausalLM(nn.Module):
         is_nextn: bool = False,
         weight_name_mapping: dict = None,
     ):
-        quant_config_name = (
-            self.quant_config.get_name() if self.quant_config is not None else None
-        )
-        if quant_config_name != "mxfp4":
-            self._load_normal_weights(
-                weights, is_nextn=is_nextn, weight_name_mapping=weight_name_mapping
-            )
-        else:
-            self._load_weights_mxfp4(
-                weights, is_nextn=is_nextn, weight_name_mapping=weight_name_mapping
-            )
+        print("HACK: skip whole load_weights")
+        pass
+        # quant_config_name = (
+        #     self.quant_config.get_name() if self.quant_config is not None else None
+        # )
+        # if quant_config_name != "mxfp4":
+        #     self._load_normal_weights(
+        #         weights, is_nextn=is_nextn, weight_name_mapping=weight_name_mapping
+        #     )
+        # else:
+        #     self._load_weights_mxfp4(
+        #         weights, is_nextn=is_nextn, weight_name_mapping=weight_name_mapping
+        #     )
 
     def _load_weights_mxfp4(self, weights, is_nextn, weight_name_mapping):
         mxfp4_weights = []
