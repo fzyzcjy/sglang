@@ -261,20 +261,22 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
         self.intermediate_size = intermediate_size_per_partition_after_pad
 
         self.hidden_size = hidden_size
-        print("hack: do not create w13_weight")
         # Fused gate_up_proj (column parallel)
-        # w13_weight = torch.nn.Parameter(
-        #     torch.zeros(
-        #         layer.num_local_experts,
-        #         2 * intermediate_size_per_partition_after_pad,
-        #         hidden_size // 2,
-        #         dtype=weight_dtype,
-        #     ),
-        #     requires_grad=False,
-        # )
-        # layer.register_parameter("w13_weight", w13_weight)
-        # set_weight_attrs(w13_weight, extra_weight_attrs)
-        # print(f"hi create w13_weight {id(w13_weight)=} {id(w13_weight.data)=} {w13_weight.data.data_ptr()=} {type(w13_weight)=} {type(w13_weight.data)=}")
+        w13_weight = torch.nn.Parameter(
+            torch.zeros(
+                layer.num_local_experts,
+                2 * intermediate_size_per_partition_after_pad,
+                hidden_size // 2,
+                dtype=weight_dtype,
+            ),
+            requires_grad=False,
+        )
+        layer.register_parameter("w13_weight", w13_weight)
+        set_weight_attrs(w13_weight, extra_weight_attrs)
+        print(f"hi create w13_weight {id(w13_weight)=} {id(w13_weight.data)=} {w13_weight.data.data_ptr()=} {type(w13_weight)=} {type(w13_weight.data)=}")
+
+        print(f"hi del w13_weight immediately after create")
+        del layer.w13_weight
 
         w13_weight_scale = torch.nn.Parameter(
             torch.zeros(
