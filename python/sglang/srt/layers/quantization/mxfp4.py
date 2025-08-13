@@ -313,6 +313,7 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
         )
         layer.register_parameter("w2_weight", w2_weight)
         set_weight_attrs(w2_weight, extra_weight_attrs)
+        print(f"hi create w2_weight {id(w2_weight)=} {id(w2_weight.data)=} {w2_weight.data.data_ptr()=} {type(w2_weight)=} {type(w2_weight.data)=}")
 
         w2_weight_scale = torch.nn.Parameter(
             torch.zeros(
