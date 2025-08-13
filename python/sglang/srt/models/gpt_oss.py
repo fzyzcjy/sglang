@@ -1146,11 +1146,12 @@ class GptOssForCausalLM(nn.Module):
             else:
                 logging.info("All parameters loaded successfully.")
 
-        self.routed_experts_weights_of_layer = {
-            layer_id: self.model.layers[layer_id].mlp.get_moe_weights()
-            for layer_id in range(self.start_layer, self.end_layer)
-            if isinstance(self.model.layers[layer_id].mlp, GptOssSparseMoeBlock)
-        }
+        print("hack rm routed_experts_weights_of_layer")
+        # self.routed_experts_weights_of_layer = {
+        #     layer_id: self.model.layers[layer_id].mlp.get_moe_weights()
+        #     for layer_id in range(self.start_layer, self.end_layer)
+        #     if isinstance(self.model.layers[layer_id].mlp, GptOssSparseMoeBlock)
+        # }
 
     def get_embed_and_head(self):
         return self.model.embed_tokens.weight, self.lm_head.weight
