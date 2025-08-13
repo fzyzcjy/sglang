@@ -29,7 +29,7 @@ from sglang.srt.utils import (
     log_info_on_rank0,
     next_power_of_2,
     round_up,
-    set_weight_attrs,
+    set_weight_attrs, dispose_tensor,
 )
 
 _is_sm100_supported = is_cuda() and is_sm100_supported()
@@ -390,6 +390,8 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             w13_bias = layer.w13_weight_bias.data.to(torch.float32)
             w2_bias = layer.w2_weight_bias.data.to(torch.float32)
 
+            weights_to_dispose = [w13_weight, w2_weight]
+
             # Swap w1 and w3 as the definition of
             # swiglu is different in the trtllm-gen
             def swap_every_two_rows(x, axis=-1):
@@ -481,6 +483,10 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
                 torch.stack(gemm2_bias_shuffled).reshape(self.num_experts, -1),
                 requires_grad=False,
             )
+
+            for w in weights_to_dispose:
+                dispose_tensor(w)
+
             return
 
         if self.use_triton_kernels:
