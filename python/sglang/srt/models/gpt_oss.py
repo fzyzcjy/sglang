@@ -808,6 +808,8 @@ class GptOssForCausalLM(nn.Module):
         )
 
     def _load_mxfp4_experts_weights(self, weights):
+        print("hi hack skip _load_mxfp4_experts_weights")
+        return set()
 
         params_dict = dict(self.named_parameters())
         loaded_params: set[str] = set()
