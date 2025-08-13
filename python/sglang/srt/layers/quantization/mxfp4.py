@@ -21,6 +21,7 @@ from sglang.srt.layers.utils import is_sm100_supported
 from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.utils import (
     direct_register_custom_op,
+    dispose_tensor,
     get_bool_env_var,
     is_cuda,
     is_flashinfer_available,
@@ -29,7 +30,7 @@ from sglang.srt.utils import (
     log_info_on_rank0,
     next_power_of_2,
     round_up,
-    set_weight_attrs, dispose_tensor,
+    set_weight_attrs,
 )
 
 _is_sm100_supported = is_cuda() and is_sm100_supported()
