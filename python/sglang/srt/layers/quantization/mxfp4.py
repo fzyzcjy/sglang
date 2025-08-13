@@ -273,6 +273,7 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
         )
         layer.register_parameter("w13_weight", w13_weight)
         set_weight_attrs(w13_weight, extra_weight_attrs)
+        print(f"hi create w13_weight {id(w13_weight)=} {id(w13_weight.data)=} {w13_weight.data.data_ptr()=}")
 
         w13_weight_scale = torch.nn.Parameter(
             torch.zeros(
@@ -486,6 +487,7 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             )
 
             for w in weights_to_dispose:
+                print(f"hi dispose_tensor {id(w)=} {w.data_ptr()=}")
                 dispose_tensor(w)
 
             return
