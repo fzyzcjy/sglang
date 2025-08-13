@@ -273,7 +273,7 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
         )
         layer.register_parameter("w13_weight", w13_weight)
         set_weight_attrs(w13_weight, extra_weight_attrs)
-        print(f"hi create w13_weight {id(w13_weight)=} {id(w13_weight.data)=} {w13_weight.data.data_ptr()=}")
+        print(f"hi create w13_weight {id(w13_weight)=} {id(w13_weight.data)=} {w13_weight.data.data_ptr()=} {type(w13_weight)=} {type(w13_weight.data)=}")
 
         w13_weight_scale = torch.nn.Parameter(
             torch.zeros(
@@ -515,8 +515,8 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             self.w13_weight_triton_tensor = w13_weight
             self.w2_weight_triton_tensor = w2_weight
 
-            for w in [w13_weight, w2_weight]:
-                print(f"hi dispose_tensor {id(w)=} {w.data_ptr()=}")
+            for w in [layer.w13_weight.data, layer.w2_weight.data]:
+                print(f"hi dispose_tensor {id(w)=} {w.data_ptr()=} {type(w)=}")
                 dispose_tensor(w)
 
             del layer.w13_weight
