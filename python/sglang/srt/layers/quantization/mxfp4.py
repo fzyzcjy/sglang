@@ -261,19 +261,20 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
         self.intermediate_size = intermediate_size_per_partition_after_pad
 
         self.hidden_size = hidden_size
+        print("hack: do not create w13_weight")
         # Fused gate_up_proj (column parallel)
-        w13_weight = torch.nn.Parameter(
-            torch.zeros(
-                layer.num_local_experts,
-                2 * intermediate_size_per_partition_after_pad,
-                hidden_size // 2,
-                dtype=weight_dtype,
-            ),
-            requires_grad=False,
-        )
-        layer.register_parameter("w13_weight", w13_weight)
-        set_weight_attrs(w13_weight, extra_weight_attrs)
-        print(f"hi create w13_weight {id(w13_weight)=} {id(w13_weight.data)=} {w13_weight.data.data_ptr()=} {type(w13_weight)=} {type(w13_weight.data)=}")
+        # w13_weight = torch.nn.Parameter(
+        #     torch.zeros(
+        #         layer.num_local_experts,
+        #         2 * intermediate_size_per_partition_after_pad,
+        #         hidden_size // 2,
+        #         dtype=weight_dtype,
+        #     ),
+        #     requires_grad=False,
+        # )
+        # layer.register_parameter("w13_weight", w13_weight)
+        # set_weight_attrs(w13_weight, extra_weight_attrs)
+        # print(f"hi create w13_weight {id(w13_weight)=} {id(w13_weight.data)=} {w13_weight.data.data_ptr()=} {type(w13_weight)=} {type(w13_weight.data)=}")
 
         w13_weight_scale = torch.nn.Parameter(
             torch.zeros(
@@ -298,18 +299,19 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
         layer.register_parameter("w13_weight_bias", w13_weight_bias)
         set_weight_attrs(w13_weight_bias, extra_weight_attrs)
 
-        # down_proj (row parallel)
-        w2_weight = torch.nn.Parameter(
-            torch.zeros(
-                layer.num_local_experts,
-                hidden_size,
-                intermediate_size_per_partition_after_pad // 2,
-                dtype=weight_dtype,
-            ),
-            requires_grad=False,
-        )
-        layer.register_parameter("w2_weight", w2_weight)
-        set_weight_attrs(w2_weight, extra_weight_attrs)
+        print("hack: do not create w2_weight")
+        # # down_proj (row parallel)
+        # w2_weight = torch.nn.Parameter(
+        #     torch.zeros(
+        #         layer.num_local_experts,
+        #         hidden_size,
+        #         intermediate_size_per_partition_after_pad // 2,
+        #         dtype=weight_dtype,
+        #     ),
+        #     requires_grad=False,
+        # )
+        # layer.register_parameter("w2_weight", w2_weight)
+        # set_weight_attrs(w2_weight, extra_weight_attrs)
 
         w2_weight_scale = torch.nn.Parameter(
             torch.zeros(
@@ -516,12 +518,13 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             # self.w13_weight_triton_tensor = w13_weight
             # self.w2_weight_triton_tensor = w2_weight
 
-            for w in [layer.w13_weight.data, layer.w2_weight.data]:
-                print(f"hi dispose_tensor {id(w)=} {w.data_ptr()=} {type(w)=}")
-                dispose_tensor(w)
-
-            del layer.w13_weight
-            del layer.w2_weight
+            print("skip del and dispose-tensor")
+            # for w in [layer.w13_weight.data, layer.w2_weight.data]:
+            #     print(f"hi dispose_tensor {id(w)=} {w.data_ptr()=} {type(w)=}")
+            #     dispose_tensor(w)
+            #
+            # del layer.w13_weight
+            # del layer.w2_weight
         else:
             from triton_kernels.numerics_details.mxfp import upcast_from_mxfp
 

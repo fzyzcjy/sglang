@@ -454,8 +454,10 @@ class DefaultModelLoader(BaseModelLoader):
 
     @staticmethod
     def load_weights_and_postprocess(model, weights, target_device):
+        print(f"hi load_weights_and_postprocess start {torch.cuda.memory_allocated()=} {torch.cuda.memory_reserved()=}")
         model.load_weights(weights)
 
+        print(f"hi load_weights_and_postprocess after load weights {torch.cuda.memory_allocated()=} {torch.cuda.memory_reserved()=}")
         for _, module in model.named_modules():
             quant_method = getattr(module, "quant_method", None)
             if quant_method is not None:
@@ -467,6 +469,7 @@ class DefaultModelLoader(BaseModelLoader):
                 with device_loading_context(module, target_device):
                     quant_method.process_weights_after_loading(module)
 
+        print(f"hi load_weights_and_postprocess after post process {torch.cuda.memory_allocated()=} {torch.cuda.memory_reserved()=}")
 
 class LayeredModelLoader(DefaultModelLoader):
     """Model loader that loads weights layer by layer so that one can quantize a

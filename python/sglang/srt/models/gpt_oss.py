@@ -655,6 +655,8 @@ class GptOssForCausalLM(nn.Module):
         self.logits_processor = LogitsProcessor(config)
         self.capture_aux_hidden_states = False
 
+        print(f"hi LM.init {torch.cuda.memory_allocated()=} {torch.cuda.memory_reserved()=}")
+
     @torch.no_grad()
     def forward(
         self,
@@ -769,6 +771,8 @@ class GptOssForCausalLM(nn.Module):
         is_nextn: bool = False,
         weight_name_mapping: dict = None,
     ):
+        print(f"hi LM.load_weights start {torch.cuda.memory_allocated()=} {torch.cuda.memory_reserved()=}")
+
         print("HACK: skip whole load_weights")
         pass
         # quant_config_name = (
