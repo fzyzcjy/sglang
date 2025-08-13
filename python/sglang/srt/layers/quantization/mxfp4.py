@@ -278,6 +278,19 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
         # print(f"hi del w13_weight immediately after create")
         # del layer.w13_weight
 
+        whello_weight = torch.nn.Parameter(
+            torch.zeros(
+                layer.num_local_experts,
+                2 * intermediate_size_per_partition_after_pad,
+                hidden_size // 2,
+                dtype=weight_dtype,
+            ),
+            requires_grad=False,
+        )
+        layer.register_parameter("whello_weight", whello_weight)
+        set_weight_attrs(whello_weight, extra_weight_attrs)
+        print(f"hi create whello_weight {id(whello_weight)=} {id(whello_weight.data)=} {whello_weight.data.data_ptr()=} {type(whello_weight)=} {type(whello_weight.data)=}")
+
         w13_weight_scale = torch.nn.Parameter(
             torch.zeros(
                 layer.num_local_experts,
@@ -523,6 +536,10 @@ class Mxfp4MoEMethod(FusedMoEMethodBase):
             # print("hi hack del w13_weight")
             # dispose_tensor(layer.w13_weight)
             # del layer.w13_weight
+
+            print("hi hack del whello_weight")
+            dispose_tensor(layer.whello_weight)
+            del layer.whello_weight
 
             print("hi hack del w2_weight")
             dispose_tensor(layer.w2_weight)
