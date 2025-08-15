@@ -327,6 +327,12 @@ def _log_jit_build(M: int, N: int, K: int, kernel_type: DeepGemmKernelType):
 def deep_gemm_execution_hook(
     m: int, n: int, k: int, num_groups: int, kernel_type: DeepGemmKernelType
 ):
+    import torch
+    import traceback
+    if torch.distributed.get_rank() == 0:
+        print(f"deep_gemm_execution_hook {m=} {n=} {k=} {num_groups=} {kernel_type=}")
+        traceback.print_stack()
+
     # not supported yet
     if not DEEPGEMM_BLACKWELL:
         _maybe_compile_deep_gemm_one_type_all(kernel_type, n, k, num_groups)
