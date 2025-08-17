@@ -590,6 +590,7 @@ class MooncakeKVManager(BaseKVManager):
     def sync_status_to_decode_endpoint(
         self, remote: str, dst_port: int, room: int, status: int, prefill_rank: int
     ):
+        logger.info(f"hi MooncakeKVManager sync_status_to_decode_endpoint {remote=} {dst_port=} {room=} {status=} {prefill_rank=}")
         self._connect(
             format_tcp_address(remote, dst_port), is_ipv6=is_valid_ipv6_address(remote)
         ).send_multipart(
