@@ -104,13 +104,14 @@ class MetadataBuffers:
         elif self.custom_mem_pool:
             device = "cuda"
             # TODO: Revert this when the small size NVLink transport synchronization issue is fixed, we pad it to >= 512Bytes currently
-            padding = 128
+            padding = 512
         with (
             torch.cuda.use_mem_pool(self.custom_mem_pool)
             if self.custom_mem_pool
             else nullcontext()
         ):
             # TODO: abort top_logprobs_num > 128 in PD
+            print(f"hi MetadataBuffers {size=} {padding=}")
 
             # We transfer the metadata of first output token to decode
             self.output_ids = torch.zeros(
