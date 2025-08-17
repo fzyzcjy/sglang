@@ -388,6 +388,7 @@ async def set_internal_state(obj: SetInternalStateReq, request: Request):
 async def generate_request(obj: GenerateReqInput, request: Request):
     """Handle a generate request."""
     if obj.stream:
+        raise Exception("not here")
 
         async def stream_results() -> AsyncIterator[bytes]:
             try:
@@ -411,10 +412,12 @@ async def generate_request(obj: GenerateReqInput, request: Request):
             background=_global_state.tokenizer_manager.create_abort_task(obj),
         )
     else:
+        print("hi http_server generate_request START")
         try:
             ret = await _global_state.tokenizer_manager.generate_request(
                 obj, request
             ).__anext__()
+            print(f"hi http_server generate_request END {ret=}")
             return ret
         except ValueError as e:
             logger.error(f"[http_server] Error: {e}")

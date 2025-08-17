@@ -471,6 +471,8 @@ class TokenizerManager:
         obj: Union[GenerateReqInput, EmbeddingReqInput],
         request: Optional[fastapi.Request] = None,
     ):
+        print("hi TokenizerManager.generate_request START")
+
         created_time = time.time()
         self.auto_create_handle_loop()
         obj.normalize_batch_and_arguments()
@@ -492,9 +494,12 @@ class TokenizerManager:
             if obj.is_single:
                 tokenized_obj = await self._tokenize_one_request(obj)
                 state = self._send_one_request(obj, tokenized_obj, created_time)
+                print("hi TokenizerManager.generate_request call wait_one_response")
                 async for response in self._wait_one_response(obj, state, request):
+                    print(f"hi TokenizerManager.generate_request see one response {response=}")
                     yield response
             else:
+                print("hi TokenizerManager.generate_request call _handle_batch_request")
                 async for response in self._handle_batch_request(
                     obj, request, created_time
                 ):

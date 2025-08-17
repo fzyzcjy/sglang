@@ -197,6 +197,7 @@ class SchedulerOutputProcessorMixin:
         result: GenerationBatchResult,
         launch_done: Optional[threading.Event] = None,
     ):
+        print(f"hi process_batch_result_decode {batch.reqs=} {batch.input_ids=} {batch.output_ids=}")
         logits_output, next_token_ids, can_run_cuda_graph = (
             result.logits_output,
             result.next_token_ids,
@@ -520,21 +521,27 @@ class SchedulerOutputProcessorMixin:
             ) = None
 
         for req in reqs:
+            logger.info(f"hi stream_output_generation.for START {req=}")
             if req is skip_req:
+                logger.info("hi stream_output_generation.for skip since in skip_req")
                 continue
 
             # Multimodal partial stream chunks break the detokenizer, so drop aborted requests here.
             if self.model_config.is_multimodal_gen and req.to_abort:
+                logger.info(f"hi stream_output_generation.for skip since multimodal etc")
                 continue
 
             if req.finished():
+                logger.info(f"hi stream_output_generation.for branch req.finished")
                 if req.finished_output:
+                    logger.info(f"hi stream_output_generation.for skip since {req.finished_output=}")
                     # With the overlap schedule, a request will try to output twice and hit this line twice
                     # because of the one additional delayed token. This "continue" prevented the dummy output.
                     continue
                 req.finished_output = True
                 should_output = True
             else:
+                logger.info(f"hi stream_output_generation.for branch NOT req.finished ({req.stream=})")
                 if req.stream:
                     stream_interval = (
                         req.sampling_params.stream_interval or self.stream_interval
@@ -552,6 +559,7 @@ class SchedulerOutputProcessorMixin:
                         else False
                     )
 
+            logger.info(f"hi stream_output_generation.for {should_output=}")
             if should_output:
                 send_token_offset = req.send_token_offset
                 send_output_token_logprobs_offset = (
@@ -670,6 +678,7 @@ class SchedulerOutputProcessorMixin:
             if self.model_config.is_multimodal_gen:
                 return
 
+            print(f"hi scheduler send_to_detokenizer {rids=} {decoded_texts=}")
             self.send_to_detokenizer.send_pyobj(
                 BatchTokenIDOut(
                     rids,

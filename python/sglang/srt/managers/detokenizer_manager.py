@@ -138,6 +138,7 @@ class DetokenizerManager:
         return recv_obj
 
     def handle_batch_token_id_out(self, recv_obj: BatchTokenIDOut):
+        print("hi DetokenizerManager handle_batch_token_id_out START")
         bs = len(recv_obj.rids)
 
         # Initialize decode status
@@ -212,6 +213,7 @@ class DetokenizerManager:
             s.sent_offset = len(output_str)
             output_strs.append(incremental_output)
 
+        print(f"hi DetokenizerManager handle_batch_token_id_out END {output_strs=}")
         return BatchStrOut(
             rids=recv_obj.rids,
             finished_reasons=recv_obj.finished_reasons,
