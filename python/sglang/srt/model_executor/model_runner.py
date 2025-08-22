@@ -519,9 +519,6 @@ class ModelRunner:
 
         if not self.use_mla_backend:
             server_args.disable_chunked_prefix_cache = True
-        elif self.page_size > 1:
-            logger.info("Disable chunked prefix cache when page size > 1.")
-            server_args.disable_chunked_prefix_cache = True
 
         if not server_args.disable_chunked_prefix_cache:
             logger.info("Chunked prefix cache is turned on.")
@@ -1248,6 +1245,11 @@ class ModelRunner:
 
         # Initialize req_to_token_pool
         if self.req_to_token_pool is None:
+            # FIXME(lsyin): this is the temporary fix for the context length issue when using speculative decoding
+            extra_max_context_len = 4
+            if self.server_args.speculative_num_draft_tokens is not None:
+                extra_max_context_len += self.server_args.speculative_num_draft_tokens
+
             if self.server_args.disaggregation_mode == "decode":
                 from sglang.srt.disaggregation.decode import DecodeReqToTokenPool
 
@@ -1256,7 +1258,8 @@ class ModelRunner:
                 pre_alloc_size = max_num_reqs * 2 if max_num_reqs <= 32 else 0
                 self.req_to_token_pool = DecodeReqToTokenPool(
                     size=max_num_reqs,
-                    max_context_len=self.model_config.context_len + 4,
+                    max_context_len=self.model_config.context_len
+                    + extra_max_context_len,
                     device=self.device,
                     enable_memory_saver=self.server_args.enable_memory_saver,
                     pre_alloc_size=pre_alloc_size,
@@ -1264,7 +1267,8 @@ class ModelRunner:
             else:
                 self.req_to_token_pool = ReqToTokenPool(
                     size=max_num_reqs,
-                    max_context_len=self.model_config.context_len + 4,
+                    max_context_len=self.model_config.context_len
+                    + extra_max_context_len,
                     device=self.device,
                     enable_memory_saver=self.server_args.enable_memory_saver,
                 )
@@ -1360,11 +1364,6 @@ class ModelRunner:
 
         # Initialize token_to_kv_pool_allocator
         need_sort = self.server_args.disaggregation_mode in ("decode", "prefill")
-        max_num_extend_tokens = (
-            self.server_args.chunked_prefill_size
-            if self.server_args.chunked_prefill_size > 0
-            else self.server_args.max_prefill_tokens
-        )
         if self.token_to_kv_pool_allocator is None:
             if self.server_args.attention_backend == "ascend":
                 self.token_to_kv_pool_allocator = AscendPagedTokenToKVPoolAllocator(
@@ -1403,7 +1402,6 @@ class ModelRunner:
                         device=self.device,
                         kvcache=self.token_to_kv_pool,
                         need_sort=need_sort,
-                        max_num_extend_tokens=max_num_extend_tokens,
                     )
         else:
             assert self.is_draft_worker

@@ -139,7 +139,29 @@ class KVArgsRegisterInfo:
         )
 
 
+class AuxDataCodec:
+    """Handles serialization and deserialization of auxiliary data buffers"""
+
+    @staticmethod
+    def serialize_data_from_buffer(src_addr, data_length):
+        """Serialize data from memory buffer to bytes"""
+        buffer = (ctypes.c_byte * data_length).from_address(src_addr)
+        return bytes(buffer)
+
+    @staticmethod
+    def deserialize_data_to_buffer(kv_args, buffer_index, aux_index, data):
+        """Deserialize bytes into target memory buffer"""
+        dst_aux_ptr = kv_args.aux_data_ptrs[buffer_index]
+        item_len = kv_args.aux_item_lens[buffer_index]
+        dst_addr = dst_aux_ptr + item_len * aux_index
+        buffer = (ctypes.c_byte * len(data)).from_address(dst_addr)
+        buffer[:] = data
+        return
+
+
 class MooncakeKVManager(BaseKVManager):
+    AUX_DATA_HEADER = b"AUX_DATA"
+
     def __init__(
         self,
         args: KVArgs,
@@ -592,8 +614,7 @@ class MooncakeKVManager(BaseKVManager):
         for i in range(len(prefill_aux_ptrs)):
             length = prefill_aux_item_lens[i]
             src_addr = prefill_aux_ptrs[i] + length * prefill_aux_index
-            buffer = (ctypes.c_byte * length).from_address(src_addr)
-            data = bytes(buffer)
+            data = AuxDataCodec.serialize_data_from_buffer(src_addr, length)
 
             self.send_aux_data_to_endpoint(
                 remote=req.endpoint,
@@ -621,7 +642,7 @@ class MooncakeKVManager(BaseKVManager):
 
         socket.send_multipart(
             [
-                b"AUX_DATA",
+                MooncakeKVManager.AUX_DATA_HEADER,
                 str(room).encode("ascii"),
                 str(buffer_index).encode("ascii"),
                 str(aux_index).encode("ascii"),
@@ -739,12 +760,13 @@ class MooncakeKVManager(BaseKVManager):
                             break
 
                         if kv_chunk.is_last:
-                            # Only the last chunk we need to send the aux data
-                            ret = self.send_aux(
-                                req,
-                                kv_chunk.prefill_aux_index,
-                                target_rank_registration_info.dst_aux_ptrs,
-                            )
+                            if self.pp_group.is_last_rank:
+                                # Only the last chunk we need to send the aux data
+                                ret = self.send_aux(
+                                    req,
+                                    kv_chunk.prefill_aux_index,
+                                    target_rank_registration_info.dst_aux_ptrs,
+                                )
                             polls.append(True if ret == 0 else False)
                             dst_ranks_infos.append(
                                 (req.endpoint, req.dst_port, req.room)
@@ -819,6 +841,26 @@ class MooncakeKVManager(BaseKVManager):
 
         threading.Thread(target=bootstrap_thread).start()
 
+    def _handle_aux_data(self, msg: List[bytes]):
+        """Handle AUX_DATA messages received by the decode thread."""
+        room = int(msg[1].decode("ascii"))
+        buffer_index = int(msg[2].decode("ascii"))
+        aux_index = int(msg[3].decode("ascii"))
+        data_length = struct.unpack(">I", msg[4])[0]
+        data = msg[5]
+
+        if len(data) != data_length:
+            logger.error(f"AUX_DATA length mismatch for bootstrap_room {room}")
+            return
+
+        AuxDataCodec.deserialize_data_to_buffer(
+            self.kv_args, buffer_index, aux_index, data
+        )
+
+        logger.debug(
+            f"Received AUX_DATA for bootstrap_room {room} with length:{len(data)}"
+        )
+
     def start_decode_thread(self):
         self.rank_port = get_free_port()
         self._bind_server_socket()
@@ -826,27 +868,8 @@ class MooncakeKVManager(BaseKVManager):
         def decode_thread():
             while True:
                 msg = self.server_socket.recv_multipart()
-                if msg[0] == b"AUX_DATA":
-                    room = int(msg[1].decode("ascii"))
-                    buffer_index = int(msg[2].decode("ascii"))
-                    aux_index = int(msg[3].decode("ascii"))
-                    data_length = struct.unpack(">I", msg[4])[0]
-                    data = msg[5]
-
-                    if len(data) != data_length:
-                        logger.error(f"AUX_DATA length mismatch for room {room}")
-                        continue
-
-                    dst_aux_ptr = self.kv_args.aux_data_ptrs[buffer_index]
-                    item_len = self.kv_args.aux_item_lens[buffer_index]
-                    dst_addr = dst_aux_ptr + item_len * aux_index
-
-                    buffer = (ctypes.c_byte * len(data)).from_address(dst_addr)
-                    buffer[:] = data
-
-                    logger.debug(
-                        f"Received AUX_DATA for room {room} with length:{len(data)}"
-                    )
+                if msg[0] == MooncakeKVManager.AUX_DATA_HEADER:
+                    self._handle_aux_data(msg)
                     continue
 
                 (bootstrap_room, status, prefill_rank) = msg
