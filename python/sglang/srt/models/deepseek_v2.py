@@ -598,7 +598,7 @@ class DeepseekV2MoE(nn.Module):
         if hidden_states.shape[0] > 0:
             # router_logits: (num_tokens, n_experts)
             router_logits = self.gate(hidden_states)
-            shared_output = self._forward_shared_experts(hidden_states)
+            # shared_output = self._forward_shared_experts(hidden_states)
             topk_weights, topk_idx, _ = self.topk(
                 hidden_states,
                 router_logits,
@@ -612,11 +612,20 @@ class DeepseekV2MoE(nn.Module):
                 hidden_states.device
             )
 
+        def _fn_shared_experts():
+            nonlocal shared_output
+            # HACK hardcode num_sm
+            with configure_deep_gemm_num_sms(152 - 32):
+                shared_output = self._forward_shared_experts(hidden_states)
+
         final_hidden_states = self.experts(
             hidden_states=hidden_states,
             topk_idx=topk_idx,
             topk_weights=topk_weights,
             forward_batch=forward_batch,
+            # HACK
+            fn_shared_experts=_fn_shared_experts,
+            alt_stream=self.alt_stream,
         )
 
         if shared_output is not None:
@@ -2691,3 +2700,20 @@ class DeepseekV3ForCausalLM(DeepseekV2ForCausalLM):
 
 
 EntryClass = [DeepseekV2ForCausalLM, DeepseekV3ForCausalLM]
+
+
+# https://github.com/sgl-project/sglang/pull/7405/files
+@contextmanager
+def configure_deep_gemm_num_sms(num_sms):
+    from deep_gemm.config import get_num_sms as _get_num_sms
+    from deep_gemm.config import set_num_sms as _set_num_sms
+
+    if num_sms is None:
+        yield
+    else:
+        original_num_sms = _get_num_sms()
+        _set_num_sms(num_sms)
+        try:
+            yield
+        finally:
+            _set_num_sms(original_num_sms)

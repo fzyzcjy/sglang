@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Optional, Union
 
 import torch
@@ -428,17 +429,27 @@ class DeepEPMoE(EPMoE):
         topk_idx: torch.Tensor,
         topk_weights: torch.Tensor,
         forward_batch: ForwardBatch,
+        fn_shared_experts,
+        alt_stream,
     ):
         dispatch_output = self.dispatch(
             hidden_states, topk_idx, topk_weights, forward_batch
         )
         hidden_states = self.moe_impl(dispatch_output)
+
+        alt_stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(alt_stream):
+            fn_shared_experts()
+
         hidden_states = self.combine(
             hidden_states,
             dispatch_output.topk_idx,
             dispatch_output.topk_weights,
             forward_batch,
         )
+
+        torch.cuda.current_stream().wait_stream(self.alt_stream)
+
         return hidden_states
 
     def dispatch(
