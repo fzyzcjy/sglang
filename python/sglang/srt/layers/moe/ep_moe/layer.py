@@ -448,7 +448,7 @@ class DeepEPMoE(EPMoE):
             forward_batch,
         )
 
-        torch.cuda.current_stream().wait_stream(self.alt_stream)
+        torch.cuda.current_stream().wait_stream(alt_stream)
 
         return hidden_states
 
