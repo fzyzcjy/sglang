@@ -81,7 +81,7 @@ def topk_ids_logical_to_physical(
 
     if info.ep_dispatch_algorithm == "static":
         return _topk_ids_logical_to_physical_static(topk_ids, info)
-    if info.ep_dispatch_algorithm in ["dynamic", "fake"]:
+    if info.ep_dispatch_algorithm in ["dynamic", "dynamic_identical", "fake"]:
         return _topk_ids_logical_to_physical_dynamic(topk_ids, info)
     raise NotImplementedError(f"Unknown algorithm {info.ep_dispatch_algorithm}")
 
@@ -99,8 +99,15 @@ def _topk_ids_logical_to_physical_dynamic(
     device = topk_ids.device
     topk_ids = topk_ids.flatten()
 
+    # TODO improve name
+    if info.ep_dispatch_algorithm == "dynamic_identical":
+        g = torch.Generator(device='cuda')
+        g.manual_seed(42)
+    else:
+        g = None
+
     chosen_dispatch_index = (
-        torch.randint(0, 65536, topk_ids.shape, dtype=torch.int32, device=device)
+        torch.randint(0, 65536, topk_ids.shape, dtype=torch.int32, device=device, generator=g)
         % info.partial_logical_to_all_physical_map_num_valid[topk_ids]
     )
     topk_ids = info.partial_logical_to_all_physical_map[topk_ids, chosen_dispatch_index]
