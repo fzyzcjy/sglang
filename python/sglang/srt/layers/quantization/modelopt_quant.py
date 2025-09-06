@@ -1318,6 +1318,7 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                     x_sf = torch.zeros(
                         0, x_col // 16, dtype=torch.uint8, device=x.device
                     )
+                print(f"hi all_gatherv {get_dp_global_num_tokens()=} {topk_ids=}")
                 topk_weights, topk_ids, x, x_sf = get_tp_group().all_gatherv(
                     [topk_weights, topk_ids, x, x_sf], sizes=get_dp_global_num_tokens()
                 )
