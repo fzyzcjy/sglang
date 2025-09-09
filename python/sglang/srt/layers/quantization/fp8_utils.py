@@ -460,10 +460,12 @@ def quant_weight_ue8m0(
     assert weight_block_size == [128, 128]
     assert weight_dequant.dtype == torch.bfloat16
 
+    *batch_dims, n, k = weight_dequant.shape
+
     weight_dequant_flat = weight_dequant.view((-1, k))
     out_w_flat, out_s_flat = per_block_cast_to_fp8(weight_dequant_flat)
 
-    out_w = out_w_flat.view(weight.shape)
+    out_w = out_w_flat.view((*batch_dims, n // weight_block_size[0], k // weight_block_size[1]))
     out_s = out_s_flat.view(weight_scale_inv.shape)
 
     # NOTE copy and modified from DeepGEMM
