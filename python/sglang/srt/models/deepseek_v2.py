@@ -25,7 +25,7 @@ from typing import Any, Dict, Iterable, Optional, Tuple, Union
 import torch
 import torch.nn.functional as F
 from torch import nn
-from tqdm import tqdm
+from tqdm import tqdm, trange
 
 from sglang.srt import single_batch_overlap
 from sglang.srt.single_batch_overlap import SboFlags
@@ -2994,7 +2994,7 @@ class DeepseekV2ForCausalLM(nn.Module):
         # temporarily only support DeepSeek V3/R1
         weight_block_size = [128, 128]
 
-        for layer_id in range(self.config.num_hidden_layers):
+        for layer_id in trange(self.config.num_hidden_layers, desc="quant attn to fp8 ue8m0"):
             for stem in [
                 "kv_a_proj_with_mqa",
                 "kv_b_proj",
