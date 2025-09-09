@@ -2515,7 +2515,7 @@ class DeepseekV2ForCausalLM(nn.Module):
                 torch.float8_e4m3fn,
                 torch.float8_e4m3fnuz,
             ):
-                self_attn_quant_config = get_self_attn_quant_config(quant_config)
+                self_attn_quant_config = get_self_attn_quant_config(self.quant_config)
                 if (
                     hasattr(self_attn_quant_config, "weight_block_size")
                     and self_attn_quant_config.weight_block_size is not None
