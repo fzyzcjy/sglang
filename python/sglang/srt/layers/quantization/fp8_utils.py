@@ -470,7 +470,9 @@ def quant_weight_ue8m0(
     out_w_flat, out_s_flat = per_block_cast_to_fp8(weight_dequant_flat)
 
     out_w = out_w_flat.view((*batch_dims, n, k))
-    out_s = out_s_flat.view((*batch_dims, n // weight_block_size[0], k // weight_block_size[1]))
+    out_s = out_s_flat.view((*batch_dims, ceil_div(n, weight_block_size[0]), ceil_div(k, weight_block_size[1])))
+
+    print(f"hi quant_weight_ue8m0 {weight_dequant.shape=} {out_w.shape=} {out_s.shape=} {out_w.dtype=} {out_s.dtype=}")
 
     return out_w, out_s
 
