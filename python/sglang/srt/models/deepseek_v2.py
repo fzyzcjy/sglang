@@ -72,7 +72,7 @@ from sglang.srt.layers.moe import (
 from sglang.srt.layers.moe.ep_moe.layer import DeepEPMoE, get_moe_impl_class
 from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
 from sglang.srt.layers.moe.topk import TopK
-from sglang.srt.layers.quantization import deep_gemm_wrapper
+from sglang.srt.layers.quantization import deep_gemm_wrapper, Fp8Config
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.quantization.fp8_kernel import (
     is_fp8_fnuz,
@@ -1931,6 +1931,16 @@ class DeepseekV2DecoderLayer(nn.Module):
         self.speculative_algorithm = global_server_args_dict["speculative_algorithm"]
         self.layer_id = layer_id
         self.is_nextn = is_nextn
+
+        if get_bool_env_var("SGLANG_NVFP4_CKPT_FP8_GEMM_IN_ATTN"):
+            self_attn_quant_config = Fp8Config(
+                is_checkpoint_fp8_serialized=False,
+                # refer to real DeepSeek V3 quant config
+                weight_block_size=[128, 128],
+            )
+        else:
+            self_attn_quant_config = quant_config
+
         self.self_attn = DeepseekV2AttentionMLA(
             config=config,
             hidden_size=self.hidden_size,
@@ -1945,7 +1955,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             rope_theta=rope_theta,
             rope_scaling=rope_scaling,
             max_position_embeddings=max_position_embeddings,
-            quant_config=quant_config,
+            quant_config=self_attn_quant_config,
             layer_id=layer_id,
             reduce_results=False,
             prefix=add_prefix("self_attn", prefix),
