@@ -85,6 +85,7 @@ from sglang.srt.layers.quantization.fp8_utils import (
     channel_quant_to_tensor_quant,
     normalize_e4m3fn_to_e4m3fnuz,
     transform_scale_ue8m0,
+    quant_weight_ue8m0,
     requant_weight_ue8m0_inplace,
 )
 from sglang.srt.layers.quantization.int8_utils import (
@@ -2755,6 +2756,9 @@ class DeepseekV2ForCausalLM(nn.Module):
             else:
                 raise ValueError("num_nextn_predict_layers is not in the config")
 
+        if get_bool_env_var("SGLANG_NVFP4_CKPT_FP8_GEMM_IN_ATTN"):
+            weights = self._quant_attn_to_fp8_ue8m0(weights)
+
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
             ("gate_up_proj", "gate_proj", 0),
@@ -2983,6 +2987,28 @@ class DeepseekV2ForCausalLM(nn.Module):
                 future.result()
 
         self.post_load_weights(is_nextn=is_nextn, weight_names=weight_names)
+
+    def _quant_attn_to_fp8_ue8m0(self, weights):
+        weights_dict = dict(weights)
+
+        # temporarily only support DeepSeek V3/R1
+        weight_block_size = [128, 128]
+
+        for layer_id in range(self.config.num_hidden_layers):
+            for stem in [
+                "kv_a_proj_with_mqa",
+                "kv_b_proj",
+                "o_proj",
+                "q_a_proj",
+                "q_b_proj",
+            ]:
+                partial_name = f"model.layers.{layer_id}.self_attn.{stem}"
+                original_weight = weights_dict[f"{partial_name}.weight"]
+                out_w, out_s = quant_weight_ue8m0(original_weight, weight_block_size=weight_block_size)
+                weights_dict[f"{partial_name}.weight"] = out_w
+                weights_dict[f"{partial_name}.weight_scale_inv"] = out_s
+
+        return list(weights_dict.items())
 
     def get_embed_and_head(self):
         return self.model.embed_tokens.weight, self.lm_head.weight
