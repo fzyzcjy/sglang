@@ -2515,11 +2515,12 @@ class DeepseekV2ForCausalLM(nn.Module):
                 torch.float8_e4m3fn,
                 torch.float8_e4m3fnuz,
             ):
+                self_attn_quant_config = get_self_attn_quant_config(quant_config)
                 if (
-                    hasattr(self.quant_config, "weight_block_size")
-                    and self.quant_config.weight_block_size is not None
+                    hasattr(self_attn_quant_config, "weight_block_size")
+                    and self_attn_quant_config.weight_block_size is not None
                 ):
-                    weight_block_size = self.quant_config.weight_block_size
+                    weight_block_size = self_attn_quant_config.weight_block_size
                     assert hasattr(self_attn.kv_b_proj, "weight_scale_inv")
                     if _is_fp8_fnuz:
                         weight, weight_scale, _ = normalize_e4m3fn_to_e4m3fnuz(
