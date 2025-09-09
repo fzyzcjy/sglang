@@ -465,8 +465,8 @@ def quant_weight_ue8m0(
     weight_dequant_flat = weight_dequant.view((-1, k))
     out_w_flat, out_s_flat = per_block_cast_to_fp8(weight_dequant_flat)
 
-    out_w = out_w_flat.view((*batch_dims, n // weight_block_size[0], k // weight_block_size[1]))
-    out_s = out_s_flat.view(weight_scale_inv.shape)
+    out_w = out_w_flat.view((*batch_dims, n, k))
+    out_s = out_s_flat.view((*batch_dims, n // weight_block_size[0], k // weight_block_size[1]))
 
     # NOTE copy and modified from DeepGEMM
     def _transform_scale(sf, mn: int):
