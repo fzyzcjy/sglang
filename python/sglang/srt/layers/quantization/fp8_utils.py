@@ -462,7 +462,7 @@ def quant_weight_ue8m0(
     weight_block_size: List[int],
 ):
     assert weight_block_size == [128, 128]
-    assert weight_dequant.dtype == torch.bfloat16, f"{weight_dequant.dtype=}"
+    assert weight_dequant.dtype == torch.bfloat16, f"{weight_dequant.dtype=} {weight_dequant.shape=}"
 
     *batch_dims, n, k = weight_dequant.shape
 
