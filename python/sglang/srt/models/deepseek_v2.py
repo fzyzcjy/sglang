@@ -2717,6 +2717,7 @@ class DeepseekV2ForCausalLM(nn.Module):
 
     # TODO temporary code duplication before refactoring both to Fp8LinearMethod
     def _weight_quant_ue8m0(self, is_nextn=False):
+        print("hi execute weight_quant_ue8m0")
         assert not is_nextn, "is_nextn not supported yet"
 
         for layer_id in range(self.config.num_hidden_layers):
