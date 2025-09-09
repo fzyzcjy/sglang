@@ -125,7 +125,7 @@ class Fp8Config(QuantizationConfig):
         self.activation_scheme = activation_scheme
         self.ignored_layers = ignored_layers or []
         if weight_block_size is not None:
-            if not is_checkpoint_fp8_serialized:
+            if (not is_checkpoint_fp8_serialized) and not get_bool_env_var("SGLANG_NVFP4_CKPT_FP8_GEMM_IN_ATTN"):
                 raise ValueError(
                     f"The block-wise quantization only supports fp8-serialized checkpoint for now."
                 )
