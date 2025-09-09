@@ -1934,9 +1934,9 @@ class DeepseekV2DecoderLayer(nn.Module):
         self.is_nextn = is_nextn
 
         if get_bool_env_var("SGLANG_NVFP4_CKPT_FP8_GEMM_IN_ATTN"):
+            # refer to real DeepSeek V3 quant config
             self_attn_quant_config = Fp8Config(
-                is_checkpoint_fp8_serialized=False,
-                # refer to real DeepSeek V3 quant config
+                is_checkpoint_fp8_serialized=True,
                 weight_block_size=[128, 128],
             )
         else:
