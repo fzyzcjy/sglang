@@ -1913,6 +1913,17 @@ class DeepseekV2AttentionMLA(nn.Module):
         return output
 
 
+def get_self_attn_quant_config(quant_config):
+    if get_bool_env_var("SGLANG_NVFP4_CKPT_FP8_GEMM_IN_ATTN"):
+        # refer to real DeepSeek V3 quant config
+        return Fp8Config(
+            is_checkpoint_fp8_serialized=True,
+            weight_block_size=[128, 128],
+        )
+    else:
+        return quant_config
+
+
 class DeepseekV2DecoderLayer(nn.Module):
 
     def __init__(
@@ -1934,15 +1945,6 @@ class DeepseekV2DecoderLayer(nn.Module):
         self.layer_id = layer_id
         self.is_nextn = is_nextn
 
-        if get_bool_env_var("SGLANG_NVFP4_CKPT_FP8_GEMM_IN_ATTN"):
-            # refer to real DeepSeek V3 quant config
-            self_attn_quant_config = Fp8Config(
-                is_checkpoint_fp8_serialized=True,
-                weight_block_size=[128, 128],
-            )
-        else:
-            self_attn_quant_config = quant_config
-
         self.self_attn = DeepseekV2AttentionMLA(
             config=config,
             hidden_size=self.hidden_size,
@@ -1957,7 +1959,7 @@ class DeepseekV2DecoderLayer(nn.Module):
             rope_theta=rope_theta,
             rope_scaling=rope_scaling,
             max_position_embeddings=max_position_embeddings,
-            quant_config=self_attn_quant_config,
+            quant_config=get_self_attn_quant_config(quant_config),
             layer_id=layer_id,
             reduce_results=False,
             prefix=add_prefix("self_attn", prefix),
