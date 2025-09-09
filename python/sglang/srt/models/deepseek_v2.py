@@ -84,6 +84,7 @@ from sglang.srt.layers.quantization.fp8_utils import (
     block_quant_to_tensor_quant,
     channel_quant_to_tensor_quant,
     normalize_e4m3fn_to_e4m3fnuz,
+    quant_weight_ue8m0,
     requant_weight_ue8m0_inplace,
 )
 from sglang.srt.layers.quantization.int8_utils import (
@@ -2734,9 +2735,9 @@ class DeepseekV2ForCausalLM(nn.Module):
                 module_list.append(layer.self_attn.q_proj)
 
             for module in module_list:
-                requant_weight_ue8m0_inplace(
-                    module.weight, module.weight_scale_inv, weight_block_size
-                )
+                out_w, out_s = quant_weight_ue8m0(module.weight.data, weight_block_size=module.quant_config.weight_block_size)
+                module.weight.data = out_w
+                module.weight_scale_inv = nn.Parameter(out_s, requires_grad=False)
 
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]], is_nextn=False):
