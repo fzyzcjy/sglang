@@ -2714,6 +2714,31 @@ class DeepseekV2ForCausalLM(nn.Module):
                         module.weight, module.weight_scale_inv, weight_block_size
                     )
 
+    # TODO temporary code duplication before refactoring both to Fp8LinearMethod
+    def _weight_quant_ue8m0(self, is_nextn=False):
+        assert not is_nextn, "is_nextn not supported yet"
+
+        for layer_id in range(self.config.num_hidden_layers):
+            layer = self.model.layers[layer_id]
+
+            module_list = [
+                layer.self_attn.kv_b_proj,
+                layer.self_attn.o_proj,
+            ]
+
+            if self.config.q_lora_rank is not None:
+                module_list.append(layer.self_attn.fused_qkv_a_proj_with_mqa)
+                module_list.append(layer.self_attn.q_b_proj)
+            else:
+                module_list.append(layer.self_attn.kv_a_proj_with_mqa)
+                module_list.append(layer.self_attn.q_proj)
+
+            for module in module_list:
+                requant_weight_ue8m0_inplace(
+                    module.weight, module.weight_scale_inv, weight_block_size
+                )
+
+
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]], is_nextn=False):
 
         if is_nextn:
