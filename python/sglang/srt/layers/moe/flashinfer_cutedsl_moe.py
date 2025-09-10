@@ -181,7 +181,12 @@ def flashinfer_cutedsl_moe_masked(
     # dumper.dump("moe__out", out, layer_id=layer_id)
     # dumper.dump("moe__any_isnan_out", torch.any(torch.isnan(out)), layer_id=layer_id)
 
-    if torch.any(torch.isnan(out)).cpu().item():
+    if any(
+        torch.any(torch.isnan(
+            out[local_expert_idx, :masked_m[local_expert_idx]]
+        )).cpu().item()
+        for local_expert_idx in range(len(masked_m))
+    ):
         print(
             f"[{torch.distributed.get_rank()}] hi flashinfer_cutedsl_moe_masked find nan! thus extra dump!"
             # f"{hidden_states=} "
