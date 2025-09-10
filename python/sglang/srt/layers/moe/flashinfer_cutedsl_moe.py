@@ -54,9 +54,6 @@ def flashinfer_cutedsl_moe_masked(
     """
 
     # === Assertions on dtypes ===
-    assert (
-        input_global_scale.dtype == torch.float32
-    ), f"input_global_scale must be float32, got {input_global_scale.dtype}"
     assert w1.dtype == torch.uint8, f"w1 must be uint8 (fp4 packed), got {w1.dtype}"
     assert (
         w1_blockscale.dtype == torch.float8_e4m3fn
@@ -79,15 +76,22 @@ def flashinfer_cutedsl_moe_masked(
     n = w2.shape[-1] * 2  # intermediate dimension
 
     if isinstance(hidden_states, tuple):
+        assert input_global_scale is None, "input_global_scale is needed when input needs quant"
+
         a_q = hidden_states[0].view(torch.uint8)
         a_q_sf = hidden_states[1].view(torch.float8_e4m3fn)
         m, k_by_2, num_experts = a_q.shape
         k = k_by_2 * 2
     else:
         num_experts, m, k = hidden_states.shape
+
+        assert (
+                input_global_scale.dtype == torch.float32
+        ), f"input_global_scale must be float32, got {input_global_scale.dtype}"
         assert input_global_scale.shape == (
             num_experts,
         ), f"input_global_scale must be (l,), got {input_global_scale.shape}"
+
         a_q, a_q_sf = scaled_fp4_grouped_quant(
             hidden_states,
             input_global_scale,

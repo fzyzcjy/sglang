@@ -1419,7 +1419,7 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
 
         out = flashinfer_cutedsl_moe_masked(
             hidden_states=x,
-            input_global_scale=layer.w13_input_scale_quant,
+            input_global_scale=None if CUTEDSL_MOE_NVFP4_DISPATCH else layer.w13_input_scale_quant,
             w1=layer.w13_weight,
             w1_blockscale=layer.w13_blockscale_swizzled,
             w1_alpha=layer.g1_alphas,
