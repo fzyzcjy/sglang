@@ -278,7 +278,7 @@ class _DeepEPDispatcherImplBase:
     def dispatch_a(
         self,
         hidden_states: torch.Tensor,
-        input_global_scale: torch.Tensor,
+        input_global_scale: Optional[torch.Tensor],
         topk_idx: torch.Tensor,
         topk_weights: torch.Tensor,
     ):
@@ -312,7 +312,7 @@ class _DeepEPDispatcherImplNormal(_DeepEPDispatcherImplBase):
     def dispatch_a(
         self,
         hidden_states: torch.Tensor,
-        input_global_scale: torch.Tensor,
+        input_global_scale: Optional[torch.Tensor],
         topk_idx: torch.Tensor,
         topk_weights: torch.Tensor,
     ):
@@ -485,7 +485,7 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
     def dispatch_a(
         self,
         hidden_states: torch.Tensor,
-        input_global_scale: torch.Tensor,
+        input_global_scale: Optional[torch.Tensor],
         topk_idx: torch.Tensor,
         topk_weights: torch.Tensor,
     ):
@@ -550,7 +550,7 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
     def _dispatch_core(
         self,
         hidden_states: torch.Tensor,
-        input_global_scale: torch.Tensor,
+        input_global_scale: Optional[torch.Tensor],
         topk_idx: torch.Tensor,
         use_fp8: bool = False,
     ):
@@ -677,7 +677,7 @@ class DeepEPDispatcher(BaseDispatcher):
     def dispatch_a(
         self,
         hidden_states: torch.Tensor,
-        input_global_scale: torch.Tensor,
+        input_global_scale: Optional[torch.Tensor],
         topk_idx: torch.Tensor,
         topk_weights: torch.Tensor,
         forward_batch: ForwardBatch,
