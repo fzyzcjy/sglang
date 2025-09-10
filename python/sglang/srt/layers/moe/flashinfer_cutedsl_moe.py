@@ -85,6 +85,9 @@ def flashinfer_cutedsl_moe_masked(
         k = k_by_2 * 2
     else:
         num_experts, m, k = hidden_states.shape
+        assert input_global_scale.shape == (
+            num_experts,
+        ), f"input_global_scale must be (l,), got {input_global_scale.shape}"
         a_q, a_q_sf = scaled_fp4_grouped_quant(
             hidden_states,
             input_global_scale,
@@ -99,10 +102,6 @@ def flashinfer_cutedsl_moe_masked(
         k,
         n // 2,
     ), f"w2 shape mismatch, got {w2.shape[-2:]}, expected {(k, n//2)}"
-
-    assert input_global_scale.shape == (
-        num_experts,
-    ), f"input_global_scale must be (l,), got {input_global_scale.shape}"
     assert w1_alpha.shape == (
         num_experts,
     ), f"w1_alpha must be (l,), got {w1_alpha.shape}"
