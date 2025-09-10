@@ -1179,6 +1179,10 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
             else:
                 w13_input_scale = layer.w13_input_scale.max(dim=1).values.to(torch.float32)
 
+            if CUTEDSL_MOE_NVFP4_DISPATCH:
+                assert torch.all(w13_input_scale == w13_input_scale[0])
+                w13_input_scale = w13_input_scale[0]
+
             w2_input_scale = layer.w2_input_scale
         else:
             w13_input_scale = layer.w13_input_scale.max(dim=1).values.to(torch.float32)
