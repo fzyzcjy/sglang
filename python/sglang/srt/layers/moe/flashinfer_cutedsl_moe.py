@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 import torch
 from flashinfer.cute_dsl.blockscaled_gemm import grouped_gemm_nt_masked
@@ -20,7 +20,7 @@ def get_cute_dtype(input: torch.Tensor) -> str:
 
 
 def flashinfer_cutedsl_moe_masked(
-    hidden_states: tuple[torch.Tensor, torch.Tensor],
+    hidden_states: Union[torch.Tensor, tuple[torch.Tensor, torch.Tensor]],
     input_global_scale: torch.Tensor,
     w1: torch.Tensor,
     w1_blockscale: torch.Tensor,
@@ -36,7 +36,9 @@ def flashinfer_cutedsl_moe_masked(
     kernels.
 
     Args:
-        hidden_states (tuple[torch.Tensor, torch.Tensor]): [num_experts, m, k // 2], uint8, [num_experts, m, k // 16], float8_e4m3fn
+        hidden_states: Either of the following case
+            * torch.Tensor: [num_experts, m, k], bf16
+            * tuple[torch.Tensor, torch.Tensor]: [num_experts, m, k // 2], uint8, [num_experts, m, k // 16], float8_e4m3fn
         input_global_scale (torch.Tensor): (l,)
         w1 (torch.Tensor): fp4 weights, [l, 2 * n, k // 2], uint8
         w1_blockscale (torch.Tensor): blockscale factors, e4m3,
@@ -72,12 +74,22 @@ def flashinfer_cutedsl_moe_masked(
     assert (
         w2_alpha.dtype == torch.float32
     ), f"w2_alpha must be float32, got {w2_alpha.dtype}"
+
     # === Assertions on shapes ===
     n = w2.shape[-1] * 2  # intermediate dimension
-    a_q = hidden_states[0].view(torch.uint8)
-    a_q_sf = hidden_states[1].view(torch.float8_e4m3fn)
-    m, k_by_2, num_experts = a_q.shape
-    k = k_by_2 * 2
+
+    if isinstance(hidden_states, tuple):
+        a_q = hidden_states[0].view(torch.uint8)
+        a_q_sf = hidden_states[1].view(torch.float8_e4m3fn)
+        m, k_by_2, num_experts = a_q.shape
+        k = k_by_2 * 2
+    else:
+        num_experts, m, k = hidden_states.shape
+        a_q, a_q_sf = scaled_fp4_grouped_quant(
+            hidden_states,
+            input_global_scale,
+            masked_m,
+        )
 
     assert w1.shape[-2] == 2 * n, f"w1 last-2 dim must be 2*n, got {w1.shape}"
     assert (
@@ -107,6 +119,8 @@ def flashinfer_cutedsl_moe_masked(
     )
     gateup_output = gateup_output.permute(1, 2, 0)  # requirement of kernel
     sf_vec_size = 16
+    assert a_q_sf.dtype == torch.float8_e4m3fn
+    assert a_q.dtype == torch.uint8
     ab_dtype = "float4_e2m1fn"
     sf_dtype = "float8_e4m3fn"
     c_dtype = "bfloat16"
