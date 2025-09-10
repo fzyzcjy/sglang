@@ -1428,5 +1428,6 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
             w2_blockscale=layer.w2_blockscale_swizzled,
             w2_alpha=layer.g2_alphas,
             masked_m=masked_m,
+            layer_id=layer.layer_id,
         )
         return out

@@ -7,6 +7,8 @@ from sgl_kernel.gemm import (
     silu_and_mul_scaled_fp4_grouped_quant,
 )
 
+from sglang.srt.debug_utils.dumper import dumper
+
 
 def get_cute_dtype(input: torch.Tensor) -> str:
     if input.dtype == torch.bfloat16:
@@ -30,6 +32,7 @@ def flashinfer_cutedsl_moe_masked(
     w2_blockscale: torch.Tensor,
     w2_alpha,
     masked_m: torch.Tensor,
+    layer_id: int,
 ):
     """
     Perform masked Mixture-of-Experts computation with FlashInfer's CuteDSL
@@ -166,4 +169,23 @@ def flashinfer_cutedsl_moe_masked(
         alpha=w2_alpha.view(1, 1, num_experts),
         alpha_dtype=get_cute_dtype(w2_alpha),
     )  # in logical [m, k, l]
+
+    dumper.dump("moe__hidden_states_a", hidden_states[0], layer_id=layer_id)
+    dumper.dump("moe__hidden_states_b", hidden_states[1], layer_id=layer_id)
+    dumper.dump("moe__masked_m", masked_m, layer_id=layer_id)
+    dumper.dump("moe__gateup_output", gateup_output, layer_id=layer_id)
+    dumper.dump("moe__out", out, layer_id=layer_id)
+    dumper.dump("moe__any_isnan_out", torch.any(torch.isnan(out)), layer_id=layer_id)
+
+    # if torch.any(torch.isnan(out)).cpu().item():
+    #     print(
+    #         f"[{torch.distributed.get_rank()}] hi flashinfer_cutedsl_moe_masked find nan! "
+    #         f"{hidden_states=} "
+    #         f"{masked_m=} "
+    #         f"{gateup_output=} {gateup_output.sum()=} "
+    #         f"{out=} {out.sum()=} "
+    #         ,
+    #         flush=True
+    #     )
+
     return out.permute(2, 0, 1)
