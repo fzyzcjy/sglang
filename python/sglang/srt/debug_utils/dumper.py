@@ -64,14 +64,14 @@ class _Dumper:
         full_filename = "___".join(f"{k}={v}" for k, v in full_kwargs.items()) + ".pt"
         path = self._base_dir / f"sglang_dump_{self._partial_name}" / full_filename
 
-        sample_value = get_truncated_value(value)
+        # sample_value = get_truncated_value(value)
 
         print(
             f"[Dumper] [{rank}, {time.time()}] {path} "
             f"type={type(value)} "
             f"shape={value.shape if isinstance(value, torch.Tensor) else None} "
             f"dtype={value.dtype if isinstance(value, torch.Tensor) else None} "
-            f"sample_value={sample_value}"
+            # f"sample_value={sample_value}"
         )
 
         if self._enable_write_file:
