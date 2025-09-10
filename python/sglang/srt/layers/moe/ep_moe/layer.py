@@ -444,8 +444,7 @@ class DeepEPMoE(EPMoE):
             topk_weights=topk_weights,
             forward_batch=forward_batch,
             input_global_scale=(
-                # TODO this `.min()` is wrong
-                self.w13_input_scale_quant.min()
+                self.w13_input_scale_quant
                 if isinstance(self.quant_method, ModelOptNvFp4FusedMoEMethod)
                 else None
             ),
