@@ -1170,7 +1170,8 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
             w2_input_scale = layer.w2_input_scale.max().to(torch.float32)
         elif self.enable_flashinfer_cutedsl_moe:
             # first input is scalar (for easy DeepEP impl), and second input is vector (as usual)
-            w13_input_scale = layer.w13_input_scale.max().to(torch.float32)
+            # TODO make it a real scalar (instead of a vector w/ same value) later
+            w13_input_scale = layer.w13_input_scale.max().to(torch.float32).repeat(layer.w13_input_scale.shape[0])
             w2_input_scale = layer.w2_input_scale
         else:
             w13_input_scale = layer.w13_input_scale.max(dim=1).values.to(torch.float32)
