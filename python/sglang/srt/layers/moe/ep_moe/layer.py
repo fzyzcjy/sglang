@@ -422,7 +422,8 @@ class DeepEPMoE(EPMoE):
     ):
         dispatch_output = self.dispatch(
             hidden_states, topk_idx, topk_weights, forward_batch,
-            input_global_scale=self.w13_input_scale_quant.min(),
+            # TODO this `.min()` is wrong
+            input_global_scale=self.w13_input_scale_quant.min() if TODO else None,
         )
         hidden_states = self.moe_impl(dispatch_output)
         hidden_states = self.combine(

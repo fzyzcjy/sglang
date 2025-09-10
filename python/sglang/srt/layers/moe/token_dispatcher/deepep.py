@@ -499,9 +499,6 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
             hidden_states,
             input_global_scale,
             topk_idx,
-            # TODO(shuw): pending https://github.com/deepseek-ai/DeepEP/pull/341
-            use_fp8=not get_bool_env_var("SGLANG_DEEPEP_BF16_DISPATCH"),
-            use_nvfp4=input_global_scale is not None,
         )
         return (
             hidden_states,
@@ -553,9 +550,13 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
         hidden_states: torch.Tensor,
         input_global_scale: Optional[torch.Tensor],
         topk_idx: torch.Tensor,
-        use_nvfp4: bool,
-        use_fp8: bool = False,
     ):
+        use_nvfp4 = use_fp8 = False
+        if input_global_scale is not None:
+            use_nvfp4 = True
+        elif not get_bool_env_var("SGLANG_DEEPEP_BF16_DISPATCH"):
+            use_fp8 = True
+
         buffer = self._get_buffer()
         packed_recv_hidden, packed_recv_count, self.handle, event, hook = (
             buffer.low_latency_dispatch(
