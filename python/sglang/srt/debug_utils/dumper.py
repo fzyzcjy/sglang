@@ -100,7 +100,7 @@ def get_truncated_value(value):
         return value
 
     slices = [
-        slice(0, 5) if dim_size > 200 else slice(None) for dim_size in value.shape
+        slice(0, 3) if dim_size > 200 else slice(None) for dim_size in value.shape
     ]
     return value[tuple(slices)]
 
