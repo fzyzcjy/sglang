@@ -57,8 +57,8 @@ def flashinfer_cutedsl_moe_masked(
     """
 
     # dumper.dump("moe__hidden_states_a", hidden_states[0], layer_id=layer_id)
-    dumper.dump("moe__hidden_states_b", hidden_states[1], layer_id=layer_id)
-    dumper.dump("moe__masked_m", masked_m, layer_id=layer_id)
+    # dumper.dump("moe__hidden_states_b", hidden_states[1], layer_id=layer_id)
+    # dumper.dump("moe__masked_m", masked_m, layer_id=layer_id)
 
     # === Assertions on dtypes ===
     assert w1.dtype == torch.uint8, f"w1 must be uint8 (fp4 packed), got {w1.dtype}"
