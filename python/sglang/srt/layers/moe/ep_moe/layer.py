@@ -29,6 +29,7 @@ from sglang.srt.layers.quantization.fp8_kernel import (
     is_fp8_fnuz,
     sglang_per_token_group_quant_fp8,
 )
+from sglang.srt.layers.quantization.modelopt_quant import ModelOptNvFp4FusedMoEMethod
 from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.utils import ceil_div, dispose_tensor, get_bool_env_var, is_hip, is_npu
@@ -420,11 +421,7 @@ class DeepEPMoE(EPMoE):
         topk_weights: torch.Tensor,
         forward_batch: ForwardBatch,
     ):
-        dispatch_output = self.dispatch(
-            hidden_states, topk_idx, topk_weights, forward_batch,
-            # TODO this `.min()` is wrong
-            input_global_scale=self.w13_input_scale_quant.min() if TODO else None,
-        )
+        dispatch_output = self.dispatch(hidden_states, topk_idx, topk_weights, forward_batch)
         hidden_states = self.moe_impl(dispatch_output)
         hidden_states = self.combine(
             hidden_states,
@@ -440,14 +437,18 @@ class DeepEPMoE(EPMoE):
         topk_idx: torch.Tensor,
         topk_weights: torch.Tensor,
         forward_batch: ForwardBatch,
-        input_global_scale: torch.Tensor,
     ):
         return self.deepep_dispatcher.dispatch(
             hidden_states=hidden_states,
-            input_global_scale=input_global_scale,
             topk_idx=topk_idx,
             topk_weights=topk_weights,
             forward_batch=forward_batch,
+            input_global_scale=(
+                # TODO this `.min()` is wrong
+                self.w13_input_scale_quant.min()
+                if isinstance(self.quant_method, ModelOptNvFp4FusedMoEMethod)
+                else None
+            ),
         )
 
     def moe_impl(self, dispatch_output: DispatchOutput):
