@@ -69,6 +69,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 CUTEDSL_MOE_SCALAR_INPUT_SCALE = get_bool_env_var("SGLANG_CUTEDSL_MOE_SCALAR_INPUT_SCALE", "true")
+CUTEDSL_MOE_NVFP4_DISPATCH = get_bool_env_var("SGLANG_CUTEDSL_MOE_NVFP4_DISPATCH", "true")
 
 # Supported activation schemes for the current configuration
 ACTIVATION_SCHEMES = ["static"]
