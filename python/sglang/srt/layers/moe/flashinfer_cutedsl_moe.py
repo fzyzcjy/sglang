@@ -159,7 +159,9 @@ def flashinfer_cutedsl_moe_masked(
     )
 
     # Gemm2
-    out = torch.empty(
+    # out = torch.empty(
+    # NOTE HACK
+    out = torch.zeros(
         (num_experts, m, k), dtype=torch.bfloat16, device=a_q.device
     )
     out = out.permute(1, 2, 0)  # requirement of kernel
