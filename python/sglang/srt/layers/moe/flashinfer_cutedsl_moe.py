@@ -181,7 +181,7 @@ def flashinfer_cutedsl_moe_masked(
 
     if torch.any(torch.isnan(out)).cpu().item():
         print(
-            f"[{torch.distributed.get_rank()}] hi flashinfer_cutedsl_moe_masked find nan! "
+            f"[{torch.distributed.get_rank()}] hi flashinfer_cutedsl_moe_masked find nan! thus extra dump!"
             # f"{hidden_states=} "
             # f"{masked_m=} "
             # f"{gateup_output=} {gateup_output.sum()=} "
@@ -189,5 +189,12 @@ def flashinfer_cutedsl_moe_masked(
             ,
             flush=True
         )
+
+        dumper.dump("moe__hidden_states_a", hidden_states[0], layer_id=layer_id)
+        dumper.dump("moe__hidden_states_b", hidden_states[1], layer_id=layer_id)
+        dumper.dump("moe__masked_m", masked_m, layer_id=layer_id)
+        dumper.dump("moe__gateup_output", gateup_output, layer_id=layer_id)
+        dumper.dump("moe__out", out, layer_id=layer_id)
+        dumper.dump("moe__any_isnan_out", torch.any(torch.isnan(out)), layer_id=layer_id)
 
     return out.permute(2, 0, 1)
