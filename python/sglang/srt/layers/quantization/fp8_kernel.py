@@ -556,7 +556,7 @@ def sglang_per_token_group_quant_fp8(
         assert masked_m is None
         print(f"quant input stat: {x.min()=} {x.max()=} {torch.sum(torch.isnan(x))=}")
 
-        if 0:
+        if 1:
             x_q_sglang, x_s_sglang = x_q, x_s
 
             try:

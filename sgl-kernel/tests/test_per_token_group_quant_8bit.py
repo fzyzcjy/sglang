@@ -44,13 +44,13 @@ configs = list(
             #     fuse_silu_and_mul=False,
             #     masked_layout_mode=None,
             # ),
-            # dict(
-            #     column_major_scales=True,
-            #     scale_tma_aligned=True,
-            #     scale_ue8m0=False,
-            #     fuse_silu_and_mul=False,
-            #     masked_layout_mode=None,
-            # ),
+            dict(
+                column_major_scales=True,
+                scale_tma_aligned=True,
+                scale_ue8m0=False,
+                fuse_silu_and_mul=False,
+                masked_layout_mode=None,
+            ),
             dict(
                 column_major_scales=True,
                 scale_tma_aligned=True,
