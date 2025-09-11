@@ -10,6 +10,8 @@ template <int THREADS_PER_SUBWARP>
 __device__ __forceinline__ float GroupReduceMax(float val, const int tid) {
   unsigned mask = threadIdx.x % 32 >= 16 ? 0xffff0000 : 0x0000ffff;
 
+  static_assert(THREADS_PER_SUBWARP == 16, "align with old code");
+
   static_assert(
       (THREADS_PER_SUBWARP & (THREADS_PER_SUBWARP - 1)) == 0 && THREADS_PER_SUBWARP <= 16 && THREADS_PER_SUBWARP >= 1,
       "THREADS_PER_SUBWARP must be 1, 2, 4, 8, or 16");
@@ -348,6 +350,7 @@ __global__ void per_token_group_quant_8bit_kernel(
 
         local_absmax = GroupReduceMax<THREADS_PER_SUBWARP>(local_absmax, lane_id);
 
+        // TODO also update this part?
         float y_scale, y_scale_inv;
         calculate_fp8_scales<SCALE_UE8M0, dst_dtype_info>(local_absmax, y_scale, y_scale_inv);
         float2 y_scale_repeated = {y_scale, y_scale};
@@ -359,27 +362,28 @@ __global__ void per_token_group_quant_8bit_kernel(
         int4 output_buf;
         static_assert(sizeof(output_buf) == INPUT_PRIMARY_VEC_SIZE * sizeof(DST_DTYPE));
 
-        if constexpr (std::is_same_v<DST_DTYPE, c10::Float8_e4m3fn>) {
-          const auto output_buf_ptr = reinterpret_cast<__nv_fp8x2_storage_t*>(&output_buf);
-          static_assert(sizeof(output_buf) == INPUT_PRIMARY_VEC_SIZE / 2 * sizeof(__nv_fp8x2_storage_t));
-          static_assert(INPUT_PRIMARY_VEC_SIZE % 2 == 0);
-
-#pragma unroll
-          for (uint32_t j = 0; j < INPUT_PRIMARY_VEC_SIZE; j += 2) {
-            float2 inputx2 = {static_cast<float>(input_primary_vec[j]), static_cast<float>(input_primary_vec[j + 1])};
-            float2 outputx2 = fmul2_rn(inputx2, y_scale_repeated);
-            output_buf_ptr[j / 2] = __nv_cvt_float2_to_fp8x2(outputx2, __NV_SATFINITE, __NV_E4M3);
-          }
-        } else {
+//         if constexpr (std::is_same_v<DST_DTYPE, c10::Float8_e4m3fn>) {
+//           const auto output_buf_ptr = reinterpret_cast<__nv_fp8x2_storage_t*>(&output_buf);
+//           static_assert(sizeof(output_buf) == INPUT_PRIMARY_VEC_SIZE / 2 * sizeof(__nv_fp8x2_storage_t));
+//           static_assert(INPUT_PRIMARY_VEC_SIZE % 2 == 0);
+//
+// #pragma unroll
+//           for (uint32_t j = 0; j < INPUT_PRIMARY_VEC_SIZE; j += 2) {
+//             float2 inputx2 = {static_cast<float>(input_primary_vec[j]), static_cast<float>(input_primary_vec[j + 1])};
+//             float2 outputx2 = fmul2_rn(inputx2, y_scale_repeated);
+//             output_buf_ptr[j / 2] = __nv_cvt_float2_to_fp8x2(outputx2, __NV_SATFINITE, __NV_E4M3);
+//           }
+//         } else {
           const auto output_buf_ptr = reinterpret_cast<DST_DTYPE*>(&output_buf);
 
 #pragma unroll
           for (uint32_t j = 0; j < INPUT_PRIMARY_VEC_SIZE; ++j) {
             float val = static_cast<float>(input_primary_vec[j]);
+            // TODO use div?
             float q_val = fminf(fmaxf(val * y_scale, dst_dtype_info::MIN), dst_dtype_info::MAX);
             output_buf_ptr[j] = DST_DTYPE(q_val);
           }
-        }
+//         }
 
         st_global(
             reinterpret_cast<int4*>(output_q + offset_num_groups * GROUP_SIZE + lane_id * INPUT_PRIMARY_VEC_SIZE),
@@ -477,15 +481,6 @@ void sgl_per_token_group_quant_8bit(
 
 #define LAUNCH_KERNEL_OUTER(...)                    \
   switch (group_size) {                             \
-    case 16:                                        \
-      LAUNCH_KERNEL(16, __VA_ARGS__);               \
-      break;                                        \
-    case 32:                                        \
-      LAUNCH_KERNEL(32, __VA_ARGS__);               \
-      break;                                        \
-    case 64:                                        \
-      LAUNCH_KERNEL(64, __VA_ARGS__);               \
-      break;                                        \
     case 128:                                       \
       LAUNCH_KERNEL(128, __VA_ARGS__);              \
       break;                                        \
