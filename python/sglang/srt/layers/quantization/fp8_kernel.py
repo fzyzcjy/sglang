@@ -566,6 +566,7 @@ def sglang_per_token_group_quant_fp8(
                 print(
                     "quant is different!"
                     f"{e=} "
+                    f"{torch.sum(torch.isnan(x))=} "
                     f"{x.shape=} {x_q_triton.shape=} {x_s_triton.shape=} {x_q_sglang.shape=} {x_s_sglang.shape=} "
                     f"{x=} "
                     f"{masked_m=} "
