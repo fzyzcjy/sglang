@@ -554,7 +554,6 @@ def sglang_per_token_group_quant_fp8(
             )
 
         if 1:
-            from sgl_kernel.test_utils import assert_all_close_or_tiny_diff
             x_q_sglang, x_s_sglang = x_q, x_s
 
             try:
@@ -587,6 +586,39 @@ def sglang_per_token_group_quant_fp8(
                 dumper.dump("quant__x_s_sglang", x_s_sglang)
 
     return x_q, x_s
+
+def assert_all_close_or_tiny_diff(a: torch.Tensor, b: torch.Tensor):
+    assert (a.shape == b.shape) and (
+        a.dtype == b.dtype
+    ), f"{a.shape=} {b.shape=} {a.dtype=} {b.dtype=}"
+    numel = a.numel()
+
+    if a.dtype == torch.float8_e4m3fn:
+        a_u8 = a.view(torch.uint8)
+        b_u8 = b.view(torch.uint8)
+        diff_u8 = (a_u8.to(torch.int16) - b_u8.to(torch.int16)).abs()
+
+        count_diff_sign = ((a_u8 >= 0) & (b_u8 < 0)).sum().item()
+        count_tiny_diff = (diff_u8 == 1).sum().item()
+        count_large_diff = (diff_u8 >= 2).sum().item()
+    elif a.dtype == torch.int8:
+        diff = (a.to(torch.int16) - a.to(torch.int16)).abs()
+        count_diff_sign = ((a >= 0) & (b < 0)).sum().item()
+        count_tiny_diff = (diff == 1).sum().item()
+        count_large_diff = (diff >= 2).sum().item()
+    else:
+        raise NotImplementedError
+
+    assert (
+        (count_diff_sign == 0)
+        and (count_large_diff == 0)
+        and (
+            (count_tiny_diff / numel < 0.005)
+            or ((count_tiny_diff / numel < 0.04) and (numel <= 4096))
+        )
+    ), f"{count_diff_sign=} {count_tiny_diff=} {count_large_diff=} {numel=} {a=} {b=}"
+    print(f"assert_all_close_or_tiny_diff success {count_diff_sign=} {count_tiny_diff=} {count_large_diff=} {numel=}")
+
 
 
 # TODO maybe unify int8 and fp8 code later
