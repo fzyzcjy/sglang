@@ -84,14 +84,6 @@ class TestHybridDPTP(CustomTestCase):
                 "128",
                 "--max-running-requests",
                 "256",
-
-                # TODO
-                # TODO hack!!!
-                # TODO
-                "--attention-backend",
-                "flashinfer",
-                "--disable-radix-cache",
-                "--disable-cuda-graph",
             ],
         )
 
