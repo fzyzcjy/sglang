@@ -980,6 +980,7 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
         )
 
         w13_input_scale = PerTensorScaleParameter(
+            # NOTE trevor fix: num_local_experts -> num_experts
             data=torch.empty(layer.num_experts, 2, dtype=torch.float32),
             weight_loader=weight_loader,
         )
@@ -1181,6 +1182,10 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
             else:
                 w13_input_scale = layer.w13_input_scale.max(dim=1).values.to(torch.float32)
 
+            assert w13_input_scale.shape == (layer.num_experts,)
+            assert layer.moe_ep_size * layer.num_local_experts == layer.num_experts
+            w13_input_scale = w13_input_scale[layer.moe_ep_rank * layer.num_local_experts: (layer.moe_ep_rank + 1) * layer.num_local_experts]
+
             if CUTEDSL_MOE_NVFP4_DISPATCH:
                 assert torch.all(w13_input_scale == w13_input_scale[0])
                 w13_input_scale = w13_input_scale[0]
@@ -1204,6 +1209,10 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
         )
         layer.w2_input_scale_quant = Parameter(
             (1 / w2_input_scale).to(torch.float32), requires_grad=False
+        )
+        print(
+            f"{layer.w13_input_scale_quant.shape=} {layer.w13_input_scale_quant=} "
+            f"{layer.g1_alphas.shape=} {layer.g1_alphas=} "
         )
 
         # Validate weight scales
