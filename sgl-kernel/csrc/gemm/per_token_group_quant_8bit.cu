@@ -26,6 +26,8 @@ __device__ __forceinline__ float GroupReduceMax(float val, const int tid) {
   val = fmaxf(val, __shfl_xor_sync(mask, val, 4));
   val = fmaxf(val, __shfl_xor_sync(mask, val, 2));
   val = fmaxf(val, __shfl_xor_sync(mask, val, 1));
+
+  return val;
   // ========================================================================
 
 //   unsigned mask = threadIdx.x % 32 >= 16 ? 0xffff0000 : 0x0000ffff;
