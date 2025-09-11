@@ -1183,7 +1183,7 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
 
             assert w13_input_scale.shape == (layer.num_experts,)
             assert layer.moe_ep_size * layer.num_local_experts == layer.num_experts
-            w13_input_scale = w13_input_scale[layer.moe_ep_rank * layer.num_local_experts, (layer.moe_ep_rank + 1) * layer.num_local_experts]
+            w13_input_scale = w13_input_scale[layer.moe_ep_rank * layer.num_local_experts: (layer.moe_ep_rank + 1) * layer.num_local_experts]
 
             w2_input_scale = layer.w2_input_scale
         else:
