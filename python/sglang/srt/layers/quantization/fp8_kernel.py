@@ -44,17 +44,11 @@ _is_cpu = is_cpu()
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 
 if _is_cuda:
-    from sgl_kernel import sgl_per_tensor_quant_fp8, sgl_per_token_quant_fp8
-
-    # Temporary
-    try:
-        from sgl_kernel import sgl_per_token_group_quant_8bit
-
-        enable_sgl_per_token_group_quant_8bit = True
-    except ImportError:
-        from sgl_kernel import sgl_per_token_group_quant_fp8
-
-        enable_sgl_per_token_group_quant_8bit = False
+    from sgl_kernel import (
+        sgl_per_tensor_quant_fp8,
+        sgl_per_token_group_quant_fp8,
+        sgl_per_token_quant_fp8,
+    )
 
 if _is_hip:
     if _use_aiter:
@@ -502,88 +496,10 @@ def sglang_per_token_group_quant_fp8(
         scale_ue8m0=scale_ue8m0,
     )
 
-    # NOTE HACK zero everything!
-    x_q.zero_()
-    x_s.zero_()
-
     if x.shape[0] > 0:
-        # def get_tensor_info(x):
-        #     min = x.float().min() if x.numel() > 0 else None
-        #     max = x.float().max() if x.numel() > 0 else None
-        #     mean = x.float().mean() if x.numel() > 0 else None
-        #     return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
-        # print(
-        #     "sglang_per_token_group_quant_fp8 call kernel "
-        #     f"{get_tensor_info(x)=} "
-        #     f"{get_tensor_info(x_q)=} "
-        #     f"{get_tensor_info(x_s)=} "
-        #     f"{group_size=} {eps=} {fp8_min=} {fp8_max=} {scale_ue8m0=} {fuse_silu_and_mul=} {masked_m=}"
-        # )
-
-        if 0:
-            x_q_triton, x_s_triton = per_token_group_quant_fp8(
-                x=x,
-                group_size=group_size,
-                eps=eps,
-                dtype=fp8_dtype,
-                column_major_scales=column_major_scales,
-                scale_tma_aligned=scale_tma_aligned,
-                scale_ue8m0=scale_ue8m0,
-            )
-
-            # print("HACK: use triton output")
-            # return x_q_triton, x_s_triton
-
-        # Temporary
-        if enable_sgl_per_token_group_quant_8bit:
-            sgl_per_token_group_quant_8bit(
-                x,
-                x_q,
-                x_s,
-                group_size,
-                eps,
-                fp8_min,
-                fp8_max,
-                scale_ue8m0,
-                fuse_silu_and_mul,
-                masked_m,
-            )
-        else:
-            sgl_per_token_group_quant_fp8(
-                x, x_q, x_s, group_size, eps, fp8_min, fp8_max, scale_ue8m0
-            )
-
-        if 0:
-            from sgl_kernel.test_utils import assert_all_close_or_tiny_diff
-            x_q_sglang, x_s_sglang = x_q, x_s
-
-            try:
-                assert_all_close_or_tiny_diff(x_q_triton, x_q_sglang)
-                torch.testing.assert_close(
-                    x_s_triton.contiguous(),
-                    x_s_sglang.contiguous(),
-                    rtol=1e-3,
-                    atol=1e-5,
-                    msg=lambda message: message + f" {x_s_triton=} {x_s_sglang=}",
-                )
-            except AssertionError as e:
-                print(
-                    "quant is different!"
-                    f"{e=} "
-                    f"{torch.sum(torch.isnan(x))=} "
-                    f"{x.shape=} {x_q_triton.shape=} {x_s_triton.shape=} {x_q_sglang.shape=} {x_s_sglang.shape=} "
-                    f"{x=} "
-                    f"{masked_m=} "
-                    f"{x_q_triton=} "
-                    f"{x_s_triton=} "
-                    f"{x_q_sglang=} "
-                    f"{x_s_sglang=} "
-                )
-                dumper.dump("quant__x", x)
-                dumper.dump("quant__x_q_triton", x_q_triton)
-                dumper.dump("quant__x_s_triton", x_s_triton)
-                dumper.dump("quant__x_q_sglang", x_q_sglang)
-                dumper.dump("quant__x_s_sglang", x_s_sglang)
+        sgl_per_token_group_quant_fp8(
+            x, x_q, x_s, group_size, eps, fp8_min, fp8_max, scale_ue8m0
+        )
 
     return x_q, x_s
 
