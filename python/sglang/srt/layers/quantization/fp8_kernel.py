@@ -520,7 +520,7 @@ def sglang_per_token_group_quant_fp8(
         #     f"{group_size=} {eps=} {fp8_min=} {fp8_max=} {scale_ue8m0=} {fuse_silu_and_mul=} {masked_m=}"
         # )
 
-        if 1:
+        if 0:
             x_q_triton, x_s_triton = per_token_group_quant_fp8(
                 x=x,
                 group_size=group_size,
@@ -556,7 +556,7 @@ def sglang_per_token_group_quant_fp8(
         assert masked_m is None
         print(f"quant input stat: {x.min()=} {x.max()=} {torch.sum(torch.isnan(x))=}")
 
-        if 1:
+        if 0:
             x_q_sglang, x_s_sglang = x_q, x_s
 
             try:
@@ -594,8 +594,8 @@ def sglang_per_token_group_quant_fp8(
                 dumper.dump("quant__x_q_sglang", x_q_sglang)
                 dumper.dump("quant__x_s_sglang", x_s_sglang)
 
-        print("HACK: use triton output")
-        return x_q_triton, x_s_triton
+        # print("HACK: use triton output")
+        # return x_q_triton, x_s_triton
 
     return x_q, x_s
 
