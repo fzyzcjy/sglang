@@ -384,18 +384,18 @@ __global__ void per_token_group_quant_8bit_kernel(
         int4 output_buf;
         static_assert(sizeof(output_buf) == INPUT_PRIMARY_VEC_SIZE * sizeof(DST_DTYPE));
 
-//         if constexpr (std::is_same_v<DST_DTYPE, c10::Float8_e4m3fn>) {
-//           const auto output_buf_ptr = reinterpret_cast<__nv_fp8x2_storage_t*>(&output_buf);
-//           static_assert(sizeof(output_buf) == INPUT_PRIMARY_VEC_SIZE / 2 * sizeof(__nv_fp8x2_storage_t));
-//           static_assert(INPUT_PRIMARY_VEC_SIZE % 2 == 0);
-//
-// #pragma unroll
-//           for (uint32_t j = 0; j < INPUT_PRIMARY_VEC_SIZE; j += 2) {
-//             float2 inputx2 = {static_cast<float>(input_primary_vec[j]), static_cast<float>(input_primary_vec[j + 1])};
-//             float2 outputx2 = fmul2_rn(inputx2, y_scale_repeated);
-//             output_buf_ptr[j / 2] = __nv_cvt_float2_to_fp8x2(outputx2, __NV_SATFINITE, __NV_E4M3);
-//           }
-//         } else {
+        if constexpr (std::is_same_v<DST_DTYPE, c10::Float8_e4m3fn>) {
+          const auto output_buf_ptr = reinterpret_cast<__nv_fp8x2_storage_t*>(&output_buf);
+          static_assert(sizeof(output_buf) == INPUT_PRIMARY_VEC_SIZE / 2 * sizeof(__nv_fp8x2_storage_t));
+          static_assert(INPUT_PRIMARY_VEC_SIZE % 2 == 0);
+
+#pragma unroll
+          for (uint32_t j = 0; j < INPUT_PRIMARY_VEC_SIZE; j += 2) {
+            float2 inputx2 = {static_cast<float>(input_primary_vec[j]), static_cast<float>(input_primary_vec[j + 1])};
+            float2 outputx2 = fmul2_rn(inputx2, y_scale_repeated);
+            output_buf_ptr[j / 2] = __nv_cvt_float2_to_fp8x2(outputx2, __NV_SATFINITE, __NV_E4M3);
+          }
+        } else {
           const auto output_buf_ptr = reinterpret_cast<DST_DTYPE*>(&output_buf);
 
 #pragma unroll
@@ -405,7 +405,7 @@ __global__ void per_token_group_quant_8bit_kernel(
             float q_val = fminf(fmaxf(val * y_scale, dst_dtype_info::MIN), dst_dtype_info::MAX);
             output_buf_ptr[j] = DST_DTYPE(q_val);
           }
-//         }
+        }
 
         st_global(
             reinterpret_cast<int4*>(output_q + offset_num_groups * GROUP_SIZE + lane_id * INPUT_PRIMARY_VEC_SIZE),
