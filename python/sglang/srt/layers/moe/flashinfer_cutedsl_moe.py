@@ -82,10 +82,15 @@ def flashinfer_cutedsl_moe_masked(
     # === Assertions on shapes ===
     n = w2.shape[-1] * 2  # intermediate dimension
 
+    def get_tensor_info(x):
+        min = x.min() if x.numel() > 0 else None
+        max = x.max() if x.numel() > 0 else None
+        mean = x.mean() if x.numel() > 0 else None
+        return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
     print(
         f"[{torch.distributed.get_rank()}, {layer_id=}] hi call moe "
-        f"{hidden_states[0].max()=} {hidden_states[0].min()=} {hidden_states[0].mean()=} {hidden_states[0].shape=} {hidden_states[0].dtype=} "
-        f"{hidden_states[1].max()=} {hidden_states[1].min()=} {hidden_states[1].mean()=} {hidden_states[1].shape=} {hidden_states[1].dtype=} "
+        f"{get_tensor_info(hidden_states[0])=} "
+        f"{get_tensor_info(hidden_states[1])=} "
     )
 
     if isinstance(hidden_states, tuple):
