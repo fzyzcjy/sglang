@@ -979,12 +979,15 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
         )
 
         w13_input_scale = PerTensorScaleParameter(
-            data=torch.empty(layer.num_local_experts, 2, dtype=torch.float32),
+            # NOTE trevor fix: num_local_experts -> num_experts
+            data=torch.empty(layer.num_experts, 2, dtype=torch.float32),
             weight_loader=weight_loader,
         )
         layer.register_parameter("w13_input_scale", w13_input_scale)
 
         w2_input_scale = PerTensorScaleParameter(
+            # NOTE HACK temp *PARTIALLY* use trevor fix since here we have per-expert quant
+            # data=torch.empty(layer.num_experts, dtype=torch.float32),
             data=torch.empty(layer.num_local_experts, dtype=torch.float32),
             weight_loader=weight_loader,
         )
@@ -1177,6 +1180,10 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                 w13_input_scale = layer.w13_input_scale.max().to(torch.float32).repeat(layer.w13_input_scale.shape[0])
             else:
                 w13_input_scale = layer.w13_input_scale.max(dim=1).values.to(torch.float32)
+
+            assert w13_input_scale.shape == (layer.num_experts,)
+            assert layer.moe_ep_size * layer.num_local_experts == layer.num_experts
+            w13_input_scale = w13_input_scale[layer.moe_ep_rank * layer.num_local_experts, (layer.moe_ep_rank + 1) * layer.num_local_experts]
 
             w2_input_scale = layer.w2_input_scale
         else:
