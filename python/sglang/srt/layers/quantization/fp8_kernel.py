@@ -520,7 +520,7 @@ def sglang_per_token_group_quant_fp8(
         #     f"{group_size=} {eps=} {fp8_min=} {fp8_max=} {scale_ue8m0=} {fuse_silu_and_mul=} {masked_m=}"
         # )
 
-        if 0:
+        if 1:
             x_q_triton, x_s_triton = per_token_group_quant_fp8(
                 x=x,
                 group_size=group_size,
@@ -553,19 +553,20 @@ def sglang_per_token_group_quant_fp8(
                 x, x_q, x_s, group_size, eps, fp8_min, fp8_max, scale_ue8m0
             )
 
-        if 0:
+        if 1:
             from sgl_kernel.test_utils import assert_all_close_or_tiny_diff
             x_q_sglang, x_s_sglang = x_q, x_s
 
             try:
                 assert_all_close_or_tiny_diff(x_q_triton, x_q_sglang)
-                torch.testing.assert_close(
-                    x_s_triton.contiguous(),
-                    x_s_sglang.contiguous(),
-                    rtol=1e-3,
-                    atol=1e-5,
-                    msg=lambda message: message + f" {x_s_triton=} {x_s_sglang=}",
-                )
+                assert torch.all(x_s_triton.contiguous() == x_s_sglang.contiguous())
+                # torch.testing.assert_close(
+                #     x_s_triton.contiguous(),
+                #     x_s_sglang.contiguous(),
+                #     rtol=1e-3,
+                #     atol=1e-5,
+                #     msg=lambda message: message + f" {x_s_triton=} {x_s_sglang=}",
+                # )
             except AssertionError as e:
                 print(
                     "quant is different!"
