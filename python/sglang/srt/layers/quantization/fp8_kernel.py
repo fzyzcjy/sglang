@@ -520,7 +520,7 @@ def sglang_per_token_group_quant_fp8(
         #     f"{group_size=} {eps=} {fp8_min=} {fp8_max=} {scale_ue8m0=} {fuse_silu_and_mul=} {masked_m=}"
         # )
 
-        if 1:
+        if 0:
             x_q_triton, x_s_triton = per_token_group_quant_fp8(
                 x=x,
                 group_size=group_size,
@@ -553,7 +553,7 @@ def sglang_per_token_group_quant_fp8(
                 x, x_q, x_s, group_size, eps, fp8_min, fp8_max, scale_ue8m0
             )
 
-        if 1:
+        if 0:
             from sgl_kernel.test_utils import assert_all_close_or_tiny_diff
             x_q_sglang, x_s_sglang = x_q, x_s
 
