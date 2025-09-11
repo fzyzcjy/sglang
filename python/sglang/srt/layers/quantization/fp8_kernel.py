@@ -501,7 +501,7 @@ def sglang_per_token_group_quant_fp8(
         scale_tma_aligned=scale_tma_aligned,
         scale_ue8m0=scale_ue8m0,
     )
-    
+
     # NOTE HACK zero everything!
     x_q.zero_()
     x_s.zero_()
