@@ -8,49 +8,25 @@
 
 template <int THREADS_PER_SUBWARP>
 __device__ __forceinline__ float GroupReduceMax(float val, const int tid) {
-  // ========================================================================
-  static_assert(THREADS_PER_SUBWARP == 8);
+  unsigned mask = threadIdx.x % 32 >= 16 ? 0xffff0000 : 0x0000ffff;
 
-  const int lane_id = threadIdx.x % 32;
-  unsigned mask = 0;
-  if (lane_id < 8) {
-    mask = 0x000000ff;
-  } else if (lane_id < 16) {
-    mask = 0x0000ff00;
-  } else if (lane_id < 24) {
-    mask = 0x00ff0000;
-  } else if (lane_id < 32) {
-    mask = 0xff000000;
+  static_assert(
+      (THREADS_PER_SUBWARP & (THREADS_PER_SUBWARP - 1)) == 0 && THREADS_PER_SUBWARP <= 16 && THREADS_PER_SUBWARP >= 1,
+      "THREADS_PER_SUBWARP must be 1, 2, 4, 8, or 16");
+
+  if constexpr (THREADS_PER_SUBWARP >= 16) {
+    val = fmaxf(val, __shfl_xor_sync(mask, val, 8));
   }
-
-  val = fmaxf(val, __shfl_xor_sync(mask, val, 4));
-  val = fmaxf(val, __shfl_xor_sync(mask, val, 2));
-  val = fmaxf(val, __shfl_xor_sync(mask, val, 1));
-
+  if constexpr (THREADS_PER_SUBWARP >= 8) {
+    val = fmaxf(val, __shfl_xor_sync(mask, val, 4));
+  }
+  if constexpr (THREADS_PER_SUBWARP >= 4) {
+    val = fmaxf(val, __shfl_xor_sync(mask, val, 2));
+  }
+  if constexpr (THREADS_PER_SUBWARP >= 2) {
+    val = fmaxf(val, __shfl_xor_sync(mask, val, 1));
+  }
   return val;
-  // ========================================================================
-
-//   unsigned mask = threadIdx.x % 32 >= 16 ? 0xffff0000 : 0x0000ffff;
-//
-//   static_assert(THREADS_PER_SUBWARP == 16, "align with old code");
-//
-//   static_assert(
-//       (THREADS_PER_SUBWARP & (THREADS_PER_SUBWARP - 1)) == 0 && THREADS_PER_SUBWARP <= 16 && THREADS_PER_SUBWARP >= 1,
-//       "THREADS_PER_SUBWARP must be 1, 2, 4, 8, or 16");
-//
-//   if constexpr (THREADS_PER_SUBWARP >= 16) {
-//     val = fmaxf(val, __shfl_xor_sync(mask, val, 8));
-//   }
-//   if constexpr (THREADS_PER_SUBWARP >= 8) {
-//     val = fmaxf(val, __shfl_xor_sync(mask, val, 4));
-//   }
-//   if constexpr (THREADS_PER_SUBWARP >= 4) {
-//     val = fmaxf(val, __shfl_xor_sync(mask, val, 2));
-//   }
-//   if constexpr (THREADS_PER_SUBWARP >= 2) {
-//     val = fmaxf(val, __shfl_xor_sync(mask, val, 1));
-//   }
-//   return val;
 }
 
 __device__ __forceinline__ float silu(const float& val) {
@@ -372,7 +348,6 @@ __global__ void per_token_group_quant_8bit_kernel(
 
         local_absmax = GroupReduceMax<THREADS_PER_SUBWARP>(local_absmax, lane_id);
 
-        // TODO also update this part?
         float y_scale, y_scale_inv;
         calculate_fp8_scales<SCALE_UE8M0, dst_dtype_info>(local_absmax, y_scale, y_scale_inv);
         float2 y_scale_repeated = {y_scale, y_scale};
@@ -406,7 +381,6 @@ __global__ void per_token_group_quant_8bit_kernel(
 #pragma unroll
           for (uint32_t j = 0; j < INPUT_PRIMARY_VEC_SIZE; ++j) {
             float val = static_cast<float>(input_primary_vec[j]);
-            // TODO use div?
             float q_val = fminf(fmaxf(val * y_scale, dst_dtype_info::MIN), dst_dtype_info::MAX);
             output_buf_ptr[j] = DST_DTYPE(q_val);
           }
@@ -508,6 +482,15 @@ void sgl_per_token_group_quant_8bit(
 
 #define LAUNCH_KERNEL_OUTER(...)                    \
   switch (group_size) {                             \
+    case 16:                                        \
+      LAUNCH_KERNEL(16, __VA_ARGS__);               \
+      break;                                        \
+    case 32:                                        \
+      LAUNCH_KERNEL(32, __VA_ARGS__);               \
+      break;                                        \
+    case 64:                                        \
+      LAUNCH_KERNEL(64, __VA_ARGS__);               \
+      break;                                        \
     case 128:                                       \
       LAUNCH_KERNEL(128, __VA_ARGS__);              \
       break;                                        \
