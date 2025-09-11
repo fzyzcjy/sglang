@@ -164,6 +164,7 @@ def flashinfer_cutedsl_moe_masked(
     out = torch.zeros(
         (num_experts, m, k), dtype=torch.bfloat16, device=a_q.device
     )
+    out_lmk = out
     out = out.permute(1, 2, 0)  # requirement of kernel
     grouped_gemm_nt_masked(
         (diq, diq_sf),
@@ -183,7 +184,7 @@ def flashinfer_cutedsl_moe_masked(
 
     if any(
         torch.any(torch.isnan(
-            out[local_expert_idx, :masked_m[local_expert_idx]]
+            out_lmk[local_expert_idx, :masked_m[local_expert_idx]]
         )).cpu().item()
         for local_expert_idx in range(len(masked_m))
     ):
@@ -192,7 +193,7 @@ def flashinfer_cutedsl_moe_masked(
             # f"{hidden_states=} "
             # f"{masked_m=} "
             # f"{gateup_output=} {gateup_output.sum()=} "
-            # f"{out=} {out.sum()=} "
+            # f"{out_lmk=} {out_lmk.sum()=} "
             ,
             flush=True
         )
@@ -201,7 +202,7 @@ def flashinfer_cutedsl_moe_masked(
         dumper.dump("moe__hidden_states_b", hidden_states[1], layer_id=layer_id)
         dumper.dump("moe__masked_m", masked_m, layer_id=layer_id)
         dumper.dump("moe__gateup_output", gateup_output, layer_id=layer_id)
-        dumper.dump("moe__out", out, layer_id=layer_id)
-        dumper.dump("moe__any_isnan_out", torch.any(torch.isnan(out)), layer_id=layer_id)
+        dumper.dump("moe__out_lmk", out_lmk, layer_id=layer_id)
+        dumper.dump("moe__any_isnan_out", torch.any(torch.isnan(out_lmk)), layer_id=layer_id)
 
     return out.permute(2, 0, 1)
