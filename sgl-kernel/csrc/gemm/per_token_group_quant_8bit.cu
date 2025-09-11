@@ -8,7 +8,7 @@
 
 template <int THREADS_PER_SUBWARP>
 __device__ __forceinline__ float GroupReduceMax(float val, const int tid) {
-  unsigned mask = threadIdx.x % 32 >= 16 ? 0xffff0000 : 0x0000ffff;
+  unsigned mask = 0xffffffff;
 
   static_assert(
       (THREADS_PER_SUBWARP & (THREADS_PER_SUBWARP - 1)) == 0 && THREADS_PER_SUBWARP <= 16 && THREADS_PER_SUBWARP >= 1,
