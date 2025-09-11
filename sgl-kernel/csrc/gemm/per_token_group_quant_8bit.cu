@@ -8,47 +8,49 @@
 
 template <int THREADS_PER_SUBWARP>
 __device__ __forceinline__ float GroupReduceMax(float val, const int tid) {
-//   // ========================================================================
-//   static_assert(THREADS_PER_SUBWARP == 8);
-//
-//   const int lane_id = threadIdx.x % 32;
-//   unsigned mask = 0;
-//   if (lane_id < 8) {
-//     mask = 0x000000ff;
-//   } else if (lane_id < 16) {
-//     mask = 0x0000ff00;
-//   } else if (lane_id < 24) {
-//     mask = 0x00ff0000;
-//   } else if (lane_id < 32) {
-//     mask = 0xff000000;
-//   }
-//
-//   val = fmaxf(val, __shfl_xor_sync(mask, val, 4));
-//   val = fmaxf(val, __shfl_xor_sync(mask, val, 2));
-//   val = fmaxf(val, __shfl_xor_sync(mask, val, 1));
-//
-//   return val;
-//   // ========================================================================
+  // ========================================================================
+  static_assert(THREADS_PER_SUBWARP == 8);
 
-  unsigned mask = threadIdx.x % 32 >= 16 ? 0xffff0000 : 0x0000ffff;
+  const int lane_id = threadIdx.x % 32;
+  unsigned mask = 0;
+  if (lane_id < 8) {
+    mask = 0x000000ff;
+  } else if (lane_id < 16) {
+    mask = 0x0000ff00;
+  } else if (lane_id < 24) {
+    mask = 0x00ff0000;
+  } else if (lane_id < 32) {
+    mask = 0xff000000;
+  }
 
-  static_assert(
-      (THREADS_PER_SUBWARP & (THREADS_PER_SUBWARP - 1)) == 0 && THREADS_PER_SUBWARP <= 16 && THREADS_PER_SUBWARP >= 1,
-      "THREADS_PER_SUBWARP must be 1, 2, 4, 8, or 16");
+  val = fmaxf(val, __shfl_xor_sync(mask, val, 4));
+  val = fmaxf(val, __shfl_xor_sync(mask, val, 2));
+  val = fmaxf(val, __shfl_xor_sync(mask, val, 1));
 
-  if constexpr (THREADS_PER_SUBWARP >= 16) {
-    val = fmaxf(val, __shfl_xor_sync(mask, val, 8));
-  }
-  if constexpr (THREADS_PER_SUBWARP >= 8) {
-    val = fmaxf(val, __shfl_xor_sync(mask, val, 4));
-  }
-  if constexpr (THREADS_PER_SUBWARP >= 4) {
-    val = fmaxf(val, __shfl_xor_sync(mask, val, 2));
-  }
-  if constexpr (THREADS_PER_SUBWARP >= 2) {
-    val = fmaxf(val, __shfl_xor_sync(mask, val, 1));
-  }
   return val;
+  // ========================================================================
+
+//   unsigned mask = threadIdx.x % 32 >= 16 ? 0xffff0000 : 0x0000ffff;
+//
+//   static_assert(THREADS_PER_SUBWARP == 16, "align with old code");
+//
+//   static_assert(
+//       (THREADS_PER_SUBWARP & (THREADS_PER_SUBWARP - 1)) == 0 && THREADS_PER_SUBWARP <= 16 && THREADS_PER_SUBWARP >= 1,
+//       "THREADS_PER_SUBWARP must be 1, 2, 4, 8, or 16");
+//
+//   if constexpr (THREADS_PER_SUBWARP >= 16) {
+//     val = fmaxf(val, __shfl_xor_sync(mask, val, 8));
+//   }
+//   if constexpr (THREADS_PER_SUBWARP >= 8) {
+//     val = fmaxf(val, __shfl_xor_sync(mask, val, 4));
+//   }
+//   if constexpr (THREADS_PER_SUBWARP >= 4) {
+//     val = fmaxf(val, __shfl_xor_sync(mask, val, 2));
+//   }
+//   if constexpr (THREADS_PER_SUBWARP >= 2) {
+//     val = fmaxf(val, __shfl_xor_sync(mask, val, 1));
+//   }
+//   return val;
 }
 
 __device__ __forceinline__ float silu(const float& val) {
