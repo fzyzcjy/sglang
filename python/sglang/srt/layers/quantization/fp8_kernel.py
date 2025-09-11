@@ -585,6 +585,9 @@ def sglang_per_token_group_quant_fp8(
                 dumper.dump("quant__x_q_sglang", x_q_sglang)
                 dumper.dump("quant__x_s_sglang", x_s_sglang)
 
+        print("HACK: use triton output")
+        return x_q_triton, x_s_triton
+
     return x_q, x_s
 
 def assert_all_close_or_tiny_diff(a: torch.Tensor, b: torch.Tensor):
