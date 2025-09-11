@@ -82,6 +82,12 @@ def flashinfer_cutedsl_moe_masked(
     # === Assertions on shapes ===
     n = w2.shape[-1] * 2  # intermediate dimension
 
+    print(
+        f"[{torch.distributed.get_rank()}, {layer_id=}] hi call moe "
+        f"{hidden_states[0].max()=} {hidden_states[0].min()=} {hidden_states[0].mean()=} {hidden_states[0].shape=} {hidden_states[0].dtype=} "
+        f"{hidden_states[1].max()=} {hidden_states[1].min()=} {hidden_states[1].mean()=} {hidden_states[1].shape=} {hidden_states[1].dtype=} "
+    )
+
     if isinstance(hidden_states, tuple):
         assert input_global_scale is None, "input_global_scale is needed when input needs quant"
 
