@@ -83,8 +83,8 @@ def flashinfer_cutedsl_moe_masked(
     n = w2.shape[-1] * 2  # intermediate dimension
 
     def get_tensor_info(x):
-        min = x.min() if x.numel() > 0 else None
-        max = x.max() if x.numel() > 0 else None
+        min = x.float().min() if x.numel() > 0 else None
+        max = x.float().max() if x.numel() > 0 else None
         mean = x.float().mean() if x.numel() > 0 else None
         return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
     print(
