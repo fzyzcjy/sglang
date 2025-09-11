@@ -90,6 +90,7 @@ class TestHybridDPTP(CustomTestCase):
                 # TODO
                 "--attention-backend",
                 "flashinfer",
+                "--disable-radix-cache"
             ],
         )
 
