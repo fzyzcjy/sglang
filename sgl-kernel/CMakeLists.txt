@@ -378,9 +378,6 @@ install(TARGETS common_ops LIBRARY DESTINATION sgl_kernel)
 # ============================ Optional Install ============================= #
 # set flash-attention sources file
 # Now FA3 support sm80/sm86/sm90
-
-set(SGL_KERNEL_ENABLE_FA3 OFF) # NOTE HACK!!!
-
 if (SGL_KERNEL_ENABLE_FA3)
     set(SGL_FLASH_KERNEL_CUDA_FLAGS
         "-DNDEBUG"
