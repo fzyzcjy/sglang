@@ -515,6 +515,20 @@ def sglang_per_token_group_quant_fp8(
             f"{group_size=} {eps=} {fp8_min=} {fp8_max=} {scale_ue8m0=} {fuse_silu_and_mul=} {masked_m=}"
         )
 
+        if 1:
+            x_q_triton, x_s_triton = per_token_group_quant_fp8(
+                x=x,
+                group_size=group_size,
+                eps=eps,
+                dtype=fp8_dtype,
+                column_major_scales=column_major_scales,
+                scale_tma_aligned=scale_tma_aligned,
+                scale_ue8m0=scale_ue8m0,
+            )
+            
+            print("HACK: use triton output")
+            return x_q_triton, x_s_triton
+
         # Temporary
         if enable_sgl_per_token_group_quant_8bit:
             sgl_per_token_group_quant_8bit(
