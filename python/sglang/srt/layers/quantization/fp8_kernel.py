@@ -502,6 +502,19 @@ def sglang_per_token_group_quant_fp8(
     )
 
     if x.shape[0] > 0:
+        def get_tensor_info(x):
+            min = x.float().min() if x.numel() > 0 else None
+            max = x.float().max() if x.numel() > 0 else None
+            mean = x.float().mean() if x.numel() > 0 else None
+            return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
+        print(
+            "sglang_per_token_group_quant_fp8 call kernel "
+            f"{get_tensor_info(x)=} "
+            f"{get_tensor_info(x_q)=} "
+            f"{get_tensor_info(x_s)=} "
+            f"{group_size=} {eps=} {fp8_min=} {fp8_max=} {scale_ue8m0=} {fuse_silu_and_mul=} {masked_m=}"
+        )
+
         # Temporary
         if enable_sgl_per_token_group_quant_8bit:
             sgl_per_token_group_quant_8bit(
