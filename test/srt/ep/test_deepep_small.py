@@ -84,6 +84,12 @@ class TestHybridDPTP(CustomTestCase):
                 "128",
                 "--max-running-requests",
                 "256",
+
+                # TODO
+                # TODO hack!!!
+                # TODO
+                "--attention-backend",
+                "flashinfer",
             ],
         )
 
