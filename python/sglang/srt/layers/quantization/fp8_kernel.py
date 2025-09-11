@@ -23,6 +23,7 @@ import torch
 import triton
 import triton.language as tl
 
+from sglang.srt.debug_utils.dumper import dumper
 from sglang.srt.layers.quantization import deep_gemm_wrapper
 from sglang.srt.utils import (
     align,
@@ -573,6 +574,11 @@ def sglang_per_token_group_quant_fp8(
                     f"{x_q_sglang=} "
                     f"{x_s_sglang=} "
                 )
+                dumper.dump("quant__x", x)
+                dumper.dump("quant__x_q_triton", x_q_triton)
+                dumper.dump("quant__x_s_triton", x_s_triton)
+                dumper.dump("quant__x_q_sglang", x_q_sglang)
+                dumper.dump("quant__x_s_sglang", x_s_sglang)
 
     return x_q, x_s
 

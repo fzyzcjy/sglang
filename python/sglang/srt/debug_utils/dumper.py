@@ -41,6 +41,10 @@ class _Dumper:
             f"[Dumper] [{time.time()}] on_forward_pass_start id={self._forward_pass_id}"
         )
 
+        # NOTE HACK
+        if self._partial_name is None:
+            self._partial_name = _get_partial_name()
+
     def dump(self, name, value, **kwargs):
         if not self._enable:
             return
