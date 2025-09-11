@@ -85,7 +85,7 @@ def flashinfer_cutedsl_moe_masked(
     def get_tensor_info(x):
         min = x.min() if x.numel() > 0 else None
         max = x.max() if x.numel() > 0 else None
-        mean = x.mean() if x.numel() > 0 else None
+        mean = x.float().mean() if x.numel() > 0 else None
         return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
     print(
         f"[{torch.distributed.get_rank()}, {layer_id=}] hi call moe "
