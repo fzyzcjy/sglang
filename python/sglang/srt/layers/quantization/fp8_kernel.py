@@ -507,11 +507,11 @@ def sglang_per_token_group_quant_fp8(
     x_s.zero_()
 
     if x.shape[0] > 0:
-        # def get_tensor_info(x):
-        #     min = x.float().min() if x.numel() > 0 else None
-        #     max = x.float().max() if x.numel() > 0 else None
-        #     mean = x.float().mean() if x.numel() > 0 else None
-        #     return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
+        def get_tensor_info(x):
+            min = x.float().min() if x.numel() > 0 else None
+            max = x.float().max() if x.numel() > 0 else None
+            mean = x.float().mean() if x.numel() > 0 else None
+            return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
         # print(
         #     "sglang_per_token_group_quant_fp8 call kernel "
         #     f"{get_tensor_info(x)=} "
@@ -570,6 +570,12 @@ def sglang_per_token_group_quant_fp8(
                 print(
                     "quant is different!"
                     f"{e=} "
+
+                    f"{get_tensor_info(x)=} "
+                    f"{get_tensor_info(x_q)=} "
+                    f"{get_tensor_info(x_s)=} "
+                    f"{group_size=} {eps=} {fp8_min=} {fp8_max=} {scale_ue8m0=} {fuse_silu_and_mul=} {masked_m=}"
+
                     f"{torch.sum(torch.isnan(x))=} "
                     f"{x.shape=} {x_q_triton.shape=} {x_s_triton.shape=} {x_q_sglang.shape=} {x_s_sglang.shape=} "
                     f"{x=} "
