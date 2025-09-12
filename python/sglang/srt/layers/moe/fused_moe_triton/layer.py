@@ -484,16 +484,8 @@ class FusedMoE(torch.nn.Module):
                 param.data[:, :dim1, :dim2].copy_(loaded_weight)
             return
 
-        # ModelOptNvFp4FusedMoEMethod uses max of global expert scaling factors for input scaling factor
-        load_global_experts = (
-            isinstance(self.quant_method, ModelOptNvFp4FusedMoEMethod)
-            and "input_scale" in weight_name
-        )
-
         global_expert_location_metadata = get_global_expert_location_metadata()
-        if global_expert_location_metadata is None or load_global_experts:
-            print(f"hi going to run the wrong code path {param.shape=} {param.dtype=} {loaded_weight.shape=} {loaded_weight.dtype=} {weight_name=} {shard_id=} {expert_id=}")
-            # assert global_expert_location_metadata is None, "Using code path that does not respect EPLB"
+        if global_expert_location_metadata is None:
             self._weight_loader_impl(
                 param=param,
                 loaded_weight=loaded_weight,
@@ -530,10 +522,16 @@ class FusedMoE(torch.nn.Module):
         shard_id: str,
         expert_id: int,
     ) -> None:
+        # ModelOptNvFp4FusedMoEMethod uses max of global expert scaling factors for input scaling factor
+        load_global_experts = (
+            isinstance(self.quant_method, ModelOptNvFp4FusedMoEMethod)
+            and "input_scale" in weight_name
+        )
+        if not load_global_experts:
+            expert_id = self._map_global_expert_id_to_local_expert_id(expert_id)
+            if expert_id == -1:
+                return
 
-        expert_id = self._map_global_expert_id_to_local_expert_id(expert_id)
-        if expert_id == -1:
-            return
         self._weight_loader_impl(
             param=param,
             loaded_weight=loaded_weight,
