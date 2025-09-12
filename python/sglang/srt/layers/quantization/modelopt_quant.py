@@ -1172,6 +1172,9 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
             w13_input_scale = layer.w13_input_scale.max().to(torch.float32)
             w2_input_scale = layer.w2_input_scale.max().to(torch.float32)
         elif self.enable_flashinfer_cutedsl_moe:
+            print(f"[{torch.distributed.get_rank()}] raw "
+                  f"{layer.moe_ep_rank=} {layer.moe_ep_size=} {layer.num_local_experts=} {layer.num_experts=} "
+                  f"{layer.w13_input_scale=} {layer.w2_input_scale=} ")
             # All-expert-one-input-scale is mathematically different from default per-expert-input-scale
             # Thus we allow users to switch the flag to do thorough testing
             if CUTEDSL_MOE_SCALAR_INPUT_SCALE:
@@ -1210,6 +1213,13 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
         )
         layer.w2_input_scale_quant = Parameter(
             (1 / w2_input_scale).to(torch.float32), requires_grad=False
+        )
+
+        print(
+            f"[{torch.distributed.get_rank()}] after process "
+            f"{w13_input_scale=} {w2_input_scale=} "
+            f"{layer.w13_input_scale_quant.shape=} {layer.w13_input_scale_quant=} "
+            f"{layer.g1_alphas.shape=} {layer.g1_alphas=} "
         )
 
         # Validate weight scales
