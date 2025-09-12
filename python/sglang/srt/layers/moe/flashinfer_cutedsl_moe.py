@@ -124,8 +124,8 @@ def flashinfer_cutedsl_moe_masked(
         dispatch_output_bf16.masked_m,
     )
 
-    # HACK: use bf16 outputs
-    a_q, a_q_sf = a_q_slow, a_q_sf_slow
+    # # HACK: use bf16 outputs
+    # a_q, a_q_sf = a_q_slow, a_q_sf_slow
 
     assert w1.shape[-2] == 2 * n, f"w1 last-2 dim must be 2*n, got {w1.shape}"
     assert (
