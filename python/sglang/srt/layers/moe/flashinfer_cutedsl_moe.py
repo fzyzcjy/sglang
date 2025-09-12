@@ -32,7 +32,6 @@ def flashinfer_cutedsl_moe_masked(
     w2_blockscale: torch.Tensor,
     w2_alpha,
     masked_m: torch.Tensor,
-    layer_id: int,
 ):
     """
     Perform masked Mixture-of-Experts computation with FlashInfer's CuteDSL
@@ -56,10 +55,6 @@ def flashinfer_cutedsl_moe_masked(
         - Assumes max(masked_m) == m.
     """
 
-    # dumper.dump("moe__hidden_states_a", hidden_states[0], layer_id=layer_id)
-    # dumper.dump("moe__hidden_states_b", hidden_states[1], layer_id=layer_id)
-    # dumper.dump("moe__masked_m", masked_m, layer_id=layer_id)
-
     # === Assertions on dtypes ===
     assert w1.dtype == torch.uint8, f"w1 must be uint8 (fp4 packed), got {w1.dtype}"
     assert (
@@ -81,17 +76,6 @@ def flashinfer_cutedsl_moe_masked(
 
     # === Assertions on shapes ===
     n = w2.shape[-1] * 2  # intermediate dimension
-
-    # def get_tensor_info(x):
-    #     min = x.float().min() if x.numel() > 0 else None
-    #     max = x.float().max() if x.numel() > 0 else None
-    #     mean = x.float().mean() if x.numel() > 0 else None
-    #     return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
-    # print(
-    #     f"[{torch.distributed.get_rank()}, {layer_id=}] hi call moe "
-    #     f"{get_tensor_info(hidden_states[0])=} "
-    #     f"{get_tensor_info(hidden_states[1])=} "
-    # )
 
     if isinstance(hidden_states, tuple):
         assert input_global_scale is None, "input_global_scale is needed when input needs quant"
@@ -160,8 +144,6 @@ def flashinfer_cutedsl_moe_masked(
         alpha_dtype=get_cute_dtype(w1_alpha),
     )  # in logical [m, n, l]
 
-    # dumper.dump("moe__gateup_output", gateup_output, layer_id=layer_id)
-
     # SILU and quantization
     diq, diq_sf = silu_and_mul_scaled_fp4_grouped_quant(
         gateup_output.permute(2, 0, 1),
@@ -170,12 +152,9 @@ def flashinfer_cutedsl_moe_masked(
     )
 
     # Gemm2
-    # out = torch.empty(
-    # NOTE HACK
-    out = torch.zeros(
+    out = torch.empty(
         (num_experts, m, k), dtype=torch.bfloat16, device=a_q.device
     )
-    out_lmk = out
     out = out.permute(1, 2, 0)  # requirement of kernel
     grouped_gemm_nt_masked(
         (diq, diq_sf),
@@ -189,31 +168,4 @@ def flashinfer_cutedsl_moe_masked(
         alpha=w2_alpha.view(1, 1, num_experts),
         alpha_dtype=get_cute_dtype(w2_alpha),
     )  # in logical [m, k, l]
-
-    # dumper.dump("moe__out", out, layer_id=layer_id)
-    # dumper.dump("moe__any_isnan_out", torch.any(torch.isnan(out)), layer_id=layer_id)
-
-    # if any(
-    #     torch.any(torch.isnan(
-    #         out_lmk[local_expert_idx, :masked_m[local_expert_idx]]
-    #     )).cpu().item()
-    #     for local_expert_idx in range(len(masked_m))
-    # ):
-    #     print(
-    #         f"[{torch.distributed.get_rank()}] hi flashinfer_cutedsl_moe_masked find nan! thus extra dump!"
-    #         # f"{hidden_states=} "
-    #         # f"{masked_m=} "
-    #         # f"{gateup_output=} {gateup_output.sum()=} "
-    #         # f"{out_lmk=} {out_lmk.sum()=} "
-    #         ,
-    #         flush=True
-    #     )
-    #
-    #     dumper.dump("moe__hidden_states_a", hidden_states[0], layer_id=layer_id)
-    #     dumper.dump("moe__hidden_states_b", hidden_states[1], layer_id=layer_id)
-    #     dumper.dump("moe__masked_m", masked_m, layer_id=layer_id)
-    #     dumper.dump("moe__gateup_output", gateup_output, layer_id=layer_id)
-    #     dumper.dump("moe__out_lmk", out_lmk, layer_id=layer_id)
-    #     dumper.dump("moe__any_isnan_out", torch.any(torch.isnan(out_lmk)), layer_id=layer_id)
-
     return out.permute(2, 0, 1)

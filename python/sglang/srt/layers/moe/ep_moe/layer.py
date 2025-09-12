@@ -438,12 +438,6 @@ class DeepEPMoE(EPMoE):
         topk_weights: torch.Tensor,
         forward_batch: ForwardBatch,
     ):
-        # def get_tensor_info(x):
-        #     min = x.float().min() if x.numel() > 0 else None
-        #     max = x.float().max() if x.numel() > 0 else None
-        #     mean = x.float().mean() if x.numel() > 0 else None
-        #     return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
-        # print(f"[{torch.distributed.get_rank()}, {self.layer_id=}] hi call dispatch {get_tensor_info(hidden_states)=}")
         return self.deepep_dispatcher.dispatch(
             hidden_states=hidden_states,
             topk_idx=topk_idx,

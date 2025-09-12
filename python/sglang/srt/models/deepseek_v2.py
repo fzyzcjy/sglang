@@ -2423,13 +2423,9 @@ class DeepseekV2ForCausalLM(nn.Module):
         input_embeds: torch.Tensor = None,
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ) -> torch.Tensor:
-        # dumper.on_forward_pass_start()
-
         hidden_states = self.model(
             input_ids, positions, forward_batch, input_embeds, pp_proxy_tensors
         )
-
-        # print(f"[{torch.distributed.get_rank()}] hi forward end {torch.any(torch.isnan(hidden_states))=} {hidden_states.sum()=} {hidden_states.mean()=}")
 
         if self.pp_group.is_last_rank:
             return self.logits_processor(
