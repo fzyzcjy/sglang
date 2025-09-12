@@ -673,6 +673,8 @@ def biased_grouped_topk_gpu(
         <= 32  # moe_fused_gate kernel ensure that num_experts/num_expert_group does not exceed MAX_VPT=32 now. And when kernel can handle MAX_VPT > 32, we can remove this assertion.
         and is_power_of_two(correction_bias.shape[0])
     ):
+        print(f"[{torch.distributed.get_rank()}] hi going to call moe_fused_gate "
+              f"{gating_output.min()=} {gating_output.max()=} {gating_output.mean()=}")
         topk_weights, topk_ids = moe_fused_gate(
             gating_output.to(dtype=torch.float32),
             correction_bias,
@@ -683,6 +685,7 @@ def biased_grouped_topk_gpu(
             routed_scaling_factor,
             apply_routed_scaling_factor_on_output,
         )
+        print(f"[{torch.distributed.get_rank()}] hi going to call _biased_grouped_topk_postprocess {topk_ids=} {num_token_non_padded=}")
         # TODO merge into kernel
         if (expert_location_dispatch_info is not None) or (
             num_token_non_padded is not None
