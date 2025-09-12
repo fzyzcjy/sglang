@@ -421,8 +421,8 @@ class DeepEPMoE(EPMoE):
         topk_weights: torch.Tensor,
         forward_batch: ForwardBatch,
     ):
-        dispatch_output, dispatch_output_bf16 = self.dispatch(hidden_states, topk_idx, topk_weights, forward_batch)
-        hidden_states = self.moe_impl(dispatch_output, dispatch_output_bf16=dispatch_output_bf16)
+        dispatch_output = self.dispatch(hidden_states, topk_idx, topk_weights, forward_batch)
+        hidden_states = self.moe_impl(dispatch_output)
         hidden_states = self.combine(
             hidden_states,
             dispatch_output.topk_idx,
@@ -444,7 +444,7 @@ class DeepEPMoE(EPMoE):
         #     mean = x.float().mean() if x.numel() > 0 else None
         #     return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
         # print(f"[{torch.distributed.get_rank()}, {self.layer_id=}] hi call dispatch {get_tensor_info(hidden_states)=}")
-        out_nvfp4 = self.deepep_dispatcher.dispatch(
+        return self.deepep_dispatcher.dispatch(
             hidden_states=hidden_states,
             topk_idx=topk_idx,
             topk_weights=topk_weights,
@@ -457,16 +457,8 @@ class DeepEPMoE(EPMoE):
                 else None
             ),
         )
-        out_bf16 = self.deepep_dispatcher.dispatch(
-            hidden_states=hidden_states,
-            topk_idx=topk_idx,
-            topk_weights=topk_weights,
-            forward_batch=forward_batch,
-            input_global_scale=None, # NOTE
-        )
-        return out_nvfp4, out_bf16
 
-    def moe_impl(self, dispatch_output: DispatchOutput, dispatch_output_bf16):
+    def moe_impl(self, dispatch_output: DispatchOutput):
         from sglang.srt.layers.moe.token_dispatcher import DispatchOutputChecker
 
         if _use_aiter:
@@ -484,7 +476,7 @@ class DeepEPMoE(EPMoE):
                 get_moe_runner_backend().is_flashinfer_cutedsl()
             )
             if enable_flashinfer_cutedsl_moe:
-                return self.forward_flashinfer_cutedsl(dispatch_output, dispatch_output_bf16)
+                return self.forward_flashinfer_cutedsl(dispatch_output)
             assert deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM and self.use_fp8_w8a8
             return self.forward_deepgemm_masked(dispatch_output)
         else:
@@ -667,9 +659,8 @@ class DeepEPMoE(EPMoE):
     def forward_flashinfer_cutedsl(
         self,
         dispatch_output: DeepEPLLOutput,
-        dispatch_output_bf16,
     ):
-        hidden_states, _, _, masked_m, expected_m, handle = dispatch_output
+        hidden_states, _, _, masked_m, expected_m = dispatch_output
         assert self.quant_method is not None
         assert self.moe_runner_config.activation == "silu"
 
@@ -678,8 +669,6 @@ class DeepEPMoE(EPMoE):
             x=hidden_states,
             masked_m=masked_m,
             moe_runner_config=self.moe_runner_config,
-            dispatch_output_bf16=dispatch_output_bf16,
-            dispatch_output_nvfp4_handle=handle,
         )
         return output
 

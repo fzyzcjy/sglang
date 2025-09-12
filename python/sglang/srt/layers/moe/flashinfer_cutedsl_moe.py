@@ -1,4 +1,3 @@
-import torch.distributed as dist
 from typing import Any, Dict, Optional, Union
 
 import torch
@@ -34,8 +33,6 @@ def flashinfer_cutedsl_moe_masked(
     w2_alpha,
     masked_m: torch.Tensor,
     layer_id: int,
-    dispatch_output_bf16,
-    dispatch_output_nvfp4_handle,
 ):
     """
     Perform masked Mixture-of-Experts computation with FlashInfer's CuteDSL
@@ -97,8 +94,7 @@ def flashinfer_cutedsl_moe_masked(
     # )
 
     if isinstance(hidden_states, tuple):
-        # temp skip this check
-        # assert input_global_scale is None, "input_global_scale is needed when input needs quant"
+        assert input_global_scale is None, "input_global_scale is needed when input needs quant"
 
         a_q = hidden_states[0].view(torch.uint8)
         a_q_sf = hidden_states[1].view(torch.float8_e4m3fn)
@@ -119,36 +115,6 @@ def flashinfer_cutedsl_moe_masked(
             input_global_scale,
             masked_m,
         )
-
-    # a_q_slow, a_q_sf_slow = scaled_fp4_grouped_quant(
-    #     dispatch_output_bf16.hidden_states_fp8,
-    #     input_global_scale.repeat(num_experts),
-    #     dispatch_output_bf16.masked_m,
-    # )
-    #
-    # # print(f"{a_q.shape=} {a_q_slow.shape=} {a_q_sf.shape=} {a_q_sf_slow.shape=}")
-    # assert torch.all(masked_m == dispatch_output_bf16.masked_m), f"{masked_m=} {dispatch_output_bf16.masked_m=}"
-    # assert a_q.dtype == a_q_slow.dtype
-    # assert a_q.shape == a_q_slow.shape
-    # assert a_q_sf.dtype == a_q_sf_slow.dtype
-    # assert a_q_sf.shape == a_q_sf_slow.shape
-    # _sanity_check(
-    #     recv_x_pre_quant=a_q, recv_x_pre_quant_scales=a_q_sf,
-    #     handle_pre_quant=dispatch_output_nvfp4_handle,
-    #     packed_recv_count_pre_quant=masked_m,
-    #
-    #     recv_x_post_quant=a_q_slow, recv_x_scales_post_quant=a_q_sf_slow,
-    #     handle=dispatch_output_bf16.handle,
-    #     packed_recv_count=dispatch_output_bf16.masked_m,
-    #
-    #     num_local_experts=num_experts,
-    #     num_ranks=torch.distributed.get_world_size(),
-    #     num_tokens=m // torch.distributed.get_world_size(),
-    #     hidden=k,
-    # )
-
-    # # HACK: use bf16 outputs
-    # a_q, a_q_sf = a_q_slow, a_q_sf_slow
 
     assert w1.shape[-2] == 2 * n, f"w1 last-2 dim must be 2*n, got {w1.shape}"
     assert (
@@ -251,95 +217,3 @@ def flashinfer_cutedsl_moe_masked(
     #     dumper.dump("moe__any_isnan_out", torch.any(torch.isnan(out_lmk)), layer_id=layer_id)
 
     return out.permute(2, 0, 1)
-
-# ==========================================================================================
-
-def _sanity_check(
-    recv_x_post_quant, recv_x_scales_post_quant,
-    recv_x_pre_quant, recv_x_pre_quant_scales,
-    packed_recv_count,
-    packed_recv_count_pre_quant,
-    handle,
-    handle_pre_quant,
-    num_local_experts,
-    num_ranks,
-    num_tokens,
-    hidden,
-):
-    padded_m = (((num_ranks * num_tokens) + 128 - 1) // 128) * 128
-    padded_k = ((hidden + 64 - 1) // 64) * 64
-
-    recv_count, recv_src_info, recv_layout_range = packed_recv_count, handle[0], handle[1]
-    recv_count_pre_quant, recv_src_info_pre_quant, recv_layout_range_pre_quant = packed_recv_count_pre_quant, handle_pre_quant[0], handle_pre_quant[1]
-
-    global_token_idxs_ret = get_global_token_idxs(recv_count, recv_src_info, recv_layout_range, num_local_experts, num_ranks, num_tokens)
-    global_token_idxs_test = get_global_token_idxs(recv_count_pre_quant, recv_src_info_pre_quant, recv_layout_range_pre_quant, num_local_experts, num_ranks, num_tokens)
-
-    recv_x_ref = recv_x_post_quant.permute(2, 0, 1)
-    recv_x_scales_ref = recv_x_scales_post_quant.permute(5, 2, 4, 0, 1, 3).view(num_local_experts, -1)
-    recv_x_scales_ref = recover_experts_swizzled_scales(recv_x_scales_ref, num_local_experts, padded_m, padded_k)
-
-    recv_x_test = recv_x_pre_quant.permute(2, 0, 1)
-    recv_x_scales_test = recv_x_pre_quant_scales.permute(5, 2, 4, 0, 1, 3).view(num_local_experts, -1)
-    recv_x_scales_test = recover_experts_swizzled_scales(recv_x_scales_test, num_local_experts, padded_m, padded_k)
-
-    for local_expert in range(num_local_experts):
-        num_valid_tokens = recv_count[local_expert].item()
-        for test_token_idx in range(num_valid_tokens):
-            # get the pair token index
-            ref_token_idx, global_token_idxs = get_pair_token_idx(global_token_idxs_test, global_token_idxs_ret, local_expert, test_token_idx)
-            # check recv_x
-            # recv_x_bf16_ref_per_token = recv_x[local_expert, ref_token_idx]
-            recv_x_ref_per_token = recv_x_ref[local_expert, ref_token_idx]
-            recv_x_test_per_token = recv_x_test[local_expert, test_token_idx]
-            assert torch.equal(recv_x_ref_per_token, recv_x_test_per_token), \
-                f'{local_expert=} {num_valid_tokens=} {test_token_idx=} {recv_x_ref_per_token=}, {recv_x_test_per_token=}'
-            # check recv_x_scales
-            recv_x_scales_ref_per_token = recv_x_scales_ref[local_expert, ref_token_idx]
-            recv_x_scales_test_per_token = recv_x_scales_test[local_expert, test_token_idx]
-            assert torch.equal(recv_x_scales_ref_per_token, recv_x_scales_test_per_token),\
-                f'{local_expert=} {num_valid_tokens=} {test_token_idx=} {recv_x_scales_ref_per_token=}, {recv_x_scales_test_per_token=}'
-
-
-BLOCK_SIZE = 16
-
-
-def get_global_token_idxs(recv_count: torch.Tensor, recv_src_info: torch.Tensor, recv_layout_range: torch.Tensor, num_local_experts: int, num_ranks: int, num_tokens: int):
-    rank = dist.get_rank()
-    int_mask = (2 ** 32) - 1
-    begin_idx = torch.zeros((num_local_experts, num_ranks), dtype=torch.int, device='cuda')
-    count = torch.zeros((num_local_experts, num_ranks), dtype=torch.int, device='cuda')
-    global_token_idxs = torch.ones((num_local_experts, num_ranks * num_tokens), dtype=torch.int, device='cuda') * -1
-    for local_expert in range(num_local_experts):
-        num_valid_tokens = recv_count[local_expert].item()
-        for src_rank in range(num_ranks):
-            begin_idx_local, count_local = (recv_layout_range[local_expert][src_rank] >> 32).item(), (recv_layout_range[local_expert][src_rank] & int_mask).item()
-            begin_idx[local_expert, src_rank], count[local_expert, src_rank] = begin_idx_local, count_local
-            for recv_idx in range(begin_idx_local, begin_idx_local + count_local):
-                global_token_idxs[local_expert, recv_idx] = recv_src_info[local_expert, recv_idx] + src_rank * num_tokens
-    return global_token_idxs
-
-
-def get_pair_token_idx(global_token_idxs_test: torch.Tensor, global_token_idxs_ref: torch.Tensor, local_expert: int, token_idx: int):
-    global_token_idxs_temp = global_token_idxs_test[local_expert, token_idx]
-    idx_arr = torch.nonzero(global_token_idxs_ref[local_expert, :] == global_token_idxs_temp, as_tuple=False)
-    assert idx_arr.numel() == 1, f'idx_arr.numel(): {idx_arr.numel()}'
-    return idx_arr.item(), global_token_idxs_temp
-
-
-def recover_swizzled_scales(scale, m, n):
-    rounded_m = ((m + 128 - 1) // 128) * 128
-    scale_n = n // BLOCK_SIZE
-    rounded_n = ((scale_n + 4 - 1) // 4) * 4
-    # Recover the swizzled scaling factor to linear layout
-    tmp = torch.reshape(scale, (1, rounded_m // 128, rounded_n // 4, 32, 4, 4))
-    tmp = torch.permute(tmp, (0, 1, 4, 3, 2, 5))
-    result = torch.reshape(tmp, (rounded_m, rounded_n)).to(torch.float32)
-    return result[:m, :scale_n]
-
-def recover_experts_swizzled_scales(scale, l, m, n):
-    recovered_tensor = torch.empty((l, m, n//16), dtype=torch.float32, device=scale.device)
-    for i in range(l):
-        recovered_tensor[i] = recover_swizzled_scales(scale[i], m, n)
-    return recovered_tensor
-
