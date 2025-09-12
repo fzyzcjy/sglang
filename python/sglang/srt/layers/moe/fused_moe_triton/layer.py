@@ -492,6 +492,7 @@ class FusedMoE(torch.nn.Module):
 
         global_expert_location_metadata = get_global_expert_location_metadata()
         if global_expert_location_metadata is None or load_global_experts:
+            assert global_expert_location_metadata is None, "Using code path that does not respect EPLB"
             self._weight_loader_impl(
                 param=param,
                 loaded_weight=loaded_weight,
