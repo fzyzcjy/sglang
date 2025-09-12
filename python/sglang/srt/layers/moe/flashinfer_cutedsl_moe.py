@@ -130,8 +130,12 @@ def flashinfer_cutedsl_moe_masked(
     _sanity_check(
         a_q_fast=a_q, a_q_sf_fast=a_q_sf,
         a_q_slow=a_q_slow, a_q_sf_slow=a_q_sf_slow,
-        handle_fast=dispatch_output_nvfp4_handle, handle_slow=dispatch_output_bf16.handle,
-        masked_m=masked_m,
+
+        handle_pre_quant=dispatch_output_nvfp4_handle,
+        handle=dispatch_output_bf16.handle,
+
+        packed_recv_count_pre_quant=masked_m,
+        packed_recv_count=dispatch_output_bf16.masked_m,
     )
 
     # # HACK: use bf16 outputs
@@ -244,9 +248,16 @@ def flashinfer_cutedsl_moe_masked(
 def _sanity_check(
     a_q_fast, a_q_sf_fast,
     a_q_slow, a_q_sf_slow,
-    handle_fast, handle_slow,
-    masked_m,
+    packed_recv_count,
+    packed_recv_count_pre_quant,
+    handle,
+    handle_pre_quant,
 ):
+    num_experts = TODO
+    num_ranks = TODO
+    num_tokens = TODO
+    hidden = TODO
+
     num_local_experts = num_experts // num_ranks
     padded_m = (((num_ranks * num_tokens) + 128 - 1) // 128) * 128
     padded_k = ((hidden + 64 - 1) // 64) * 64
@@ -258,6 +269,12 @@ def _sanity_check(
     recv_x_test, recv_x_scales_test = _recover(
         a_q_fast, a_q_sf_fast,
         num_local_experts=num_local_experts, padded_m=padded_m, padded_k=padded_k)
+
+    recv_count, recv_src_info, recv_layout_range = packed_recv_count, handle[0], handle[1]
+    recv_count_pre_quant, recv_src_info_pre_quant, recv_layout_range_pre_quant = packed_recv_count_pre_quant, handle_pre_quant[0], handle_pre_quant[1]
+
+    global_token_idxs_ret = get_global_token_idxs(recv_count, recv_src_info, recv_layout_range, num_local_experts, num_ranks, num_tokens)
+    global_token_idxs_test = get_global_token_idxs(recv_count_pre_quant, recv_src_info_pre_quant, recv_layout_range_pre_quant, num_local_experts, num_ranks, num_tokens)
 
     for local_expert in range(num_local_experts):
         num_valid_tokens = recv_count[local_expert].item()
