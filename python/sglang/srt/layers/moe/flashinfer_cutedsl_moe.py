@@ -128,13 +128,12 @@ def flashinfer_cutedsl_moe_masked(
 
     assert torch.all(masked_m == dispatch_output_bf16.masked_m), f"{masked_m=} {dispatch_output_bf16.masked_m=}"
     _sanity_check(
-        a_q_fast=a_q, a_q_sf_fast=a_q_sf,
-        a_q_slow=a_q_slow, a_q_sf_slow=a_q_sf_slow,
-
+        recv_x_pre_quant=a_q, recv_x_pre_quant_scales=a_q_sf,
         handle_pre_quant=dispatch_output_nvfp4_handle,
-        handle=dispatch_output_bf16.handle,
-
         packed_recv_count_pre_quant=masked_m,
+
+        recv_x_post_quant=a_q_slow, recv_x_scales_post_quant=a_q_sf_slow,
+        handle=dispatch_output_bf16.handle,
         packed_recv_count=dispatch_output_bf16.masked_m,
     )
 
@@ -246,8 +245,8 @@ def flashinfer_cutedsl_moe_masked(
 # ==========================================================================================
 
 def _sanity_check(
-    a_q_fast, a_q_sf_fast,
-    a_q_slow, a_q_sf_slow,
+    recv_x_post_quant, recv_x_scales_post_quant,
+    recv_x_pre_quant, recv_x_pre_quant_scales,
     packed_recv_count,
     packed_recv_count_pre_quant,
     handle,
@@ -262,19 +261,19 @@ def _sanity_check(
     padded_m = (((num_ranks * num_tokens) + 128 - 1) // 128) * 128
     padded_k = ((hidden + 64 - 1) // 64) * 64
 
-    recv_x_ref, recv_x_scales_ref = _recover(
-        a_q_slow, a_q_sf_slow,
-        num_local_experts=num_local_experts, padded_m=padded_m, padded_k=padded_k)
-
-    recv_x_test, recv_x_scales_test = _recover(
-        a_q_fast, a_q_sf_fast,
-        num_local_experts=num_local_experts, padded_m=padded_m, padded_k=padded_k)
-
     recv_count, recv_src_info, recv_layout_range = packed_recv_count, handle[0], handle[1]
     recv_count_pre_quant, recv_src_info_pre_quant, recv_layout_range_pre_quant = packed_recv_count_pre_quant, handle_pre_quant[0], handle_pre_quant[1]
 
     global_token_idxs_ret = get_global_token_idxs(recv_count, recv_src_info, recv_layout_range, num_local_experts, num_ranks, num_tokens)
     global_token_idxs_test = get_global_token_idxs(recv_count_pre_quant, recv_src_info_pre_quant, recv_layout_range_pre_quant, num_local_experts, num_ranks, num_tokens)
+
+    recv_x_ref = recv_x_post_quant.permute(2, 0, 1)
+    recv_x_scales_ref = recv_x_scales_post_quant.permute(5, 2, 4, 0, 1, 3).view(num_local_experts, -1)
+    recv_x_scales_ref = recover_experts_swizzled_scales(recv_x_scales_ref, num_local_experts, padded_m, padded_k)
+
+    recv_x_test = recv_x_pre_quant.permute(2, 0, 1)
+    recv_x_scales_test = recv_x_pre_quant_scales.permute(5, 2, 4, 0, 1, 3).view(num_local_experts, -1)
+    recv_x_scales_test = recover_experts_swizzled_scales(recv_x_scales_test, num_local_experts, padded_m, padded_k)
 
     for local_expert in range(num_local_experts):
         num_valid_tokens = recv_count[local_expert].item()
@@ -290,13 +289,6 @@ def _sanity_check(
             recv_x_scales_ref_per_token = recv_x_scales_ref[local_expert, ref_token_idx]
             recv_x_scales_test_per_token = recv_x_scales_test[local_expert, test_token_idx]
             assert torch.equal(recv_x_scales_ref_per_token, recv_x_scales_test_per_token), f'{recv_x_scales_ref_per_token=}, {recv_x_scales_test_per_token=}'
-
-
-def _recover(a_q, a_q_sf, num_local_experts, padded_m, padded_k):
-    recv_x = a_q.permute(2, 0, 1)
-    recv_x_scales = a_q_sf.permute(5, 2, 4, 0, 1, 3).view(num_local_experts, -1)
-    recv_x_scales = recover_experts_swizzled_scales(recv_x_scales, num_local_experts, padded_m, padded_k)
-    return recv_x, recv_x_scales
 
 
 BLOCK_SIZE = 16
