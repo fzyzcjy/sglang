@@ -1,3 +1,4 @@
+import torch.distributed as dist
 from typing import Any, Dict, Optional, Union
 
 import torch
@@ -238,6 +239,7 @@ def flashinfer_cutedsl_moe_masked(
 
     return out.permute(2, 0, 1)
 
+# ==========================================================================================
 
 def _sanity_check(
     a_q_fast, a_q_sf_fast,
@@ -246,3 +248,47 @@ def _sanity_check(
     masked_m,
 ):
     TODO
+
+
+BLOCK_SIZE = 16
+
+
+def get_global_token_idxs(recv_count: torch.Tensor, recv_src_info: torch.Tensor, recv_layout_range: torch.Tensor, num_local_experts: int, num_ranks: int, num_tokens: int):
+    rank = dist.get_rank()
+    int_mask = (2 ** 32) - 1
+    begin_idx = torch.zeros((num_local_experts, num_ranks), dtype=torch.int, device='cuda')
+    count = torch.zeros((num_local_experts, num_ranks), dtype=torch.int, device='cuda')
+    global_token_idxs = torch.ones((num_local_experts, num_ranks * num_tokens), dtype=torch.int, device='cuda') * -1
+    for local_expert in range(num_local_experts):
+        num_valid_tokens = recv_count[local_expert].item()
+        for src_rank in range(num_ranks):
+            begin_idx_local, count_local = (recv_layout_range[local_expert][src_rank] >> 32).item(), (recv_layout_range[local_expert][src_rank] & int_mask).item()
+            begin_idx[local_expert, src_rank], count[local_expert, src_rank] = begin_idx_local, count_local
+            for recv_idx in range(begin_idx_local, begin_idx_local + count_local):
+                global_token_idxs[local_expert, recv_idx] = recv_src_info[local_expert, recv_idx] + src_rank * num_tokens
+    return global_token_idxs
+
+
+def get_pair_token_idx(global_token_idxs_test: torch.Tensor, global_token_idxs_ref: torch.Tensor, local_expert: int, token_idx: int):
+    global_token_idxs_temp = global_token_idxs_test[local_expert, token_idx]
+    idx_arr = torch.nonzero(global_token_idxs_ref[local_expert, :] == global_token_idxs_temp, as_tuple=False)
+    assert idx_arr.numel() == 1, f'idx_arr.numel(): {idx_arr.numel()}'
+    return idx_arr.item(), global_token_idxs_temp
+
+
+def recover_swizzled_scales(scale, m, n):
+    rounded_m = ((m + 128 - 1) // 128) * 128
+    scale_n = n // BLOCK_SIZE
+    rounded_n = ((scale_n + 4 - 1) // 4) * 4
+    # Recover the swizzled scaling factor to linear layout
+    tmp = torch.reshape(scale, (1, rounded_m // 128, rounded_n // 4, 32, 4, 4))
+    tmp = torch.permute(tmp, (0, 1, 4, 3, 2, 5))
+    result = torch.reshape(tmp, (rounded_m, rounded_n)).to(torch.float32)
+    return result[:m, :scale_n]
+
+def recover_experts_swizzled_scales(scale, l, m, n):
+    recovered_tensor = torch.empty((l, m, n//16), dtype=torch.float32, device=scale.device)
+    for i in range(l):
+        recovered_tensor[i] = recover_swizzled_scales(scale[i], m, n)
+    return recovered_tensor
+
