@@ -126,7 +126,12 @@ def flashinfer_cutedsl_moe_masked(
         dispatch_output_bf16.masked_m,
     )
 
+    print(f"{a_q.shape=} {a_q_slow.shape=} {a_q_sf.shape=} {a_q_sf_slow.shape=}")
     assert torch.all(masked_m == dispatch_output_bf16.masked_m), f"{masked_m=} {dispatch_output_bf16.masked_m=}"
+    assert a_q.dtype == a_q_slow.dtype
+    assert a_q.shape == a_q_slow.shape
+    assert a_q_sf.dtype == a_q_sf_slow.dtype
+    assert a_q_sf.shape == a_q_sf_slow.shape
     _sanity_check(
         recv_x_pre_quant=a_q, recv_x_pre_quant_scales=a_q_sf,
         handle_pre_quant=dispatch_output_nvfp4_handle,
