@@ -247,7 +247,26 @@ def _sanity_check(
     handle_fast, handle_slow,
     masked_m,
 ):
+    num_local_experts = num_experts // num_ranks
+    padded_m = (((num_ranks * num_tokens) + 128 - 1) // 128) * 128
+    padded_k = ((hidden + 64 - 1) // 64) * 64
+
+    a_q_fast_recover, a_q_sf_fast_recover = _recover(
+        a_q_fast, a_q_sf_fast,
+        num_local_experts=num_local_experts, padded_m=padded_m, padded_k=padded_k)
+    a_q_slow_recover, a_q_sf_slow_recover = _recover(
+        a_q_slow, a_q_sf_slow,
+        num_local_experts=num_local_experts, padded_m=padded_m, padded_k=padded_k)
+
     TODO
+
+def _recover(a_q, a_q_sf, num_local_experts, padded_m, padded_k):
+    a_q_recover = a_q.permute(2, 0, 1)
+
+    a_q_sf_recover = a_q_sf.permute(5, 2, 4, 0, 1, 3).view(num_local_experts, -1)
+    a_q_sf_recover = recover_experts_swizzled_scales(a_q_sf_recover, num_local_experts, padded_m, padded_k)
+
+    return a_q_recover, a_q_sf_recover
 
 
 BLOCK_SIZE = 16
