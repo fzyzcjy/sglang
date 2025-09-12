@@ -29,7 +29,10 @@ from sglang.srt.layers.quantization.fp8_kernel import (
     is_fp8_fnuz,
     sglang_per_token_group_quant_fp8,
 )
-from sglang.srt.layers.quantization.modelopt_quant import ModelOptNvFp4FusedMoEMethod, CUTEDSL_MOE_NVFP4_DISPATCH
+from sglang.srt.layers.quantization.modelopt_quant import (
+    CUTEDSL_MOE_NVFP4_DISPATCH,
+    ModelOptNvFp4FusedMoEMethod,
+)
 from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.utils import ceil_div, dispose_tensor, get_bool_env_var, is_hip, is_npu

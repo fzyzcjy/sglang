@@ -76,7 +76,9 @@ def flashinfer_cutedsl_moe_masked(
     n = w2.shape[-1] * 2  # intermediate dimension
 
     if isinstance(hidden_states, tuple):
-        assert input_global_scale is None, "input_global_scale is needed when input needs quant"
+        assert (
+            input_global_scale is None
+        ), "input_global_scale is needed when input needs quant"
 
         a_q = hidden_states[0].view(torch.uint8)
         a_q_sf = hidden_states[1].view(torch.float8_e4m3fn)
@@ -86,7 +88,7 @@ def flashinfer_cutedsl_moe_masked(
         num_experts, m, k = hidden_states.shape
 
         assert (
-                input_global_scale.dtype == torch.float32
+            input_global_scale.dtype == torch.float32
         ), f"input_global_scale must be float32, got {input_global_scale.dtype}"
         assert input_global_scale.shape == (
             num_experts,
@@ -150,9 +152,7 @@ def flashinfer_cutedsl_moe_masked(
     )
 
     # Gemm2
-    out = torch.empty(
-        (num_experts, m, k), dtype=torch.bfloat16, device=a_q.device
-    )
+    out = torch.empty((num_experts, m, k), dtype=torch.bfloat16, device=a_q.device)
     out = out.permute(1, 2, 0)  # requirement of kernel
     grouped_gemm_nt_masked(
         (diq, diq_sf),
