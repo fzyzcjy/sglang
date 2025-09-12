@@ -265,14 +265,14 @@ def _sanity_check(
             # get the pair token index
             ref_token_idx, global_token_idxs = get_pair_token_idx(global_token_idxs_test, global_token_idxs_ret, local_expert, test_token_idx)
             # check recv_x
-            recv_x_bf16_ref_per_token = recv_x[local_expert, ref_token_idx]
+            # recv_x_bf16_ref_per_token = recv_x[local_expert, ref_token_idx]
             recv_x_ref_per_token = recv_x_ref[local_expert, ref_token_idx]
             recv_x_test_per_token = recv_x_test[local_expert, test_token_idx]
-            assert torch.equal(recv_x_ref_per_token, recv_x_test_per_token), f'rank {rank}, recv_x_ref_per_token: {recv_x_ref_per_token}, recv_x_test_per_token: {recv_x_test_per_token}'
+            assert torch.equal(recv_x_ref_per_token, recv_x_test_per_token), f'{recv_x_ref_per_token=}, {recv_x_test_per_token=}'
             # check recv_x_scales
             recv_x_scales_ref_per_token = recv_x_scales_ref[local_expert, ref_token_idx]
             recv_x_scales_test_per_token = recv_x_scales_test[local_expert, test_token_idx]
-            assert torch.equal(recv_x_scales_ref_per_token, recv_x_scales_test_per_token), f'rank {rank}, recv_x_scales_ref_per_token: {recv_x_scales_ref_per_token}, recv_x_scales_test_per_token: {recv_x_scales_test_per_token}'
+            assert torch.equal(recv_x_scales_ref_per_token, recv_x_scales_test_per_token), f'{recv_x_scales_ref_per_token=}, {recv_x_scales_test_per_token=}'
 
 
 def _recover(a_q, a_q_sf, num_local_experts, padded_m, padded_k):
