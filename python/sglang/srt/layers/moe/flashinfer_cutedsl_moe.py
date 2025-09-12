@@ -135,6 +135,11 @@ def flashinfer_cutedsl_moe_masked(
         recv_x_post_quant=a_q_slow, recv_x_scales_post_quant=a_q_sf_slow,
         handle=dispatch_output_bf16.handle,
         packed_recv_count=dispatch_output_bf16.masked_m,
+
+        num_local_experts=num_experts,
+        num_ranks=torch.distributed.get_world_size(),
+        num_tokens=TODO,
+        hidden=k,
     )
 
     # # HACK: use bf16 outputs
@@ -251,13 +256,11 @@ def _sanity_check(
     packed_recv_count_pre_quant,
     handle,
     handle_pre_quant,
+    num_local_experts,
+    num_ranks,
+    num_tokens,
+    hidden,
 ):
-    num_experts = TODO
-    num_ranks = TODO
-    num_tokens = TODO
-    hidden = TODO
-
-    num_local_experts = num_experts // num_ranks
     padded_m = (((num_ranks * num_tokens) + 128 - 1) // 128) * 128
     padded_k = ((hidden + 64 - 1) // 64) * 64
 
