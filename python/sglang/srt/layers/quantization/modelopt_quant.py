@@ -1414,6 +1414,7 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
         x: torch.Tensor,
         masked_m: torch.Tensor,
         moe_runner_config: MoeRunnerConfig,
+        dispatch_output_bf16,
     ) -> torch.Tensor:
         assert (
             moe_runner_config.activation == "silu"
@@ -1430,7 +1431,8 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
 
         out = flashinfer_cutedsl_moe_masked(
             hidden_states=x,
-            input_global_scale=None if CUTEDSL_MOE_NVFP4_DISPATCH else layer.w13_input_scale_quant,
+            # input_global_scale=None if CUTEDSL_MOE_NVFP4_DISPATCH else layer.w13_input_scale_quant,
+            input_global_scale=layer.w13_input_scale_quant,
             w1=layer.w13_weight,
             w1_blockscale=layer.w13_blockscale_swizzled,
             w1_alpha=layer.g1_alphas,
@@ -1440,5 +1442,6 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
             w2_alpha=layer.g2_alphas,
             masked_m=masked_m,
             layer_id=layer.layer_id,
+            dispatch_output_bf16=dispatch_output_bf16,
         )
         return out

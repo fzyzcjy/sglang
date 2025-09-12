@@ -33,6 +33,7 @@ def flashinfer_cutedsl_moe_masked(
     w2_alpha,
     masked_m: torch.Tensor,
     layer_id: int,
+    dispatch_output_bf16,
 ):
     """
     Perform masked Mixture-of-Experts computation with FlashInfer's CuteDSL
@@ -94,7 +95,8 @@ def flashinfer_cutedsl_moe_masked(
     # )
 
     if isinstance(hidden_states, tuple):
-        assert input_global_scale is None, "input_global_scale is needed when input needs quant"
+        # temp skip this check
+        # assert input_global_scale is None, "input_global_scale is needed when input needs quant"
 
         a_q = hidden_states[0].view(torch.uint8)
         a_q_sf = hidden_states[1].view(torch.float8_e4m3fn)
@@ -115,6 +117,15 @@ def flashinfer_cutedsl_moe_masked(
             input_global_scale,
             masked_m,
         )
+
+    a_q_slow, a_q_sf_slow = scaled_fp4_grouped_quant(
+        dispatch_output_bf16.hidden_states_fp8,
+        input_global_scale.repeat(num_experts),
+        dispatch_output_bf16.masked_m,
+    )
+
+    # HACK: use bf16 outputs
+    a_q, a_q_sf = a_q_slow, a_q_sf_slow
 
     assert w1.shape[-2] == 2 * n, f"w1 last-2 dim must be 2*n, got {w1.shape}"
     assert (
