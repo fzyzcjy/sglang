@@ -669,7 +669,7 @@ class DeepEPMoE(EPMoE):
         dispatch_output: DeepEPLLOutput,
         dispatch_output_bf16,
     ):
-        hidden_states, _, _, masked_m, expected_m = dispatch_output
+        hidden_states, _, _, masked_m, expected_m, handle = dispatch_output
         assert self.quant_method is not None
         assert self.moe_runner_config.activation == "silu"
 
@@ -679,6 +679,7 @@ class DeepEPMoE(EPMoE):
             masked_m=masked_m,
             moe_runner_config=self.moe_runner_config,
             dispatch_output_bf16=dispatch_output_bf16,
+            dispatch_output_nvfp4_handle=handle,
         )
         return output
 

@@ -1415,6 +1415,7 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
         masked_m: torch.Tensor,
         moe_runner_config: MoeRunnerConfig,
         dispatch_output_bf16,
+        dispatch_output_nvfp4_handle,
     ) -> torch.Tensor:
         assert (
             moe_runner_config.activation == "silu"
@@ -1443,5 +1444,6 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
             masked_m=masked_m,
             layer_id=layer.layer_id,
             dispatch_output_bf16=dispatch_output_bf16,
+            dispatch_output_nvfp4_handle=dispatch_output_nvfp4_handle,
         )
         return out

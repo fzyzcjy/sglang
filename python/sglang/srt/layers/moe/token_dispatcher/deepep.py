@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, List, NamedTuple, Optional, Tuple, Union
+from typing import TYPE_CHECKING, List, NamedTuple, Optional, Tuple, Union, Any
 
 from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
 from sglang.srt.layers.moe import DeepEPMode, get_deepep_config, is_tbo_enabled
@@ -73,6 +73,7 @@ class DeepEPLLOutput(NamedTuple):
     topk_weights: torch.Tensor
     masked_m: torch.Tensor
     expected_m: int
+    handle: Any
 
     @property
     def format(self) -> DispatchOutputFormat:
@@ -542,6 +543,7 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
                 topk_weights,
                 masked_m,
                 expected_m,
+                self.handle,
             )
         return deepep_output
 

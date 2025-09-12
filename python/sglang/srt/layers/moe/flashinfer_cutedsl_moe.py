@@ -34,6 +34,7 @@ def flashinfer_cutedsl_moe_masked(
     masked_m: torch.Tensor,
     layer_id: int,
     dispatch_output_bf16,
+    dispatch_output_nvfp4_handle,
 ):
     """
     Perform masked Mixture-of-Experts computation with FlashInfer's CuteDSL
@@ -122,6 +123,14 @@ def flashinfer_cutedsl_moe_masked(
         dispatch_output_bf16.hidden_states_fp8,
         input_global_scale.repeat(num_experts),
         dispatch_output_bf16.masked_m,
+    )
+
+    assert torch.all(masked_m == dispatch_output_bf16.masked_m), f"{masked_m=} {dispatch_output_bf16.masked_m=}"
+    _sanity_check(
+        a_q_fast=a_q, a_q_sf_fast=a_q_sf,
+        a_q_slow=a_q_slow, a_q_sf_slow=a_q_sf_slow,
+        handle_fast=dispatch_output_nvfp4_handle, handle_slow=dispatch_output_bf16.handle,
+        masked_m=masked_m,
     )
 
     # # HACK: use bf16 outputs
@@ -228,3 +237,12 @@ def flashinfer_cutedsl_moe_masked(
     #     dumper.dump("moe__any_isnan_out", torch.any(torch.isnan(out_lmk)), layer_id=layer_id)
 
     return out.permute(2, 0, 1)
+
+
+def _sanity_check(
+    a_q_fast, a_q_sf_fast,
+    a_q_slow, a_q_sf_slow,
+    handle_fast, handle_slow,
+    masked_m,
+):
+    TODO
