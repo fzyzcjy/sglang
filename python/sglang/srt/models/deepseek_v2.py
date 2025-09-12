@@ -2264,12 +2264,12 @@ class DeepseekV2Model(nn.Module):
 
         if self.pp_group.is_first_rank:
             if input_embeds is None:
-                if (
-                    (input_ids is not None)
-                    and (input_ids.numel() > 0)
-                    and ((input_ids.min() < 0) or (input_ids.max() >= self.embed_tokens.num_embeddings))
-                ):
-                    print(f"[{torch.distributed.get_rank()}] {input_ids.numel()=} {input_ids.min()=} {input_ids.max()=} {input_ids.tolist()=}")
+                # if (
+                #     (input_ids is not None)
+                #     and (input_ids.numel() > 0)
+                #     and ((input_ids.min() < 0) or (input_ids.max() >= self.embed_tokens.num_embeddings))
+                # ):
+                #     print(f"[{torch.distributed.get_rank()}] {input_ids.numel()=} {input_ids.min()=} {input_ids.max()=} {input_ids.tolist()=}")
 
                 hidden_states = self.embed_tokens(input_ids)
             else:
