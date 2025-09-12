@@ -523,6 +523,7 @@ class FusedMoE(torch.nn.Module):
         expert_id: int,
     ) -> None:
         # ModelOptNvFp4FusedMoEMethod uses max of global expert scaling factors for input scaling factor
+        # WARN: This makes the `expert_id` mean "local" and "global" in different cases
         load_global_experts = (
             isinstance(self.quant_method, ModelOptNvFp4FusedMoEMethod)
             and "input_scale" in weight_name
