@@ -138,7 +138,8 @@ def flashinfer_cutedsl_moe_masked(
 
         num_local_experts=num_experts,
         num_ranks=torch.distributed.get_world_size(),
-        num_tokens=TODO,
+        # TODO correct?
+        num_tokens=m,
         hidden=k,
     )
 
@@ -287,11 +288,13 @@ def _sanity_check(
             # recv_x_bf16_ref_per_token = recv_x[local_expert, ref_token_idx]
             recv_x_ref_per_token = recv_x_ref[local_expert, ref_token_idx]
             recv_x_test_per_token = recv_x_test[local_expert, test_token_idx]
-            assert torch.equal(recv_x_ref_per_token, recv_x_test_per_token), f'{recv_x_ref_per_token=}, {recv_x_test_per_token=}'
+            assert torch.equal(recv_x_ref_per_token, recv_x_test_per_token), \
+                f'{local_expert=} {num_valid_tokens=} {test_token_idx=} {recv_x_ref_per_token=}, {recv_x_test_per_token=}'
             # check recv_x_scales
             recv_x_scales_ref_per_token = recv_x_scales_ref[local_expert, ref_token_idx]
             recv_x_scales_test_per_token = recv_x_scales_test[local_expert, test_token_idx]
-            assert torch.equal(recv_x_scales_ref_per_token, recv_x_scales_test_per_token), f'{recv_x_scales_ref_per_token=}, {recv_x_scales_test_per_token=}'
+            assert torch.equal(recv_x_scales_ref_per_token, recv_x_scales_test_per_token),\
+                f'{local_expert=} {num_valid_tokens=} {test_token_idx=} {recv_x_scales_ref_per_token=}, {recv_x_scales_test_per_token=}'
 
 
 BLOCK_SIZE = 16
