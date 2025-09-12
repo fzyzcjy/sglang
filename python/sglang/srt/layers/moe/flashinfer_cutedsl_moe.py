@@ -120,32 +120,32 @@ def flashinfer_cutedsl_moe_masked(
             masked_m,
         )
 
-    # a_q_slow, a_q_sf_slow = scaled_fp4_grouped_quant(
-    #     dispatch_output_bf16.hidden_states_fp8,
-    #     input_global_scale.repeat(num_experts),
-    #     dispatch_output_bf16.masked_m,
-    # )
-    #
-    # # print(f"{a_q.shape=} {a_q_slow.shape=} {a_q_sf.shape=} {a_q_sf_slow.shape=}")
-    # assert torch.all(masked_m == dispatch_output_bf16.masked_m), f"{masked_m=} {dispatch_output_bf16.masked_m=}"
-    # assert a_q.dtype == a_q_slow.dtype
-    # assert a_q.shape == a_q_slow.shape
-    # assert a_q_sf.dtype == a_q_sf_slow.dtype
-    # assert a_q_sf.shape == a_q_sf_slow.shape
-    # _sanity_check(
-    #     recv_x_pre_quant=a_q, recv_x_pre_quant_scales=a_q_sf,
-    #     handle_pre_quant=dispatch_output_nvfp4_handle,
-    #     packed_recv_count_pre_quant=masked_m,
-    #
-    #     recv_x_post_quant=a_q_slow, recv_x_scales_post_quant=a_q_sf_slow,
-    #     handle=dispatch_output_bf16.handle,
-    #     packed_recv_count=dispatch_output_bf16.masked_m,
-    #
-    #     num_local_experts=num_experts,
-    #     num_ranks=torch.distributed.get_world_size(),
-    #     num_tokens=m // torch.distributed.get_world_size(),
-    #     hidden=k,
-    # )
+    a_q_slow, a_q_sf_slow = scaled_fp4_grouped_quant(
+        dispatch_output_bf16.hidden_states_fp8,
+        input_global_scale.repeat(num_experts),
+        dispatch_output_bf16.masked_m,
+    )
+
+    # print(f"{a_q.shape=} {a_q_slow.shape=} {a_q_sf.shape=} {a_q_sf_slow.shape=}")
+    assert torch.all(masked_m == dispatch_output_bf16.masked_m), f"{masked_m=} {dispatch_output_bf16.masked_m=}"
+    assert a_q.dtype == a_q_slow.dtype
+    assert a_q.shape == a_q_slow.shape
+    assert a_q_sf.dtype == a_q_sf_slow.dtype
+    assert a_q_sf.shape == a_q_sf_slow.shape
+    _sanity_check(
+        recv_x_pre_quant=a_q, recv_x_pre_quant_scales=a_q_sf,
+        handle_pre_quant=dispatch_output_nvfp4_handle,
+        packed_recv_count_pre_quant=masked_m,
+
+        recv_x_post_quant=a_q_slow, recv_x_scales_post_quant=a_q_sf_slow,
+        handle=dispatch_output_bf16.handle,
+        packed_recv_count=dispatch_output_bf16.masked_m,
+
+        num_local_experts=num_experts,
+        num_ranks=torch.distributed.get_world_size(),
+        num_tokens=m // torch.distributed.get_world_size(),
+        hidden=k,
+    )
 
     # # HACK: use bf16 outputs
     # a_q, a_q_sf = a_q_slow, a_q_sf_slow
