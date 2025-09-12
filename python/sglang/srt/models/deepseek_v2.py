@@ -28,7 +28,6 @@ from torch import nn
 from tqdm import tqdm
 from transformers import PretrainedConfig
 
-from sglang.srt.debug_utils.dumper import dumper
 from sglang.srt.distributed import (
     get_moe_expert_parallel_world_size,
     get_pp_group,
