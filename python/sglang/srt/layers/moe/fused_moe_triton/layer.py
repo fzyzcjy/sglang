@@ -522,13 +522,8 @@ class FusedMoE(torch.nn.Module):
         shard_id: str,
         expert_id: int,
     ) -> None:
-        # ModelOptNvFp4FusedMoEMethod uses max of global expert scaling factors for input scaling factor
         # WARN: This makes the `expert_id` mean "local" and "global" in different cases
-        load_global_experts = (
-            isinstance(self.quant_method, ModelOptNvFp4FusedMoEMethod)
-            and "input_scale" in weight_name
-        )
-        if not load_global_experts:
+        if not getattr(param, "_sglang_require_global_experts", False):
             expert_id = self._map_global_expert_id_to_local_expert_id(expert_id)
             if expert_id == -1:
                 return
