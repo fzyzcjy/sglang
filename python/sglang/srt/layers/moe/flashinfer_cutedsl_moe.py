@@ -251,22 +251,35 @@ def _sanity_check(
     padded_m = (((num_ranks * num_tokens) + 128 - 1) // 128) * 128
     padded_k = ((hidden + 64 - 1) // 64) * 64
 
-    a_q_fast_recover, a_q_sf_fast_recover = _recover(
-        a_q_fast, a_q_sf_fast,
-        num_local_experts=num_local_experts, padded_m=padded_m, padded_k=padded_k)
-    a_q_slow_recover, a_q_sf_slow_recover = _recover(
+    recv_x_ref, recv_x_scales_ref = _recover(
         a_q_slow, a_q_sf_slow,
         num_local_experts=num_local_experts, padded_m=padded_m, padded_k=padded_k)
 
-    TODO
+    recv_x_test, recv_x_scales_test = _recover(
+        a_q_fast, a_q_sf_fast,
+        num_local_experts=num_local_experts, padded_m=padded_m, padded_k=padded_k)
+
+    for local_expert in range(num_local_experts):
+        num_valid_tokens = recv_count[local_expert].item()
+        for test_token_idx in range(num_valid_tokens):
+            # get the pair token index
+            ref_token_idx, global_token_idxs = get_pair_token_idx(global_token_idxs_test, global_token_idxs_ret, local_expert, test_token_idx)
+            # check recv_x
+            recv_x_bf16_ref_per_token = recv_x[local_expert, ref_token_idx]
+            recv_x_ref_per_token = recv_x_ref[local_expert, ref_token_idx]
+            recv_x_test_per_token = recv_x_test[local_expert, test_token_idx]
+            assert torch.equal(recv_x_ref_per_token, recv_x_test_per_token), f'rank {rank}, recv_x_ref_per_token: {recv_x_ref_per_token}, recv_x_test_per_token: {recv_x_test_per_token}'
+            # check recv_x_scales
+            recv_x_scales_ref_per_token = recv_x_scales_ref[local_expert, ref_token_idx]
+            recv_x_scales_test_per_token = recv_x_scales_test[local_expert, test_token_idx]
+            assert torch.equal(recv_x_scales_ref_per_token, recv_x_scales_test_per_token), f'rank {rank}, recv_x_scales_ref_per_token: {recv_x_scales_ref_per_token}, recv_x_scales_test_per_token: {recv_x_scales_test_per_token}'
+
 
 def _recover(a_q, a_q_sf, num_local_experts, padded_m, padded_k):
-    a_q_recover = a_q.permute(2, 0, 1)
-
-    a_q_sf_recover = a_q_sf.permute(5, 2, 4, 0, 1, 3).view(num_local_experts, -1)
-    a_q_sf_recover = recover_experts_swizzled_scales(a_q_sf_recover, num_local_experts, padded_m, padded_k)
-
-    return a_q_recover, a_q_sf_recover
+    recv_x = a_q.permute(2, 0, 1)
+    recv_x_scales = a_q_sf.permute(5, 2, 4, 0, 1, 3).view(num_local_experts, -1)
+    recv_x_scales = recover_experts_swizzled_scales(recv_x_scales, num_local_experts, padded_m, padded_k)
+    return recv_x, recv_x_scales
 
 
 BLOCK_SIZE = 16
