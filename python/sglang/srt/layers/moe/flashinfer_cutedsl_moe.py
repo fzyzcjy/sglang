@@ -7,8 +7,6 @@ from sgl_kernel.gemm import (
     silu_and_mul_scaled_fp4_grouped_quant,
 )
 
-from sglang.srt.debug_utils.dumper import dumper
-
 
 def get_cute_dtype(input: torch.Tensor) -> str:
     if input.dtype == torch.bfloat16:

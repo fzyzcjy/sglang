@@ -41,9 +41,6 @@ class _Dumper:
             f"[Dumper] [{time.time()}] on_forward_pass_start id={self._forward_pass_id}"
         )
 
-        if self._partial_name is None:
-            self._partial_name = _get_partial_name()
-
     def dump(self, name, value, **kwargs):
         if not self._enable:
             return
@@ -67,14 +64,14 @@ class _Dumper:
         full_filename = "___".join(f"{k}={v}" for k, v in full_kwargs.items()) + ".pt"
         path = self._base_dir / f"sglang_dump_{self._partial_name}" / full_filename
 
-        # sample_value = get_truncated_value(value)
+        sample_value = get_truncated_value(value)
 
         print(
             f"[Dumper] [{rank}, {time.time()}] {path} "
             f"type={type(value)} "
             f"shape={value.shape if isinstance(value, torch.Tensor) else None} "
             f"dtype={value.dtype if isinstance(value, torch.Tensor) else None} "
-            # f"sample_value={sample_value}"
+            f"sample_value={sample_value}"
         )
 
         if self._enable_write_file:
@@ -103,7 +100,7 @@ def get_truncated_value(value):
         return value
 
     slices = [
-        slice(0, 3) if dim_size > 200 else slice(None) for dim_size in value.shape
+        slice(0, 5) if dim_size > 200 else slice(None) for dim_size in value.shape
     ]
     return value[tuple(slices)]
 

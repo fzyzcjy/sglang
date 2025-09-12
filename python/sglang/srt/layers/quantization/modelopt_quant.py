@@ -1210,10 +1210,6 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
         layer.w2_input_scale_quant = Parameter(
             (1 / w2_input_scale).to(torch.float32), requires_grad=False
         )
-        print(
-            f"{layer.w13_input_scale_quant.shape=} {layer.w13_input_scale_quant=} "
-            f"{layer.g1_alphas.shape=} {layer.g1_alphas=} "
-        )
 
         # Validate weight scales
         for name, weight_scale in [
