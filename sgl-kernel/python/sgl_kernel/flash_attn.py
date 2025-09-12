@@ -9,10 +9,11 @@ try:
 except:
     raise ImportError("Can not import sgl_kernel. Please check your installation.")
 
-try:
-    from ._fa4_interface import flash_attn_varlen_func as flash_attn_varlen_func_v4
-except ImportError:
-    flash_attn_varlen_func_v4 = None
+# try:
+#     from ._fa4_interface import flash_attn_varlen_func as flash_attn_varlen_func_v4
+# except ImportError:
+#     flash_attn_varlen_func_v4 = None
+flash_attn_varlen_func_v4 = None
 
 
 @lru_cache(maxsize=1)
