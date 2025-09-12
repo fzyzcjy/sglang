@@ -143,8 +143,7 @@ def flashinfer_cutedsl_moe_masked(
 
         num_local_experts=num_experts,
         num_ranks=torch.distributed.get_world_size(),
-        # TODO correct?
-        num_tokens=m,
+        num_tokens=m // torch.distributed.get_world_size(),
         hidden=k,
     )
 
