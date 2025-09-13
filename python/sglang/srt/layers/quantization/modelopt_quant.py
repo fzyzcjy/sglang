@@ -1401,7 +1401,6 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                 x_sf = nvfp4_block_scale_interleave(x_sf)
 
             if 1:
-                TODO_handle_ep
                 assert x_sf is None
                 _, top_k = topk_ids.shape
                 output = ref_cutlass_fused_moe(
@@ -1431,6 +1430,11 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                     w1_blockscale=layer.w13_blockscale_swizzled,
                     # quant_scales[4] (w/ diff dtype)
                     w2_blockscale=layer.w2_blockscale_swizzled,
+
+                    ep_size=layer.moe_ep_size,
+                    ep_rank=layer.moe_ep_rank,
+                    tp_size=layer.moe_tp_size,
+                    tp_rank=layer.moe_tp_rank,
                 )
             else:
                 output = flashinfer_cutlass_fused_moe(
@@ -1628,11 +1632,18 @@ def ref_cutlass_fused_moe(
     w2_q,
     w1_blockscale,
     w2_blockscale,
+    ep_size, ep_rank,
+    tp_size, tp_rank,
 ):
     assert num_experts == 256 // 4
     assert intermediate_size == 2048
     assert hidden_size == 7168
     assert top_k == 8
+
+    assert tp_size == 1
+    assert tp_rank == 0
+    
+    TODO_ep
 
     e = num_experts
     # m = batch_size
