@@ -489,6 +489,16 @@ class DeepseekV2MoE(nn.Module):
         use_reduce_scatter: bool = False,
         gemm_output_zero_allocator: BumpAllocator = None,
     ) -> torch.Tensor:
+        if global_server_args_dict["disaggregation_mode"] == "prefill":
+            num_real_tokens = forward_batch.input_ids.shape[0]
+            hidden_states[num_real_tokens:] = 0.0
+            print(
+                f"[{torch.distributed.get_rank()}] moe.forward start HACK SET PADDED HIDDEN STATES TO ZERO"
+                f"{self.layer_id=} "
+                f"{num_real_tokens=} "
+                f"{hidden_states.shape=} {forward_batch.input_ids.shape=}"
+            )
+
         if not self._enable_deepep_moe:
             DUAL_STREAM_TOKEN_THRESHOLD = 1024
             if (
