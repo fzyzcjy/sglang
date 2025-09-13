@@ -1642,7 +1642,8 @@ def ref_cutlass_fused_moe(
 
     assert tp_size == 1
     assert tp_rank == 0
-    
+    assert torch.all(selected_experts >= 0) and torch.all(selected_experts < num_experts * ep_size)
+
     TODO_ep
 
     e = num_experts
