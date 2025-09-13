@@ -2066,6 +2066,22 @@ class DeepseekV2DecoderLayer(nn.Module):
             else ""
         )
 
+        def get_tensor_info(x):
+            if not isinstance(x, torch.Tensor):
+                return f"type={type(x)} value={x}"
+            min = x.float().min() if x.numel() > 0 else None
+            max = x.float().max() if x.numel() > 0 else None
+            mean = x.float().mean() if x.numel() > 0 else None
+            return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
+
+        if global_server_args_dict["disaggregation_mode"] == "prefill":
+            print(
+                f"[{torch.distributed.get_rank()}] layer.forward :: start "
+                f"{self.layer_id=} "
+                f"{get_tensor_info(hidden_states)=} "
+                f"{get_tensor_info(residual)=} "
+            )
+
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states,
             residual,
@@ -2079,6 +2095,13 @@ class DeepseekV2DecoderLayer(nn.Module):
             forward_batch=forward_batch,
             zero_allocator=zero_allocator,
         )
+
+        if global_server_args_dict["disaggregation_mode"] == "prefill":
+            print(
+                f"[{torch.distributed.get_rank()}] layer.forward :: after-self-attn "
+                f"{self.layer_id=} "
+                f"{get_tensor_info(hidden_states)=} "
+            )
 
         hidden_states, residual = self.layer_communicator.prepare_mlp(
             hidden_states, residual, forward_batch
@@ -2112,6 +2135,14 @@ class DeepseekV2DecoderLayer(nn.Module):
         if not should_allreduce_fusion:
             hidden_states, residual = self.layer_communicator.postprocess_layer(
                 hidden_states, residual, forward_batch
+            )
+
+        if global_server_args_dict["disaggregation_mode"] == "prefill":
+            print(
+                f"[{torch.distributed.get_rank()}] layer.forward :: end "
+                f"{self.layer_id=} "
+                f"{get_tensor_info(hidden_states)=} "
+                f"{get_tensor_info(residual)=} "
             )
 
         return hidden_states, residual
