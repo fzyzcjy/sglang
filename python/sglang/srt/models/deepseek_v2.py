@@ -1137,15 +1137,13 @@ class DeepseekV2AttentionMLA(nn.Module):
                 if forward_batch.extend_prefix_lens_cpu is not None
                 else 0
             )
-            print("HACK: force disable mha_chunked_kv")
             if (
-                False
-                # forward_batch.forward_mode.is_extend()
-                # and not forward_batch.forward_mode.is_target_verify()
-                # and not forward_batch.forward_mode.is_draft_extend()
-                # and (
-                #     not self.disable_chunked_prefix_cache or sum_extend_prefix_lens == 0
-                # )
+                forward_batch.forward_mode.is_extend()
+                and not forward_batch.forward_mode.is_target_verify()
+                and not forward_batch.forward_mode.is_draft_extend()
+                and (
+                    not self.disable_chunked_prefix_cache or sum_extend_prefix_lens == 0
+                )
             ):
                 return AttnForwardMethod.MHA_CHUNKED_KV
             else:
