@@ -1592,36 +1592,19 @@ def torch_moe_nvfp4(a, w1, w2, topk, topk_weight, topk_ids):
     ).sum(dim=1)
 
 
-def ref_cutlass_fused_moe(
-    routing_weights,
-    selected_experts,
+def create_ref_extra_weights(
     num_experts,
     intermediate_size,
     hidden_size,
-    top_k,
 ):
     assert num_experts == 256 // 4
     assert intermediate_size == 2048
     assert hidden_size == 7168
-    assert top_k == 8
 
     e = num_experts
     # m = batch_size
     n = intermediate_size
     k = hidden_size
-    otype = torch.bfloat16
-
-    # Ref check
-    a_fp4, a_scale_interleaved = fp4_quantize(x, a1_gs)
-    _, m_k = a_fp4.shape
-    a_in_dtype = dequantize_nvfp4_to_dtype(
-        a_fp4,
-        a_scale_interleaved,
-        a1_gs,
-        dtype=otype,
-        device=x.device,
-        block_size=quant_blocksize,
-    )
 
     w1_d = torch.empty((e, 2 * n, k), device="cuda", dtype=otype)
     w2_d = torch.empty((e, k, n), device="cuda", dtype=otype)
@@ -1643,6 +1626,36 @@ def ref_cutlass_fused_moe(
             device=w2.device,
             block_size=quant_blocksize,
         )
+
+    return dict(
+        w1_d=w1_d,
+        w2_d=w2_d,
+    )
+
+def ref_cutlass_fused_moe(
+    routing_weights,
+    selected_experts,
+    top_k,
+    extra_weights,
+):
+    assert top_k == 8
+
+    otype = torch.bfloat16
+
+    w1_d = extra_weights["w1_d"]
+    w2_d = extra_weights["w2_d"]
+
+    # Ref check
+    a_fp4, a_scale_interleaved = fp4_quantize(x, a1_gs)
+    _, m_k = a_fp4.shape
+    a_in_dtype = dequantize_nvfp4_to_dtype(
+        a_fp4,
+        a_scale_interleaved,
+        a1_gs,
+        dtype=otype,
+        device=x.device,
+        block_size=quant_blocksize,
+    )
 
     # w1_q_cutlass = torch.cat((w1_q[:, n:, :], w1_q[:, :n, :]), dim=1).contiguous()
     # w1_blockscale_cutlass = torch.cat(
