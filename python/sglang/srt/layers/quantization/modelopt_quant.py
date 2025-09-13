@@ -1400,28 +1400,36 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                 )
                 x_sf = nvfp4_block_scale_interleave(x_sf)
 
-            output = flashinfer_cutlass_fused_moe(
-                input=x,
-                token_selected_experts=topk_ids.to(torch.int),
-                token_final_scales=topk_weights,
-                fc1_expert_weights=layer.w13_weight.view(torch.long),
-                fc2_expert_weights=layer.w2_weight.view(torch.long),
-                output_dtype=output_dtype,
-                input_sf=x_sf,
-                quant_scales=[
-                    layer.w13_input_scale_quant,
-                    layer.w13_blockscale_swizzled.view(torch.int32),
-                    layer.g1_alphas,
-                    layer.w2_input_scale_quant,
-                    layer.w2_blockscale_swizzled.view(torch.int32),
-                    layer.g2_alphas,
-                ],
-                ep_size=layer.moe_ep_size,
-                ep_rank=layer.moe_ep_rank,
-                tp_size=layer.moe_tp_size,
-                tp_rank=layer.moe_tp_rank,
-                tune_max_num_tokens=next_power_of_2(x.shape[0]),
-            )[0]
+            if 1:
+                output = ref_cutlass_fused_moe(
+
+                )
+            else:
+                output = flashinfer_cutlass_fused_moe(
+                    input=x,
+                    token_selected_experts=topk_ids.to(torch.int),
+                    token_final_scales=topk_weights,
+                    fc1_expert_weights=layer.w13_weight.view(torch.long),
+                    fc2_expert_weights=layer.w2_weight.view(torch.long),
+                    output_dtype=output_dtype,
+                    input_sf=x_sf,
+                    quant_scales=[
+                        layer.w13_input_scale_quant,
+                        layer.w13_blockscale_swizzled.view(torch.int32),
+                        layer.g1_alphas,
+                        layer.w2_input_scale_quant,
+                        layer.w2_blockscale_swizzled.view(torch.int32),
+                        layer.g2_alphas,
+                    ],
+                    ep_size=layer.moe_ep_size,
+                    ep_rank=layer.moe_ep_rank,
+                    tp_size=layer.moe_tp_size,
+                    tp_rank=layer.moe_tp_rank,
+                    tune_max_num_tokens=next_power_of_2(x.shape[0]),
+                )[0]
+
+            assert output.dtype == torch.bfloat16
+
             if should_use_flashinfer_cutlass_moe_fp4_allgather():
                 output, global_output = get_local_dp_buffer(), output
                 get_tp_group().reduce_scatterv(
@@ -1577,6 +1585,12 @@ def torch_moe_nvfp4(a, w1, w2, topk, topk_weight, topk_ids):
 
 
 def ref_cutlass_fused_moe():
+    e = num_experts
+    m = batch_size
+    n = intermediate_size
+    k = hidden_size
+    otype = torch.bfloat16
+
     # Ref check
     a_fp4, a_scale_interleaved = fp4_quantize(x, a1_gs)
     _, m_k = a_fp4.shape
