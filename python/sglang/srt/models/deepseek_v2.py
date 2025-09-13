@@ -489,21 +489,6 @@ class DeepseekV2MoE(nn.Module):
         use_reduce_scatter: bool = False,
         gemm_output_zero_allocator: BumpAllocator = None,
     ) -> torch.Tensor:
-        if global_server_args_dict["disaggregation_mode"] == "prefill":
-            hidden_states_info_before_setpad = get_tensor_info(hidden_states)
-            num_real_tokens = forward_batch.hack_num_tokens_before_pad
-            hidden_states[num_real_tokens:] = 0.0
-            hidden_states_info_after_setpad = get_tensor_info(hidden_states)
-            print(
-                f"[{torch.distributed.get_rank()}] moe.forward start HACK SET PADDED HIDDEN STATES TO ZERO "
-                f"{self.layer_id=} "
-                f"{num_real_tokens=} "
-                f"{hidden_states.shape=} {forward_batch.input_ids.shape=} {forward_batch.global_num_tokens_cpu=}"
-                f"{forward_batch.hack_num_tokens_before_pad=} "
-                f"{hidden_states_info_before_setpad=} "
-                f"{hidden_states_info_after_setpad=} "
-            )
-
         if not self._enable_deepep_moe:
             DUAL_STREAM_TOKEN_THRESHOLD = 1024
             if (
@@ -2117,9 +2102,18 @@ class DeepseekV2DecoderLayer(nn.Module):
             else ""
         )
 
+        def hack_setpad(x):
+            if x is None:
+                return
+            assert len(x) == len(forward_batch.input_ids)  # the padded len
+            num_real_tokens = forward_batch.hack_num_tokens_before_pad
+            x[num_real_tokens:] = 0.0
+
         if global_server_args_dict["disaggregation_mode"] == "prefill":
+            hack_setpad(hidden_states)
+            hack_setpad(residual)
             print(
-                f"[{torch.distributed.get_rank()}] layer.forward :: start "
+                f"[{torch.distributed.get_rank()}] layer.forward :: start and HACK_SETPAD "
                 f"{self.layer_id=} "
                 f"{get_tensor_info(hidden_states)=} "
                 f"{get_tensor_info(residual)=} "
@@ -2132,6 +2126,16 @@ class DeepseekV2DecoderLayer(nn.Module):
             quant_format,
         )
 
+        if global_server_args_dict["disaggregation_mode"] == "prefill":
+            hack_setpad(hidden_states)
+            hack_setpad(residual)
+            print(
+                f"[{torch.distributed.get_rank()}] layer.forward :: before-attn and HACK_SETPAD "
+                f"{self.layer_id=} "
+                f"{get_tensor_info(hidden_states)=} "
+                f"{get_tensor_info(residual)=} "
+            )
+
         hidden_states = self.self_attn(
             positions=positions,
             hidden_states=hidden_states,
@@ -2140,8 +2144,10 @@ class DeepseekV2DecoderLayer(nn.Module):
         )
 
         if global_server_args_dict["disaggregation_mode"] == "prefill":
+            hack_setpad(hidden_states)
+            hack_setpad(residual)
             print(
-                f"[{torch.distributed.get_rank()}] layer.forward :: after-self-attn "
+                f"[{torch.distributed.get_rank()}] layer.forward :: after-self-attn AND HACK_SETPAD "
                 f"{self.layer_id=} "
                 f"{get_tensor_info(hidden_states)=} "
             )
@@ -2164,6 +2170,15 @@ class DeepseekV2DecoderLayer(nn.Module):
         if isinstance(self.mlp, DeepseekV2MLP):
             gemm_output_zero_allocator = None
 
+        if global_server_args_dict["disaggregation_mode"] == "prefill":
+            hack_setpad(hidden_states)
+            hack_setpad(residual)
+            print(
+                f"[{torch.distributed.get_rank()}] layer.forward :: before-mlp AND HACK_SETPAD "
+                f"{self.layer_id=} "
+                f"{get_tensor_info(hidden_states)=} "
+            )
+
         hidden_states = self.mlp(
             hidden_states,
             forward_batch,
@@ -2181,8 +2196,10 @@ class DeepseekV2DecoderLayer(nn.Module):
             )
 
         if global_server_args_dict["disaggregation_mode"] == "prefill":
+            hack_setpad(hidden_states)
+            hack_setpad(residual)
             print(
-                f"[{torch.distributed.get_rank()}] layer.forward :: end "
+                f"[{torch.distributed.get_rank()}] layer.forward :: end AND HACK_SETPAD "
                 f"{self.layer_id=} "
                 f"{get_tensor_info(hidden_states)=} "
                 f"{get_tensor_info(residual)=} "
