@@ -495,11 +495,11 @@ class DeepseekV2MoE(nn.Module):
             hidden_states[num_real_tokens:] = 0.0
             hidden_states_info_after_setpad = get_tensor_info(hidden_states)
             print(
-                f"[{torch.distributed.get_rank()}] moe.forward start HACK SET PADDED HIDDEN STATES TO ZERO"
+                f"[{torch.distributed.get_rank()}] moe.forward start HACK SET PADDED HIDDEN STATES TO ZERO "
                 f"{self.layer_id=} "
                 f"{num_real_tokens=} "
                 f"{hidden_states.shape=} {forward_batch.input_ids.shape=} {forward_batch.global_num_tokens_cpu=}"
-                f"{forward_batch.hack_num_tokens_before_pad=}"
+                f"{forward_batch.hack_num_tokens_before_pad=} "
                 f"{hidden_states_info_before_setpad=} "
                 f"{hidden_states_info_after_setpad=} "
             )
