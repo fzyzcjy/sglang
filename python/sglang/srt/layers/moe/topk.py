@@ -41,6 +41,7 @@ from sglang.srt.layers.moe import (
     get_moe_runner_backend,
     should_use_flashinfer_trtllm_moe,
 )
+from sglang.srt.managers.schedule_batch import GLOBAL_SERVER_ARGS_KEYS, global_server_args_dict
 from sglang.srt.utils import (
     cpu_has_amx_support,
     get_bool_env_var,
@@ -668,16 +669,17 @@ def biased_grouped_topk_gpu(
     ), "routed_scaling_factor is required for biased_grouped_topk"
     # TODO: moe_fused_gate kernel is not supported for num_fused_shared_experts > 0 now.
 
-    def get_tensor_info(x):
-        min = x.float().min() if x.numel() > 0 else None
-        max = x.float().max() if x.numel() > 0 else None
-        mean = x.float().mean() if x.numel() > 0 else None
-        return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
-    print(
-        f"[{torch.distributed.get_rank()}] biased_grouped_topk_gpu "
-        f"{get_tensor_info(hidden_states)=} "
-        f"{get_tensor_info(gating_output)=} "
-    )
+    if global_server_args_dict["disaggregation_mode"] == "prefill":
+        def get_tensor_info(x):
+            min = x.float().min() if x.numel() > 0 else None
+            max = x.float().max() if x.numel() > 0 else None
+            mean = x.float().mean() if x.numel() > 0 else None
+            return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
+        print(
+            f"[{torch.distributed.get_rank()}] biased_grouped_topk_gpu "
+            f"{get_tensor_info(hidden_states)=} "
+            f"{get_tensor_info(gating_output)=} "
+        )
 
     print("HACK: skip fast moe_fused_gate code path")
     if (
