@@ -1408,6 +1408,9 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                     # real func 2nd arg, "token_selected_experts"
                     selected_experts=topk_ids,
                     top_k=top_k,
+                    num_experts=layer.num_local_experts,
+                    intermediate_size=layer.w2_weight.shape[2] * 2,
+                    hidden_size=layer.w13_weight.shape[2] * 2,
                 )
             else:
                 output = flashinfer_cutlass_fused_moe(
@@ -1592,8 +1595,14 @@ def torch_moe_nvfp4(a, w1, w2, topk, topk_weight, topk_ids):
 def ref_cutlass_fused_moe(
     routing_weights,
     selected_experts,
+    num_experts,
+    intermediate_size,
+    hidden_size,
     top_k,
 ):
+    assert num_experts == 256 // 4
+    assert intermediate_size == 2048
+    assert hidden_size == 7168
     assert top_k == 8
 
     e = num_experts
