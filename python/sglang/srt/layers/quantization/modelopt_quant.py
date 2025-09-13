@@ -1401,7 +1401,7 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                 x_sf = nvfp4_block_scale_interleave(x_sf)
 
             if 1:
-                assert x_sf is None
+                assert x_sf is not None
                 _, top_k = topk_ids.shape
                 output = ref_cutlass_fused_moe(
                     # real func 3rd arg (start from 1), "token_final_scales"
@@ -1414,8 +1414,9 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                     hidden_size=layer.w13_weight.shape[2] * 2,
                     # 1st arg (start from 1)
                     x=x,
+                    x_sf=x_sf,
                     # # quant_scales[0]
-                    # a1_gs=layer.w13_input_scale_quant,
+                    a1_gs=layer.w13_input_scale_quant,
                     # # TODO correct?
                     # inter_gs=layer.w2_input_scale_quant,
                     # quant_scales[2] == 1.0 / (a1_gs * w1_gs)
@@ -1625,7 +1626,8 @@ def ref_cutlass_fused_moe(
     hidden_size,
     top_k,
     x,
-    # a1_gs,
+    x_sf,
+    a1_gs,
     # inter_gs,
     w1_gs,
     w2_gs,
@@ -1657,18 +1659,20 @@ def ref_cutlass_fused_moe(
     otype = torch.bfloat16
 
     # Ref check
-    # NOTE HACK skip quantize-unquantize
-    a_in_dtype = x
+
+    # NOTE HACK
     # a_fp4, a_scale_interleaved = fp4_quantize(x, a1_gs)
-    # _, m_k = a_fp4.shape
-    # a_in_dtype = dequantize_nvfp4_to_dtype(
-    #     a_fp4,
-    #     a_scale_interleaved,
-    #     a1_gs,
-    #     dtype=otype,
-    #     device=x.device,
-    #     block_size=quant_blocksize,
-    # )
+    a_fp4, a_scale_interleaved = x, x_sf
+
+    _, m_k = a_fp4.shape
+    a_in_dtype = dequantize_nvfp4_to_dtype(
+        a_fp4,
+        a_scale_interleaved,
+        a1_gs,
+        dtype=otype,
+        device=x.device,
+        block_size=quant_blocksize,
+    )
 
     w1_d = torch.empty((e, 2 * n, k), device="cuda", dtype=otype)
     w2_d = torch.empty((e, k, n), device="cuda", dtype=otype)
