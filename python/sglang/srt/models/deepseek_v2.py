@@ -178,6 +178,14 @@ _is_sm100_supported = is_cuda() and is_sm100_supported()
 
 logger = logging.getLogger(__name__)
 
+def get_tensor_info(x):
+    if not isinstance(x, torch.Tensor):
+        return f"type={type(x)} value={x}"
+    min = x.float().min() if x.numel() > 0 else None
+    max = x.float().max() if x.numel() > 0 else None
+    mean = x.float().mean() if x.numel() > 0 else None
+    return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
+
 
 class AttnForwardMethod(IntEnum):
     # Use multi-head attention
@@ -1221,6 +1229,15 @@ class DeepseekV2AttentionMLA(nn.Module):
 
         attn_forward_method = self.dispatch_attn_forward_method(forward_batch)
 
+        if global_server_args_dict["disaggregation_mode"] == "prefill":
+            print(
+                f"[{torch.distributed.get_rank()}] mla.forward_prepare :: start "
+                f"{self.layer_id=} "
+                f"{attn_forward_method=} "
+                f"{get_tensor_info(hidden_states)=} "
+                f"{get_tensor_info(positions)=} "
+            )
+
         if attn_forward_method == AttnForwardMethod.MHA:
             inner_state = self.forward_normal_prepare(
                 positions, hidden_states, forward_batch, zero_allocator
@@ -1452,6 +1469,16 @@ class DeepseekV2AttentionMLA(nn.Module):
     def forward_absorb_core(
         self, q_pe, k_pe, q_nope_out, k_nope, forward_batch, zero_allocator, positions
     ):
+        if global_server_args_dict["disaggregation_mode"] == "prefill":
+            print(
+                f"[{torch.distributed.get_rank()}] mla.forward_absorb_core :: start "
+                f"{self.layer_id=} "
+                f"{get_tensor_info(q_pe)=} "
+                f"{get_tensor_info(k_pe)=} "
+                f"{get_tensor_info(q_nope_out)=} "
+                f"{get_tensor_info(k_nope)=} "
+            )
+
         if (
             self.current_attention_backend == "fa3"
             or self.current_attention_backend == "flashinfer"
@@ -1571,6 +1598,15 @@ class DeepseekV2AttentionMLA(nn.Module):
                 ).transpose(0, 1),
             )
         output, _ = self.o_proj(attn_bmm_output)
+
+        if global_server_args_dict["disaggregation_mode"] == "prefill":
+            print(
+                f"[{torch.distributed.get_rank()}] mla.forward_absorb_core :: end "
+                f"{self.layer_id=} "
+                f"{get_tensor_info(attn_output)=} "
+                f"{get_tensor_info(attn_bmm_output)=} "
+                f"{get_tensor_info(output)=} "
+            )
 
         return output
 
@@ -2065,14 +2101,6 @@ class DeepseekV2DecoderLayer(nn.Module):
             and self.self_attn.fused_qkv_a_proj_with_mqa.weight.dtype == torch.uint8
             else ""
         )
-
-        def get_tensor_info(x):
-            if not isinstance(x, torch.Tensor):
-                return f"type={type(x)} value={x}"
-            min = x.float().min() if x.numel() > 0 else None
-            max = x.float().max() if x.numel() > 0 else None
-            mean = x.float().mean() if x.numel() > 0 else None
-            return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
 
         if global_server_args_dict["disaggregation_mode"] == "prefill":
             print(
