@@ -1420,9 +1420,9 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                     inter_gs=layer.w2_input_scale_quant,
                     # quant_scales[2] == 1.0 / (a1_gs * w1_gs)
                     # => w1_gs = 1 / quant_scales[2] / a1_gs
-                    w1_gs=1/(1.0 / layer.g1_alphas / layer.w13_input_scale_quant),
+                    w1_gs=1.0 / layer.g1_alphas / layer.w13_input_scale_quant,
                     # same
-                    w2_gs=1/(1.0 / layer.g2_alphas / layer.w2_input_scale_quant),
+                    w2_gs=1.0 / layer.g2_alphas / layer.w2_input_scale_quant,
                     # w1_q/w2_q = 4th/5th arg (start from 1)
                     w1_q=layer.w13_weight,
                     w2_q=layer.w2_weight,
