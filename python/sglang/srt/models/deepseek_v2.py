@@ -566,6 +566,10 @@ class DeepseekV2MoE(nn.Module):
             shared_output = None
             topk_output = self.topk.empty_topk_output(hidden_states.device)
 
+        if torch.distributed.get_rank() != 0:
+            print("HACK: set nonzero rank shared_output to zero")
+            shared_output *= 0.0
+
         final_hidden_states = self.experts(hidden_states, topk_output)
         if not _is_cuda and not _use_aiter:
             # fused in biased_grouped_topk so we can skip here
