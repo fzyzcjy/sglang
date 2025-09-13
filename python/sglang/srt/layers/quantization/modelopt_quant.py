@@ -1609,6 +1609,8 @@ def ref_cutlass_fused_moe(
     # m = batch_size
     n = intermediate_size
     k = hidden_size
+
+    quant_blocksize = 16
     otype = torch.bfloat16
 
     # Ref check
