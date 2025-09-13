@@ -1414,10 +1414,10 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                     hidden_size=layer.w13_weight.shape[2] * 2,
                     # 1st arg (start from 1)
                     x=x,
-                    # quant_scales[0]
-                    a1_gs=layer.w13_input_scale_quant,
-                    # TODO correct?
-                    inter_gs=layer.w2_input_scale_quant,
+                    # # quant_scales[0]
+                    # a1_gs=layer.w13_input_scale_quant,
+                    # # TODO correct?
+                    # inter_gs=layer.w2_input_scale_quant,
                     # quant_scales[2] == 1.0 / (a1_gs * w1_gs)
                     # => w1_gs = 1 / quant_scales[2] / a1_gs
                     w1_gs=1.0 / layer.g1_alphas / layer.w13_input_scale_quant,
@@ -1583,7 +1583,7 @@ def break_fp4_bytes(a, dtype):
     return values.reshape(m, n * 2).to(dtype=dtype)
 
 
-def torch_moe_nvfp4(a, w1, w2, topk, topk_weight, topk_ids, inter_gs):
+def torch_moe_nvfp4(a, w1, w2, topk, topk_weight, topk_ids):
     B, D = a.shape
     a = a.view(B, -1, D).repeat(1, topk, 1).reshape(-1, D)
     out = torch.zeros(B * topk, w2.shape[1], dtype=a.dtype, device=a.device)
@@ -1600,16 +1600,17 @@ def torch_moe_nvfp4(a, w1, w2, topk, topk_weight, topk_ids, inter_gs):
             assert m % 2 == 0
             w1_expert, w3_expert = w1[i][m // 2 :, :], w1[i][: m // 2, :]
             inter = F.silu(a[mask] @ w1_expert.t()) * (a[mask] @ w3_expert.t())
-            # inter_gs = torch.tensor(1.0).cuda()
-            inter_q, inter_blockscale = fp4_quantize(inter, inter_gs)
-            inter = dequantize_nvfp4_to_dtype(
-                inter_q,
-                inter_blockscale,
-                inter_gs,
-                dtype=inter.dtype,
-                device=inter.device,
-                block_size=16,
-            ).cuda()
+            # NOTE HACK rm quant-unquant
+            # [wrong, should let user pass in] inter_gs = torch.tensor(1.0).cuda()
+            # inter_q, inter_blockscale = fp4_quantize(inter, inter_gs)
+            # inter = dequantize_nvfp4_to_dtype(
+            #     inter_q,
+            #     inter_blockscale,
+            #     inter_gs,
+            #     dtype=inter.dtype,
+            #     device=inter.device,
+            #     block_size=16,
+            # ).cuda()
             out[mask] = inter @ w2[i].transpose(0, 1)
     return (
         out.view(B, -1, w2.shape[1]) * topk_weight.view(B, -1, 1).to(out.dtype)
@@ -1624,8 +1625,8 @@ def ref_cutlass_fused_moe(
     hidden_size,
     top_k,
     x,
-    a1_gs,
-    inter_gs,
+    # a1_gs,
+    # inter_gs,
     w1_gs,
     w2_gs,
     w1_q,
@@ -1656,16 +1657,18 @@ def ref_cutlass_fused_moe(
     otype = torch.bfloat16
 
     # Ref check
-    a_fp4, a_scale_interleaved = fp4_quantize(x, a1_gs)
-    _, m_k = a_fp4.shape
-    a_in_dtype = dequantize_nvfp4_to_dtype(
-        a_fp4,
-        a_scale_interleaved,
-        a1_gs,
-        dtype=otype,
-        device=x.device,
-        block_size=quant_blocksize,
-    )
+    # NOTE HACK skip quantize-unquantize
+    a_in_dtype = x
+    # a_fp4, a_scale_interleaved = fp4_quantize(x, a1_gs)
+    # _, m_k = a_fp4.shape
+    # a_in_dtype = dequantize_nvfp4_to_dtype(
+    #     a_fp4,
+    #     a_scale_interleaved,
+    #     a1_gs,
+    #     dtype=otype,
+    #     device=x.device,
+    #     block_size=quant_blocksize,
+    # )
 
     w1_d = torch.empty((e, 2 * n, k), device="cuda", dtype=otype)
     w2_d = torch.empty((e, k, n), device="cuda", dtype=otype)
@@ -1698,7 +1701,7 @@ def ref_cutlass_fused_moe(
     # ).contiguous()
     ref_output = torch_moe_nvfp4(
         a_in_dtype, w1_d, w2_d, top_k, routing_weights, selected_experts,
-        inter_gs=inter_gs,
+        # inter_gs=inter_gs,
     )
 
     return ref_output
