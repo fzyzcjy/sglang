@@ -299,8 +299,6 @@ class LayerCommunicator:
         )
 
     def should_use_reduce_scatter(self, forward_batch: ForwardBatch):
-        return False
-
         return (
             self.allow_reduce_scatter
             and self._communicate_summable_tensor_pair_fn
@@ -311,8 +309,6 @@ class LayerCommunicator:
     def should_fuse_mlp_allreduce_with_next_layer(
         self, forward_batch: ForwardBatch
     ) -> bool:
-        return False
-
         speculative_algo = global_server_args_dict.get("speculative_algorithm", None)
         if (
             is_dp_attention_enabled()
