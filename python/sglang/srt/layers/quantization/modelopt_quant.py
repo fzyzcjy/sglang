@@ -1472,7 +1472,7 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                 print(
                     f"[{torch.distributed.get_rank()}] see nan in output "
                     f"{torch.isnan(output).sum()=} {output.shape=} "
-                    f"{get_tensor_info(output)=}"
+                    f"{get_tensor_info(output)=} "
                     f"{get_tensor_info(x)=} "
                     f"{get_tensor_info(x_sf)=} "
                     f"{get_tensor_info(topk_ids)=} "

@@ -667,6 +667,18 @@ def biased_grouped_topk_gpu(
         routed_scaling_factor is not None
     ), "routed_scaling_factor is required for biased_grouped_topk"
     # TODO: moe_fused_gate kernel is not supported for num_fused_shared_experts > 0 now.
+
+    def get_tensor_info(x):
+        min = x.float().min() if x.numel() > 0 else None
+        max = x.float().max() if x.numel() > 0 else None
+        mean = x.float().mean() if x.numel() > 0 else None
+        return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
+    print(
+        f"[{torch.distributed.get_rank()}] biased_grouped_topk_gpu "
+        f"{get_tensor_info(hidden_states)=} "
+        f"{get_tensor_info(gating_output)=} "
+    )
+
     if (
         _is_cuda
         and gating_output.shape[1] // num_expert_group
