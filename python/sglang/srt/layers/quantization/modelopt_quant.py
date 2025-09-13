@@ -1401,6 +1401,7 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                 x_sf = nvfp4_block_scale_interleave(x_sf)
 
             if 1:
+                TODO_handle_ep
                 assert x_sf is None
                 _, top_k = topk_ids.shape
                 output = ref_cutlass_fused_moe(
@@ -1418,8 +1419,11 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                     a1_gs=layer.w13_input_scale_quant,
                     # TODO correct?
                     inter_gs=layer.w2_input_scale_quant,
-                    w1_gs=TODO,
-                    w2_gs=TODO,
+                    # quant_scales[2] == 1.0 / (a1_gs * w1_gs)
+                    # => w1_gs = 1 / quant_scales[2] / a1_gs
+                    w1_gs=1.0 / layer.g1_alphas / layer.w13_input_scale_quant,
+                    # same
+                    w2_gs=1.0 / layer.g2_alphas / layer.w2_input_scale_quant,
                     # w1_q/w2_q = 4th/5th arg (start from 1)
                     w1_q=layer.w13_weight,
                     w2_q=layer.w2_weight,
