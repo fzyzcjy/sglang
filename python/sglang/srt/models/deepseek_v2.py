@@ -2532,6 +2532,12 @@ class DeepseekV2ForCausalLM(nn.Module):
         input_embeds: torch.Tensor = None,
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ) -> torch.Tensor:
+        if global_server_args_dict["disaggregation_mode"] == "prefill":
+            print(
+                f"[{torch.distributed.get_rank()}] causallm :: start"
+                f"{input_ids=} {positions=} "
+            )
+
         hidden_states = self.model(
             input_ids, positions, forward_batch, input_embeds, pp_proxy_tensors
         )
