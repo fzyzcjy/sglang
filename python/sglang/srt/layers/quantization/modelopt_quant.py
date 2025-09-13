@@ -1600,10 +1600,15 @@ def ref_cutlass_fused_moe(
     intermediate_size,
     hidden_size,
     top_k,
+    x,
     a1_gs,
     inter_gs,
     w1_gs,
     w2_gs,
+    w1_q,
+    w2_q,
+    w1_blockscale,
+    w2_blockscale,
 ):
     assert num_experts == 256 // 4
     assert intermediate_size == 2048
@@ -1638,16 +1643,20 @@ def ref_cutlass_fused_moe(
             w1_q[idx],
             w1_blockscale[idx],
             w1_gs[idx],
-            dtype=w1.dtype,
-            device=w1.device,
+            dtype=otype,
+            device="cuda",
+            # dtype=w1.dtype,
+            # device=w1.device,
             block_size=quant_blocksize,
         )
         w2_d[idx] = dequantize_nvfp4_to_dtype(
             w2_q[idx],
             w2_blockscale[idx],
             w2_gs[idx],
-            dtype=w2.dtype,
-            device=w2.device,
+            dtype=otype,
+            device="cuda",
+            # dtype=w2.dtype,
+            # device=w2.device,
             block_size=quant_blocksize,
         )
 
