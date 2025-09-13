@@ -2140,6 +2140,15 @@ class ModelRunner:
             forward_batch.top_logprobs_nums,
             forward_batch.token_ids_logprobs,
         )
+        print(
+            f"[{torch.distributed.get_rank()}] "
+            f"{self.forward_pass_id=} "
+            f"{forward_batch.batch_size=} {forward_batch.forward_mode=} {forward_batch.seq_lens=} "
+            f"{forward_batch.extend_prefix_lens=} "
+            f"{forward_batch.input_ids.shape=} {forward_batch.input_ids.tolist()=} "
+            f"{next_token_ids.shape=} {next_token_ids.tolist()=}"
+            f"bad_next_token_ids={torch.any(next_token_ids != 128798).item()}"
+        )
         return next_token_ids
 
     @property
