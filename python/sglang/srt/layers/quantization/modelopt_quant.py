@@ -1416,7 +1416,8 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                     x=x,
                     # quant_scales[0]
                     a1_gs=layer.w13_input_scale_quant,
-                    inter_gs=TODO,
+                    # TODO correct?
+                    inter_gs=layer.w2_input_scale_quant,
                     w1_gs=TODO,
                     w2_gs=TODO,
                     # w1_q/w2_q = 4th/5th arg (start from 1)
