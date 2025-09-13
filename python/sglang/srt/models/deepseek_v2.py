@@ -484,10 +484,11 @@ class DeepseekV2MoE(nn.Module):
         if not self._enable_deepep_moe:
             DUAL_STREAM_TOKEN_THRESHOLD = 1024
             if (
-                self.alt_stream is not None
-                and self.num_fused_shared_experts == 0
-                and hidden_states.shape[0] > 0
-                and hidden_states.shape[0] <= DUAL_STREAM_TOKEN_THRESHOLD
+                False
+                # self.alt_stream is not None
+                # and self.num_fused_shared_experts == 0
+                # and hidden_states.shape[0] > 0
+                # and hidden_states.shape[0] <= DUAL_STREAM_TOKEN_THRESHOLD
             ):
                 return self.forward_normal_dual_stream(
                     hidden_states,
