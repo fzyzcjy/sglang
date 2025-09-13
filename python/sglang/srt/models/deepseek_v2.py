@@ -490,13 +490,14 @@ class DeepseekV2MoE(nn.Module):
         gemm_output_zero_allocator: BumpAllocator = None,
     ) -> torch.Tensor:
         if global_server_args_dict["disaggregation_mode"] == "prefill":
-            num_real_tokens = forward_batch.input_ids.shape[0]
+            num_real_tokens = forward_batch.hack_num_tokens_before_pad
             hidden_states[num_real_tokens:] = 0.0
             print(
                 f"[{torch.distributed.get_rank()}] moe.forward start HACK SET PADDED HIDDEN STATES TO ZERO"
                 f"{self.layer_id=} "
                 f"{num_real_tokens=} "
-                f"{hidden_states.shape=} {forward_batch.input_ids.shape=}"
+                f"{hidden_states.shape=} {forward_batch.input_ids.shape=} {forward_batch.global_num_tokens_cpu=}"
+                f"{forward_batch.hack_num_tokens_before_pad=}"
             )
 
         if not self._enable_deepep_moe:
@@ -2542,6 +2543,14 @@ class DeepseekV2ForCausalLM(nn.Module):
         input_embeds: torch.Tensor = None,
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ) -> torch.Tensor:
+        if global_server_args_dict["disaggregation_mode"] == "prefill":
+            print(
+                f"[{torch.distributed.get_rank()}] causallm.forward :: start "
+                f"{forward_batch.input_ids.shape=} {forward_batch.positions.shape=} "
+                f"{forward_batch.global_num_tokens_cpu=} "
+                f"{input_ids=} {positions=} "
+            )
+
         hidden_states = self.model(
             input_ids, positions, forward_batch, input_embeds, pp_proxy_tensors
         )
