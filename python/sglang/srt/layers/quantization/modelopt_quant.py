@@ -1412,15 +1412,19 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                     num_experts=layer.num_local_experts,
                     intermediate_size=layer.w2_weight.shape[2] * 2,
                     hidden_size=layer.w13_weight.shape[2] * 2,
-                    x=TODO,
-                    a1_gs=TODO,
+                    # 1st arg
+                    x=x,
+                    # quant_scales[0]
+                    a1_gs=layer.w13_input_scale_quant,
                     inter_gs=TODO,
                     w1_gs=TODO,
                     w2_gs=TODO,
                     w1_q=TODO,
                     w2_q=TODO,
-                    w1_blockscale=TODO,
-                    w2_blockscale=TODO,
+                    # quant_scales[1] (w/ diff dtype)
+                    w1_blockscale=layer.w13_blockscale_swizzled,
+                    # quant_scales[4] (w/ diff dtype)
+                    w2_blockscale=layer.w2_blockscale_swizzled,
                 )
             else:
                 output = flashinfer_cutlass_fused_moe(
