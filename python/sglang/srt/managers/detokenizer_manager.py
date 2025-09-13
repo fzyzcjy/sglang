@@ -151,6 +151,7 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
 
     def handle_batch_token_id_out(self, recv_obj: BatchTokenIDOut):
         bs = len(recv_obj.rids)
+        print(f"handle_batch_token_id_out {recv_obj.decode_ids=} {recv_obj.decoded_texts=}")
 
         # Initialize decode status
         read_ids, surr_ids = [], []
