@@ -1606,9 +1606,6 @@ def create_ref_extra_weights(
     n = intermediate_size
     k = hidden_size
 
-    quant_blocksize = 16
-    otype = torch.bfloat16
-
     w1_d = torch.empty((e, 2 * n, k), device="cuda", dtype=otype)
     w2_d = torch.empty((e, k, n), device="cuda", dtype=otype)
 
@@ -1643,7 +1640,6 @@ def ref_cutlass_fused_moe(
 ):
     assert top_k == 8
 
-    quant_blocksize = 16
     otype = torch.bfloat16
 
     w1_d = extra_weights["w1_d"]
