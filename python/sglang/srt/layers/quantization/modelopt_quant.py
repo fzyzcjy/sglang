@@ -1,6 +1,9 @@
 # Adapted from https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/layers/quantization/modelopt.py
 from __future__ import annotations
 
+from torch.nn import functional as F
+from flashinfer import fp4_quantize
+
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -1482,3 +1485,139 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
             masked_m=masked_m,
         )
         return out
+
+
+def convert_swizzled_to_linear(a_sf_swizzled: torch.Tensor, m, k, block_size):
+    m_tiles = (m + 128 - 1) // 128
+    f = block_size * 4
+    k_tiles = (k + f - 1) // f
+    tmp = torch.reshape(a_sf_swizzled, (1, m_tiles, k_tiles, 32, 4, 4))
+    tmp = torch.permute(tmp, (0, 1, 4, 3, 2, 5))
+    out = tmp.reshape(m_tiles * 128, k_tiles * f // block_size)
+    return out[0:m, 0:k]
+
+
+def dequantize_nvfp4_to_dtype(
+    tensor_fp4, tensor_sf, global_scale, dtype, device, block_size=16
+):
+    """Dequantize the fp4 tensor back to high precision."""
+    # Two fp4 values are packed into one uint8.
+    assert tensor_fp4.dtype == torch.uint8
+    m, packed_k = tensor_fp4.shape
+    k = packed_k * 2
+    tensor_f32 = break_fp4_bytes(tensor_fp4, dtype)
+    tensor_f32 = tensor_f32.reshape(m, k // block_size, block_size)
+    tensor_sf = tensor_sf.view(torch.float8_e4m3fn)
+    tensor_sf = convert_swizzled_to_linear(tensor_sf, m, k, block_size)
+    tensor_sf_dtype = tensor_sf.to(torch.float32) / global_scale
+
+    # scale the tensor
+    out = (tensor_f32 * tensor_sf_dtype.unsqueeze(-1)).reshape(m, k)
+    return out.to(dtype=dtype)
+
+
+def break_fp4_bytes(a, dtype):
+    assert a.dtype == torch.uint8
+    m, n = a.shape
+
+    # Vectorized nibble processing
+    a_flat = a.flatten()
+    high = (a_flat & 0xF0) >> 4  # Upper nibbles
+    low = a_flat & 0x0F  # Lower nibbles
+
+    # Combine nibbles for batch processing
+    combined = torch.stack((low, high), dim=1).flatten()
+
+    # Vectorized sign and magnitude extraction
+    signs = (combined & 0x08).to(torch.bool)  # Sign bits
+    abs_vals = (combined & 0x07).to(torch.long)  # Magnitude indices
+
+    # Device-aware lookup and sign application
+    kE2M1ToFloat = torch.tensor(
+        [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0], dtype=torch.float32
+    )
+    kE2M1 = kE2M1ToFloat.to(device=a.device)
+    values = kE2M1[abs_vals] * torch.where(signs, -1.0, 1.0)
+
+    # Reshape to final form
+    return values.reshape(m, n * 2).to(dtype=dtype)
+
+
+def torch_moe_nvfp4(a, w1, w2, topk, topk_weight, topk_ids):
+    B, D = a.shape
+    a = a.view(B, -1, D).repeat(1, topk, 1).reshape(-1, D)
+    out = torch.zeros(B * topk, w2.shape[1], dtype=a.dtype, device=a.device)
+    # score = torch.softmax(score, dim=-1, dtype=torch.float32)
+    # topk_weight, topk_ids = torch.topk(score, topk)
+    topk_weight = topk_weight.view(-1)
+    topk_ids = topk_ids.view(-1)
+    # w1 needs to be swapped in terms of gate and up_proj
+
+    for i in range(w1.shape[0]):
+        mask = topk_ids == i
+        if mask.sum():
+            m = w1[i].shape[0]
+            assert m % 2 == 0
+            w1_expert, w3_expert = w1[i][m // 2 :, :], w1[i][: m // 2, :]
+            inter = F.silu(a[mask] @ w1_expert.t()) * (a[mask] @ w3_expert.t())
+            inter_gs = torch.tensor(1.0).cuda()
+            inter_q, inter_blockscale = fp4_quantize(inter, inter_gs)
+            inter = dequantize_nvfp4_to_dtype(
+                inter_q,
+                inter_blockscale,
+                inter_gs,
+                dtype=inter.dtype,
+                device=inter.device,
+                block_size=16,
+            ).cuda()
+            out[mask] = inter @ w2[i].transpose(0, 1)
+    return (
+        out.view(B, -1, w2.shape[1]) * topk_weight.view(B, -1, 1).to(out.dtype)
+    ).sum(dim=1)
+
+
+def ref_cutlass_fused_moe():
+    # Ref check
+    a_fp4, a_scale_interleaved = fp4_quantize(x, a1_gs)
+    _, m_k = a_fp4.shape
+    a_in_dtype = dequantize_nvfp4_to_dtype(
+        a_fp4,
+        a_scale_interleaved,
+        a1_gs,
+        dtype=otype,
+        device=x.device,
+        block_size=quant_blocksize,
+    )
+
+    w1_d = torch.empty((e, 2 * n, k), device="cuda", dtype=otype)
+    w2_d = torch.empty((e, k, n), device="cuda", dtype=otype)
+
+    for idx in range(0, e):
+        w1_d[idx] = dequantize_nvfp4_to_dtype(
+            w1_q[idx],
+            w1_blockscale[idx],
+            w1_gs[idx],
+            dtype=w1.dtype,
+            device=w1.device,
+            block_size=quant_blocksize,
+        )
+        w2_d[idx] = dequantize_nvfp4_to_dtype(
+            w2_q[idx],
+            w2_blockscale[idx],
+            w2_gs[idx],
+            dtype=w2.dtype,
+            device=w2.device,
+            block_size=quant_blocksize,
+        )
+
+    # w1_q_cutlass = torch.cat((w1_q[:, n:, :], w1_q[:, :n, :]), dim=1).contiguous()
+    # w1_blockscale_cutlass = torch.cat(
+    #     (w1_blockscale[:, n:, :], w1_blockscale[:, :n, :]), dim=1
+    # ).contiguous()
+    ref_output = torch_moe_nvfp4(
+        a_in_dtype, w1_d, w2_d, top_k, routing_weights, selected_experts
+    )
+
+    return ref_output
+
+
