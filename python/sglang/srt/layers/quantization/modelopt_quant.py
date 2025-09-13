@@ -1404,23 +1404,24 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                 assert x_sf is None
                 _, top_k = topk_ids.shape
                 output = ref_cutlass_fused_moe(
-                    # real func 3rd arg, "token_final_scales"
+                    # real func 3rd arg (start from 1), "token_final_scales"
                     routing_weights=topk_weights,
-                    # real func 2nd arg, "token_selected_experts"
+                    # real func 2nd arg (start from 1), "token_selected_experts"
                     selected_experts=topk_ids,
                     top_k=top_k,
                     num_experts=layer.num_local_experts,
                     intermediate_size=layer.w2_weight.shape[2] * 2,
                     hidden_size=layer.w13_weight.shape[2] * 2,
-                    # 1st arg
+                    # 1st arg (start from 1)
                     x=x,
                     # quant_scales[0]
                     a1_gs=layer.w13_input_scale_quant,
                     inter_gs=TODO,
                     w1_gs=TODO,
                     w2_gs=TODO,
-                    w1_q=TODO,
-                    w2_q=TODO,
+                    # w1_q/w2_q = 4th/5th arg (start from 1)
+                    w1_q=layer.w13_weight,
+                    w2_q=layer.w2_weight,
                     # quant_scales[1] (w/ diff dtype)
                     w1_blockscale=layer.w13_blockscale_swizzled,
                     # quant_scales[4] (w/ diff dtype)
