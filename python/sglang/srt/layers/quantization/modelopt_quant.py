@@ -1401,11 +1401,13 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                 x_sf = nvfp4_block_scale_interleave(x_sf)
 
             if 1:
+                _, top_k = topk_ids.shape
                 output = ref_cutlass_fused_moe(
                     # real func 3rd arg, "token_final_scales"
                     routing_weights=topk_weights,
                     # real func 2nd arg, "token_selected_experts"
                     selected_experts=topk_ids,
+                    top_k=top_k,
                 )
             else:
                 output = flashinfer_cutlass_fused_moe(
@@ -1590,12 +1592,12 @@ def torch_moe_nvfp4(a, w1, w2, topk, topk_weight, topk_ids):
 def ref_cutlass_fused_moe(
     routing_weights,
     selected_experts,
+    top_k,
 ):
-    _, top_k = topk_ids.shape
     assert top_k == 8
 
     e = num_experts
-    m = batch_size
+    # m = batch_size
     n = intermediate_size
     k = hidden_size
     otype = torch.bfloat16
