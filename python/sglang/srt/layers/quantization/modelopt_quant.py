@@ -1401,6 +1401,7 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                 x_sf = nvfp4_block_scale_interleave(x_sf)
 
             if 1:
+                assert x_sf is None
                 _, top_k = topk_ids.shape
                 output = ref_cutlass_fused_moe(
                     # real func 3rd arg, "token_final_scales"
@@ -1559,7 +1560,7 @@ def break_fp4_bytes(a, dtype):
     return values.reshape(m, n * 2).to(dtype=dtype)
 
 
-def torch_moe_nvfp4(a, w1, w2, topk, topk_weight, topk_ids):
+def torch_moe_nvfp4(a, w1, w2, topk, topk_weight, topk_ids, inter_gs):
     B, D = a.shape
     a = a.view(B, -1, D).repeat(1, topk, 1).reshape(-1, D)
     out = torch.zeros(B * topk, w2.shape[1], dtype=a.dtype, device=a.device)
@@ -1576,7 +1577,7 @@ def torch_moe_nvfp4(a, w1, w2, topk, topk_weight, topk_ids):
             assert m % 2 == 0
             w1_expert, w3_expert = w1[i][m // 2 :, :], w1[i][: m // 2, :]
             inter = F.silu(a[mask] @ w1_expert.t()) * (a[mask] @ w3_expert.t())
-            inter_gs = torch.tensor(1.0).cuda()
+            # inter_gs = torch.tensor(1.0).cuda()
             inter_q, inter_blockscale = fp4_quantize(inter, inter_gs)
             inter = dequantize_nvfp4_to_dtype(
                 inter_q,
@@ -1599,6 +1600,10 @@ def ref_cutlass_fused_moe(
     intermediate_size,
     hidden_size,
     top_k,
+    a1_gs,
+    inter_gs,
+    w1_gs,
+    w2_gs,
 ):
     assert num_experts == 256 // 4
     assert intermediate_size == 2048
@@ -1651,7 +1656,8 @@ def ref_cutlass_fused_moe(
     #     (w1_blockscale[:, n:, :], w1_blockscale[:, :n, :]), dim=1
     # ).contiguous()
     ref_output = torch_moe_nvfp4(
-        a_in_dtype, w1_d, w2_d, top_k, routing_weights, selected_experts
+        a_in_dtype, w1_d, w2_d, top_k, routing_weights, selected_experts,
+        inter_gs=inter_gs,
     )
 
     return ref_output
