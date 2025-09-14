@@ -1463,22 +1463,23 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
 
             assert output.dtype == torch.bfloat16
 
-            if torch.any(torch.isnan(output)):
-                def get_tensor_info(x):
-                    min = x.float().min() if x.numel() > 0 else None
-                    max = x.float().max() if x.numel() > 0 else None
-                    mean = x.float().mean() if x.numel() > 0 else None
-                    return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
-                print(
-                    f"[{torch.distributed.get_rank()}] see nan in output "
-                    f"{torch.isnan(output).sum()=} {output.shape=} "
-                    f"{get_tensor_info(output)=} "
-                    f"{get_tensor_info(x)=} "
-                    f"{get_tensor_info(x_sf)=} "
-                    f"{get_tensor_info(topk_ids)=} "
-                    f"{get_tensor_info(topk_weights)=} "
-                    f"{x=} {x_sf=} {output=} "
-                )
+            if 0:
+                if torch.any(torch.isnan(output)):
+                    def get_tensor_info(x):
+                        min = x.float().min() if x.numel() > 0 else None
+                        max = x.float().max() if x.numel() > 0 else None
+                        mean = x.float().mean() if x.numel() > 0 else None
+                        return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
+                    print(
+                        f"[{torch.distributed.get_rank()}] see nan in output "
+                        f"{torch.isnan(output).sum()=} {output.shape=} "
+                        f"{get_tensor_info(output)=} "
+                        f"{get_tensor_info(x)=} "
+                        f"{get_tensor_info(x_sf)=} "
+                        f"{get_tensor_info(topk_ids)=} "
+                        f"{get_tensor_info(topk_weights)=} "
+                        f"{x=} {x_sf=} {output=} "
+                    )
 
             if should_use_flashinfer_cutlass_moe_fp4_allgather():
                 output, global_output = get_local_dp_buffer(), output
