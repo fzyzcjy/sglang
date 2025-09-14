@@ -563,6 +563,17 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
             q = q.view(-1, layer.tp_q_head_num, layer.head_dim)
             k = k.view(-1, layer.tp_k_head_num, layer.head_dim)
             v = v.view(-1, layer.tp_k_head_num, layer.v_head_dim)
+            print(
+                f"{type(self)=} forward_extend call trtllm_ragged_attention_deepseek"
+                f"{forward_batch.attn_attend_prefix_cache=} "
+                f"{forward_batch.batch_size=} "
+                f"{forward_batch.mha_return_lse=} "
+                f"{q.shape=} "
+                f"{k.shape=} "
+                f"{v.shape=} "
+                f"{self.workspace_buffer.shape=} "
+                f"{self.forward_prefill_metadata=} "
+            )
             output = flashinfer.prefill.trtllm_ragged_attention_deepseek(
                 query=q,
                 key=k,
