@@ -1230,13 +1230,14 @@ class DeepseekV2AttentionMLA(nn.Module):
         attn_forward_method = self.dispatch_attn_forward_method(forward_batch)
 
         if global_server_args_dict["disaggregation_mode"] == "prefill":
-            print(
-                f"[{torch.distributed.get_rank()}] mla.forward_prepare :: start "
-                f"{self.layer_id=} "
-                f"{attn_forward_method=} "
-                f"{get_tensor_info(hidden_states)=} "
-                f"{get_tensor_info(positions)=} "
-            )
+            pass
+            # print(
+            #     f"[{torch.distributed.get_rank()}] mla.forward_prepare :: start "
+            #     f"{self.layer_id=} "
+            #     f"{attn_forward_method=} "
+            #     f"{get_tensor_info(hidden_states)=} "
+            #     f"{get_tensor_info(positions)=} "
+            # )
 
         if attn_forward_method == AttnForwardMethod.MHA:
             inner_state = self.forward_normal_prepare(
@@ -1470,14 +1471,15 @@ class DeepseekV2AttentionMLA(nn.Module):
         self, q_pe, k_pe, q_nope_out, k_nope, forward_batch, zero_allocator, positions
     ):
         if global_server_args_dict["disaggregation_mode"] == "prefill":
-            print(
-                f"[{torch.distributed.get_rank()}] mla.forward_absorb_core :: start "
-                f"{self.layer_id=} "
-                f"{get_tensor_info(q_pe)=} "
-                f"{get_tensor_info(k_pe)=} "
-                f"{get_tensor_info(q_nope_out)=} "
-                f"{get_tensor_info(k_nope)=} "
-            )
+            pass
+            # print(
+            #     f"[{torch.distributed.get_rank()}] mla.forward_absorb_core :: start "
+            #     f"{self.layer_id=} "
+            #     f"{get_tensor_info(q_pe)=} "
+            #     f"{get_tensor_info(k_pe)=} "
+            #     f"{get_tensor_info(q_nope_out)=} "
+            #     f"{get_tensor_info(k_nope)=} "
+            # )
 
         if (
             self.current_attention_backend == "fa3"
@@ -1600,13 +1602,14 @@ class DeepseekV2AttentionMLA(nn.Module):
         output, _ = self.o_proj(attn_bmm_output)
 
         if global_server_args_dict["disaggregation_mode"] == "prefill":
-            print(
-                f"[{torch.distributed.get_rank()}] mla.forward_absorb_core :: end "
-                f"{self.layer_id=} "
-                f"{get_tensor_info(attn_output)=} "
-                f"{get_tensor_info(attn_bmm_output)=} "
-                f"{get_tensor_info(output)=} "
-            )
+            pass
+            # print(
+            #     f"[{torch.distributed.get_rank()}] mla.forward_absorb_core :: end "
+            #     f"{self.layer_id=} "
+            #     f"{get_tensor_info(attn_output)=} "
+            #     f"{get_tensor_info(attn_bmm_output)=} "
+            #     f"{get_tensor_info(output)=} "
+            # )
 
         return output
 
@@ -2112,12 +2115,13 @@ class DeepseekV2DecoderLayer(nn.Module):
         if global_server_args_dict["disaggregation_mode"] == "prefill":
             hack_setpad(hidden_states)
             hack_setpad(residual)
-            print(
-                f"[{torch.distributed.get_rank()}] layer.forward :: start and HACK_SETPAD "
-                f"{self.layer_id=} "
-                f"{get_tensor_info(hidden_states)=} "
-                f"{get_tensor_info(residual)=} "
-            )
+            pass
+            # print(
+            #     f"[{torch.distributed.get_rank()}] layer.forward :: start and HACK_SETPAD "
+            #     f"{self.layer_id=} "
+            #     f"{get_tensor_info(hidden_states)=} "
+            #     f"{get_tensor_info(residual)=} "
+            # )
 
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states,
@@ -2129,12 +2133,13 @@ class DeepseekV2DecoderLayer(nn.Module):
         if global_server_args_dict["disaggregation_mode"] == "prefill":
             hack_setpad(hidden_states)
             hack_setpad(residual)
-            print(
-                f"[{torch.distributed.get_rank()}] layer.forward :: before-attn and HACK_SETPAD "
-                f"{self.layer_id=} "
-                f"{get_tensor_info(hidden_states)=} "
-                f"{get_tensor_info(residual)=} "
-            )
+            pass
+            # print(
+            #     f"[{torch.distributed.get_rank()}] layer.forward :: before-attn and HACK_SETPAD "
+            #     f"{self.layer_id=} "
+            #     f"{get_tensor_info(hidden_states)=} "
+            #     f"{get_tensor_info(residual)=} "
+            # )
 
         hidden_states = self.self_attn(
             positions=positions,
@@ -2146,11 +2151,12 @@ class DeepseekV2DecoderLayer(nn.Module):
         if global_server_args_dict["disaggregation_mode"] == "prefill":
             hack_setpad(hidden_states)
             hack_setpad(residual)
-            print(
-                f"[{torch.distributed.get_rank()}] layer.forward :: after-self-attn AND HACK_SETPAD "
-                f"{self.layer_id=} "
-                f"{get_tensor_info(hidden_states)=} "
-            )
+            pass
+            # print(
+            #     f"[{torch.distributed.get_rank()}] layer.forward :: after-self-attn AND HACK_SETPAD "
+            #     f"{self.layer_id=} "
+            #     f"{get_tensor_info(hidden_states)=} "
+            # )
 
         hidden_states, residual = self.layer_communicator.prepare_mlp(
             hidden_states, residual, forward_batch
@@ -2173,11 +2179,12 @@ class DeepseekV2DecoderLayer(nn.Module):
         if global_server_args_dict["disaggregation_mode"] == "prefill":
             hack_setpad(hidden_states)
             hack_setpad(residual)
-            print(
-                f"[{torch.distributed.get_rank()}] layer.forward :: before-mlp AND HACK_SETPAD "
-                f"{self.layer_id=} "
-                f"{get_tensor_info(hidden_states)=} "
-            )
+            pass
+            # print(
+            #     f"[{torch.distributed.get_rank()}] layer.forward :: before-mlp AND HACK_SETPAD "
+            #     f"{self.layer_id=} "
+            #     f"{get_tensor_info(hidden_states)=} "
+            # )
 
         hidden_states = self.mlp(
             hidden_states,
@@ -2198,12 +2205,13 @@ class DeepseekV2DecoderLayer(nn.Module):
         if global_server_args_dict["disaggregation_mode"] == "prefill":
             hack_setpad(hidden_states)
             hack_setpad(residual)
-            print(
-                f"[{torch.distributed.get_rank()}] layer.forward :: end AND HACK_SETPAD "
-                f"{self.layer_id=} "
-                f"{get_tensor_info(hidden_states)=} "
-                f"{get_tensor_info(residual)=} "
-            )
+            pass
+            # print(
+            #     f"[{torch.distributed.get_rank()}] layer.forward :: end AND HACK_SETPAD "
+            #     f"{self.layer_id=} "
+            #     f"{get_tensor_info(hidden_states)=} "
+            #     f"{get_tensor_info(residual)=} "
+            # )
 
         return hidden_states, residual
 
@@ -2565,12 +2573,13 @@ class DeepseekV2ForCausalLM(nn.Module):
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ) -> torch.Tensor:
         if global_server_args_dict["disaggregation_mode"] == "prefill":
-            print(
-                f"[{torch.distributed.get_rank()}] causallm.forward :: start "
-                f"{forward_batch.input_ids.shape=} {forward_batch.positions.shape=} "
-                f"{forward_batch.global_num_tokens_cpu=} "
-                f"{input_ids=} {positions=} "
-            )
+            pass
+            # print(
+            #     f"[{torch.distributed.get_rank()}] causallm.forward :: start "
+            #     f"{forward_batch.input_ids.shape=} {forward_batch.positions.shape=} "
+            #     f"{forward_batch.global_num_tokens_cpu=} "
+            #     f"{input_ids=} {positions=} "
+            # )
 
         hidden_states = self.model(
             input_ids, positions, forward_batch, input_embeds, pp_proxy_tensors
