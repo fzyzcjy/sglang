@@ -1400,7 +1400,7 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                 )
                 x_sf = nvfp4_block_scale_interleave(x_sf)
 
-            if 1:
+            if 0:
                 assert x_sf is not None
                 _, top_k = topk_ids.shape
                 output = ref_cutlass_fused_moe(
