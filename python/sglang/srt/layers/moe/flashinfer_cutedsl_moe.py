@@ -78,12 +78,6 @@ def flashinfer_cutedsl_moe_masked(
         w2_alpha.dtype == torch.float32
     ), f"w2_alpha must be float32, got {w2_alpha.dtype}"
 
-    if get_bool_env_var("SGLANG_HACK_CUTEDSL_GEMM_FAKE_INPUT"):
-        original_num_experts, original_m, original_k = hidden_states.shape
-        new_m = min(original_m, 4096)
-        fake_output = hidden_states
-        hidden_states = hidden_states.flatten()[:original_num_experts * new_m * original_k].view(original_num_experts, new_m, original_k)
-
     # === Assertions on shapes ===
     n = w2.shape[-1] * 2  # intermediate dimension
     num_experts, m, k = hidden_states.shape
@@ -175,8 +169,4 @@ def flashinfer_cutedsl_moe_masked(
             else {}
         )
     )  # in logical [m, k, l]
-
-    if get_bool_env_var("SGLANG_HACK_CUTEDSL_GEMM_FAKE_INPUT"):
-        return fake_output
-
     return out.permute(2, 0, 1)
