@@ -2065,23 +2065,12 @@ class DeepseekV2DecoderLayer(nn.Module):
             else ""
         )
 
-        def hack_setpad(x):
-            if x is None:
-                return
-            assert len(x) == len(forward_batch.input_ids)  # the padded len
-            num_real_tokens = forward_batch.hack_num_tokens_before_pad
-            x[num_real_tokens:] = 0.0
-
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states,
             residual,
             forward_batch,
             quant_format,
         )
-
-        if forward_batch.forward_mode.is_extend():
-            hack_setpad(hidden_states)
-            hack_setpad(residual)
 
         hidden_states = self.self_attn(
             positions=positions,
