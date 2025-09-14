@@ -624,7 +624,7 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
                 return_recv_hook=self.return_recv_hook,
                 **(
                     dict(
-                        enable_v2=True,
+                        overlap=overlap_args.overlap,
                         src_signals=overlap_args.signal,
                         src_signal_expect_value=overlap_args.threshold,
                     )
