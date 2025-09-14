@@ -42,8 +42,6 @@ class CombineOverlapArgs:
     wait_event: torch.cuda.Event
     num_sms: int
     signal: Optional[torch.Tensor] = None
-    # TODO maybe antgroup can rename these args to be a bit more clear
-    block_m: int = -1
     threshold: int = -1
 
 
@@ -120,8 +118,6 @@ def _compute_overlap_args(dispatch_output, alt_stream):
     down_gemm_overlap_args = None
 
     if SboFlags.enable_combine_down_gemm_two_stream_overlap():
-        down_gemm_block_m, down_gemm_block_n = 128, 128
-
         # TODO use zero_allocator to remove this `torch.zeros` call
         # NOTE ours v2 use uint32 not int32 currently
         combine_signal = torch.zeros(num_local_experts, dtype=torch.uint32, device=hidden_states.device)
@@ -133,7 +129,6 @@ def _compute_overlap_args(dispatch_output, alt_stream):
         )
         combine_overlap_args.overlap = True
         combine_overlap_args.signal = combine_signal
-        combine_overlap_args.block_m = down_gemm_block_m
         combine_overlap_args.threshold = compute_num_sms
     else:
         meta_overlap_args |= dict(
