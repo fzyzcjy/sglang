@@ -574,10 +574,11 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
             #     f"{self.workspace_buffer.shape=} "
             #     f"{self.forward_prefill_metadata=} "
             # )
+            num_actual_tokens = self.forward_prefill_metadata.cum_seq_lens[-1].item()
             output = flashinfer.prefill.trtllm_ragged_attention_deepseek(
-                query=q,
-                key=k,
-                value=v,
+                query=q[:num_actual_tokens],
+                key=k[:num_actual_tokens],
+                value=v[:num_actual_tokens],
                 workspace_buffer=self.workspace_buffer,
                 seq_lens=self.forward_prefill_metadata.seq_lens,
                 max_q_len=self.forward_prefill_metadata.max_seq_len,
