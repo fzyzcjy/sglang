@@ -1920,16 +1920,16 @@ class DeepseekV2AttentionMLA(nn.Module):
         )
 
     def forward_normal_chunked_kv_core(self, q, k, v, forward_batch):
-        def hack_setpad(x):
-            if x is None:
-                return
-            assert len(x) == len(forward_batch.input_ids)  # the padded len
-            num_real_tokens = forward_batch.hack_num_tokens_before_pad
-            x[num_real_tokens:] = 0.0
-
-        hack_setpad(q)
-        hack_setpad(k)
-        hack_setpad(v)
+        # def hack_setpad(x):
+        #     if x is None:
+        #         return
+        #     assert len(x) == len(forward_batch.input_ids)  # the padded len
+        #     num_real_tokens = forward_batch.hack_num_tokens_before_pad
+        #     x[num_real_tokens:] = 0.0
+        #
+        # hack_setpad(q)
+        # hack_setpad(k)
+        # hack_setpad(v)
 
         has_extend_prefix = any(forward_batch.extend_prefix_lens_cpu)
         # Only initialize the info once
