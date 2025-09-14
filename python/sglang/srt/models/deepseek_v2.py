@@ -2476,6 +2476,16 @@ class DeepseekV2ForCausalLM(nn.Module):
             input_ids, positions, forward_batch, input_embeds, pp_proxy_tensors
         )
 
+        def hack_setpad(x):
+            if x is None:
+                return
+            assert len(x) == len(forward_batch.input_ids)  # the padded len
+            num_real_tokens = forward_batch.hack_num_tokens_before_pad
+            x[num_real_tokens:] = 0.0
+
+        if global_server_args_dict["disaggregation_mode"] == "prefill":
+            hack_setpad(hidden_states)
+
         if self.pp_group.is_last_rank:
             return self.logits_processor(
                 input_ids, hidden_states, self.lm_head, forward_batch
