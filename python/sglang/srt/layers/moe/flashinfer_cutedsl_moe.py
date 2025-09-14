@@ -7,8 +7,6 @@ from sgl_kernel.gemm import (
     silu_and_mul_scaled_fp4_grouped_quant,
 )
 
-from sglang.srt.utils import get_bool_env_var
-
 
 def get_cute_dtype(input: torch.Tensor) -> str:
     if input.dtype == torch.bfloat16:
@@ -53,7 +51,7 @@ def flashinfer_cutedsl_moe_masked(
         masked_m (torch.Tensor): Masked dimension indices
 
     Notes:
-        - Assumes max(masked_m) == m.
+        - Assumes max(masked_m) <= m.
     """
 
     # === Assertions on dtypes ===
