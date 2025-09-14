@@ -563,23 +563,10 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
             q = q.view(-1, layer.tp_q_head_num, layer.head_dim)
             k = k.view(-1, layer.tp_k_head_num, layer.head_dim)
             v = v.view(-1, layer.tp_k_head_num, layer.v_head_dim)
-            # print(
-            #     f"{type(self)=} forward_extend call trtllm_ragged_attention_deepseek"
-            #     f"{forward_batch.attn_attend_prefix_cache=} "
-            #     f"{forward_batch.batch_size=} "
-            #     f"{forward_batch.mha_return_lse=} "
-            #     f"{q.shape=} "
-            #     f"{k.shape=} "
-            #     f"{v.shape=} "
-            #     f"{self.workspace_buffer.shape=} "
-            #     f"{self.forward_prefill_metadata=} "
-            # )
-            num_padded_tokens = q.shape[0]
-            num_actual_tokens = self.forward_prefill_metadata.cum_seq_lens[-1].item()
             output = flashinfer.prefill.trtllm_ragged_attention_deepseek(
-                query=q[:num_actual_tokens],
-                key=k[:num_actual_tokens],
-                value=v[:num_actual_tokens],
+                query=q,
+                key=k,
+                value=v,
                 workspace_buffer=self.workspace_buffer,
                 seq_lens=self.forward_prefill_metadata.seq_lens,
                 max_q_len=self.forward_prefill_metadata.max_seq_len,
@@ -595,9 +582,6 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
                 is_causal=True,
                 return_lse=forward_batch.mha_return_lse,
             )
-            import torch.nn.functional as F
-            assert len(output.shape) == 3
-            output = F.pad(output, (0, 0, 0, 0, 0, num_padded_tokens - num_actual_tokens), value=0)
         else:
             # replace with trtllm ragged attention once accuracy is resolved.
             output = super().forward_extend(

@@ -1920,17 +1920,6 @@ class DeepseekV2AttentionMLA(nn.Module):
         )
 
     def forward_normal_chunked_kv_core(self, q, k, v, forward_batch):
-        # def hack_setpad(x):
-        #     if x is None:
-        #         return
-        #     assert len(x) == len(forward_batch.input_ids)  # the padded len
-        #     num_real_tokens = forward_batch.hack_num_tokens_before_pad
-        #     x[num_real_tokens:] = 0.0
-        #
-        # hack_setpad(q)
-        # hack_setpad(k)
-        # hack_setpad(v)
-
         has_extend_prefix = any(forward_batch.extend_prefix_lens_cpu)
         # Only initialize the info once
         if has_extend_prefix and forward_batch.num_prefix_chunks is None:
@@ -1945,7 +1934,6 @@ class DeepseekV2AttentionMLA(nn.Module):
 
         # Do mha attention with chunked prefix cache if there are any sequence with prefix
         if has_extend_prefix:
-            assert False, "not examining this branch"
             attn_output, lse = attn_output
             forward_batch.set_attn_attend_prefix_cache(True)
             attn_output = self._chunked_prefix_attn_mha(
