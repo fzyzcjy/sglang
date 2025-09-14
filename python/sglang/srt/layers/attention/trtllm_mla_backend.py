@@ -574,6 +574,7 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
             #     f"{self.workspace_buffer.shape=} "
             #     f"{self.forward_prefill_metadata=} "
             # )
+            num_padded_tokens = q.shape[0]
             num_actual_tokens = self.forward_prefill_metadata.cum_seq_lens[-1].item()
             output = flashinfer.prefill.trtllm_ragged_attention_deepseek(
                 query=q[:num_actual_tokens],
@@ -594,6 +595,9 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
                 is_causal=True,
                 return_lse=forward_batch.mha_return_lse,
             )
+            import torch.nn.functional as F
+            assert len(output.shape) == 3
+            output = F.pad(output, (0, 0, 0, 0, 0, num_padded_tokens - num_actual_tokens), value=0)
         else:
             # replace with trtllm ragged attention once accuracy is resolved.
             output = super().forward_extend(
