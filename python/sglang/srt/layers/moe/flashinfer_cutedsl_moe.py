@@ -165,6 +165,6 @@ def flashinfer_cutedsl_moe_masked(
             )
             if down_sm_count is not None or down_signals is not None
             else {}
-        )
+        ),
     )  # in logical [m, k, l]
     return out.permute(2, 0, 1)

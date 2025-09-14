@@ -43,11 +43,11 @@ from sglang.srt.utils import get_bool_env_var, is_cuda, next_power_of_2
 
 if TYPE_CHECKING:
     from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
-    from sglang.srt.single_batch_overlap import DownGemmOverlapArgs
     from sglang.srt.layers.moe.token_dispatcher import (
         CombineInput,
         StandardDispatchOutput,
     )
+    from sglang.srt.single_batch_overlap import DownGemmOverlapArgs
 
 if is_cuda():
     from sgl_kernel import scaled_fp4_quant
@@ -1479,7 +1479,8 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                     down_signals=down_gemm_overlap_args.signal,
                     down_start_event=down_gemm_overlap_args.start_event,
                 )
-                if down_gemm_overlap_args is not None else {}
+                if down_gemm_overlap_args is not None
+                else {}
             ),
         )
         return out

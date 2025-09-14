@@ -1,17 +1,17 @@
-from typing import Optional, Callable, Any, TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import torch
-
-from dataclasses import dataclass
 
 from sglang.srt.layers.moe import get_moe_runner_backend
 from sglang.srt.layers.quantization import deep_gemm_wrapper
 from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
-from sglang.srt.utils import get_int_env_var, ceil_div
+from sglang.srt.utils import ceil_div, get_int_env_var
 
 if TYPE_CHECKING:
     from sglang.srt.layers.moe.ep_moe.layer import DeepEPMoE
+
 
 class SboFlags:
     # TODO may have: "enable_dispatch_shared_one_stream_overlap", "enable_dispatch_gateup_gemm_two_stream_overlap", ...
@@ -71,13 +71,17 @@ def execute_sbo(
         _compute_overlap_args(dispatch_output, alt_stream)
     )
 
-    hidden_states = experts.moe_impl(dispatch_output, down_gemm_overlap_args=down_gemm_overlap_args)
+    hidden_states = experts.moe_impl(
+        dispatch_output, down_gemm_overlap_args=down_gemm_overlap_args
+    )
     if (e := meta_overlap_args.get("record_event_after_down")) is not None:
         e.record()
 
     if SboFlags.enable_combine_shared_two_stream_overlap():
         # TODO reduce sm for non-deepgemm
-        with deep_gemm_wrapper.configure_deep_gemm_num_sms(meta_overlap_args["compute_num_sms"]):
+        with deep_gemm_wrapper.configure_deep_gemm_num_sms(
+            meta_overlap_args["compute_num_sms"]
+        ):
             shared_output = forward_shared_experts()
 
     hidden_states = experts.combine(
@@ -90,8 +94,12 @@ def execute_sbo(
 
     return hidden_states, shared_output
 
+
 def _compute_overlap_args(dispatch_output, alt_stream):
-    if not (SboFlags.enable_combine_down_gemm_two_stream_overlap() or SboFlags.enable_combine_shared_two_stream_overlap()):
+    if not (
+        SboFlags.enable_combine_down_gemm_two_stream_overlap()
+        or SboFlags.enable_combine_shared_two_stream_overlap()
+    ):
         return None, None, {}
 
     hidden_states = dispatch_output.hidden_states_fp8
@@ -100,7 +108,9 @@ def _compute_overlap_args(dispatch_output, alt_stream):
 
     num_local_experts, num_tokens_static, hidden_dim = hidden_states.shape
 
-    total_num_sms = torch.cuda.get_device_properties(device="cuda").multi_processor_count
+    total_num_sms = torch.cuda.get_device_properties(
+        device="cuda"
+    ).multi_processor_count
     communicate_num_sms = get_int_env_var("SGLANG_DEEPEP_LL_COMBINE_SEND_NUM_SMS", 32)
     compute_num_sms = total_num_sms - communicate_num_sms
 
@@ -120,7 +130,9 @@ def _compute_overlap_args(dispatch_output, alt_stream):
     if SboFlags.enable_combine_down_gemm_two_stream_overlap():
         # TODO use zero_allocator to remove this `torch.zeros` call
         # NOTE ours v2 use uint32 not int32 currently
-        combine_signal = torch.zeros(num_local_experts, dtype=torch.uint32, device=hidden_states.device)
+        combine_signal = torch.zeros(
+            num_local_experts, dtype=torch.uint32, device=hidden_states.device
+        )
 
         down_gemm_overlap_args = DownGemmOverlapArgs(
             signal=combine_signal,

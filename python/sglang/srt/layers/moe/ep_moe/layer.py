@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import nullcontext
-from typing import TYPE_CHECKING, Optional, Union, Dict, Any, Callable
-from typing import TYPE_CHECKING, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 import torch
 import triton
@@ -35,13 +34,13 @@ from sglang.srt.layers.quantization.fp8_kernel import (
 )
 from sglang.srt.managers.schedule_batch import global_server_args_dict
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
-from sglang.srt.single_batch_overlap import DownGemmOverlapArgs
-from sglang.srt.utils import ceil_div, dispose_tensor, get_bool_env_var, is_hip, is_npu, get_int_env_var
 from sglang.srt.offloader import get_offloader
+from sglang.srt.single_batch_overlap import DownGemmOverlapArgs
 from sglang.srt.utils import (
     ceil_div,
     dispose_tensor,
     get_bool_env_var,
+    get_int_env_var,
     is_cuda,
     is_hip,
     is_npu,
@@ -459,7 +458,11 @@ class DeepEPMoE(EPMoE):
             forward_batch=forward_batch,
         )
 
-    def moe_impl(self, dispatch_output: DispatchOutput, down_gemm_overlap_args: Optional[DownGemmOverlapArgs],):
+    def moe_impl(
+        self,
+        dispatch_output: DispatchOutput,
+        down_gemm_overlap_args: Optional[DownGemmOverlapArgs],
+    ):
         from sglang.srt.layers.moe.token_dispatcher import DispatchOutputChecker
 
         if _use_aiter:
