@@ -300,7 +300,9 @@ def is_dp_attention_enabled() -> bool:
 
 
 def is_allocation_symmetric() -> bool:
-    return not is_dp_attention_enabled() or is_dp_max_padding()
+    # NOTE HACK!
+    # return not is_dp_attention_enabled() or is_dp_max_padding()
+    return True
 
 
 def get_attention_tp_group() -> GroupCoordinator:
