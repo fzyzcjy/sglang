@@ -1399,8 +1399,30 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                     x_sf = torch.zeros(
                         0, x_col // 16, dtype=torch.uint8, device=x.device
                     )
+                def get_tensor_info(x):
+                    if not isinstance(x, torch.Tensor):
+                        return f"type={type(x)} value={x}"
+                    min = x.float().min() if x.numel() > 0 else None
+                    max = x.float().max() if x.numel() > 0 else None
+                    mean = x.float().mean() if x.numel() > 0 else None
+                    return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
+                print(
+                    "call all_gatherv INPUT "
+                    f"{get_tensor_info(topk_weights)=} "
+                    f"{get_tensor_info(topk_ids)=} "
+                    f"{get_tensor_info(x)=} "
+                    f"{get_tensor_info(x_sf)=} "
+                    f"{get_dp_global_num_tokens()=} "
+                )
                 topk_weights, topk_ids, x, x_sf = get_tp_group().all_gatherv(
                     [topk_weights, topk_ids, x, x_sf], sizes=get_dp_global_num_tokens()
+                )
+                print(
+                    "call all_gatherv OUTPUT "
+                    f"{get_tensor_info(topk_weights)=} "
+                    f"{get_tensor_info(topk_ids)=} "
+                    f"{get_tensor_info(x)=} "
+                    f"{get_tensor_info(x_sf)=} "
                 )
                 x_sf = nvfp4_block_scale_interleave(x_sf)
 
@@ -1434,6 +1456,12 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                     with torch.cuda.stream(alt_stream):
                         forward_shared_experts()
 
+                print(
+                    "call reduce_scatterv INPUT "
+                    f"{get_tensor_info(global_output)=} "
+                    f"{get_tensor_info(output)=} "
+                    f"{get_dp_global_num_tokens()=} "
+                )
                 get_tp_group().reduce_scatterv(
                     global_output, output=output, sizes=get_dp_global_num_tokens()
                 )
