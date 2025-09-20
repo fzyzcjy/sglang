@@ -1399,7 +1399,10 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
 
                 # Quantize before comm, swizzle after.
                 with use_symmetric_memory(
-                    get_tp_group(), disabled=not is_allocation_symmetric()
+                    get_tp_group(),
+                    # NOTE HACK force enable
+                    disabled=False,
+                    # disabled=not is_allocation_symmetric()
                 ):
                     if x.shape[0] > 0:
                         x, x_sf = fp4_quantize(
@@ -1419,7 +1422,10 @@ class ModelOptNvFp4FusedMoEMethod(FusedMoEMethodBase):
                 x_sf = nvfp4_block_scale_interleave(x_sf)
 
             with use_symmetric_memory(
-                get_tp_group(), disabled=not is_allocation_symmetric()
+                get_tp_group(),
+                # NOTE HACK force enable
+                disabled=False,
+                # disabled=not is_allocation_symmetric()
             ):
                 symm_output = torch.empty(
                     x.shape[0], output_col, dtype=output_dtype, device=x.device
