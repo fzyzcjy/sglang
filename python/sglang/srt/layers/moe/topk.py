@@ -814,6 +814,10 @@ def select_experts(
         )
     )
 
+    router_logits.uniform_(5, 10)
+    if correction_bias is not None:
+        correction_bias = torch.zeros_like(correction_bias)
+
     # DeepSeek V2/V3/R1 series models use grouped_top_k
     if use_grouped_topk:
         assert topk_group is not None
