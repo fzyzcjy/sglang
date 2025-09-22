@@ -530,26 +530,26 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
 
         bmm1_scale = q_scale * k_scale * layer.scaling
 
-        # def get_tensor_info(x):
-        #     if not isinstance(x, torch.Tensor):
-        #         return f"type={type(x)} value={x}"
-        #     min = x.float().min() if x.numel() > 0 else None
-        #     max = x.float().max() if x.numel() > 0 else None
-        #     mean = x.float().mean() if x.numel() > 0 else None
-        #     return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
-        # print(
-        #     f"[{torch.distributed.get_rank()}] hi call trtllm_batch_decode_with_kv_cache_mla "
-        #     f"{get_tensor_info(query)=} "
-        #     f"{get_tensor_info(kv_cache)=} "
-        #     f"{get_tensor_info(self.workspace_buffer)=} "
-        #     f"{self.qk_nope_head_dim=} "
-        #     f"{self.kv_lora_rank=} "
-        #     f"{self.qk_rope_head_dim=} "
-        #     f"{get_tensor_info(metadata.block_kv_indices)=} "
-        #     f"{get_tensor_info(forward_batch.seq_lens)=} {forward_batch.seq_lens=} "
-        #     f"{metadata.max_seq_len=} "
-        #     f"{bmm1_scale=} "
-        # )
+        def get_tensor_info(x):
+            if not isinstance(x, torch.Tensor):
+                return f"type={type(x)} value={x}"
+            min = x.float().min() if x.numel() > 0 else None
+            max = x.float().max() if x.numel() > 0 else None
+            mean = x.float().mean() if x.numel() > 0 else None
+            return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
+        print(
+            f"[{torch.distributed.get_rank()}] hi call trtllm_batch_decode_with_kv_cache_mla "
+            f"{get_tensor_info(query)=} "
+            f"{get_tensor_info(kv_cache)=} "
+            f"{get_tensor_info(self.workspace_buffer)=} "
+            f"{self.qk_nope_head_dim=} "
+            f"{self.kv_lora_rank=} "
+            f"{self.qk_rope_head_dim=} "
+            f"{get_tensor_info(metadata.block_kv_indices)=} "
+            f"{get_tensor_info(forward_batch.seq_lens)=} {forward_batch.seq_lens=} "
+            f"{metadata.max_seq_len=} "
+            f"{bmm1_scale=} "
+        )
 
         # Call TRT-LLM kernel
         raw_out = flashinfer.decode.trtllm_batch_decode_with_kv_cache_mla(
@@ -636,28 +636,28 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
                 + forward_batch.spec_info.draft_token_num
             )
 
-            # def get_tensor_info(x):
-            #     if not isinstance(x, torch.Tensor):
-            #         return f"type={type(x)} value={x}"
-            #     min = x.float().min() if x.numel() > 0 else None
-            #     max = x.float().max() if x.numel() > 0 else None
-            #     mean = x.float().mean() if x.numel() > 0 else None
-            #     return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
-            # print(
-            #     f"[{torch.distributed.get_rank()}] hi call trtllm_batch_decode_with_kv_cache_mla "
-            #     f"{get_tensor_info(q)=} "
-            #     f"{get_tensor_info(kv_cache)=} "
-            #     f"{get_tensor_info(self.workspace_buffer)=} "
-            #     f"{self.qk_nope_head_dim=} "
-            #     f"{self.kv_lora_rank=} "
-            #     f"{self.qk_rope_head_dim=} "
-            #     f"{get_tensor_info(metadata.block_kv_indices)=} "
-            #     f"{get_tensor_info(seq_lens)=} {seq_lens=} "
-            #     f"{metadata.max_seq_len=} "
-            #     f"{bmm1_scale=} "
-            #     f'{getattr(forward_batch, "decode_trtllm_mla_metadata", None) is not None=} '
-            #     f'{self.forward_decode_metadata is not None=} '
-            # )
+            def get_tensor_info(x):
+                if not isinstance(x, torch.Tensor):
+                    return f"type={type(x)} value={x}"
+                min = x.float().min() if x.numel() > 0 else None
+                max = x.float().max() if x.numel() > 0 else None
+                mean = x.float().mean() if x.numel() > 0 else None
+                return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
+            print(
+                f"[{torch.distributed.get_rank()}] hi call trtllm_batch_decode_with_kv_cache_mla "
+                f"{get_tensor_info(q)=} "
+                f"{get_tensor_info(kv_cache)=} "
+                f"{get_tensor_info(self.workspace_buffer)=} "
+                f"{self.qk_nope_head_dim=} "
+                f"{self.kv_lora_rank=} "
+                f"{self.qk_rope_head_dim=} "
+                f"{get_tensor_info(metadata.block_kv_indices)=} "
+                f"{get_tensor_info(seq_lens)=} {seq_lens=} "
+                f"{metadata.max_seq_len=} "
+                f"{bmm1_scale=} "
+                f'{getattr(forward_batch, "decode_trtllm_mla_metadata", None) is not None=} '
+                f'{self.forward_decode_metadata is not None=} '
+            )
 
             raw_out = flashinfer.decode.trtllm_batch_decode_with_kv_cache_mla(
                 query=q,
