@@ -629,9 +629,8 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
             )
             max_seq_len = metadata.max_seq_len + forward_batch.spec_info.draft_token_num
 
-            assert kv_cache.dtype == torch.float8_e4m3fn
             raw_out = flashinfer.decode.trtllm_batch_decode_with_kv_cache_mla(
-                query=q.to(torch.float8_e4m3fn),
+                query=q,
                 kv_cache=kv_cache,
                 workspace_buffer=self.workspace_buffer,
                 qk_nope_head_dim=self.qk_nope_head_dim,
