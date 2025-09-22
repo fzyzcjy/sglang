@@ -127,6 +127,8 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
             "disable_chunked_prefix_cache"
         ]
 
+        self.num_draft_tokens = model_runner.server_args.speculative_num_draft_tokens
+
     def _calc_padded_blocks(self, max_seq_len: int) -> int:
         """
         Calculate padded block count that satisfies both TRT-LLM and Triton constraints.
@@ -347,6 +349,10 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
                 max_seq = forward_batch.seq_lens.max().item()
 
             seq_lens = forward_batch.seq_lens
+
+            if forward_batch.forward_mode.is_target_verify():
+                max_seq += self.num_draft_tokens
+                seq_lens += self.num_draft_tokens
 
             max_seqlen_pad = self._calc_padded_blocks(max_seq)
             block_kv_indices = self._create_block_kv_indices(
