@@ -230,12 +230,14 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
                 spec_info,
             )
 
+        if forward_mode.is_target_verify():
+            seq_lens = seq_lens + self.num_draft_tokens
+
         # Custom fast-path for decode/idle.
         # Capture with full width so future longer sequences are safe during replay
         max_blocks_per_seq = self._calc_padded_blocks(self.max_context_len)
         block_kv_indices = self.decode_cuda_graph_kv_indices[:bs, :max_blocks_per_seq]
 
-        # TODO seq_lens should +num_draft_tokens?
         create_flashmla_kv_indices_triton[(bs,)](
             self.req_to_token,
             req_pool_indices,
@@ -285,10 +287,13 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
                 seq_lens_cpu,
             )
 
+        if forward_mode.is_target_verify():
+            seq_lens = seq_lens + self.num_draft_tokens
+            del seq_lens_sum  # not handle "num_draft_tokens" but we do not need it
+
         metadata = self.decode_cuda_graph_metadata[bs]
 
         # Update block indices for new sequences.
-        # TODO seq_lens should +num_draft_tokens?
         create_flashmla_kv_indices_triton[(bs,)](
             self.req_to_token,
             req_pool_indices[:bs],
