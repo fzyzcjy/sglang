@@ -351,8 +351,8 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
             seq_lens = forward_batch.seq_lens
 
             if forward_batch.forward_mode.is_target_verify():
-                max_seq += self.num_draft_tokens
-                seq_lens += self.num_draft_tokens
+                max_seq = max_seq + self.num_draft_tokens
+                seq_lens = seq_lens + self.num_draft_tokens
 
             max_seqlen_pad = self._calc_padded_blocks(max_seq)
             block_kv_indices = self._create_block_kv_indices(
