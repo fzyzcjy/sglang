@@ -530,7 +530,7 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
 
         bmm1_scale = q_scale * k_scale * layer.scaling
 
-        if 0:
+        if 1:
             def get_tensor_info(x):
                 if not isinstance(x, torch.Tensor):
                     return f"type={type(x)} value={x}"
@@ -546,7 +546,7 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
                 f"{self.qk_nope_head_dim=} "
                 f"{self.kv_lora_rank=} "
                 f"{self.qk_rope_head_dim=} "
-                f"{get_tensor_info(metadata.block_kv_indices)=} "
+                f"{get_tensor_info(metadata.block_kv_indices)=} {metadata.block_kv_indices=} "
                 f"{get_tensor_info(forward_batch.seq_lens)=} {forward_batch.seq_lens=} "
                 f"{metadata.max_seq_len=} "
                 f"{bmm1_scale=} "
@@ -643,7 +643,7 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
             )
             max_seq_len = metadata.max_seq_len + forward_batch.spec_info.draft_token_num
 
-            if 0:
+            if 1:
                 def get_tensor_info(x):
                     if not isinstance(x, torch.Tensor):
                         return f"type={type(x)} value={x}"
@@ -659,7 +659,7 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
                     f"{self.qk_nope_head_dim=} "
                     f"{self.kv_lora_rank=} "
                     f"{self.qk_rope_head_dim=} "
-                    f"{get_tensor_info(metadata.block_kv_indices)=} "
+                    f"{get_tensor_info(metadata.block_kv_indices)=} {metadata.block_kv_indices=} "
                     f"{get_tensor_info(seq_lens)=} {seq_lens=} "
                     f"{max_seq_len=} "
                     f"{bmm1_scale=} "
