@@ -538,7 +538,7 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
 
         bmm1_scale = q_scale * k_scale * layer.scaling
 
-        if 1:
+        if 0:
             def get_tensor_info(x):
                 if not isinstance(x, torch.Tensor):
                     return f"type={type(x)} value={x}"
@@ -651,7 +651,7 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
             )
             max_seq_len = metadata.max_seq_len + forward_batch.spec_info.draft_token_num
 
-            if 1:
+            if 0:
                 def get_tensor_info(x):
                     if not isinstance(x, torch.Tensor):
                         return f"type={type(x)} value={x}"
