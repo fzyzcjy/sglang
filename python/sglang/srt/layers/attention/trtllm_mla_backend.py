@@ -549,6 +549,11 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
             f"{get_tensor_info(forward_batch.seq_lens)=} {forward_batch.seq_lens=} "
             f"{metadata.max_seq_len=} "
             f"{bmm1_scale=} "
+            f'{forward_batch.input_ids=} '
+            f'{forward_batch.positions=} '
+            f'{forward_batch.seq_lens=} '
+            f'{forward_batch.batch_size=} '
+            f'{forward_batch.spec_info=} '
         )
 
         # Call TRT-LLM kernel
@@ -657,6 +662,11 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
                 f"{bmm1_scale=} "
                 f'{getattr(forward_batch, "decode_trtllm_mla_metadata", None) is not None=} '
                 f'{self.forward_decode_metadata is not None=} '
+                f'{forward_batch.input_ids=} '
+                f'{forward_batch.positions=} '
+                f'{forward_batch.seq_lens=} '
+                f'{forward_batch.batch_size=} '
+                f'{forward_batch.spec_info=} '
             )
 
             raw_out = flashinfer.decode.trtllm_batch_decode_with_kv_cache_mla(
