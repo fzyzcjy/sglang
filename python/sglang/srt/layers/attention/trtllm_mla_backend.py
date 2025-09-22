@@ -668,6 +668,8 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
                 qk_rope_head_dim=self.qk_rope_head_dim,
                 block_tables=metadata.block_kv_indices,
                 seq_lens=seq_lens,
+                # TODO 1. +num_draft_token?
+                # TODO 2. replay cuda graph change max_seq_len is wrong?
                 max_seq_len=metadata.max_seq_len,
                 bmm1_scale=bmm1_scale,
             )
