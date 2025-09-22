@@ -640,6 +640,7 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
                 forward_batch.seq_lens.to(torch.int32)
                 + forward_batch.spec_info.draft_token_num
             )
+            max_seq_len = metadata.max_seq_len + forward_batch.spec_info.draft_token_num
 
             def get_tensor_info(x):
                 if not isinstance(x, torch.Tensor):
@@ -658,7 +659,7 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
                 f"{self.qk_rope_head_dim=} "
                 f"{get_tensor_info(metadata.block_kv_indices)=} "
                 f"{get_tensor_info(seq_lens)=} {seq_lens=} "
-                f"{metadata.max_seq_len=} "
+                f"{max_seq_len=} "
                 f"{bmm1_scale=} "
                 f'{getattr(forward_batch, "decode_trtllm_mla_metadata", None) is not None=} '
                 f'{self.forward_decode_metadata is not None=} '
@@ -680,7 +681,7 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
                 seq_lens=seq_lens,
                 # TODO 1. +num_draft_token?
                 # TODO 2. replay cuda graph change max_seq_len is wrong?
-                max_seq_len=metadata.max_seq_len,
+                max_seq_len=max_seq_len,
                 bmm1_scale=bmm1_scale,
             )
 
