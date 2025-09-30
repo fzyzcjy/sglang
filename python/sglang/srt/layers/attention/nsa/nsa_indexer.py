@@ -10,6 +10,7 @@ from torch import nn
 
 from sglang.srt.custom_op import CustomOp
 from sglang.srt.debug_utils.dumper import dumper
+from sglang.srt.layers.attention.nsa.tilelang_kernel import fp8_index
 from sglang.srt.utils import add_prefix, is_npu
 
 if not is_npu():
@@ -31,6 +32,14 @@ if TYPE_CHECKING:
     from sglang.srt.mem_cache.memory_pool import NSATokenToKVPool
 
 DUAL_STREAM_TOKEN_THRESHOLD = 1024 if is_cuda() else 0
+
+PRINT_LIST = [0, 10, 60]
+
+
+def _print_scores(layer_id: int, scores: torch.Tensor):
+    if layer_id in PRINT_LIST:
+        if scores.shape[-1] > 20:
+            print(scores[-1].topk(20))
 
 
 class BaseIndexerMetadata(ABC):
@@ -71,6 +80,7 @@ class BaseIndexerMetadata(ABC):
                 Don't assume it is the topk indices of the input logits.
         """
 
+
 def get_mask(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -82,10 +92,44 @@ def get_mask(
     mask = seqlen_q[:, None] >= seqlen_k[None, :]
     return mask
 
+
+def fp8_index_tilelang_quant(
+    q: torch.Tensor,
+    q_s: torch.Tensor,
+    k: torch.Tensor,
+    k_s: torch.Tensor,
+    weights: Optional[torch.Tensor],
+) -> torch.Tensor:
+    # shape example:
+    # q.shape=torch.Size([7, 64, 128]), k.shape=torch.Size([7, 128]), weights.shape=torch.Size([7, 64])
+    assert q.dim() == 3 and k.dim() == 2
+    mask = get_mask(q, k)
+    # unsqueeze batch dim, bs = 1
+    q = q.unsqueeze(0)
+    k = k.unsqueeze(0)
+    if weights is not None:
+        q_s = weights.unsqueeze(-1) * q_s
+    q_s = q_s.unsqueeze(0)
+    k_s = k_s.unsqueeze(0)
+    scores = fp8_index(q, q_s, k, k_s).squeeze(0)
+    return scores.masked_fill(~mask, float("-inf"))
+
+
+def fp8_index_tilelang(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    weights: Optional[torch.Tensor],
+) -> torch.Tensor:
+    assert q.dtype == torch.bfloat16 and k.dtype == torch.bfloat16
+    q, q_s = act_quant(q)
+    k, k_s = act_quant(k)
+    return fp8_index_tilelang_quant(q, q_s, k, k_s, weights)
+
+
 def fp16_index_torch(
     q: torch.Tensor,
     k: torch.Tensor,
-    weights: torch.Tensor,
+    weights: Optional[torch.Tensor],
 ) -> torch.Tensor:
     # shape example:
     # q.shape=torch.Size([7, 64, 128]), k.shape=torch.Size([7, 128]), weights.shape=torch.Size([7, 64])
@@ -93,10 +137,13 @@ def fp16_index_torch(
     assert q.dim() == 3 and k.dim() == 2
     q = q.float()
     k = k.float()
-    score = torch.einsum('mhd,nd->hmn', q, k)
-    weights = weights.float()
-    logits = (score.relu() * weights.unsqueeze(-1).transpose(0, 1)).sum(dim=0)
-    return logits.masked_fill(~get_mask(q, k), float('-inf'))
+    score = torch.einsum("mhd,nd->hmn", q, k).relu()
+    if weights is not None:
+        weights = weights.float()
+        logits = (score * weights.unsqueeze(-1).transpose(0, 1)).sum(dim=0)
+    else:
+        logits = score.sum(dim=0)
+    return logits.masked_fill(~get_mask(q, k), float("-inf"))
 
 
 def rotate_activation(x: torch.Tensor) -> torch.Tensor:
@@ -434,8 +481,9 @@ class Indexer(CustomOp):
             weights,
             ks,
             ke,
-            clean_logits=False,
+            clean_logits=True,
         )
+        _print_scores(self.layer_id, logits)
 
         assert logits.shape[0] == len(seq_lens_expanded)
         return metadata.topk_transform(logits, self.index_topk)
@@ -444,13 +492,18 @@ class Indexer(CustomOp):
         self,
         query: torch.Tensor,
         key: torch.Tensor,
-        weights: torch.Tensor,
-        forward_batch: ForwardBatch,
+        weights_fp16: torch.Tensor,
         metadata: BaseIndexerMetadata,
+        q_fp8: torch.Tensor,
+        q_s: torch.Tensor,
+        k_fp8: torch.Tensor,
+        k_s: torch.Tensor,
+        weights: torch.Tensor,
+        scalar_scale: float,
     ) -> torch.Tensor:
-        if TYPE_CHECKING:
-            assert isinstance(forward_batch.token_to_kv_pool, NSATokenToKVPool)
-        logits = fp16_index_torch(query, key, weights).squeeze(0)
+        logits = fp8_index_tilelang_quant(q_fp8, weights, k_fp8, k_s, None).squeeze(0)
+        # logits = fp16_index_torch(query, key, weights_fp16 * scalar_scale).squeeze(0)
+        _print_scores(self.layer_id, logits)
         return metadata.topk_transform(logits, self.index_topk)
 
     def _forward(
@@ -525,16 +578,21 @@ class Indexer(CustomOp):
             topk_result = self._get_topk_paged(
                 forward_batch, layer_id, q_fp8, weights, metadata
             )
-        elif forward_batch.forward_mode.is_extend():
-            assert forward_batch.batch_size == 1
-            weights, _ = self.weights_proj(x)
-            topk_result = self._get_topk_raw(
-                query=query,
-                key=key,
-                weights=weights,
-                forward_batch=forward_batch,
-                metadata=metadata,
-            )
+        # elif forward_batch.forward_mode.is_extend():
+        #     assert forward_batch.batch_size == 1
+        #     weights_fp16, _ = self.weights_proj(x)
+        #     topk_result = self._get_topk_raw(
+        #         query=query,
+        #         key=key,
+        #         weights_fp16=weights_fp16,
+        #         weights=weights,
+        #         metadata=metadata,
+        #         q_fp8=q_fp8,
+        #         q_s=q_scale,
+        #         k_fp8=k_fp8,
+        #         k_s=k_scale,
+        #         scalar_scale=(self.n_heads**-0.5) * self.softmax_scale,
+        #     )
         else:
             topk_result = self._get_topk_ragged(
                 forward_batch, layer_id, q_fp8, weights, metadata
