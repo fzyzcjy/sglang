@@ -785,6 +785,7 @@ def _compute_flashmla_metadata(
         cache_seqlens=cache_seqlens,
         # TODO doc says `num_q_tokens_per_q_seq * num_heads_q // num_heads_k`
         #      but the name looks like need seq_len_q?
+        # UT: t.s_q * t.h_q // t.h_kv
         num_q_tokens_per_head_k=seq_len_q * num_heads_q // num_heads_k,
         num_heads_k=num_heads_k,
         num_heads_q=num_heads_q,
