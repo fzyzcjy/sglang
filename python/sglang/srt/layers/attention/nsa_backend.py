@@ -781,6 +781,10 @@ def _compute_flashmla_metadata(
 ):
     from flash_mla import get_mla_metadata
 
+    assert num_heads_q == 128
+    assert num_heads_k == 1
+    assert nsa_index_topk == 2048
+
     flashmla_metadata, num_splits = get_mla_metadata(
         cache_seqlens=cache_seqlens,
         # TODO doc says `num_q_tokens_per_q_seq * num_heads_q // num_heads_k`
