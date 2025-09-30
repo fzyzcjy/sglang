@@ -820,4 +820,9 @@ def _compute_indices_in_kvcache(block_table, topk_indices, page_size):
 
     # return: (batch_size, seqlen_q_ori, topk)
     indices_in_kvcache = indices_in_kvcache[:, None, :]
+
+    print("HACK: pad to 2048")
+    indices_in_kvcache = torch.nn.functional.pad(indices_in_kvcache, (0, 2048 - indices_in_kvcache.shape[-1]), "constant", -1)
+    assert indices_in_kvcache.shape[-1] == 2048
+
     return indices_in_kvcache
