@@ -772,3 +772,97 @@ def tilelang_sparse_fwd(
         num_heads, d_v, tail_dim, topk, sm_scale=sm_scale
     )
     return kernel(q.unsqueeze(0), kv.unsqueeze(0), indices.unsqueeze(0))  # type: ignore
+
+
+@tilelang.jit(
+    pass_configs={
+        tilelang.PassConfigKey.TL_ENABLE_FAST_MATH: True,
+    },)
+def mqa_attn_return_logits(
+    heads: int = 64,
+    index_dim: int = 128,
+    block_N=256,
+    num_stages=3,
+    threads=512,
+    block_Q=None,
+):
+    if block_Q is None:
+        block_Q = 128 // heads
+    dtype = "float8_e4m3"
+    accum_dtype = "float"
+    index_dtype = "int32"
+
+    seq_len = T.symbolic("seq_len")
+    seq_len_kv = T.symbolic("seq_len_kv")
+
+    index_q_shape = [seq_len * heads, index_dim]
+    index_k_shape = [seq_len_kv, index_dim]
+    index_k_scale_shape = [seq_len_kv]
+    logits_shape = [seq_len, seq_len_kv]
+
+    @T.prim_func
+    def mqa_attn_return_logits_kernel(
+            IndexQ: T.Tensor(index_q_shape, dtype),  # type: ignore
+            IndexK: T.Tensor(index_k_shape, dtype),  # type: ignore
+            IndexKScale: T.Tensor(index_k_scale_shape, accum_dtype),  # type: ignore
+            Logits: T.Tensor(logits_shape, accum_dtype),  # type: ignore
+            Weights: T.Tensor([seq_len, heads], accum_dtype),  # type: ignore
+            CuSeqLenKS: T.Tensor([seq_len], index_dtype),  # type: ignore
+            CuSeqLenKE: T.Tensor([seq_len], index_dtype),  # type: ignore
+    ):
+        with T.Kernel(T.ceildiv(seq_len, block_Q), threads=threads) as bx:
+
+            index_q_shared = T.alloc_shared([block_Q * heads, index_dim], dtype)
+            index_k_shared = T.alloc_shared([block_N, index_dim], dtype)
+            index_k_scale_fragment = T.alloc_fragment([block_N], accum_dtype)
+            s = T.alloc_fragment([block_N, block_Q * heads], accum_dtype)
+            s_reshaped = T.alloc_fragment([block_N, block_Q, heads], accum_dtype)
+            logits = T.alloc_fragment([block_N, block_Q], accum_dtype)
+            weights = T.alloc_fragment([block_Q, heads], accum_dtype)
+
+            seq_len_i = bx * block_Q
+
+            cu_k_s_min = T.alloc_local([1], index_dtype)
+            cu_k_e_max = T.alloc_local([1], index_dtype)
+
+            T.no_set_max_nreg()
+
+            cu_k_s_min[0] = 2147483647
+            cu_k_e_max[0] = -2147483648
+
+            for bq_i in T.serial(block_Q):
+                cu_k_s_min[0] = T.min(cu_k_s_min[0], T.min(CuSeqLenKS[seq_len_i + bq_i],
+                                                           seq_len_kv))
+            for bq_i in T.serial(block_Q):
+                cu_k_e_max[0] = T.max(cu_k_e_max[0], T.min(CuSeqLenKE[seq_len_i + bq_i],
+                                                           seq_len_kv))
+
+            T.copy(IndexQ[seq_len_i * heads, 0], index_q_shared)
+            T.copy(Weights[seq_len_i, 0], weights)
+
+            for nbn_i in T.Pipelined(
+                    T.ceildiv(cu_k_e_max[0] - cu_k_s_min[0], block_N), num_stages=num_stages):
+                T.copy(IndexK[cu_k_s_min[0] + nbn_i * block_N, 0], index_k_shared)
+                T.copy(IndexKScale[cu_k_s_min[0] + nbn_i * block_N], index_k_scale_fragment)
+
+                T.gemm(
+                    index_k_shared,
+                    index_q_shared,
+                    s,
+                    transpose_B=True,
+                    clear_accum=True,
+                    policy=T.GemmWarpPolicy.FullCol,
+                )
+
+                for bn_i, bq_i, h_i in T.Parallel(block_N, block_Q, heads):
+                    s_reshaped[bn_i, bq_i,
+                               h_i] = (T.max(s[bn_i, bq_i * heads + h_i], 0) *
+                                       weights[bq_i, h_i]) * index_k_scale_fragment[bn_i]
+
+                T.reduce_sum(s_reshaped, logits, dim=-1, clear=True)
+
+                for bq_i, bn_i in T.Parallel(block_Q, block_N):
+                    Logits[seq_len_i + bq_i, cu_k_s_min[0] + nbn_i * block_N + bn_i] = (
+                        logits[bn_i, bq_i])
+
+    return mqa_attn_return_logits_kernel

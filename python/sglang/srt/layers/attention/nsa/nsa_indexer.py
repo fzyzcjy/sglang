@@ -71,6 +71,33 @@ class BaseIndexerMetadata(ABC):
                 Don't assume it is the topk indices of the input logits.
         """
 
+def get_mask(
+    q: torch.Tensor,
+    k: torch.Tensor,
+) -> torch.Tensor:
+    N = q.shape[0]
+    M = k.shape[0]
+    seqlen_q = torch.arange(0, N, device="cuda") + k.shape[0] - q.shape[0]
+    seqlen_k = torch.arange(0, M, device="cuda")
+    mask = seqlen_q[:, None] >= seqlen_k[None, :]
+    return mask
+
+def fp16_index_torch(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    weights: torch.Tensor,
+) -> torch.Tensor:
+    # shape example:
+    # q.shape=torch.Size([7, 64, 128]), k.shape=torch.Size([7, 128]), weights.shape=torch.Size([7, 64])
+    assert q.dtype == torch.bfloat16 and k.dtype == torch.bfloat16
+    assert q.dim() == 3 and k.dim() == 2
+    q = q.float()
+    k = k.float()
+    score = torch.einsum('mhd,nd->hmn', q, k)
+    weights = weights.float()
+    logits = (score.relu() * weights.unsqueeze(-1).transpose(0, 1)).sum(dim=0)
+    return logits.masked_fill(~get_mask(q, k), float('-inf'))
+
 
 def rotate_activation(x: torch.Tensor) -> torch.Tensor:
     assert x.dtype == torch.bfloat16
@@ -411,9 +438,20 @@ class Indexer(CustomOp):
         )
 
         assert logits.shape[0] == len(seq_lens_expanded)
-        topk_result = metadata.topk_transform(logits, self.index_topk)
+        return metadata.topk_transform(logits, self.index_topk)
 
-        return topk_result
+    def _get_topk_raw(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        weights: torch.Tensor,
+        forward_batch: ForwardBatch,
+        metadata: BaseIndexerMetadata,
+    ) -> torch.Tensor:
+        if TYPE_CHECKING:
+            assert isinstance(forward_batch.token_to_kv_pool, NSATokenToKVPool)
+        logits = fp16_index_torch(query, key, weights).squeeze(0)
+        return metadata.topk_transform(logits, self.index_topk)
 
     def _forward(
         self,
@@ -446,11 +484,6 @@ class Indexer(CustomOp):
             return self._forward_fake(x, q_lora, positions, forward_batch, layer_id)
 
         query, key = self._get_q_k_bf16(q_lora, x, positions, enable_dual_stream)
-
-        q_fp8 = query.to(torch.float32)
-        k_fp8 = key.to(torch.float32)
-        q_scale = torch.ones((query.shape[0], 1), dtype=torch.float32, device="cuda")
-        k_scale = torch.ones((key.shape[0], 1), dtype=torch.float32, device="cuda")
 
         if enable_dual_stream:
             current_stream = torch.cuda.current_stream()
@@ -491,6 +524,16 @@ class Indexer(CustomOp):
         if forward_batch.forward_mode.is_decode_or_idle():
             topk_result = self._get_topk_paged(
                 forward_batch, layer_id, q_fp8, weights, metadata
+            )
+        elif forward_batch.forward_mode.is_extend():
+            assert forward_batch.batch_size == 1
+            weights, _ = self.weights_proj(x)
+            topk_result = self._get_topk_raw(
+                query=query,
+                key=key,
+                weights=weights,
+                forward_batch=forward_batch,
+                metadata=metadata,
             )
         else:
             topk_result = self._get_topk_ragged(
