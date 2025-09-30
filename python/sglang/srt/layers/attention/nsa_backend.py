@@ -737,7 +737,7 @@ class NativeSparseAttnBackend(AttentionBackend):
             return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
         def get_dict_info(d):
             return ", ".join(f"[{k}] {get_tensor_info(v)}" for k, v in d.items())
-        print(f"forward_flashmla_decode {get_dict_info(d)} {d['indices'].tolist()=} {d['block_table'].tolist()=}")
+        print(f"forward_flashmla_decode {get_dict_info(d)} {d['indices'].tolist()=} {d['cache_seqlens'].tolist()=} {d['block_table'].tolist()=}")
 
         o, _ = flash_mla_with_kvcache(**d)
 
