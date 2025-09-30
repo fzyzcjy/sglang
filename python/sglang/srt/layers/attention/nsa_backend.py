@@ -709,7 +709,7 @@ class NativeSparseAttnBackend(AttentionBackend):
             # inefficiently quantize the whole cache
             kv_cache = quantize_k_cache(kv_cache)
 
-        o, _ = flash_mla_with_kvcache(
+        d = dict(
             q=q_all,
             k_cache=kv_cache,
             cache_seqlens=cache_seqlens,
@@ -727,6 +727,19 @@ class NativeSparseAttnBackend(AttentionBackend):
             block_table=block_table,
             is_fp8_kvcache=NSA_FLASHMLA_BACKEND_DECODE_COMPUTE_FP8,
         )
+
+        def get_tensor_info(x):
+            if not isinstance(x, torch.Tensor):
+                return f"type={type(x)} value={x}"
+            min = x.float().min() if x.numel() > 0 else None
+            max = x.float().max() if x.numel() > 0 else None
+            mean = x.float().mean() if x.numel() > 0 else None
+            return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} min={min} max={max} mean={mean}"
+        def get_dict_info(d):
+            return ", ".join(f"[{k}] {get_tensor_info(v)}" for k, v in d.items())
+        print(f"forward_flashmla_decode {get_dict_info(d)} {d['indices'].tolist()=} {d['block_table'].tolist()=}")
+
+        o, _ = flash_mla_with_kvcache(**d)
 
         # TODO shape correct?
         return o
