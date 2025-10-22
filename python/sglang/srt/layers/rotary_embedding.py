@@ -21,6 +21,7 @@ from sglang.srt.utils import (
     is_npu,
     is_xpu,
 )
+from sglang.srt.server_args import get_global_server_args
 
 _is_cuda = is_cuda()
 _is_hip = is_hip()
@@ -123,6 +124,9 @@ class RotaryEmbedding(CustomOp):
 
         self.cos_sin_cache: torch.Tensor
         self.register_buffer("cos_sin_cache", cache, persistent=False)
+
+        if get_global_server_args().enable_deterministic_inference:
+            self._forward_method = self.forward_native
 
     def _compute_inv_freq(self, base: Union[int, float]) -> torch.Tensor:
         """Compute the inverse frequency."""

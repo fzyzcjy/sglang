@@ -37,6 +37,7 @@ from sglang.srt.utils import (
     is_npu,
     wait_cmo_stream,
 )
+from sglang.srt.server_args import get_global_server_args
 
 Qwen3Config = None
 
@@ -90,8 +91,8 @@ class Qwen3Attention(nn.Module):
         self.max_position_embeddings = max_position_embeddings
         self.tp_rank = get_tensor_model_parallel_rank()
 
-        self.q_norm = RMSNorm(self.head_dim, eps=rms_norm_eps, fp32_output=True)
-        self.k_norm = RMSNorm(self.head_dim, eps=rms_norm_eps, fp32_output=True)
+        self.q_norm = RMSNorm(self.head_dim, eps=rms_norm_eps, fp32_output=get_global_server_args().enable_deterministic_inference)
+        self.k_norm = RMSNorm(self.head_dim, eps=rms_norm_eps, fp32_output=get_global_server_args().enable_deterministic_inference)
 
         self.qkv_proj = QKVParallelLinear(
             hidden_size,
