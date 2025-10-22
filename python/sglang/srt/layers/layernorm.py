@@ -168,7 +168,7 @@ class RMSNorm(CustomOp):
         x: torch.Tensor,
         residual: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        dumper.dump("rmsnorm__input", x)
+        dumper.dump("rmsnorm__input_hidden", x)
 
         if not x.is_contiguous():
             x = x.contiguous()
@@ -199,7 +199,7 @@ class RMSNorm(CustomOp):
         variance = x_var.pow(2).mean(dim=-1, keepdim=True)
         x = x * torch.rsqrt(variance + self.variance_epsilon)
 
-        dumper.dump("rmsnorm__after_mul_rsqrt", x)
+        dumper.dump("rmsnorm__after_mul_rsqrt_hidden", x)
         dumper.dump("rmsnorm__weight", self.weight)
 
         # TODO should improve flag
@@ -208,7 +208,7 @@ class RMSNorm(CustomOp):
         else:
             x = (x * self.weight).to(orig_dtype)
 
-        dumper.dump("rmsnorm__ans", x)
+        dumper.dump("rmsnorm__ans_hidden", x)
         if residual is None:
             return x
         else:

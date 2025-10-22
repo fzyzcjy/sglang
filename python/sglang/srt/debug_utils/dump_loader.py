@@ -82,7 +82,9 @@ def find_row(df, conditions: Dict[str, Any]):
             ],
         )
     )
-    assert len(df_sub) <= 1, f"{df_sub=}"
+    if len(df_sub) > 1:
+        print(f"find_row find ambiguous results: {df_sub=}")
+        return None
     return df_sub.to_dicts()[0] if len(df_sub) > 0 else None
 
 

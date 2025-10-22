@@ -124,6 +124,11 @@ def _get_tensor_dim_descs():
             baseline_desc="1 num_heads num_tokens head_dim",
             target_desc="num_tokens (num_heads head_dim)",
         ),
+        dict(
+            pattern="rmsnorm.*hidden",
+            baseline_desc="1 num_tokens num_heads head_dim",
+            target_desc="(num_tokens num_heads) head_dim",
+        ),
     ]
 
 
@@ -145,7 +150,7 @@ def check_tensor_pair(
     print(
         f"Raw "
         f"[shape] {x_baseline.shape} vs {x_target.shape}\t"
-        f"[dtype] {x_baseline.dtype} vs {x_target.dtype}"
+        f"[{'' if x_baseline.dtype == x_target.dtype else '🟠'}dtype] {x_baseline.dtype} vs {x_target.dtype}"
     )
 
     if tensor_dim_desc is not None:

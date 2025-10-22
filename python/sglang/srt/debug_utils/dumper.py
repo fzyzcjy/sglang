@@ -57,6 +57,7 @@ class _Dumper:
         """
         Example:
 
+        dumper.override_enable(self.layer_id <= 3)
         dumper.set_ctx(layer_id=self.layer_id)
         ...
         dumper.set_ctx(layer_id=None)
