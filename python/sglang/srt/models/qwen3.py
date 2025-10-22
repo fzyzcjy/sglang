@@ -91,8 +91,12 @@ class Qwen3Attention(nn.Module):
         self.max_position_embeddings = max_position_embeddings
         self.tp_rank = get_tensor_model_parallel_rank()
 
-        self.q_norm = RMSNorm(self.head_dim, eps=rms_norm_eps, fp32_output=get_global_server_args().enable_deterministic_inference)
-        self.k_norm = RMSNorm(self.head_dim, eps=rms_norm_eps, fp32_output=get_global_server_args().enable_deterministic_inference)
+        norm_kwargs = dict(
+            weight_dtype=torch.float32,
+            fp32_output=True,
+        ) if get_global_server_args().enable_deterministic_inference else {}
+        self.q_norm = RMSNorm(self.head_dim, eps=rms_norm_eps, **norm_kwargs)
+        self.k_norm = RMSNorm(self.head_dim, eps=rms_norm_eps, **norm_kwargs)
 
         self.qkv_proj = QKVParallelLinear(
             hidden_size,

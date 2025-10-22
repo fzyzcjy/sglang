@@ -75,10 +75,11 @@ class RMSNorm(CustomOp):
         eps: float = 1e-6,
         var_hidden_size: Optional[int] = None,
         fp32_output: bool = False,
+        weight_dtype: Optional = None,
     ) -> None:
         super().__init__()
         self.fp32_output = fp32_output
-        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.weight = nn.Parameter(torch.ones(hidden_size, dtype=weight_dtype))
         self.variance_epsilon = eps
         self.hidden_size = hidden_size
         self.variance_size_override = (
@@ -208,7 +209,7 @@ class RMSNorm(CustomOp):
 
         # TODO should improve flag
         if self.fp32_output:
-            x = x * self.weight.to(torch.float32)
+            x = x * self.weight
         else:
             x = (x * self.weight).to(orig_dtype)
 
