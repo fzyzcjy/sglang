@@ -203,7 +203,11 @@ def check_tensor_pair(
     needs_print = diff_info["max_abs_diff"] > 1e-3
 
     if (x_baseline_original_dtype != x_target_original_dtype) and (
-        (downcast_dtype := _compute_smaller_dtype(x_baseline_original_dtype, x_target_original_dtype))
+        (
+            downcast_dtype := _compute_smaller_dtype(
+                x_baseline_original_dtype, x_target_original_dtype
+            )
+        )
         is not None
     ):
         _compute_and_print_diff(

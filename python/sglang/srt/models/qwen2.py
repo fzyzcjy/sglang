@@ -21,7 +21,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 import torch
 from torch import nn
 
-from sglang.srt.debug_utils.dumper import get_tensor_info
+from sglang.srt.debug_utils.dumper import dumper, get_tensor_info
 from sglang.srt.distributed import (
     get_pp_group,
     get_tensor_model_parallel_rank,
@@ -51,7 +51,6 @@ from sglang.srt.model_loader.weight_utils import (
     kv_cache_scales_loader,
 )
 from sglang.srt.utils import add_prefix, make_layers
-from sglang.srt.debug_utils.dumper import dumper
 
 Qwen2Config = None
 
@@ -96,8 +95,8 @@ class Qwen2MLP(nn.Module):
         print(f"{get_tensor_info(self.down_proj.weight)=}")
         dumper.dump("mlp__input_hidden_states", x)
         gate_up, _ = self.gate_up_proj(x)
-        dumper.dump("mlp__gate_hidden_states", gate_up[:, :self.intermediate_size])
-        dumper.dump("mlp__up_hidden_states", gate_up[:, self.intermediate_size:])
+        dumper.dump("mlp__gate_hidden_states", gate_up[:, : self.intermediate_size])
+        dumper.dump("mlp__up_hidden_states", gate_up[:, self.intermediate_size :])
         x = self.act_fn(gate_up)
         dumper.dump("mlp__after_act_hidden_states", x)
         x, _ = self.down_proj(x)

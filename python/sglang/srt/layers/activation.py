@@ -29,6 +29,7 @@ from sglang.srt.distributed import (
     get_tensor_model_parallel_world_size,
 )
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
+from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import (
     cpu_has_amx_support,
     is_cpu,
@@ -39,7 +40,6 @@ from sglang.srt.utils import (
     set_weight_attrs,
 )
 from sglang.utils import resolve_obj_by_qualname
-from sglang.srt.server_args import get_global_server_args
 
 _is_cuda = is_cuda()
 _is_npu = is_npu()

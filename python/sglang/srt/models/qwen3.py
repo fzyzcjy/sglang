@@ -277,8 +277,10 @@ class Qwen3DecoderLayer(nn.Module):
                 hidden_states=hidden_states,
                 forward_batch=forward_batch,
             )
+        dumper.dump("layer_after_attn_hidden_states", hidden_states)
+        dumper.dump("layer_after_attn_residual", residual)
         dumper.dump(
-            "layer_after_attn_hidden_states",
+            "layer_after_attn_hidden_states_and_residual",
             (hidden_states + residual) if residual is not None else hidden_states,
         )
 
@@ -300,6 +302,10 @@ class Qwen3DecoderLayer(nn.Module):
         hidden_states, residual = self.layer_communicator.postprocess_layer(
             hidden_states, residual, forward_batch
         )
+        dumper.dump("layer_after_mlp_hidden_states", hidden_states)
+        dumper.dump("layer_after_mlp_residual", residual)
+        dumper.dump("layer_end__hidden_states_and_residual", hidden_states + residual)
+
         dumper.override_enable(None)
         dumper.set_ctx(layer_id=None)
         return hidden_states, residual
