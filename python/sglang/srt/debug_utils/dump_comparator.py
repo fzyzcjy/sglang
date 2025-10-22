@@ -173,6 +173,9 @@ def check_tensor_pair(
         f"[dtype] {x_baseline.dtype} vs {x_target.dtype}"
     )
 
+    x_baseline_original_dtype = x_baseline.dtype
+    x_target_original_dtype = x_target.dtype
+
     x_target = x_target.float()
     x_baseline = x_baseline.float()
 
@@ -196,16 +199,34 @@ def check_tensor_pair(
         print(f"⚠️ Shape mismatch")
         return
 
+    diff_info = _compute_and_print_diff(x_baseline=x_baseline, x_target=x_target)
+    needs_print = diff_info["max_abs_diff"] > 1e-3
+
+    if (x_baseline_original_dtype != x_target_original_dtype) and (
+        (downcast_dtype := _compute_smaller_dtype(x_baseline_original_dtype, x_target_original_dtype))
+        is not None
+    ):
+        _compute_and_print_diff(
+            x_baseline=x_baseline.to(downcast_dtype),
+            x_target=x_target.to(downcast_dtype),
+            prefix_text=f"When downcast to {downcast_dtype}: ",
+        )
+
+    if needs_print:
+        print(f"x_baseline(sample)={get_truncated_value(x_baseline)}")
+        print(f"x_target(sample)={get_truncated_value(x_target)}")
+
+
+def _compute_and_print_diff(x_baseline, x_target, prefix_text=""):
     raw_abs_diff = (x_target - x_baseline).abs()
 
     max_abs_diff = raw_abs_diff.max().item()
     mean_abs_diff = raw_abs_diff.mean().item()
     rel_diff = _calc_rel_diff(x_target, x_baseline)
 
-    needs_print = max_abs_diff > 1e-3
-
     print(
-        "\t".join(
+        prefix_text
+        + "\t".join(
             f"{'❌' if value > 1e-3 else '✅'} {name}={value}"
             for name, value in [
                 ("rel_diff", rel_diff),
@@ -215,9 +236,15 @@ def check_tensor_pair(
         )
     )
 
-    if needs_print:
-        print(f"x_baseline(sample)={get_truncated_value(x_baseline)}")
-        print(f"x_target(sample)={get_truncated_value(x_target)}")
+    return dict(max_abs_diff=max_abs_diff)
+
+
+def _compute_smaller_dtype(dtype_a, dtype_b):
+    info_dict = {
+        (torch.float32, torch.bfloat16): torch.bfloat16,
+        # ... add more ...
+    }
+    return info_dict.get((dtype_a, dtype_b)) or info_dict.get((dtype_b, dtype_a))
 
 
 def _try_unify_shape(x: torch.Tensor, target_shape):
