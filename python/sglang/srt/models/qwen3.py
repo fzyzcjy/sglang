@@ -152,9 +152,12 @@ class Qwen3Attention(nn.Module):
             current_stream.wait_stream(self.alt_stream)
         else:
             q_by_head = q.reshape(-1, self.head_dim)
+            dumper.set_ctx(norm_mode="q")
             q_by_head = self.q_norm(q_by_head)
             k_by_head = k.reshape(-1, self.head_dim)
+            dumper.set_ctx(norm_mode="k")
             k_by_head = self.k_norm(k_by_head)
+            dumper.set_ctx(norm_mode=None)
         q = q_by_head.view(q.shape)
         k = k_by_head.view(k.shape)
         return q, k
@@ -167,24 +170,24 @@ class Qwen3Attention(nn.Module):
     ) -> torch.Tensor:
         qkv, _ = self.qkv_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-        dumper.dump("attn__q_before_norm", q, layer_id=self.layer_id)
-        dumper.dump("attn__k_before_norm", k, layer_id=self.layer_id)
+        dumper.dump("attn__q_before_norm", q)
+        dumper.dump("attn__k_before_norm", k)
         q, k = self._apply_qk_norm(q, k)
-        dumper.dump("attn__q_before_rope", q, layer_id=self.layer_id)
-        dumper.dump("attn__k_before_rope", k, layer_id=self.layer_id)
+        dumper.dump("attn__q_before_rope", q)
+        dumper.dump("attn__k_before_rope", k)
         q, k = self.rotary_emb(positions, q, k)
 
         if get_global_server_args().enable_deterministic_inference:
             q = q.to(torch.bfloat16)
             k = k.to(torch.bfloat16)
 
-        dumper.dump("attn__q", q, layer_id=self.layer_id)
-        dumper.dump("attn__k", k, layer_id=self.layer_id)
-        dumper.dump("attn__v", v, layer_id=self.layer_id)
+        dumper.dump("attn__q", q)
+        dumper.dump("attn__k", k)
+        dumper.dump("attn__v", v)
 
         attn_output = self.attn(q, k, v, forward_batch)
 
-        dumper.dump("attn__attn_output", attn_output, layer_id=self.layer_id)
+        dumper.dump("attn__attn_output", attn_output)
 
         output, _ = self.o_proj(attn_output)
         return output
@@ -252,19 +255,18 @@ class Qwen3DecoderLayer(nn.Module):
         forward_batch: ForwardBatch,
         residual: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        dumper.override_enable(self.layer_id <= 3)
+        dumper.set_ctx(layer_id=self.layer_id)
         dumper.dump(
             "layer_start__hidden_states_and_residual",
             (hidden_states + residual) if residual is not None else hidden_states,
-            layer_id=self.layer_id,
         )
 
         # Self Attention
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states, residual, forward_batch
         )
-        dumper.dump(
-            "layer_after_input_ln_hidden_states", hidden_states, layer_id=self.layer_id
-        )
+        dumper.dump("layer_after_input_ln_hidden_states", hidden_states)
         if hidden_states.shape[0] != 0:
             hidden_states = self.self_attn(
                 positions=positions,
@@ -289,6 +291,8 @@ class Qwen3DecoderLayer(nn.Module):
         hidden_states, residual = self.layer_communicator.postprocess_layer(
             hidden_states, residual, forward_batch
         )
+        dumper.override_enable(None)
+        dumper.set_ctx(layer_id=None)
         return hidden_states, residual
 
 

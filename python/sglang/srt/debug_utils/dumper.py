@@ -1,7 +1,7 @@
 import os
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
 
 import torch
 import torch.distributed as dist
@@ -34,6 +34,8 @@ class _Dumper:
         self._partial_name: Optional[str] = None
         self._dump_index = 0
         self._forward_pass_id = 0
+        self._global_ctx = {}
+        self._override_enable = None
 
     def on_forward_pass_start(self):
         """This should be called on all ranks."""
@@ -44,14 +46,28 @@ class _Dumper:
         # Users may want to `dump` only on some ranks, thus determine name here
         if self._partial_name is None:
             self._partial_name = _get_partial_name()
+            print(f"[Dumper] Choose partial_name={self._partial_name}")
 
         self._forward_pass_id += 1
         print(
             f"[Dumper] [{time.time()}] on_forward_pass_start id={self._forward_pass_id}"
         )
 
+    def set_ctx(self, **kwargs):
+        """
+        Example:
+
+        dumper.set_ctx(layer_id=self.layer_id)
+        ...
+        dumper.set_ctx(layer_id=None)
+        """
+        self._global_ctx = {k: v for k, v in (self._global_ctx | kwargs).items() if v is not None}
+
+    def override_enable(self, value: bool):
+        self._override_enable = value
+
     def dump(self, name, value, **kwargs):
-        if not self._enable:
+        if not (self._enable and (self._override_enable is not False)):
             return
 
         assert (
@@ -67,6 +83,7 @@ class _Dumper:
             name=name,
             dump_index=self._dump_index,
             **kwargs,
+            **self._global_ctx,
         )
         full_filename = "___".join(f"{k}={v}" for k, v in full_kwargs.items()) + ".pt"
         path = self._base_dir / f"sglang_dump_{self._partial_name}" / full_filename

@@ -73,6 +73,8 @@ def find_row(df, conditions: Dict[str, Any]):
             lambda a, b: a & b,
             [
                 pl.col(col) == _cast_to_polars_dtype(conditions[col], df.schema[col])
+                if conditions[col] is not None
+                else pl.col(col).is_null()
                 for col in conditions.keys()
             ],
         )
