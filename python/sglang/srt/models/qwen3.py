@@ -170,6 +170,10 @@ class Qwen3Attention(nn.Module):
         dumper.dump("attn__k_before_rope", k, layer_id=self.layer_id)
         q, k = self.rotary_emb(positions, q, k)
 
+        if get_global_server_args().enable_deterministic_inference:
+            q = q.to(torch.bfloat16)
+            k = k.to(torch.bfloat16)
+
         dumper.dump("attn__q", q, layer_id=self.layer_id)
         dumper.dump("attn__k", k, layer_id=self.layer_id)
         dumper.dump("attn__v", v, layer_id=self.layer_id)
