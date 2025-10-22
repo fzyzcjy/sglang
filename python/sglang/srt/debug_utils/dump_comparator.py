@@ -1,7 +1,9 @@
 import argparse
 import functools
+import re
 from pathlib import Path
 
+import einops
 import polars as pl
 import torch
 
@@ -26,6 +28,7 @@ def main(args):
     print("df_baseline", df_baseline)
 
     location_info_of_target_pass_id = _get_location_info_of_target_pass_id()
+    tensor_dim_descs = _get_tensor_dim_descs()
 
     for row in df_target.iter_rows(named=True):
         path_target = Path(args.target_path) / row["filename"]
@@ -41,6 +44,16 @@ def main(args):
                 row["forward_pass_id"] - args.start_id + args.baseline_start_id
             )
             baseline_token_slice = None
+
+        tensor_dim_desc = None
+        if tensor_dim_descs is not None:
+            tensor_dim_descs_filtered = [
+                desc
+                for desc in tensor_dim_descs
+                if re.search(desc["pattern"], row["filename"]) is not None
+            ]
+            if tensor_dim_descs_filtered:
+                tensor_dim_desc = tensor_dim_descs_filtered[0]
 
         row_baseline = find_row(
             df_baseline,
@@ -68,6 +81,7 @@ def main(args):
             path_target=path_target,
             name=row["name"],
             baseline_token_slice=baseline_token_slice,
+            tensor_dim_desc=tensor_dim_desc,
         )
         print()
 
@@ -90,7 +104,39 @@ def _get_location_info_of_target_pass_id():
     }
 
 
-def check_tensor_pair(path_baseline, path_target, name="", baseline_token_slice=None):
+# TODO allow configure via command line
+def _get_tensor_dim_descs():
+    return [
+        dict(
+            pattern="hidden_states|residual",
+            baseline_desc="1 num_tokens hidden",
+            target_desc="num_tokens hidden",
+        ),
+        dict(
+            pattern="(attn__(q_before_norm|k_before_norm))|attn_output",
+            baseline_desc="1 num_tokens num_heads head_dim",
+            target_desc="num_tokens (num_heads head_dim)",
+        ),
+        dict(
+            pattern="attn__(q|k|v)",
+            baseline_desc="1 num_heads num_tokens head_dim",
+            target_desc="num_tokens (num_heads head_dim)",
+        ),
+    ]
+
+
+def _split_einops_pattern(pattern):
+    return re.findall(r"\([^()]*\)|\S+", pattern)
+
+
+def _get_einops_dim_index(pattern: str, dim_name: str):
+    pattern_list = _split_einops_pattern(pattern)
+    return pattern_list.index(dim_name)
+
+
+def check_tensor_pair(
+    path_baseline, path_target, name="", baseline_token_slice=None, tensor_dim_desc=None
+):
     x_baseline = _load_object(path_baseline)
     x_target = _load_object(path_target)
 
@@ -100,9 +146,16 @@ def check_tensor_pair(path_baseline, path_target, name="", baseline_token_slice=
         f"[dtype] {x_baseline.dtype} vs {x_target.dtype}"
     )
 
-    if (s := baseline_token_slice) is not None:
-        # temporarily assume the token dim is dim0
-        x_baseline = x_baseline[s, ...]
+    if tensor_dim_desc is not None:
+        if (s := baseline_token_slice) is not None:
+            dim = _get_einops_dim_index(tensor_dim_desc["baseline_desc"], "num_tokens")
+            x_baseline = x_baseline.narrow(
+                dim=dim, start=s.start, length=s.stop - s.start
+            )
+        x_baseline = einops.rearrange(
+            x_baseline,
+            tensor_dim_desc["baseline_desc"] + " -> " + tensor_dim_desc["target_desc"],
+        )
 
     x_baseline, x_target = _comparison_preprocessor(x_baseline, x_target, name=name)
     x_baseline = _try_unify_shape(x_baseline, target_shape=x_target.shape)

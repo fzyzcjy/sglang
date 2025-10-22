@@ -253,7 +253,9 @@ class Qwen3DecoderLayer(nn.Module):
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states, residual, forward_batch
         )
-        dumper.dump("layer_after_input_ln", hidden_states, layer_id=self.layer_id)
+        dumper.dump(
+            "layer_after_input_ln_hidden_states", hidden_states, layer_id=self.layer_id
+        )
         if hidden_states.shape[0] != 0:
             hidden_states = self.self_attn(
                 positions=positions,
