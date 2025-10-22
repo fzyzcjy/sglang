@@ -144,6 +144,9 @@ dumper = _Dumper()
 
 
 def get_tensor_info(x):
+    """
+    from sglang.srt.debug_utils.dumper import get_tensor_info
+    """
     if not isinstance(x, torch.Tensor):
         return f"type={type(x)} value={x}"
     min = x.float().min() if x.numel() > 0 else None

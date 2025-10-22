@@ -277,6 +277,10 @@ class Qwen3DecoderLayer(nn.Module):
                 hidden_states=hidden_states,
                 forward_batch=forward_batch,
             )
+        dumper.dump(
+            "layer_after_attn_hidden_states",
+            (hidden_states + residual) if residual is not None else hidden_states,
+        )
 
         # Fully Connected
         hidden_states, residual = self.layer_communicator.prepare_mlp(
@@ -289,6 +293,7 @@ class Qwen3DecoderLayer(nn.Module):
                 else None
             ),
         )
+        dumper.dump("layer_before_mlp_hidden_states", hidden_states)
         hidden_states = self.mlp(hidden_states)
         if _is_npu and get_cmo_stream():
             wait_cmo_stream()
