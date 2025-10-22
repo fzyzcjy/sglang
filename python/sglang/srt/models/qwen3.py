@@ -94,7 +94,7 @@ class Qwen3Attention(nn.Module):
         norm_kwargs = (
             dict(
                 weight_dtype=torch.float32,
-                fp32_output=True,
+                cast_x_before_out_mul=True,
             )
             if get_global_server_args().enable_deterministic_inference
             else {}
