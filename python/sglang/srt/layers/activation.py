@@ -39,6 +39,7 @@ from sglang.srt.utils import (
     set_weight_attrs,
 )
 from sglang.utils import resolve_obj_by_qualname
+from sglang.srt.server_args import get_global_server_args
 
 _is_cuda = is_cuda()
 _is_npu = is_npu()
@@ -59,6 +60,11 @@ logger = logging.getLogger(__name__)
 
 
 class SiluAndMul(CustomOp):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if get_global_server_args().enable_deterministic_inference:
+            self._forward_method = self.forward_native
+
     def forward_native(self, x: torch.Tensor) -> torch.Tensor:
         d = x.shape[-1] // 2
         return F.silu(x[..., :d]) * x[..., d:]
