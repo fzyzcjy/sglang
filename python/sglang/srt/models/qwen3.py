@@ -237,7 +237,9 @@ class Qwen3DecoderLayer(nn.Module):
         )
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
+            config.hidden_size,
+            eps=config.rms_norm_eps,
+            fp32_residual=True,
         )
 
         self.layer_scatter_modes = LayerScatterModes.init_new(
@@ -281,7 +283,12 @@ class Qwen3DecoderLayer(nn.Module):
         dumper.dump("layer_after_attn_residual", residual)
         dumper.dump(
             "layer_after_attn_hidden_states_and_residual",
-            (hidden_states + residual) if residual is not None else hidden_states,
+            # HACK: the `float()` will make numbers change
+            (
+                (hidden_states + residual.float())
+                if residual is not None
+                else hidden_states
+            ),
         )
 
         # Fully Connected

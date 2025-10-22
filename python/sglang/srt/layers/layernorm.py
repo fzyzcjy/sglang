@@ -75,10 +75,12 @@ class RMSNorm(CustomOp):
         eps: float = 1e-6,
         var_hidden_size: Optional[int] = None,
         cast_x_before_out_mul: bool = False,
+        fp32_residual: bool = False,
         weight_dtype: Optional = None,
     ) -> None:
         super().__init__()
         self.cast_x_before_out_mul = cast_x_before_out_mul
+        self.fp32_residual = fp32_residual
         self.weight = nn.Parameter(torch.ones(hidden_size, dtype=weight_dtype))
         self.variance_epsilon = eps
         self.hidden_size = hidden_size
@@ -175,7 +177,10 @@ class RMSNorm(CustomOp):
         x = x.to(torch.float32)
         if residual is not None:
             x = x + residual.to(torch.float32)
-            residual = x.to(orig_dtype)
+            if self.fp32_residual:
+                residual = x.clone()
+            else:
+                residual = x.to(orig_dtype)
 
         hidden_size = x.shape[-1]
         if hidden_size != self.hidden_size:
