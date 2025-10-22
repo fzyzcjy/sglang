@@ -5,6 +5,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import torch
 from torch import nn
 
+from sglang.srt.debug_utils.dumper import dumper
 from sglang.srt.distributed import (
     get_pp_group,
     get_tensor_model_parallel_rank,
@@ -62,6 +63,7 @@ class Qwen3Attention(nn.Module):
         alt_stream: Optional[torch.cuda.Stream] = None,
     ) -> None:
         super().__init__()
+        self.layer_id = layer_id
         self.hidden_size = hidden_size
         self.tp_size = get_tensor_model_parallel_world_size()
         self.total_num_heads = num_heads
@@ -162,7 +164,15 @@ class Qwen3Attention(nn.Module):
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         q, k = self._apply_qk_norm(q, k)
         q, k = self.rotary_emb(positions, q, k)
+
+        dumper.dump("attn__q", q, layer_id=self.layer_id)
+        dumper.dump("attn__k", k, layer_id=self.layer_id)
+        dumper.dump("attn__v", v, layer_id=self.layer_id)
+
         attn_output = self.attn(q, k, v, forward_batch)
+
+        dumper.dump("attn__attn_output", attn_output, layer_id=self.layer_id)
+
         output, _ = self.o_proj(attn_output)
         return output
 
@@ -177,6 +187,7 @@ class Qwen3DecoderLayer(nn.Module):
         alt_stream: Optional[torch.cuda.Stream] = None,
     ) -> None:
         super().__init__()
+        self.layer_id = layer_id
         self.hidden_size = config.hidden_size
         rope_theta = getattr(config, "rope_theta", 1000000)
         rope_scaling = getattr(config, "rope_scaling", None)
@@ -228,6 +239,12 @@ class Qwen3DecoderLayer(nn.Module):
         forward_batch: ForwardBatch,
         residual: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        dumper.dump(
+            "layer_start__hidden_states_and_residual",
+            (hidden_states + residual) if residual is not None else hidden_states,
+            layer_id=self.layer_id,
+        )
+
         # Self Attention
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states, residual, forward_batch
@@ -358,6 +375,10 @@ class Qwen3ForCausalLM(nn.Module):
         get_embedding: bool = False,
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ) -> torch.Tensor:
+        dumper.on_forward_pass_start()
+        dumper.dump("causallm__input_ids", input_ids)
+        dumper.dump("causallm__positions", positions)
+
         hidden_states = self.model(
             input_ids,
             positions,
