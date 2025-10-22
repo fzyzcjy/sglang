@@ -32,6 +32,7 @@ from sglang.srt.utils import (
     is_xpu,
     supports_custom_op,
 )
+from sglang.srt.server_args import get_global_server_args
 
 _is_cuda = is_cuda()
 _is_flashinfer_available = is_flashinfer_available()
@@ -163,6 +164,9 @@ class RMSNorm(CustomOp):
         x: torch.Tensor,
         residual: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        from sglang.srt.debug_utils.dumper import get_tensor_info
+        print(f"RMSNorm.forward_native start {get_tensor_info(x)=}")
+
         if not x.is_contiguous():
             x = x.contiguous()
         orig_dtype = x.dtype
@@ -189,9 +193,22 @@ class RMSNorm(CustomOp):
 
             x_var = x[..., : self.variance_size_override]
 
+        print(f"RMSNorm.forward_native middle {get_tensor_info(x)=} {get_tensor_info(x_var)=}")
         variance = x_var.pow(2).mean(dim=-1, keepdim=True)
+        print(f"RMSNorm.forward_native middle {get_tensor_info(variance)=}")
+        print(f"RMSNorm.forward_native middle {self.variance_epsilon=}")
         x = x * torch.rsqrt(variance + self.variance_epsilon)
-        x = (x * self.weight).to(orig_dtype)
+        print(f"RMSNorm.forward_native after-mul-rsqrt {get_tensor_info(x)=}")
+        print(f"RMSNorm.forward_native {get_tensor_info(self.weight)=}")
+        print(f"RMSNorm.forward_native {orig_dtype=}")
+
+        # TODO should improve flag
+        if get_global_server_args().enable_deterministic_inference:
+            x = x * self.weight.to(torch.float32)
+        else:
+            x = (x * self.weight).to(orig_dtype)
+
+        print(f"RMSNorm.forward_native output {x=}")
         if residual is None:
             return x
         else:

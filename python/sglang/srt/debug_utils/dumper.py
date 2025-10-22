@@ -121,3 +121,14 @@ def get_truncated_value(value):
 
 
 dumper = _Dumper()
+
+def get_tensor_info(x):
+    if not isinstance(x, torch.Tensor):
+        return f"type={type(x)} value={x}"
+    min = x.float().min() if x.numel() > 0 else None
+    max = x.float().max() if x.numel() > 0 else None
+    mean = x.float().mean() if x.numel() > 0 else None
+    torch.set_printoptions(precision=10)
+    x_sample = str(x.flatten()[:5])
+    torch.set_printoptions(precision=4)
+    return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} req_grad={x.requires_grad} min={min} max={max} mean={mean} x_sample={x_sample}"
