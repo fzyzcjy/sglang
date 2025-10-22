@@ -22,7 +22,6 @@ from packaging.version import Version
 
 from sglang.srt.custom_op import CustomOp
 from sglang.srt.debug_utils.dumper import dumper
-from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import (
     cpu_has_amx_support,
     get_bool_env_var,

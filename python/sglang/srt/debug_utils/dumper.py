@@ -1,7 +1,7 @@
 import os
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
 import torch
 import torch.distributed as dist
