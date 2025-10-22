@@ -78,6 +78,7 @@ class BenchArgs:
                 "single",
                 "prefix",
                 "radix_cache",
+                "p_vs_d",
             ],
         )
         parser.add_argument("--profile", action="store_true")
@@ -239,7 +240,7 @@ def _test_mode_p_vs_d(args):
     resp_a = send_single(
         args,
         prompt=[prompt],
-        max_new_tokens=100,
+        max_new_tokens=args.max_new_tokens,
         return_full_response=True,
         extra_params=query_extra_params,
     )
@@ -249,7 +250,7 @@ def _test_mode_p_vs_d(args):
 
     resp_b = send_single(
         args,
-        input_ids=TODO,
+        input_ids=info_a["io"].token_ids,
         max_new_tokens=1,
         return_full_response=True,
         extra_params=query_extra_params,
@@ -277,10 +278,30 @@ class TokenIdsAndLogprobs:
         assert len(a.token_ids) == len(b.token_ids)
         token_match = a.token_ids == b.token_ids
         logprobs_match = a.logprobs == b.logprobs
-        if not token_match:
+
+        if token_match:
+            print(f"Token match: {a.token_ids}")
+        else:
             print(f"Token mismatch: {a.token_ids=} {b.token_ids=}")
-        if not logprobs_match:
-            print(f"Logprobs mismatch: {a.logprobs=} {b.logprobs=}")
+
+        if logprobs_match:
+            print(f"Logprobs match:", a.logprobs)
+        else:
+            print(f"Logprobs mismatch")
+            print(
+                "    A:   ",
+                [f"{x:.10f}" if x is not None else "None" for x in a.logprobs],
+            )
+            print(
+                "    B:   ",
+                [f"{x:.10f}" if x is not None else "None" for x in b.logprobs],
+            )
+            diff = [
+                abs(x - y) if x is not None else float("nan")
+                for x, y in zip(a.logprobs, b.logprobs)
+            ]
+            print("    Diff:", [f"{x:.10e}" for x in diff])
+
         return token_match and logprobs_match
 
 
@@ -288,7 +309,7 @@ def _extract_ids_and_logprobs(response):
     def _extract_part(name):
         token_ids, logprobs = [], []
         for item in response["meta_info"][name]:
-            token_id, logprob, text = item
+            logprob, token_id, text = item
             token_ids.append(token_id)
             logprobs.append(logprob)
         return TokenIdsAndLogprobs(token_ids=token_ids, logprobs=logprobs)
@@ -496,7 +517,7 @@ def test_deterministic(args):
 
     elif args.test_mode == "p_vs_d":
         # TODO also extract other modes to functions
-        _test_mode_p_vs_d(args)
+        return _test_mode_p_vs_d(args)
 
     else:
         raise ValueError(f"Invalid test mode: {args.test_mode}")
