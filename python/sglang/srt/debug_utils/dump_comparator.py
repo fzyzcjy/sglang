@@ -25,15 +25,27 @@ def main(args):
     print("df_target", df_target)
     print("df_baseline", df_baseline)
 
+    location_info_of_target_pass_id = _get_location_info_of_target_pass_id()
+
     for row in df_target.iter_rows(named=True):
         path_target = Path(args.target_path) / row["filename"]
+
+        if location_info_of_target_pass_id is not None:
+            location_info = location_info_of_target_pass_id.get(row["forward_pass_id"])
+            if location_info is None:
+                continue
+            baseline_forward_pass_id = location_info["baseline_forward_pass_id"]
+            baseline_token_slice = location_info["baseline_token_slice"]
+        else:
+            baseline_forward_pass_id = (
+                row["forward_pass_id"] - args.start_id + args.baseline_start_id
+            )
+            baseline_token_slice = None
 
         row_baseline = find_row(
             df_baseline,
             conditions=dict(
-                forward_pass_id=row["forward_pass_id"]
-                - args.start_id
-                + args.baseline_start_id,
+                forward_pass_id=baseline_forward_pass_id,
                 **{
                     k: v
                     for k, v in row.items()
@@ -52,12 +64,33 @@ def main(args):
         path_baseline = Path(args.baseline_path) / row_baseline["filename"]
         print(f"Check: target={str(path_target)} baseline={str(path_baseline)}")
         check_tensor_pair(
-            path_baseline=path_baseline, path_target=path_target, name=row["name"]
+            path_baseline=path_baseline,
+            path_target=path_target,
+            name=row["name"],
+            baseline_token_slice=baseline_token_slice,
         )
         print()
 
 
-def check_tensor_pair(path_baseline, path_target, name=""):
+# TODO allow configure via command line
+def _get_location_info_of_target_pass_id():
+    prefill_num_tokens = 91
+    start_target_forward_pass_id = 5
+    return {
+        start_target_forward_pass_id
+        + i: dict(
+            baseline_forward_pass_id=1,
+            baseline_token_slice=(
+                slice(0, prefill_num_tokens)
+                if i == 0
+                else slice(prefill_num_tokens + i, prefill_num_tokens + i + 1)
+            ),
+        )
+        for i in range(10)
+    }
+
+
+def check_tensor_pair(path_baseline, path_target, name="", baseline_token_slice=None):
     x_baseline = _load_object(path_baseline)
     x_target = _load_object(path_target)
 
@@ -66,6 +99,10 @@ def check_tensor_pair(path_baseline, path_target, name=""):
         f"[shape] {x_baseline.shape} vs {x_target.shape}\t"
         f"[dtype] {x_baseline.dtype} vs {x_target.dtype}"
     )
+
+    if (s := baseline_token_slice) is not None:
+        # temporarily assume the token dim is dim0
+        x_baseline = x_baseline[s, ...]
 
     x_baseline, x_target = _comparison_preprocessor(x_baseline, x_target, name=name)
     x_baseline = _try_unify_shape(x_baseline, target_shape=x_target.shape)
@@ -158,6 +195,7 @@ def _load_object(path):
 
 
 if __name__ == "__main__":
+    # python -m sglang.srt.debug_utils.dump_comparator --baseline-path ... --target-path ...
     parser = argparse.ArgumentParser()
     parser.add_argument("--baseline-path", type=str)
     parser.add_argument("--target-path", type=str)
