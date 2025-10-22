@@ -279,10 +279,11 @@ class Qwen3DecoderLayer(nn.Module):
             )
         dumper.dump("layer_after_attn_hidden_states", hidden_states)
         dumper.dump("layer_after_attn_residual", residual)
-        dumper.dump(
-            "layer_after_attn_hidden_states_and_residual",
-            (hidden_states + residual) if residual is not None else hidden_states,
-        )
+
+        if get_global_server_args().enable_deterministic_inference:
+            hidden_states = hidden_states + residual.to(torch.float32)
+            residual = None
+        dumper.dump("layer_after_attn_hidden_states_and_residual", hidden_states)
 
         # Fully Connected
         hidden_states, residual = self.layer_communicator.prepare_mlp(
