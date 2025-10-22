@@ -90,14 +90,16 @@ def main(args):
 def _get_location_info_of_target_pass_id():
     prefill_num_tokens = 91
     start_target_forward_pass_id = 5
+    baseline_forward_pass_id = 1
+
     return {
         start_target_forward_pass_id
         + i: dict(
-            baseline_forward_pass_id=1,
+            baseline_forward_pass_id=baseline_forward_pass_id,
             baseline_token_slice=(
                 slice(0, prefill_num_tokens)
                 if i == 0
-                else slice(prefill_num_tokens + i, prefill_num_tokens + i + 1)
+                else slice(prefill_num_tokens + i - 1, prefill_num_tokens + i)
             ),
         )
         for i in range(10)
