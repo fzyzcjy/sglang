@@ -115,6 +115,11 @@ def _get_tensor_dim_descs():
             target_desc="num_tokens hidden",
         ),
         dict(
+            pattern="input_ids|position",
+            baseline_desc="1 num_tokens",
+            target_desc="num_tokens",
+        ),
+        dict(
             pattern="(attn__(q_before_norm|k_before_norm))|attn_output",
             baseline_desc="1 num_tokens num_heads head_dim",
             target_desc="num_tokens (num_heads head_dim)",
