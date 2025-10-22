@@ -90,8 +90,8 @@ class Qwen3Attention(nn.Module):
         self.max_position_embeddings = max_position_embeddings
         self.tp_rank = get_tensor_model_parallel_rank()
 
-        self.q_norm = RMSNorm(self.head_dim, eps=rms_norm_eps)
-        self.k_norm = RMSNorm(self.head_dim, eps=rms_norm_eps)
+        self.q_norm = RMSNorm(self.head_dim, eps=rms_norm_eps, fp32_output=True)
+        self.k_norm = RMSNorm(self.head_dim, eps=rms_norm_eps, fp32_output=True)
 
         self.qkv_proj = QKVParallelLinear(
             hidden_size,

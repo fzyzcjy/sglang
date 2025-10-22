@@ -74,8 +74,10 @@ class RMSNorm(CustomOp):
         hidden_size: int,
         eps: float = 1e-6,
         var_hidden_size: Optional[int] = None,
+        fp32_output: bool = False,
     ) -> None:
         super().__init__()
+        self.fp32_output = fp32_output
         self.weight = nn.Parameter(torch.ones(hidden_size))
         self.variance_epsilon = eps
         self.hidden_size = hidden_size
@@ -203,12 +205,12 @@ class RMSNorm(CustomOp):
         print(f"RMSNorm.forward_native {orig_dtype=}")
 
         # TODO should improve flag
-        if get_global_server_args().enable_deterministic_inference:
+        if self.fp32_output:
             x = x * self.weight.to(torch.float32)
         else:
             x = (x * self.weight).to(orig_dtype)
 
-        print(f"RMSNorm.forward_native output {x=}")
+        print(f"RMSNorm.forward_native output {get_tensor_info(x)=}")
         if residual is None:
             return x
         else:
