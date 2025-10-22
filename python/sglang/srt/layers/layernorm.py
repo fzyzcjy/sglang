@@ -203,6 +203,8 @@ class RMSNorm(CustomOp):
         print(f"RMSNorm.forward_native after-mul-rsqrt {get_tensor_info(x)=}")
         print(f"RMSNorm.forward_native {get_tensor_info(self.weight)=}")
         print(f"RMSNorm.forward_native {orig_dtype=}")
+        print(f"RMSNorm.forward_native {self.fp32_output=}")
+        print(f"RMSNorm.forward_native {get_global_server_args().enable_deterministic_inference=}")
 
         # TODO should improve flag
         if self.fp32_output:
