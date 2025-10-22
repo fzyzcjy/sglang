@@ -17,7 +17,7 @@ import dataclasses
 import json
 import os
 import random
-from typing import List
+from typing import Any, Dict, List, Optional
 
 import requests
 
@@ -101,6 +101,7 @@ def send_single(
     input_ids: List[int] = None,
     prompt: List[str] = None,
     max_new_tokens: int = None,
+    extra_params: Optional[Dict[str, Any]] = None,
 ):
     base_url = f"http://{args.host}:{args.port}"
 
@@ -121,6 +122,7 @@ def send_single(
             },
             "return_logprob": args.return_logprob,
             "stream": args.stream,
+            **(extra_params or {}),
         }
     else:
         assert input_ids is None
@@ -138,6 +140,7 @@ def send_single(
             },
             "return_logprob": args.return_logprob,
             "stream": args.stream,
+            **(extra_params or {}),
         }
 
     if args.sampling_seed is not None:
@@ -218,6 +221,81 @@ def send_prefix(args, batch_size: int, prompts: List[str]):
         ret_dict[sampled_indices[i]].append(ret[i]["text"])
 
     return ret_dict
+
+
+def _test_mode_p_vs_d(args):
+    args.return_logprob = True
+    query_extra_params = {
+        "logprob_start_len": 0,
+        "return_text_in_logprobs": True,
+    }
+
+    prompt = PROMPT_1
+
+    # warmup + flush
+    send_single(args, input_ids=[1] * 64, max_new_tokens=65, return_full_response=True)
+    requests.post(f"http://{args.host}:{args.port}/flush_cache")
+
+    resp_a = send_single(
+        args,
+        prompt=[prompt],
+        max_new_tokens=100,
+        return_full_response=True,
+        extra_params=query_extra_params,
+    )
+    info_a = _extract_ids_and_logprobs(resp_a)
+
+    requests.post(f"http://{args.host}:{args.port}/flush_cache")
+
+    resp_b = send_single(
+        args,
+        input_ids=TODO,
+        max_new_tokens=1,
+        return_full_response=True,
+        extra_params=query_extra_params,
+    )
+    info_b = _extract_ids_and_logprobs(resp_b)
+
+    correct = TokenIdsAndLogprobs.compare(info_a["io"], info_b["input"])
+
+    return [int(correct)]
+
+
+@dataclasses.dataclass
+class TokenIdsAndLogprobs:
+    token_ids: List[int]
+    logprobs: List[float]
+
+    def __add__(self, other):
+        return TokenIdsAndLogprobs(
+            token_ids=self.token_ids + other.token_ids,
+            logprobs=self.logprobs + other.logprobs,
+        )
+
+    @classmethod
+    def compare(cls, a: "TokenIdsAndLogprobs", b: "TokenIdsAndLogprobs"):
+        assert len(a.token_ids) == len(b.token_ids)
+        token_match = a.token_ids == b.token_ids
+        logprobs_match = a.logprobs == b.logprobs
+        if not token_match:
+            print(f"Token mismatch: {a.token_ids=} {b.token_ids=}")
+        if not logprobs_match:
+            print(f"Logprobs mismatch: {a.logprobs=} {b.logprobs=}")
+        return token_match and logprobs_match
+
+
+def _extract_ids_and_logprobs(response):
+    def _extract_part(name):
+        token_ids, logprobs = [], []
+        for item in response["meta_info"][name]:
+            token_id, logprob, text = item
+            token_ids.append(token_id)
+            logprobs.append(logprob)
+        return TokenIdsAndLogprobs(token_ids=token_ids, logprobs=logprobs)
+
+    input = _extract_part("input_token_logprobs")
+    output = _extract_part("output_token_logprobs")
+    return dict(input=input, output=output, io=input + output)
 
 
 def test_deterministic(args):
@@ -415,6 +493,10 @@ def test_deterministic(args):
         else:
             print("✗✗✗ TEST FAILED - Radix cache produces different results! ✗✗✗")
             return [0]
+
+    elif args.test_mode == "p_vs_d":
+        # TODO also extract other modes to functions
+        _test_mode_p_vs_d(args)
 
     else:
         raise ValueError(f"Invalid test mode: {args.test_mode}")
