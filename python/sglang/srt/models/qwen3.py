@@ -30,6 +30,7 @@ from sglang.srt.model_loader.weight_utils import (
 )
 from sglang.srt.models.qwen2 import Qwen2MLP as Qwen3MLP
 from sglang.srt.models.qwen2 import Qwen2Model
+from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import (
     add_prefix,
     get_cmo_stream,
@@ -37,7 +38,6 @@ from sglang.srt.utils import (
     is_npu,
     wait_cmo_stream,
 )
-from sglang.srt.server_args import get_global_server_args
 
 Qwen3Config = None
 
@@ -91,10 +91,14 @@ class Qwen3Attention(nn.Module):
         self.max_position_embeddings = max_position_embeddings
         self.tp_rank = get_tensor_model_parallel_rank()
 
-        norm_kwargs = dict(
-            weight_dtype=torch.float32,
-            fp32_output=True,
-        ) if get_global_server_args().enable_deterministic_inference else {}
+        norm_kwargs = (
+            dict(
+                weight_dtype=torch.float32,
+                fp32_output=True,
+            )
+            if get_global_server_args().enable_deterministic_inference
+            else {}
+        )
         self.q_norm = RMSNorm(self.head_dim, eps=rms_norm_eps, **norm_kwargs)
         self.k_norm = RMSNorm(self.head_dim, eps=rms_norm_eps, **norm_kwargs)
 

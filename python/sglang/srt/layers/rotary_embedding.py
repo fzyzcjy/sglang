@@ -11,6 +11,7 @@ import triton
 import triton.language as tl
 
 from sglang.srt.custom_op import CustomOp
+from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import (
     cpu_has_amx_support,
     get_bool_env_var,
@@ -21,7 +22,6 @@ from sglang.srt.utils import (
     is_npu,
     is_xpu,
 )
-from sglang.srt.server_args import get_global_server_args
 
 _is_cuda = is_cuda()
 _is_hip = is_hip()

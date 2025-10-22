@@ -1,7 +1,7 @@
 import os
 import time
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Dict, Optional
 
 import torch
 import torch.distributed as dist
@@ -61,7 +61,9 @@ class _Dumper:
         ...
         dumper.set_ctx(layer_id=None)
         """
-        self._global_ctx = {k: v for k, v in (self._global_ctx | kwargs).items() if v is not None}
+        self._global_ctx = {
+            k: v for k, v in (self._global_ctx | kwargs).items() if v is not None
+        }
 
     def override_enable(self, value: bool):
         self._override_enable = value
@@ -138,6 +140,7 @@ def get_truncated_value(value):
 
 
 dumper = _Dumper()
+
 
 def get_tensor_info(x):
     if not isinstance(x, torch.Tensor):

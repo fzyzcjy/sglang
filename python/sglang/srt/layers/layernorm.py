@@ -21,6 +21,8 @@ import torch.nn as nn
 from packaging.version import Version
 
 from sglang.srt.custom_op import CustomOp
+from sglang.srt.debug_utils.dumper import dumper
+from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import (
     cpu_has_amx_support,
     get_bool_env_var,
@@ -32,8 +34,6 @@ from sglang.srt.utils import (
     is_xpu,
     supports_custom_op,
 )
-from sglang.srt.server_args import get_global_server_args
-from sglang.srt.debug_utils.dumper import dumper
 
 _is_cuda = is_cuda()
 _is_flashinfer_available = is_flashinfer_available()
