@@ -162,7 +162,11 @@ class Qwen3Attention(nn.Module):
     ) -> torch.Tensor:
         qkv, _ = self.qkv_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+        dumper.dump("attn__q_before_norm", q, layer_id=self.layer_id)
+        dumper.dump("attn__k_before_norm", k, layer_id=self.layer_id)
         q, k = self._apply_qk_norm(q, k)
+        dumper.dump("attn__q_before_rope", q, layer_id=self.layer_id)
+        dumper.dump("attn__k_before_rope", k, layer_id=self.layer_id)
         q, k = self.rotary_emb(positions, q, k)
 
         dumper.dump("attn__q", q, layer_id=self.layer_id)
@@ -249,6 +253,7 @@ class Qwen3DecoderLayer(nn.Module):
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states, residual, forward_batch
         )
+        dumper.dump("layer_after_input_ln", hidden_states, layer_id=self.layer_id)
         if hidden_states.shape[0] != 0:
             hidden_states = self.self_attn(
                 positions=positions,
