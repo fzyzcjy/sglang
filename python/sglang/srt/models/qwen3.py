@@ -238,12 +238,12 @@ class Qwen3DecoderLayer(nn.Module):
         self.input_layernorm = RMSNorm(
             config.hidden_size,
             eps=config.rms_norm_eps,
-            fp32_residual=True,
+            fp32_residual=get_global_server_args().enable_deterministic_inference,
         )
         self.post_attention_layernorm = RMSNorm(
             config.hidden_size,
             eps=config.rms_norm_eps,
-            fp32_residual=True,
+            fp32_residual=get_global_server_args().enable_deterministic_inference,
         )
 
         self.layer_scatter_modes = LayerScatterModes.init_new(
