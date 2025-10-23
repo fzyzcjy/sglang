@@ -108,7 +108,9 @@ class Sampler(nn.Module):
                 dumper.dump(
                     "compute_logprobs__raw_temperatures", sampling_info.temperatures
                 )
-                logits_div_temperature = logits.bfloat16().div(sampling_info.temperatures).bfloat16()
+                logits_div_temperature = (
+                    logits.bfloat16().div(sampling_info.temperatures).bfloat16()
+                )
                 dumper.dump(
                     "compute_logprobs__logits_after_temperature", logits_div_temperature
                 )
