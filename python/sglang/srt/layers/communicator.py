@@ -19,6 +19,7 @@ from typing import Dict, Optional
 
 import torch
 
+from sglang.srt.debug_utils.dumper import dumper
 from sglang.srt.distributed import (
     get_tensor_model_parallel_world_size,
     tensor_model_parallel_all_reduce,
@@ -53,7 +54,6 @@ from sglang.srt.utils import (
     is_sm100_supported,
     prepare_weight_cache,
 )
-from sglang.srt.debug_utils.dumper import dumper
 
 _is_flashinfer_available = is_flashinfer_available()
 _is_sm90_supported = is_cuda() and is_sm90_supported()

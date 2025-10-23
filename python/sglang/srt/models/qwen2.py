@@ -50,8 +50,8 @@ from sglang.srt.model_loader.weight_utils import (
     default_weight_loader,
     kv_cache_scales_loader,
 )
-from sglang.srt.utils import add_prefix, make_layers
 from sglang.srt.server_args import get_global_server_args
+from sglang.srt.utils import add_prefix, make_layers
 
 Qwen2Config = None
 
@@ -283,7 +283,11 @@ class Qwen2Model(nn.Module):
                 quant_config=quant_config,
                 enable_tp=not is_dp_attention_enabled(),
                 prefix=add_prefix("embed_tokens", prefix),
-                params_dtype=torch.float32 if get_global_server_args().enable_deterministic_inference else None,
+                params_dtype=(
+                    torch.float32
+                    if get_global_server_args().enable_deterministic_inference
+                    else None
+                ),
             )
         else:
             self.embed_tokens = PPMissingLayer()

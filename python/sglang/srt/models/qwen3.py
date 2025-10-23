@@ -249,8 +249,12 @@ class Qwen3DecoderLayer(nn.Module):
             if get_global_server_args().enable_deterministic_inference
             else {}
         )
-        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, **norm_kwargs)
-        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, **norm_kwargs)
+        self.input_layernorm = RMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps, **norm_kwargs
+        )
+        self.post_attention_layernorm = RMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps, **norm_kwargs
+        )
 
         self.layer_scatter_modes = LayerScatterModes.init_new(
             layer_id=layer_id,
@@ -277,7 +281,11 @@ class Qwen3DecoderLayer(nn.Module):
         dumper.dump("layer_start__residual", residual)
         dumper.dump(
             "layer_start__hidden_states_and_residual",
-            (hidden_states.float() + residual.float()) if residual is not None else hidden_states,
+            (
+                (hidden_states.float() + residual.float())
+                if residual is not None
+                else hidden_states
+            ),
         )
 
         # Self Attention
@@ -391,7 +399,11 @@ class Qwen3ForCausalLM(nn.Module):
                     config.hidden_size,
                     quant_config=quant_config,
                     prefix=add_prefix("lm_head", prefix),
-                    params_dtype=torch.float32 if get_global_server_args().enable_deterministic_inference else None,
+                    params_dtype=(
+                        torch.float32
+                        if get_global_server_args().enable_deterministic_inference
+                        else None
+                    ),
                 )
         else:
             # ranks other than the last rank will have a placeholder layer

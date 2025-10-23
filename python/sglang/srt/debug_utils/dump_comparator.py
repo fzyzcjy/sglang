@@ -90,15 +90,11 @@ def main(args):
 
 # TODO allow configure via command line
 def _get_location_info_of_target_pass_id():
-    prefill_num_tokens = int(
-        os.environ.get("ARG_PREFILL_NUM_TOKENS", "91")
-    )
+    prefill_num_tokens = int(os.environ.get("ARG_PREFILL_NUM_TOKENS", "91"))
     start_target_forward_pass_id = int(
         os.environ.get("ARG_START_TARGET_FORWARD_PASS_ID", "5")
     )
-    baseline_forward_pass_id = int(
-        os.environ.get("ARG_BASELINE_FORWARD_PASS_ID", "1")
-    )
+    baseline_forward_pass_id = int(os.environ.get("ARG_BASELINE_FORWARD_PASS_ID", "1"))
     location_info_mode = os.environ.get("ARG_LOCATION_INFO_MODE", "normal")
 
     match location_info_mode:

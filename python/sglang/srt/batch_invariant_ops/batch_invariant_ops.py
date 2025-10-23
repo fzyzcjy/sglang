@@ -16,8 +16,6 @@ __all__ = [
     "enable_batch_invariant_mode",
 ]
 
-from sglang.srt.debug_utils.dumper import dumper
-
 
 def _matmul_launch_metadata(
     grid: Callable[..., Any], kernel: Any, args: Dict[str, Any]
