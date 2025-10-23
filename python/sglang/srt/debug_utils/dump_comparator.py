@@ -99,7 +99,8 @@ def _get_location_info_of_target_pass_id():
     match location_info_mode:
         case "normal":
             return {
-                start_target_forward_pass_id + i: dict(
+                start_target_forward_pass_id
+                + i: dict(
                     baseline_forward_pass_id=1,
                     baseline_token_slice=(
                         slice(0, prefill_num_tokens)
@@ -111,10 +112,13 @@ def _get_location_info_of_target_pass_id():
             }
         case "compute_logprobs":
             return {
-                start_target_forward_pass_id + i: dict(
+                start_target_forward_pass_id
+                + i: dict(
                     # it is another system
                     baseline_forward_pass_id=0,
-                    baseline_token_slice=slice(prefill_num_tokens + i - 1, prefill_num_tokens + i),
+                    baseline_token_slice=slice(
+                        prefill_num_tokens + i - 1, prefill_num_tokens + i
+                    ),
                 )
                 for i in range(2)
             }
