@@ -321,7 +321,9 @@ class Qwen2Model(nn.Module):
                 if get_global_server_args().rl_on_policy_target == "fsdp"
                 else {}
             )
-            self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, **norm_kwargs)
+            self.norm = RMSNorm(
+                config.hidden_size, eps=config.rms_norm_eps, **norm_kwargs
+            )
         else:
             self.norm = PPMissingLayer(return_tuple=True)
 
