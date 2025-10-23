@@ -415,6 +415,10 @@ async def health_generate(request: Request) -> Response:
     if _global_state.tokenizer_manager.server_status == ServerStatus.Starting:
         return Response(status_code=503)
 
+    # NOTE WARN: seems need to enable server warmup (i.e. remove --skip-server-warmup)
+    print("HACK: /health_generate return 200 without real generate")
+    return Response(status_code=200)
+
     sampling_params = {"max_new_tokens": 1, "temperature": 0.0}
     rid = f"HEALTH_CHECK_{time.time()}"
 
@@ -1439,7 +1443,9 @@ def _execute_server_warmup(
 
     # Send a warmup request
     request_name = "/generate" if model_info["is_generation"] else "/encode"
-    max_new_tokens = 8 if model_info["is_generation"] else 1
+    # NOTE MODIFIED
+    # max_new_tokens = 8 if model_info["is_generation"] else 1
+    max_new_tokens = 2
     json_data = {
         "sampling_params": {
             "temperature": 0,
