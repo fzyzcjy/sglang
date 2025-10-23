@@ -93,6 +93,9 @@ class Qwen2MLP(nn.Module):
 
     def forward(self, x):
         dumper.dump("mlp__input_hidden_states", x)
+        if get_global_server_args().enable_deterministic_inference:
+            x = x.bfloat16()
+
         gate_up, _ = self.gate_up_proj(x)
         dumper.dump("mlp__gate_hidden_states", gate_up[:, : self.intermediate_size])
         dumper.dump("mlp__up_hidden_states", gate_up[:, self.intermediate_size :])

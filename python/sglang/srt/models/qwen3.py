@@ -172,6 +172,7 @@ class Qwen3Attention(nn.Module):
         hidden_states: torch.Tensor,
         forward_batch: ForwardBatch,
     ) -> torch.Tensor:
+        dumper.dump("attn__input_hidden_states", hidden_states)
         if get_global_server_args().enable_deterministic_inference:
             hidden_states = hidden_states.bfloat16()
 
@@ -241,9 +242,8 @@ class Qwen3DecoderLayer(nn.Module):
 
         norm_kwargs = (
             dict(
-                # TODO
-                # weight_dtype=torch.float32,
-                # cast_x_before_out_mul=True,
+                weight_dtype=torch.float32,
+                cast_x_before_out_mul=True,
                 fp32_residual=True,
             )
             if get_global_server_args().enable_deterministic_inference
