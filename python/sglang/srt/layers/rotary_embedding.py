@@ -147,11 +147,15 @@ class RotaryEmbedding(CustomOp):
     def _compute_cos_sin_cache(self) -> torch.Tensor:
         """Compute the cos and sin cache."""
         inv_freq = self._compute_inv_freq(self.base)
+        dumper.dump("create_rope__inv_freq", inv_freq)
         t = torch.arange(self.max_position_embeddings, dtype=torch.float)
 
         freqs = torch.einsum("i,j -> ij", t, inv_freq)
+        dumper.dump("create_rope__freqs", freqs)
         cos = freqs.cos()
         sin = freqs.sin()
+        dumper.dump("create_rope__output_cos", cos)
+        dumper.dump("create_rope__output_sin", sin)
         cache = torch.cat((cos, sin), dim=-1)
         return cache
 

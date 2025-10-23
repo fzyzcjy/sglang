@@ -44,14 +44,17 @@ class _Dumper:
             return
 
         # Users may want to `dump` only on some ranks, thus determine name here
-        if self._partial_name is None:
-            self._partial_name = _get_partial_name()
-            print(f"[Dumper] Choose partial_name={self._partial_name}")
+        self._ensure_partial_name()
 
         self._forward_pass_id += 1
         print(
             f"[Dumper] [{time.time()}] on_forward_pass_start id={self._forward_pass_id}"
         )
+
+    def _ensure_partial_name(self):
+        if self._partial_name is None:
+            self._partial_name = _get_partial_name()
+            print(f"[Dumper] Choose partial_name={self._partial_name}")
 
     def set_ctx(self, **kwargs):
         """
@@ -73,10 +76,9 @@ class _Dumper:
         if not (self._enable and (self._override_enable is not False)):
             return
 
-        assert (
-            self._forward_pass_id >= 1
-        ), "Do you forget to call `dumper.on_forward_pass_start()`?"
-        assert self._partial_name is not None
+        if self._forward_pass_id < 1:
+            print("Dump without on_forward_pass_start()")
+        self._ensure_partial_name()
         self._dump_index += 1
 
         rank = _get_rank()
@@ -98,6 +100,7 @@ class _Dumper:
             f"type={type(value)} "
             f"shape={value.shape if isinstance(value, torch.Tensor) else None} "
             f"dtype={value.dtype if isinstance(value, torch.Tensor) else None} "
+            f"device={value.device if isinstance(value, torch.Tensor) else None} "
             f"sample_value={sample_value}"
         )
 
