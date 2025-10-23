@@ -72,7 +72,7 @@ class _Dumper:
     def override_enable(self, value: bool):
         self._override_enable = value
 
-    def dump(self, name, value, **kwargs):
+    def dump(self, name, value, save: bool = True, **kwargs):
         if not (self._enable and (self._override_enable is not False)):
             return
 
@@ -104,7 +104,7 @@ class _Dumper:
             f"sample_value={sample_value}"
         )
 
-        if self._enable_write_file:
+        if self._enable_write_file and save:
             path.parent.mkdir(parents=True, exist_ok=True)
             torch.save(value, str(path))
 

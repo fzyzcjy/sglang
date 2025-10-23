@@ -270,9 +270,11 @@ class Qwen3DecoderLayer(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # dumper.override_enable(self.layer_id <= 3)
         dumper.set_ctx(layer_id=self.layer_id)
+        dumper.dump("layer_start__hidden_states", hidden_states)
+        dumper.dump("layer_start__residual", residual)
         dumper.dump(
             "layer_start__hidden_states_and_residual",
-            (hidden_states + residual) if residual is not None else hidden_states,
+            (hidden_states.float() + residual.float()) if residual is not None else hidden_states,
         )
 
         # Self Attention

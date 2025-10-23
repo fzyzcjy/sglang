@@ -163,11 +163,16 @@ def _get_tensor_dim_descs():
             baseline_desc="1 num_heads num_tokens head_dim",
             target_desc="num_tokens (num_heads head_dim)",
         ),
-        # dict(
-        #     pattern="rmsnorm.*hidden",
-        #     baseline_desc="1 num_tokens num_heads head_dim",
-        #     target_desc="(num_tokens num_heads) head_dim",
-        # ),
+        dict(
+            pattern="rmsnorm.*hidden.*(input_ln|post_attn_ln)",
+            baseline_desc="1 num_tokens head_dim",
+            target_desc="num_tokens head_dim",
+        ),
+        dict(
+            pattern="rmsnorm.*hidden",
+            baseline_desc="1 num_tokens num_heads head_dim",
+            target_desc="(num_tokens num_heads) head_dim",
+        ),
     ]
 
 

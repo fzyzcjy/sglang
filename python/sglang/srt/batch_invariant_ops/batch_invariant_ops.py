@@ -16,6 +16,8 @@ __all__ = [
     "enable_batch_invariant_mode",
 ]
 
+from sglang.srt.debug_utils.dumper import dumper
+
 
 def _matmul_launch_metadata(
     grid: Callable[..., Any], kernel: Any, args: Dict[str, Any]
@@ -155,6 +157,9 @@ def matmul_persistent(
     dtype = a.dtype
     # Allocates output.
     c = torch.empty((M, N), device=a.device, dtype=dtype)
+
+    # dumper.dump("matmul_persistent__a", a, save=False)
+    # dumper.dump("matmul_persistent__b", b, save=False)
 
     # 1D launch kernel where each block gets its own program.
     def grid(META):

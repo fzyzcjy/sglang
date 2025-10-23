@@ -169,7 +169,7 @@ class RMSNorm(CustomOp):
         x: torch.Tensor,
         residual: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        dumper.dump("rmsnorm__input_hidden", x)
+        dumper.dump("rmsnorm__input_raw", x)
 
         if not x.is_contiguous():
             x = x.contiguous()
@@ -181,6 +181,8 @@ class RMSNorm(CustomOp):
                 residual = x.clone()
             else:
                 residual = x.to(orig_dtype)
+
+        dumper.dump("rmsnorm__input_hidden", x)
 
         hidden_size = x.shape[-1]
         if hidden_size != self.hidden_size:
