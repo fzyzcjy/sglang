@@ -11,6 +11,7 @@ import triton
 import triton.language as tl
 
 from sglang.srt.custom_op import CustomOp
+from sglang.srt.debug_utils.dumper import dumper
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import (
     cpu_has_amx_support,
@@ -22,8 +23,6 @@ from sglang.srt.utils import (
     is_npu,
     is_xpu,
 )
-
-from sglang.srt.debug_utils.dumper import dumper
 
 _is_cuda = is_cuda()
 _is_hip = is_hip()
@@ -136,11 +135,16 @@ class RotaryEmbedding(CustomOp):
         # use CPU to compute the cache and then move it to GPU. However, we
         # create the cache on GPU for faster initialization. This may cause
         # a slight numerical difference between the HF implementation and ours.
-        init_device = "cpu" if get_global_server_args().enable_deterministic_inference else None
+        init_device = (
+            "cpu" if get_global_server_args().enable_deterministic_inference else None
+        )
         inv_freq = 1.0 / (
             base
             ** (
-                torch.arange(0, self.rotary_dim, 2, dtype=torch.float, device=init_device) / self.rotary_dim
+                torch.arange(
+                    0, self.rotary_dim, 2, dtype=torch.float, device=init_device
+                )
+                / self.rotary_dim
             )
         )
         if get_global_server_args().enable_deterministic_inference:

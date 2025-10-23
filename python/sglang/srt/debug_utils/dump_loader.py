@@ -79,6 +79,7 @@ def find_row(df, conditions: Dict[str, Any]):
                     else pl.col(col).is_null()
                 )
                 for col in conditions.keys()
+                if col in df.columns
             ],
         )
     )

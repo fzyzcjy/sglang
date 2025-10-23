@@ -91,21 +91,33 @@ def main(args):
 # TODO allow configure via command line
 def _get_location_info_of_target_pass_id():
     prefill_num_tokens = 91
-    start_target_forward_pass_id = int(os.environ.get("ARG_START_TARGET_FORWARD_PASS_ID", "5"))
-    baseline_forward_pass_id = 1
+    start_target_forward_pass_id = int(
+        os.environ.get("ARG_START_TARGET_FORWARD_PASS_ID", "5")
+    )
+    location_info_mode = os.environ.get("ARG_LOCATION_INFO_MODE", "normal")
 
-    return {
-        start_target_forward_pass_id
-        + i: dict(
-            baseline_forward_pass_id=baseline_forward_pass_id,
-            baseline_token_slice=(
-                slice(0, prefill_num_tokens)
-                if i == 0
-                else slice(prefill_num_tokens + i - 1, prefill_num_tokens + i)
-            ),
-        )
-        for i in range(10)
-    }
+    match location_info_mode:
+        case "normal":
+            return {
+                start_target_forward_pass_id + i: dict(
+                    baseline_forward_pass_id=1,
+                    baseline_token_slice=(
+                        slice(0, prefill_num_tokens)
+                        if i == 0
+                        else slice(prefill_num_tokens + i - 1, prefill_num_tokens + i)
+                    ),
+                )
+                for i in range(2)
+            }
+        case "compute_logprobs":
+            return {
+                start_target_forward_pass_id + i: dict(
+                    # it is another system
+                    baseline_forward_pass_id=0,
+                    baseline_token_slice=slice(prefill_num_tokens + i - 1, prefill_num_tokens + i),
+                )
+                for i in range(2)
+            }
 
 
 # TODO allow configure via command line
