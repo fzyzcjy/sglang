@@ -112,7 +112,7 @@ def _get_location_info_of_target_pass_id():
 def _get_tensor_dim_descs():
     return [
         dict(
-            pattern="hidden_states|residual",
+            pattern="hidden_states|residual|logits",
             baseline_desc="1 num_tokens hidden",
             target_desc="num_tokens hidden",
         ),
