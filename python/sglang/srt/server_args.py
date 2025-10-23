@@ -1504,6 +1504,8 @@ class ServerArgs:
                 "Enable deterministic inference because of rl_on_policy_target."
             )
             self.enable_deterministic_inference = True
+            # TODO remove this environment variable as a whole
+            os.environ["SGLANG_ENABLE_DETERMINISTIC_INFERENCE"] = "1"
 
         if self.enable_deterministic_inference:
             # Check sampling backend
