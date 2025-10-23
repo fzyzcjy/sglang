@@ -126,7 +126,7 @@ class RotaryEmbedding(CustomOp):
         self.cos_sin_cache: torch.Tensor
         self.register_buffer("cos_sin_cache", cache, persistent=False)
 
-        if get_global_server_args().enable_deterministic_inference:
+        if get_global_server_args().rl_on_policy_target == "fsdp":
             self._forward_method = self.forward_native
 
     def _compute_inv_freq(self, base: Union[int, float]) -> torch.Tensor:
@@ -136,7 +136,7 @@ class RotaryEmbedding(CustomOp):
         # create the cache on GPU for faster initialization. This may cause
         # a slight numerical difference between the HF implementation and ours.
         init_device = (
-            "cpu" if get_global_server_args().enable_deterministic_inference else None
+            "cpu" if get_global_server_args().rl_on_policy_target == "fsdp" else None
         )
         inv_freq = 1.0 / (
             base
@@ -147,7 +147,7 @@ class RotaryEmbedding(CustomOp):
                 / self.rotary_dim
             )
         )
-        if get_global_server_args().enable_deterministic_inference:
+        if get_global_server_args().rl_on_policy_target == "fsdp":
             inv_freq = inv_freq.cuda()
         return inv_freq
 

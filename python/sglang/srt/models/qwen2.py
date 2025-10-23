@@ -93,7 +93,7 @@ class Qwen2MLP(nn.Module):
 
     def forward(self, x):
         dumper.dump("mlp__input_hidden_states", x)
-        if get_global_server_args().enable_deterministic_inference:
+        if get_global_server_args().rl_on_policy_target == "fsdp":
             x = x.bfloat16()
 
         gate_up, _ = self.gate_up_proj(x)
@@ -288,7 +288,7 @@ class Qwen2Model(nn.Module):
                 prefix=add_prefix("embed_tokens", prefix),
                 params_dtype=(
                     torch.float32
-                    if get_global_server_args().enable_deterministic_inference
+                    if get_global_server_args().rl_on_policy_target == "fsdp"
                     else None
                 ),
             )
@@ -318,7 +318,7 @@ class Qwen2Model(nn.Module):
                     override_orig_dtype=torch.float32,
                     fp32_residual=True,
                 )
-                if get_global_server_args().enable_deterministic_inference
+                if get_global_server_args().rl_on_policy_target == "fsdp"
                 else {}
             )
             self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, **norm_kwargs)

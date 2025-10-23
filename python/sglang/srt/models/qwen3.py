@@ -96,7 +96,7 @@ class Qwen3Attention(nn.Module):
                 weight_dtype=torch.float32,
                 cast_x_before_out_mul=True,
             )
-            if get_global_server_args().enable_deterministic_inference
+            if get_global_server_args().rl_on_policy_target == "fsdp"
             else {}
         )
         self.q_norm = RMSNorm(self.head_dim, eps=rms_norm_eps, **norm_kwargs)
@@ -173,7 +173,7 @@ class Qwen3Attention(nn.Module):
         forward_batch: ForwardBatch,
     ) -> torch.Tensor:
         dumper.dump("attn__input_hidden_states", hidden_states)
-        if get_global_server_args().enable_deterministic_inference:
+        if get_global_server_args().rl_on_policy_target == "fsdp":
             hidden_states = hidden_states.bfloat16()
 
         qkv, _ = self.qkv_proj(hidden_states)
@@ -185,7 +185,7 @@ class Qwen3Attention(nn.Module):
         dumper.dump("attn__k_before_rope", k)
         q, k = self.rotary_emb(positions, q, k)
 
-        if get_global_server_args().enable_deterministic_inference:
+        if get_global_server_args().rl_on_policy_target == "fsdp":
             q = q.to(torch.bfloat16)
             k = k.to(torch.bfloat16)
 
@@ -247,7 +247,7 @@ class Qwen3DecoderLayer(nn.Module):
                 override_orig_dtype=torch.float32,
                 fp32_residual=True,
             )
-            if get_global_server_args().enable_deterministic_inference
+            if get_global_server_args().rl_on_policy_target == "fsdp"
             else {}
         )
         self.input_layernorm = RMSNorm(

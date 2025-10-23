@@ -104,7 +104,7 @@ class Sampler(nn.Module):
             if return_logprob and SGLANG_RETURN_ORIGINAL_LOGPROB:
                 probs_without_temp_scaling = torch.softmax(logits, dim=-1)
 
-            if get_global_server_args().enable_deterministic_inference:
+            if get_global_server_args().rl_on_policy_target == "fsdp":
                 dumper.dump(
                     "compute_logprobs__raw_temperatures", sampling_info.temperatures
                 )
@@ -167,7 +167,7 @@ class Sampler(nn.Module):
                     )
 
             if return_logprob:
-                if get_global_server_args().enable_deterministic_inference:
+                if get_global_server_args().rl_on_policy_target == "fsdp":
                     logprobs = logprobs_via_logsoftmax_kernel
                     del logprobs_via_logsoftmax_kernel
                 # clamp to avoid -inf
