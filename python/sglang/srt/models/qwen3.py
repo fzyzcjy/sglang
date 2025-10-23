@@ -235,16 +235,18 @@ class Qwen3DecoderLayer(nn.Module):
             quant_config=quant_config,
             prefix=add_prefix("mlp", prefix),
         )
-        self.input_layernorm = RMSNorm(
-            config.hidden_size,
-            eps=config.rms_norm_eps,
-            fp32_residual=get_global_server_args().enable_deterministic_inference,
+
+        norm_kwargs = (
+            dict(
+                weight_dtype=torch.float32,
+                cast_x_before_out_mul=True,
+                fp32_residual=True,
+            )
+            if get_global_server_args().enable_deterministic_inference
+            else {}
         )
-        self.post_attention_layernorm = RMSNorm(
-            config.hidden_size,
-            eps=config.rms_norm_eps,
-            fp32_residual=get_global_server_args().enable_deterministic_inference,
-        )
+        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, **norm_kwargs)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, **norm_kwargs)
 
         self.layer_scatter_modes = LayerScatterModes.init_new(
             layer_id=layer_id,
