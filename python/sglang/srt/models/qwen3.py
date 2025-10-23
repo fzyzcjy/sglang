@@ -400,11 +400,6 @@ class Qwen3ForCausalLM(nn.Module):
                     config.hidden_size,
                     quant_config=quant_config,
                     prefix=add_prefix("lm_head", prefix),
-                    params_dtype=(
-                        torch.float32
-                        if get_global_server_args().enable_deterministic_inference
-                        else None
-                    ),
                 )
         else:
             # ranks other than the last rank will have a placeholder layer
