@@ -136,12 +136,15 @@ class RotaryEmbedding(CustomOp):
         # use CPU to compute the cache and then move it to GPU. However, we
         # create the cache on GPU for faster initialization. This may cause
         # a slight numerical difference between the HF implementation and ours.
+        init_device = "cpu" if get_global_server_args().enable_deterministic_inference else None
         inv_freq = 1.0 / (
             base
             ** (
-                torch.arange(0, self.rotary_dim, 2, dtype=torch.float) / self.rotary_dim
+                torch.arange(0, self.rotary_dim, 2, dtype=torch.float, device=init_device) / self.rotary_dim
             )
         )
+        if get_global_server_args().enable_deterministic_inference:
+            inv_freq = inv_freq.cuda()
         return inv_freq
 
     def _compute_cos_sin_cache(self) -> torch.Tensor:
