@@ -77,10 +77,12 @@ class RMSNorm(CustomOp):
         cast_x_before_out_mul: bool = False,
         fp32_residual: bool = False,
         weight_dtype: Optional = None,
+        override_orig_dtype: Optional = None,
     ) -> None:
         super().__init__()
         self.cast_x_before_out_mul = cast_x_before_out_mul
         self.fp32_residual = fp32_residual
+        self.override_orig_dtype = override_orig_dtype
         self.weight = nn.Parameter(torch.ones(hidden_size, dtype=weight_dtype))
         self.variance_epsilon = eps
         self.hidden_size = hidden_size
@@ -173,7 +175,7 @@ class RMSNorm(CustomOp):
 
         if not x.is_contiguous():
             x = x.contiguous()
-        orig_dtype = x.dtype
+        orig_dtype = self.override_orig_dtype or x.dtype
         x = x.to(torch.float32)
         if residual is not None:
             x = x + residual.to(torch.float32)

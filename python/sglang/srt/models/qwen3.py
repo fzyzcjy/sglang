@@ -244,6 +244,7 @@ class Qwen3DecoderLayer(nn.Module):
             dict(
                 weight_dtype=torch.float32,
                 cast_x_before_out_mul=True,
+                override_orig_dtype=torch.float32,
                 fp32_residual=True,
             )
             if get_global_server_args().enable_deterministic_inference
