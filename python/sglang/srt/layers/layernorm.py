@@ -74,12 +74,12 @@ class RMSNorm(CustomOp):
         hidden_size: int,
         eps: float = 1e-6,
         var_hidden_size: Optional[int] = None,
-        cast_x_before_out_mul: bool = False,
+        skip_output_cast: bool = False,
         fp32_residual: bool = False,
         weight_dtype: Optional = None,
     ) -> None:
         super().__init__()
-        self.cast_x_before_out_mul = cast_x_before_out_mul
+        self.skip_output_cast = skip_output_cast
         self.fp32_residual = fp32_residual
         self.weight = nn.Parameter(torch.ones(hidden_size, dtype=weight_dtype))
         self.variance_epsilon = eps
@@ -208,8 +208,9 @@ class RMSNorm(CustomOp):
         dumper.dump("rmsnorm__after_mul_rsqrt_hidden", x)
         dumper.dump("rmsnorm__weight", self.weight)
 
-        if self.cast_x_before_out_mul:
-            x = self.weight * x.to(orig_dtype)
+        # TODO may improve, e.g. ensure input is fp32 instead of skip output cast here
+        if self.skip_output_cast:
+            x = self.weight * x
         else:
             x = (x * self.weight).to(orig_dtype)
 
