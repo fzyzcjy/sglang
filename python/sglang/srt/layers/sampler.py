@@ -104,6 +104,11 @@ class Sampler(nn.Module):
 
             # Post process logits
             logits.div_(sampling_info.temperatures)
+
+            if get_global_server_args().enable_deterministic_inference:
+                logprobs_via_logsoftmax_kernel = torch.log_softmax(logits, dim=-1)
+
+            # Post process logits (continued)
             logits[:] = torch.softmax(logits, dim=-1)
             probs = logits
             del logits
@@ -148,8 +153,11 @@ class Sampler(nn.Module):
                     )
 
             if return_logprob:
+                if get_global_server_args().enable_deterministic_inference:
+                    logprobs = logprobs_via_logsoftmax_kernel
+                    del logprobs_via_logsoftmax_kernel
                 # clamp to avoid -inf
-                if SGLANG_RETURN_ORIGINAL_LOGPROB:
+                elif SGLANG_RETURN_ORIGINAL_LOGPROB:
                     logprobs = torch.log(probs_without_temp_scaling).clamp(
                         min=torch.finfo(probs_without_temp_scaling.dtype).min
                     )
