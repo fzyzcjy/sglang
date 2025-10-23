@@ -22,6 +22,7 @@ import triton
 import triton.language as tl
 from torch import nn
 
+from sglang.srt.debug_utils.dumper import dumper
 from sglang.srt.distributed import (
     get_tensor_model_parallel_world_size,
     tensor_model_parallel_all_gather,
@@ -459,6 +460,8 @@ class LogitsProcessor(nn.Module):
 
         # Compute logits for both input and sampled tokens.
         logits = self._get_logits(pruned_states, lm_head, logits_metadata)
+        dumper.dump("causallm__lm_head_weights", lm_head.weight)
+        dumper.dump("causallm__logits", logits)
         sampled_logits = (
             logits[sample_indices] if sample_indices is not None else logits
         )

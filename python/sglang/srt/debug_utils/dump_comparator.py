@@ -79,6 +79,7 @@ def main(args):
         check_tensor_pair(
             path_baseline=path_baseline,
             path_target=path_target,
+            diff_threshold=args.diff_threshold,
             name=row["name"],
             baseline_token_slice=baseline_token_slice,
             tensor_dim_desc=tensor_dim_desc,
@@ -147,7 +148,12 @@ def _get_einops_dim_index(pattern: str, dim_name: str):
 
 
 def check_tensor_pair(
-    path_baseline, path_target, name="", baseline_token_slice=None, tensor_dim_desc=None
+    path_baseline,
+    path_target,
+    diff_threshold: float = 1e-3,
+    name="",
+    baseline_token_slice=None,
+    tensor_dim_desc=None,
 ):
     x_baseline = _load_object(path_baseline)
     x_target = _load_object(path_target)
@@ -184,16 +190,22 @@ def check_tensor_pair(
     x_target = x_target.float()
     x_baseline = x_baseline.float()
 
-    for name, fn in (
+    for name, fn in [
         ("mean", torch.mean),
         ("std", torch.std),
         ("min", torch.min),
         ("max", torch.max),
-        ("p1", functools.partial(torch.quantile, q=0.01)),
-        ("p5", functools.partial(torch.quantile, q=0.05)),
-        ("p95", functools.partial(torch.quantile, q=0.95)),
-        ("p99", functools.partial(torch.quantile, q=0.99)),
-    ):
+        *(
+            [
+                ("p1", functools.partial(torch.quantile, q=0.01)),
+                ("p5", functools.partial(torch.quantile, q=0.05)),
+                ("p95", functools.partial(torch.quantile, q=0.95)),
+                ("p99", functools.partial(torch.quantile, q=0.99)),
+            ]
+            if x_baseline.numel() < 10_000_000
+            else []
+        ),
+    ]:
         value_baseline = fn(x_baseline).item()
         value_target = fn(x_target).item()
         print(
@@ -204,7 +216,11 @@ def check_tensor_pair(
         print(f"⚠️ Shape mismatch")
         return
 
-    diff_info = _compute_and_print_diff(x_baseline=x_baseline, x_target=x_target)
+    diff_info = _compute_and_print_diff(
+        x_baseline=x_baseline,
+        x_target=x_target,
+        diff_threshold=diff_threshold,
+    )
     needs_print = diff_info["max_abs_diff"] > 1e-3
 
     if (x_baseline_original_dtype != x_target_original_dtype) and (
@@ -218,6 +234,7 @@ def check_tensor_pair(
         _compute_and_print_diff(
             x_baseline=x_baseline.to(downcast_dtype),
             x_target=x_target.to(downcast_dtype),
+            diff_threshold=diff_threshold,
             prefix_text=f"When downcast to {downcast_dtype}: ",
         )
 
@@ -226,7 +243,9 @@ def check_tensor_pair(
         print(f"x_target(sample)={get_truncated_value(x_target)}")
 
 
-def _compute_and_print_diff(x_baseline, x_target, prefix_text=""):
+def _compute_and_print_diff(
+    x_baseline, x_target, diff_threshold: float, prefix_text=""
+):
     raw_abs_diff = (x_target - x_baseline).abs()
 
     max_abs_diff = raw_abs_diff.max().item()
@@ -236,7 +255,7 @@ def _compute_and_print_diff(x_baseline, x_target, prefix_text=""):
     print(
         prefix_text
         + "\t".join(
-            f"{'❌' if value > 1e-3 else '✅'} {name}={value}"
+            f"{'❌' if value > diff_threshold else '✅'} {name}={value}"
             for name, value in [
                 ("rel_diff", rel_diff),
                 ("max_abs_diff", max_abs_diff),
@@ -298,5 +317,6 @@ if __name__ == "__main__":
     parser.add_argument("--start-id", type=int, default=0)
     parser.add_argument("--end-id", type=int, default=1000000)
     parser.add_argument("--baseline-start-id", type=int, default=0)
+    parser.add_argument("--diff-threshold", type=float, default=1e-3)
     args = parser.parse_args()
     main(args)

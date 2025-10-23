@@ -134,9 +134,7 @@ def get_truncated_value(value):
     if value.numel() < 200:
         return value
 
-    slices = [
-        slice(0, 5) if dim_size > 200 else slice(None) for dim_size in value.shape
-    ]
+    slices = [slice(0, 5) if dim_size > 50 else slice(None) for dim_size in value.shape]
     return value[tuple(slices)]
 
 

@@ -265,7 +265,7 @@ class Qwen3DecoderLayer(nn.Module):
         forward_batch: ForwardBatch,
         residual: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        dumper.override_enable(self.layer_id <= 3)
+        # dumper.override_enable(self.layer_id <= 3)
         dumper.set_ctx(layer_id=self.layer_id)
         dumper.dump(
             "layer_start__hidden_states_and_residual",
@@ -432,6 +432,7 @@ class Qwen3ForCausalLM(nn.Module):
             input_embeds,
             pp_proxy_tensors=pp_proxy_tensors,
         )
+        dumper.dump("causallm__last_hidden_states", hidden_states)
 
         aux_hidden_states = None
         if self.capture_aux_hidden_states:

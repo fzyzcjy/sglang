@@ -364,6 +364,12 @@ class Qwen2Model(nn.Module):
                 if residual is None:
                     hidden_states = self.norm(hidden_states)
                 else:
+                    dumper.dump("model_last_hidden_states_before_norm", hidden_states)
+                    dumper.dump("model_last_residual_before_norm", residual)
+                    dumper.dump(
+                        "model_last_hidden_states_and_residual_before_norm",
+                        hidden_states.float() + residual.float(),
+                    )
                     hidden_states, _ = self.norm(hidden_states, residual)
 
         if len(aux_hidden_states) == 0:

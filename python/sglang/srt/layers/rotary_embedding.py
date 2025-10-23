@@ -23,6 +23,8 @@ from sglang.srt.utils import (
     is_xpu,
 )
 
+from sglang.srt.debug_utils.dumper import dumper
+
 _is_cuda = is_cuda()
 _is_hip = is_hip()
 _use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
@@ -162,6 +164,12 @@ class RotaryEmbedding(CustomOp):
         fused_set_kv_buffer_arg: Optional[FusedSetKVBufferArg] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """A PyTorch-native implementation of forward()."""
+        dumper.dump("rope__input_q", query)
+        dumper.dump("rope__input_k", key)
+        dumper.dump("rope__input_positions", positions)
+        dumper.dump("rope__input_offsets", offsets)
+        dumper.dump("rope__rotary_dim", self.rotary_dim)
+
         assert (
             fused_set_kv_buffer_arg is None
         ), "fused_set_kv_buffer_arg is not supported for native implementation"
@@ -172,6 +180,8 @@ class RotaryEmbedding(CustomOp):
         num_tokens = positions.shape[0]
         cos_sin = self.cos_sin_cache.index_select(0, positions)
         cos, sin = cos_sin.chunk(2, dim=-1)
+        dumper.dump("rope__cos", cos)
+        dumper.dump("rope__sin", sin)
 
         query_shape = query.shape
         query = query.view(num_tokens, -1, self.head_size)
@@ -186,6 +196,9 @@ class RotaryEmbedding(CustomOp):
         key_pass = key[..., self.rotary_dim :]
         key_rot = _apply_rotary_emb(key_rot, cos, sin, self.is_neox_style)
         key = torch.cat((key_rot, key_pass), dim=-1).reshape(key_shape)
+
+        dumper.dump("rope__output_q", query)
+        dumper.dump("rope__output_k", key)
         return query, key
 
     def forward_npu(
