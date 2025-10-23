@@ -172,6 +172,9 @@ class Qwen3Attention(nn.Module):
         hidden_states: torch.Tensor,
         forward_batch: ForwardBatch,
     ) -> torch.Tensor:
+        if get_global_server_args().enable_deterministic_inference:
+            hidden_states = hidden_states.bfloat16()
+
         qkv, _ = self.qkv_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
         dumper.dump("attn__q_before_norm", q)
