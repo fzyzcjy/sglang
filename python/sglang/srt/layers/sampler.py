@@ -105,8 +105,11 @@ class Sampler(nn.Module):
                 probs_without_temp_scaling = torch.softmax(logits, dim=-1)
 
             if get_global_server_args().enable_deterministic_inference:
+                dumper.dump(
+                    "compute_logprobs__raw_temperatures", sampling_info.temperatures
+                )
                 logits_div_temperature = logits.bfloat16().div(
-                    sampling_info.temperatures
+                    sampling_info.temperatures.bfloat16()
                 )
                 dumper.dump(
                     "compute_logprobs__logits_after_temperature", logits_div_temperature
