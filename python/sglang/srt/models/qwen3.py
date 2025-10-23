@@ -238,8 +238,9 @@ class Qwen3DecoderLayer(nn.Module):
 
         norm_kwargs = (
             dict(
-                weight_dtype=torch.float32,
-                cast_x_before_out_mul=True,
+                # TODO
+                # weight_dtype=torch.float32,
+                # cast_x_before_out_mul=True,
                 fp32_residual=True,
             )
             if get_global_server_args().enable_deterministic_inference
