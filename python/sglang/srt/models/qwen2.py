@@ -311,7 +311,17 @@ class Qwen2Model(nn.Module):
             prefix=add_prefix("layers", prefix),
         )
         if self.pp_group.is_last_rank:
-            self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+            norm_kwargs = (
+                dict(
+                    weight_dtype=torch.float32,
+                    cast_x_before_out_mul=True,
+                    override_orig_dtype=torch.float32,
+                    fp32_residual=True,
+                )
+                if get_global_server_args().enable_deterministic_inference
+                else {}
+            )
+            self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps, **norm_kwargs)
         else:
             self.norm = PPMissingLayer(return_tuple=True)
 
