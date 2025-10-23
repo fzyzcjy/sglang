@@ -129,7 +129,7 @@ def get_truncated_value(value):
         return [get_truncated_value(x) for x in value]
 
     if not isinstance(value, torch.Tensor):
-        return None
+        return value
 
     if value.numel() < 200:
         return value

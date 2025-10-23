@@ -1,5 +1,6 @@
 import argparse
 import functools
+import os
 import re
 from pathlib import Path
 
@@ -43,7 +44,7 @@ def main(args):
             baseline_forward_pass_id = (
                 row["forward_pass_id"] - args.start_id + args.baseline_start_id
             )
-            baseline_token_slice = None
+            baseline_token_slice = baseline_cropper = None
 
         tensor_dim_desc = None
         if tensor_dim_descs is not None:
@@ -90,7 +91,7 @@ def main(args):
 # TODO allow configure via command line
 def _get_location_info_of_target_pass_id():
     prefill_num_tokens = 91
-    start_target_forward_pass_id = 5
+    start_target_forward_pass_id = int(os.environ.get("ARG_START_TARGET_FORWARD_PASS_ID", "5"))
     baseline_forward_pass_id = 1
 
     return {
@@ -127,6 +128,17 @@ def _get_tensor_dim_descs():
         ),
         dict(
             pattern="attn__(q|k|v)",
+            baseline_desc="1 num_heads num_tokens head_dim",
+            target_desc="num_tokens (num_heads head_dim)",
+        ),
+        dict(
+            pattern="rope__(sin|cos)",
+            baseline_desc="1 num_tokens head_dim",
+            target_desc="num_tokens head_dim",
+            baseline_cropper=lambda x: x[:, :64],
+        ),
+        dict(
+            pattern="rope__(input_q|input_k|output_q|output_k)",
             baseline_desc="1 num_heads num_tokens head_dim",
             target_desc="num_tokens (num_heads head_dim)",
         ),
@@ -174,6 +186,9 @@ def check_tensor_pair(
             x_baseline,
             tensor_dim_desc["baseline_desc"] + " -> " + tensor_dim_desc["target_desc"],
         )
+        if (f := tensor_dim_desc.get("baseline_cropper")) is not None:
+            print("Apply baseline_cropper")
+            x_baseline = f(x_baseline)
 
     x_baseline, x_target = _comparison_preprocessor(x_baseline, x_target, name=name)
     x_baseline = _try_unify_shape(x_baseline, target_shape=x_target.shape)
@@ -304,7 +319,7 @@ def _comparison_preprocessor(x_baseline, x_target, name):
 def _load_object(path):
     x = torch.load(path, weights_only=False)
     if not isinstance(x, torch.Tensor):
-        print(f"Skip load {path} since {type(x)=} is not a Tensor")
+        print(f"Skip load {path} since {type(x)=} is not a Tensor ({x=})")
         return None
     return x.cuda()
 
