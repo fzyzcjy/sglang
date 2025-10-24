@@ -11,7 +11,6 @@ import triton
 import triton.language as tl
 
 from sglang.srt.custom_op import CustomOp
-from sglang.srt.debug_utils.dumper import dumper
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import (
     cpu_has_amx_support,
@@ -154,15 +153,11 @@ class RotaryEmbedding(CustomOp):
     def _compute_cos_sin_cache(self) -> torch.Tensor:
         """Compute the cos and sin cache."""
         inv_freq = self._compute_inv_freq(self.base)
-        dumper.dump("create_rope__inv_freq", inv_freq)
         t = torch.arange(self.max_position_embeddings, dtype=torch.float)
 
         freqs = torch.einsum("i,j -> ij", t, inv_freq)
-        dumper.dump("create_rope__freqs", freqs)
         cos = freqs.cos()
         sin = freqs.sin()
-        dumper.dump("create_rope__output_cos", cos)
-        dumper.dump("create_rope__output_sin", sin)
         cache = torch.cat((cos, sin), dim=-1)
         return cache
 
@@ -175,12 +170,6 @@ class RotaryEmbedding(CustomOp):
         fused_set_kv_buffer_arg: Optional[FusedSetKVBufferArg] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """A PyTorch-native implementation of forward()."""
-        dumper.dump("rope__input_q", query)
-        dumper.dump("rope__input_k", key)
-        dumper.dump("rope__input_positions", positions)
-        dumper.dump("rope__input_offsets", offsets)
-        dumper.dump("rope__rotary_dim", self.rotary_dim)
-
         assert (
             fused_set_kv_buffer_arg is None
         ), "fused_set_kv_buffer_arg is not supported for native implementation"
@@ -191,8 +180,6 @@ class RotaryEmbedding(CustomOp):
         num_tokens = positions.shape[0]
         cos_sin = self.cos_sin_cache.index_select(0, positions)
         cos, sin = cos_sin.chunk(2, dim=-1)
-        dumper.dump("rope__cos", cos)
-        dumper.dump("rope__sin", sin)
 
         query_shape = query.shape
         query = query.view(num_tokens, -1, self.head_size)
@@ -207,9 +194,6 @@ class RotaryEmbedding(CustomOp):
         key_pass = key[..., self.rotary_dim :]
         key_rot = _apply_rotary_emb(key_rot, cos, sin, self.is_neox_style)
         key = torch.cat((key_rot, key_pass), dim=-1).reshape(key_shape)
-
-        dumper.dump("rope__output_q", query)
-        dumper.dump("rope__output_k", key)
         return query, key
 
     def forward_npu(

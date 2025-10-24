@@ -21,7 +21,6 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 import torch
 from torch import nn
 
-from sglang.srt.debug_utils.dumper import dumper
 from sglang.srt.distributed import (
     get_pp_group,
     get_tensor_model_parallel_rank,
@@ -69,7 +68,6 @@ class Qwen2MLP(nn.Module):
         prefix: str = "",
     ) -> None:
         super().__init__()
-        self.intermediate_size = intermediate_size
         self.gate_up_proj = MergedColumnParallelLinear(
             hidden_size,
             [intermediate_size] * 2,
@@ -92,17 +90,12 @@ class Qwen2MLP(nn.Module):
         self.act_fn = SiluAndMul()
 
     def forward(self, x):
-        dumper.dump("mlp__input_hidden_states", x)
         if get_global_server_args().rl_on_policy_target == "fsdp":
             x = x.bfloat16()
 
         gate_up, _ = self.gate_up_proj(x)
-        dumper.dump("mlp__gate_hidden_states", gate_up[:, : self.intermediate_size])
-        dumper.dump("mlp__up_hidden_states", gate_up[:, self.intermediate_size :])
         x = self.act_fn(gate_up)
-        dumper.dump("mlp__after_act_hidden_states", x)
         x, _ = self.down_proj(x)
-        dumper.dump("mlp__output_hidden_states", x)
         return x
 
 
@@ -383,12 +376,6 @@ class Qwen2Model(nn.Module):
                 if residual is None:
                     hidden_states = self.norm(hidden_states)
                 else:
-                    dumper.dump("model_last_hidden_states_before_norm", hidden_states)
-                    dumper.dump("model_last_residual_before_norm", residual)
-                    dumper.dump(
-                        "model_last_hidden_states_and_residual_before_norm",
-                        hidden_states.float() + residual.float(),
-                    )
                     hidden_states, _ = self.norm(hidden_states, residual)
 
         if len(aux_hidden_states) == 0:

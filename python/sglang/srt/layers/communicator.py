@@ -19,7 +19,6 @@ from typing import Dict, Optional
 
 import torch
 
-from sglang.srt.debug_utils.dumper import dumper
 from sglang.srt.distributed import (
     get_tensor_model_parallel_world_size,
     tensor_model_parallel_all_reduce,
@@ -224,7 +223,6 @@ class LayerCommunicator:
         forward_batch: ForwardBatch,
         qaunt_format: str = "",
     ):
-        dumper.set_ctx(norm_mode="input_ln")
         if hidden_states.shape[0] == 0:
             residual = hidden_states
         else:
@@ -269,7 +267,6 @@ class LayerCommunicator:
                         hidden_states, residual = self.input_layernorm(
                             hidden_states, residual
                         )
-        dumper.set_ctx(norm_mode=None)
 
         hidden_states = self._communicate_simple_fn(
             hidden_states=hidden_states,
@@ -289,16 +286,13 @@ class LayerCommunicator:
         if cache is not None:
             self._context.cache = cache
 
-        dumper.set_ctx(norm_mode="post_attn_ln")
-        ans = self._communicate_with_all_reduce_and_layer_norm_fn(
+        return self._communicate_with_all_reduce_and_layer_norm_fn(
             hidden_states=hidden_states,
             residual=residual,
             forward_batch=forward_batch,
             layernorm=self.post_attention_layernorm,
             context=self._context,
         )
-        dumper.set_ctx(norm_mode=None)
-        return ans
 
     def postprocess_layer(
         self,

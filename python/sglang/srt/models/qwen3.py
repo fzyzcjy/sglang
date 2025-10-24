@@ -5,7 +5,6 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import torch
 from torch import nn
 
-from sglang.srt.debug_utils.dumper import dumper
 from sglang.srt.distributed import (
     get_pp_group,
     get_tensor_model_parallel_rank,
@@ -64,7 +63,6 @@ class Qwen3Attention(nn.Module):
         alt_stream: Optional[torch.cuda.Stream] = None,
     ) -> None:
         super().__init__()
-        self.layer_id = layer_id
         self.hidden_size = hidden_size
         self.tp_size = get_tensor_model_parallel_world_size()
         self.total_num_heads = num_heads
@@ -156,12 +154,9 @@ class Qwen3Attention(nn.Module):
             current_stream.wait_stream(self.alt_stream)
         else:
             q_by_head = q.reshape(-1, self.head_dim)
-            dumper.set_ctx(norm_mode="q")
             q_by_head = self.q_norm(q_by_head)
             k_by_head = k.reshape(-1, self.head_dim)
-            dumper.set_ctx(norm_mode="k")
             k_by_head = self.k_norm(k_by_head)
-            dumper.set_ctx(norm_mode=None)
         q = q_by_head.view(q.shape)
         k = k_by_head.view(k.shape)
         return q, k
@@ -172,31 +167,19 @@ class Qwen3Attention(nn.Module):
         hidden_states: torch.Tensor,
         forward_batch: ForwardBatch,
     ) -> torch.Tensor:
-        dumper.dump("attn__input_hidden_states", hidden_states)
         if get_global_server_args().rl_on_policy_target == "fsdp":
             hidden_states = hidden_states.bfloat16()
 
         qkv, _ = self.qkv_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-        dumper.dump("attn__q_before_norm", q)
-        dumper.dump("attn__k_before_norm", k)
         q, k = self._apply_qk_norm(q, k)
-        dumper.dump("attn__q_before_rope", q)
-        dumper.dump("attn__k_before_rope", k)
         q, k = self.rotary_emb(positions, q, k)
 
         if get_global_server_args().rl_on_policy_target == "fsdp":
             q = q.to(torch.bfloat16)
             k = k.to(torch.bfloat16)
 
-        dumper.dump("attn__q", q)
-        dumper.dump("attn__k", k)
-        dumper.dump("attn__v", v)
-
         attn_output = self.attn(q, k, v, forward_batch)
-
-        dumper.dump("attn__attn_output", attn_output)
-
         output, _ = self.o_proj(attn_output)
         return output
 
@@ -211,7 +194,6 @@ class Qwen3DecoderLayer(nn.Module):
         alt_stream: Optional[torch.cuda.Stream] = None,
     ) -> None:
         super().__init__()
-        self.layer_id = layer_id
         self.hidden_size = config.hidden_size
         rope_theta = getattr(config, "rope_theta", 1000000)
         rope_scaling = getattr(config, "rope_scaling", None)
@@ -276,41 +258,16 @@ class Qwen3DecoderLayer(nn.Module):
         forward_batch: ForwardBatch,
         residual: Optional[torch.Tensor],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # dumper.override_enable(self.layer_id <= 3)
-        dumper.set_ctx(layer_id=self.layer_id)
-        dumper.dump("layer_start__hidden_states", hidden_states)
-        dumper.dump("layer_start__residual", residual)
-        dumper.dump(
-            "layer_start__hidden_states_and_residual",
-            (
-                (hidden_states.float() + residual.float())
-                if residual is not None
-                else hidden_states
-            ),
-        )
-
         # Self Attention
         hidden_states, residual = self.layer_communicator.prepare_attn(
             hidden_states, residual, forward_batch
         )
-        dumper.dump("layer_after_input_ln_hidden_states", hidden_states)
         if hidden_states.shape[0] != 0:
             hidden_states = self.self_attn(
                 positions=positions,
                 hidden_states=hidden_states,
                 forward_batch=forward_batch,
             )
-        dumper.dump("layer_after_attn_hidden_states", hidden_states)
-        dumper.dump("layer_after_attn_residual", residual)
-        dumper.dump(
-            "layer_after_attn_hidden_states_and_residual",
-            # HACK: the `float()` will make numbers change
-            (
-                (hidden_states + residual.float())
-                if residual is not None
-                else hidden_states
-            ),
-        )
 
         # Fully Connected
         hidden_states, residual = self.layer_communicator.prepare_mlp(
@@ -323,19 +280,12 @@ class Qwen3DecoderLayer(nn.Module):
                 else None
             ),
         )
-        dumper.dump("layer_before_mlp_hidden_states", hidden_states)
         hidden_states = self.mlp(hidden_states)
         if _is_npu and get_cmo_stream():
             wait_cmo_stream()
         hidden_states, residual = self.layer_communicator.postprocess_layer(
             hidden_states, residual, forward_batch
         )
-        dumper.dump("layer_after_mlp_hidden_states", hidden_states)
-        dumper.dump("layer_after_mlp_residual", residual)
-        dumper.dump("layer_end__hidden_states_and_residual", hidden_states + residual)
-
-        dumper.override_enable(None)
-        dumper.set_ctx(layer_id=None)
         return hidden_states, residual
 
 
@@ -438,10 +388,6 @@ class Qwen3ForCausalLM(nn.Module):
         get_embedding: bool = False,
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ) -> torch.Tensor:
-        dumper.on_forward_pass_start()
-        dumper.dump("causallm__input_ids", input_ids)
-        dumper.dump("causallm__positions", positions)
-
         hidden_states = self.model(
             input_ids,
             positions,
@@ -449,7 +395,6 @@ class Qwen3ForCausalLM(nn.Module):
             input_embeds,
             pp_proxy_tensors=pp_proxy_tensors,
         )
-        dumper.dump("causallm__last_hidden_states", hidden_states)
 
         aux_hidden_states = None
         if self.capture_aux_hidden_states:

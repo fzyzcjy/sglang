@@ -21,7 +21,6 @@ import torch.nn as nn
 from packaging.version import Version
 
 from sglang.srt.custom_op import CustomOp
-from sglang.srt.debug_utils.dumper import dumper
 from sglang.srt.utils import (
     cpu_has_amx_support,
     get_bool_env_var,
@@ -171,8 +170,6 @@ class RMSNorm(CustomOp):
         x: torch.Tensor,
         residual: Optional[torch.Tensor] = None,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        dumper.dump("rmsnorm__input_raw", x)
-
         if not x.is_contiguous():
             x = x.contiguous()
         orig_dtype = self.override_orig_dtype or x.dtype
@@ -183,8 +180,6 @@ class RMSNorm(CustomOp):
                 residual = x.clone()
             else:
                 residual = x.to(orig_dtype)
-
-        dumper.dump("rmsnorm__input_hidden", x)
 
         hidden_size = x.shape[-1]
         if hidden_size != self.hidden_size:
@@ -207,15 +202,11 @@ class RMSNorm(CustomOp):
         variance = x_var.pow(2).mean(dim=-1, keepdim=True)
         x = x * torch.rsqrt(variance + self.variance_epsilon)
 
-        dumper.dump("rmsnorm__after_mul_rsqrt_hidden", x)
-        dumper.dump("rmsnorm__weight", self.weight)
-
         if self.cast_x_before_out_mul:
             x = self.weight * x.to(orig_dtype)
         else:
             x = (x * self.weight).to(orig_dtype)
 
-        dumper.dump("rmsnorm__ans_hidden", x)
         if residual is None:
             return x
         else:

@@ -5,7 +5,6 @@ import torch
 import torch.distributed as dist
 from torch import nn
 
-from sglang.srt.debug_utils.dumper import dumper
 from sglang.srt.distributed import get_tp_group
 from sglang.srt.layers.dp_attention import (
     get_attention_tp_group,
@@ -86,7 +85,6 @@ class Sampler(nn.Module):
 
         # Preprocess logits (custom processors and NaN handling)
         logits = self._preprocess_logits(logits, sampling_info)
-        dumper.dump("compute_logprobs__raw_logits", logits)
 
         if sampling_info.is_all_greedy:
             # Use torch.argmax if all requests use greedy sampling
@@ -105,20 +103,11 @@ class Sampler(nn.Module):
                 probs_without_temp_scaling = torch.softmax(logits, dim=-1)
 
             if get_global_server_args().rl_on_policy_target == "fsdp":
-                dumper.dump(
-                    "compute_logprobs__raw_temperatures", sampling_info.temperatures
-                )
                 logits_div_temperature = (
                     logits.bfloat16().div(sampling_info.temperatures).bfloat16()
                 )
-                dumper.dump(
-                    "compute_logprobs__logits_after_temperature", logits_div_temperature
-                )
                 logprobs_via_logsoftmax_kernel = torch.log_softmax(
                     logits_div_temperature, dim=-1
-                )
-                dumper.dump(
-                    "compute_logprobs_raw_logprobs", logprobs_via_logsoftmax_kernel
                 )
 
             # Post process logits
@@ -197,9 +186,6 @@ class Sampler(nn.Module):
                 torch.arange(len(batch_next_token_ids), device=sampling_info.device),
                 batch_next_token_ids,
             ]
-            dumper.dump(
-                "compute_logprobs_gathered_logprobs", logits_output.next_token_logprobs
-            )
 
         if SYNC_TOKEN_IDS_ACROSS_TP or sampling_info.grammars:
             # For performance reasons, SGLang does not sync the final token IDs across TP ranks by default.

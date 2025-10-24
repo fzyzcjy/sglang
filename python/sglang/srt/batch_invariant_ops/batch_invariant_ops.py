@@ -156,9 +156,6 @@ def matmul_persistent(
     # Allocates output.
     c = torch.empty((M, N), device=a.device, dtype=dtype)
 
-    # dumper.dump("matmul_persistent__a", a, save=False)
-    # dumper.dump("matmul_persistent__b", b, save=False)
-
     # 1D launch kernel where each block gets its own program.
     def grid(META):
         return (
