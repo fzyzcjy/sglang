@@ -106,9 +106,6 @@ class Sampler(nn.Module):
                 logits_div_temperature = (
                     logits.bfloat16().div(sampling_info.temperatures).bfloat16()
                 )
-                logprobs_via_logsoftmax_kernel = torch.log_softmax(
-                    logits_div_temperature, dim=-1
-                )
 
             # Post process logits
             logits.div_(sampling_info.temperatures)
@@ -157,8 +154,7 @@ class Sampler(nn.Module):
 
             if return_logprob:
                 if get_global_server_args().rl_on_policy_target == "fsdp":
-                    logprobs = logprobs_via_logsoftmax_kernel
-                    del logprobs_via_logsoftmax_kernel
+                    pass
                 # clamp to avoid -inf
                 elif SGLANG_RETURN_ORIGINAL_LOGPROB:
                     logprobs = torch.log(probs_without_temp_scaling).clamp(
@@ -182,10 +178,17 @@ class Sampler(nn.Module):
                     logits_output.next_token_token_ids_logprobs_idx,
                 ) = get_token_ids_logprobs(logprobs, token_ids_logprobs)
 
-            logits_output.next_token_logprobs = logprobs[
-                torch.arange(len(batch_next_token_ids), device=sampling_info.device),
-                batch_next_token_ids,
-            ]
+            if get_global_server_args().rl_on_policy_target == "fsdp":
+                logits_output.next_token_logprobs = selective_log_softmax(
+                    logits_div_temperature, batch_next_token_ids
+                )
+            else:
+                logits_output.next_token_logprobs = logprobs[
+                    torch.arange(
+                        len(batch_next_token_ids), device=sampling_info.device
+                    ),
+                    batch_next_token_ids,
+                ]
 
         if SYNC_TOKEN_IDS_ACROSS_TP or sampling_info.grammars:
             # For performance reasons, SGLang does not sync the final token IDs across TP ranks by default.
@@ -515,3 +518,12 @@ def apply_custom_logit_processor(
         logger.debug(
             f"Custom logit processor {processor.__class__.__name__} is applied."
         )
+
+
+# Keep in sync with RL frameworks
+@torch.compile(dynamic=True)
+def selective_log_softmax(
+    logits: torch.Tensor, token_ids: torch.Tensor
+) -> torch.Tensor:
+    logprobs = logits.log_softmax(dim=-1)
+    return torch.gather(logprobs, dim=-1, index=token_ids.unsqueeze(-1)).squeeze(-1)
