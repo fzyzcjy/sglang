@@ -401,6 +401,12 @@ async def validate_json_request(raw_request: Request):
 
 
 @app.get("/health")
+async def health(request: Request) -> Response:
+    print("HACK: follow slime patch and skip gen in /health")
+    return Response(status_code=200)
+
+
+# @app.get("/health")
 @app.get("/health_generate")
 async def health_generate(request: Request) -> Response:
     """
