@@ -101,7 +101,9 @@ class SchedulerUpdateWeightsMixin:
     def release_memory_occupation(
         self: Scheduler, recv_req: ReleaseMemoryOccupationReqInput
     ):
-        assert self._is_no_request(), "release_memory_occupation should be called only when no ongoing request."
+        assert (
+            self._is_no_request()
+        ), "release_memory_occupation should be called only when no ongoing request."
 
         tags = recv_req.tags
 
