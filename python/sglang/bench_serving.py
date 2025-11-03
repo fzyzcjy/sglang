@@ -1551,7 +1551,10 @@ def sample_generated_shared_prefix_requests(
         ):
             question = questions[group_idx * prompts_per_group + prompt_idx]
             full_prompt = f"{system_prompt}\n\n{question}"
-            prompt_len = len(tokenizer.encode(full_prompt))
+            
+            # TODO temp skip
+            # prompt_len = len(tokenizer.encode(full_prompt))
+            prompt_len = 1
 
             input_requests.append(
                 DatasetRow(
