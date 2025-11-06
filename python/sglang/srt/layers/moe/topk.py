@@ -884,6 +884,12 @@ def select_experts(
             renormalize=renormalize,
         )
 
+    # TODO
+    # TODO hack!!!
+    # TODO
+    if expert_location_dispatch_info is not None and expert_location_dispatch_info.ep_dispatch_algorithm == "fake":
+        topk_ids = torch.randint(0, expert_location_dispatch_info.num_physical_experts, topk_ids.shape, dtype=topk_ids.dtype, device=topk_ids.device)
+
     get_global_expert_distribution_recorder().on_select_experts(topk_ids=topk_ids)
 
     return StandardTopKOutput(topk_weights, topk_ids, router_logits)
