@@ -1535,7 +1535,7 @@ def sample_generated_shared_prefix_requests(
 
     # Generate questions
     questions = []
-    if bool(int(os.environ.get("ARG_HACK_GSP_APPROXIMATED_QUESTIONS"))):
+    if bool(int(os.environ.get("ARG_HACK_GSP_APPROXIMATED_QUESTIONS", "0"))):
         all_token_strs = [tokenizer.decode([i]) for i in range(100, 100000)]
         questions = [
             "".join(random.choices(all_token_strs, k=question_len))
