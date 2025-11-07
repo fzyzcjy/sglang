@@ -1535,9 +1535,16 @@ def sample_generated_shared_prefix_requests(
 
     # Generate questions
     questions = []
-    for _ in tqdm(range(num_groups * prompts_per_group), desc="Generating questions"):
-        question = gen_prompt(tokenizer, question_len)
-        questions.append(question)
+    if bool(int(os.environ.get("ARG_HACK_GSP_APPROXIMATED_QUESTIONS"))):
+        all_available_tokens = list(tokenizer.get_vocab().values())
+        questions = [
+            "".join(random.choices(all_available_tokens, k=question_len))
+            for _ in tqdm(range(num_groups * prompts_per_group), desc="Generating questions")
+        ]
+    else:
+        for _ in tqdm(range(num_groups * prompts_per_group), desc="Generating questions"):
+            question = gen_prompt(tokenizer, question_len)
+            questions.append(question)
 
     # Combine system prompts with questions
     input_requests = []
