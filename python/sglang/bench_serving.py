@@ -1587,9 +1587,9 @@ def sample_generated_shared_prefix_requests(
     print(
         f"Average system prompt length: {sum(len(tokenizer.encode(sp)) for sp in system_prompts) / len(system_prompts):.1f} tokens"
     )
-    print(
-        f"Average question length: {sum(len(tokenizer.encode(q)) for q in questions) / len(questions):.1f} tokens\n"
-    )
+    # print(
+    #     f"Average question length: {sum(len(tokenizer.encode(q)) for q in questions) / len(questions):.1f} tokens\n"
+    # )
 
     # Save to cache
     cache_path.parent.mkdir(parents=True, exist_ok=True)
