@@ -122,12 +122,35 @@ def post_load_weights(model: nn.Module, model_config: ModelConfig):
 
 @dataclass
 class PostLoadWeightMetadata:
-    original_meta_tensor: Optional[torch.Tensor]
+    original_meta_tensor: torch.Tensor
 
-    def __post_init__(self):
-        if (x := self.original_meta_tensor) is not None:
-            assert x.device.type == "meta"
+class PostLoadWeightMetadataUtils:
+    @classmethod
+    def set(cls, param: torch.nn.Parameter, original_weight: torch.Tensor):
+        assert isinstance(param, torch.nn.Parameter), f"{type(param)=}"
+        assert isinstance(original_weight, torch.Tensor), f"{type(original_weight)=}"
+        assert original_weight.device.type == "meta"
+        param._sglang_post_load_weight_metadata = PostLoadWeightMetadata(original_meta_tensor=original_weight)
 
+    @classmethod
+    def restore(cls, param: torch.nn.Parameter):
+        assert isinstance(param, torch.nn.Parameter), f"{type(param)=}"
+        meta = getattr(param, "_sglang_post_load_weight_metadata", None)
+        if meta is None:
+            return False
+
+        param.data = torch.empty_like(meta.original_meta_tensor, device=param.device)
+        return True
+
+    @classmethod
+    def restore_multi(cls, params: Iterable[torch.nn.Parameter]):
+        count = 0
+        for param in params:
+            acted = cls.restore(param)
+            count += int(acted)
+
+        if count > 0:
+            logger.info(f"PostLoadWeightMetadataUtils restored {count} tensors.")
 
 def should_async_load(weight: torch.Tensor) -> bool:
     """Return True if we should load the given weight asynchronously.
