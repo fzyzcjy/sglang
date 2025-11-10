@@ -269,6 +269,7 @@ suites = {
         TestFile("openai_server/features/test_continuous_usage_stats.py"),
         TestFile("openai_server/features/test_structural_tag.py"),
         TestFile("quant/test_fp8_kvcache.py"),
+        TestFile("rl/test_update_weights_from_disk_large.py"),
         TestFile("rl/test_verl_engine_2_gpu.py"),
         TestFile("rl/test_verl_engine_4_gpu.py"),
         TestFile("test_ascend_attention_backend.py"),
