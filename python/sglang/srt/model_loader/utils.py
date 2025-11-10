@@ -4,6 +4,7 @@
 import concurrent.futures
 import contextlib
 import logging
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Type
 
 import torch
@@ -117,6 +118,15 @@ def post_load_weights(model: nn.Module, model_config: ModelConfig):
             model.post_load_weights(is_nextn=True)
         else:
             model.post_load_weights()
+
+
+@dataclass
+class PostLoadWeightMetadata:
+    original_meta_tensor: Optional[torch.Tensor]
+
+    def __post_init__(self):
+        if (x := self.original_meta_tensor) is not None:
+            assert x.device.type == "meta"
 
 
 def should_async_load(weight: torch.Tensor) -> bool:
