@@ -80,7 +80,11 @@ from sglang.srt.layers.vocab_parallel_embedding import (
     VocabParallelEmbedding,
 )
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
-from sglang.srt.model_loader.utils import maybe_executor_submit, should_async_load
+from sglang.srt.model_loader.utils import (
+    maybe_executor_submit,
+    should_async_load,
+    PostLoadWeightTransformUtils,
+)
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models.deepseek_v2 import DeepseekV2AttentionMLA
 from sglang.srt.server_args import get_global_server_args
@@ -828,6 +832,7 @@ class LongcatFlashForCausalLM(nn.Module):
                     requant_weight_ue8m0_inplace(w[0], w[1], weight_block_size)
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+        PostLoadWeightTransformUtils.restore_multi(self.parameters())
 
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
