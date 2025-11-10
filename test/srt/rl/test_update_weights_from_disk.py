@@ -121,7 +121,7 @@ class TestServerUpdateWeightsFromDisk(CustomTestCase):
         print(f"[Server Mode] origin_model_path: {origin_model_path}")
         origin_response = self.run_decode()
 
-        new_model_path = DEFAULT_SMALL_MODEL_NAME_FOR_TEST.replace("-Instruct", "")
+        new_model_path = self.model.replace("-Instruct", "")
         ret = self.run_update_weights(new_model_path)
         self.assertTrue(ret["success"])
 
@@ -146,7 +146,7 @@ class TestServerUpdateWeightsFromDisk(CustomTestCase):
         print(f"[Server Mode] origin_model_path: {origin_model_path}")
         origin_response = self.run_decode()
 
-        new_model_path = DEFAULT_SMALL_MODEL_NAME_FOR_TEST.replace("-Instruct", "wrong")
+        new_model_path = self.model.replace("-Instruct", "wrong")
         ret = self.run_update_weights(new_model_path)
         self.assertFalse(ret["success"])
 
