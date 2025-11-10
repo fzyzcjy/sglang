@@ -17,6 +17,8 @@ from sglang.test.test_utils import (
     popen_launch_server,
 )
 
+from python.sglang.srt.environ import envs
+
 
 ###############################################################################
 # Engine Mode Tests (Single-configuration)
@@ -79,9 +81,10 @@ class TestServerUpdateWeightsFromDisk(CustomTestCase):
     @classmethod
     def setUpClass(cls):
         cls.base_url = DEFAULT_URL_FOR_TEST
-        cls.process = popen_launch_server(
-            cls.model, cls.base_url, timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH
-        )
+        with envs.SGLANG_JIT_DEEPGEMM_PRECOMPILE.override(False):
+            cls.process = popen_launch_server(
+                cls.model, cls.base_url, timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH
+            )
 
     @classmethod
     def tearDownClass(cls):
