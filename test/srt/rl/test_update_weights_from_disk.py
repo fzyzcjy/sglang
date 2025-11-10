@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
 import sglang as sgl
+from sglang.srt.environ import envs
 from sglang.srt.utils import kill_process_tree
 from sglang.test.test_utils import (
     DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
@@ -16,8 +17,6 @@ from sglang.test.test_utils import (
     is_in_ci,
     popen_launch_server,
 )
-
-from python.sglang.srt.environ import envs
 
 
 ###############################################################################
