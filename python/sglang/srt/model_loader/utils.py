@@ -121,17 +121,17 @@ def post_load_weights(model: nn.Module, model_config: ModelConfig):
 
 
 @dataclass
-class PostLoadWeightMetadata:
+class _PostLoadWeightTransformMetadata:
     original_meta_tensor: torch.Tensor
 
 
-class PostLoadWeightMetadataUtils:
+class PostLoadWeightTransformUtils:
     @classmethod
     def set(cls, param: torch.nn.Parameter, original_weight: torch.Tensor):
         assert isinstance(param, torch.nn.Parameter), f"{type(param)=}"
         assert isinstance(original_weight, torch.Tensor), f"{type(original_weight)=}"
         assert original_weight.device.type == "meta"
-        param._sglang_post_load_weight_metadata = PostLoadWeightMetadata(
+        param._sglang_post_load_weight_metadata = _PostLoadWeightTransformMetadata(
             original_meta_tensor=original_weight
         )
 

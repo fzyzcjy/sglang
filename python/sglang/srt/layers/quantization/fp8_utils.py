@@ -5,7 +5,7 @@ import torch
 from sglang.srt.layers import deep_gemm_wrapper
 from sglang.srt.layers.quantization.fp8_kernel import sglang_per_token_group_quant_fp8
 from sglang.srt.layers.quantization.mxfp4_tensor import MXFP4QuantizeUtil
-from sglang.srt.model_loader.utils import PostLoadWeightMetadataUtils
+from sglang.srt.model_loader.utils import PostLoadWeightTransformUtils
 from sglang.srt.utils import ceil_div, is_blackwell_supported, offloader
 
 try:
@@ -428,8 +428,8 @@ def requant_weight_ue8m0_inplace(weight, weight_scale_inv, weight_block_size):
     offloader.update_param(weight, new_weight)
     weight_scale_inv.data = new_weight_scale_inv
 
-    PostLoadWeightMetadataUtils.set(weight, old_weight_meta)
-    PostLoadWeightMetadataUtils.set(weight_scale_inv, old_weight_scale_inv_meta)
+    PostLoadWeightTransformUtils.set(weight, old_weight_meta)
+    PostLoadWeightTransformUtils.set(weight_scale_inv, old_weight_scale_inv_meta)
 
 
 def _requant_weight_ue8m0(

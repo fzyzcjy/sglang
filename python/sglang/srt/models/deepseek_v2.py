@@ -114,7 +114,7 @@ from sglang.srt.model_executor.piecewise_cuda_graph_runner import (
     is_in_piecewise_cuda_graph,
 )
 from sglang.srt.model_loader.utils import (
-    PostLoadWeightMetadataUtils,
+    PostLoadWeightTransformUtils,
     maybe_executor_submit,
     should_async_load,
 )
@@ -3468,7 +3468,7 @@ class DeepseekV2ForCausalLM(nn.Module):
                 weights, nextn_layer_id=nextn_layer_id
             )
 
-        PostLoadWeightMetadataUtils.restore_multi(self.parameters())
+        PostLoadWeightTransformUtils.restore_multi(self.parameters())
 
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
