@@ -1,9 +1,9 @@
 import unittest
 
-from test_update_weights_from_disk import TestServerUpdateWeightsFromDisk
+from test_update_weights_from_disk import TestServerUpdateWeightsFromDisk as _ParentTest
 
 
-class TestServerUpdateWeightsFromDiskDeepSeek(TestServerUpdateWeightsFromDisk):
+class TestServerUpdateWeightsFromDiskDeepSeek(_ParentTest):
     model = "deepseek-ai/DeepSeek-V3-0324"
 
 
