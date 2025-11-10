@@ -131,6 +131,7 @@ class PostLoadWeightTransformUtils:
         assert isinstance(param, torch.nn.Parameter), f"{type(param)=}"
         assert isinstance(original_weight, torch.Tensor), f"{type(original_weight)=}"
         assert original_weight.device.type == "meta"
+        assert not hasattr(param, "_sglang_post_load_weight_metadata")
         param._sglang_post_load_weight_metadata = _PostLoadWeightTransformMetadata(
             original_meta_tensor=original_weight
         )
@@ -141,6 +142,7 @@ class PostLoadWeightTransformUtils:
         meta = getattr(param, "_sglang_post_load_weight_metadata", None)
         if meta is None:
             return False
+        del param._sglang_post_load_weight_metadata
 
         param.data = torch.empty_like(meta.original_meta_tensor, device=param.device)
         return True
