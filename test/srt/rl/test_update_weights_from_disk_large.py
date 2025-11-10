@@ -1,6 +1,6 @@
 import unittest
 
-import TestServerUpdateWeightsFromDisk
+from test_update_weights_from_disk import TestServerUpdateWeightsFromDisk
 
 
 class TestServerUpdateWeightsFromDiskDeepSeek(TestServerUpdateWeightsFromDisk):
