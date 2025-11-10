@@ -5,7 +5,6 @@ import torch
 from sglang.srt.layers import deep_gemm_wrapper
 from sglang.srt.layers.quantization.fp8_kernel import sglang_per_token_group_quant_fp8
 from sglang.srt.layers.quantization.mxfp4_tensor import MXFP4QuantizeUtil
-from sglang.srt.model_loader.utils import PostLoadWeightTransformUtils
 from sglang.srt.utils import ceil_div, is_blackwell_supported, offloader
 
 try:
@@ -415,6 +414,8 @@ def block_quant_dequant(
 
 
 def requant_weight_ue8m0_inplace(weight, weight_scale_inv, weight_block_size):
+    from sglang.srt.model_loader.utils import PostLoadWeightTransformUtils
+
     assert isinstance(weight, torch.nn.Parameter)
     assert isinstance(weight_scale_inv, torch.nn.Parameter)
 
