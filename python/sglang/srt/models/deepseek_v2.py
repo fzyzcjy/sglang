@@ -3352,6 +3352,8 @@ class DeepseekV2ForCausalLM(nn.Module):
                 module_list.append(layer.self_attn.q_proj)
 
             for module in module_list:
+                if torch.distributed.get_rank() == 0:
+                    print(f"hi going to call requant {type(module)=} {module.quant_method=}")
                 requant_weight_ue8m0_inplace(
                     module.weight, module.weight_scale_inv, weight_block_size
                 )
@@ -3363,6 +3365,8 @@ class DeepseekV2ForCausalLM(nn.Module):
                         shared_experts.gate_up_proj,
                         shared_experts.down_proj,
                     ]:
+                        if torch.distributed.get_rank() == 0:
+                            print(f"hi going to call requant {type(module)=} {module.quant_method=}")
                         requant_weight_ue8m0_inplace(
                             module.weight, module.weight_scale_inv, weight_block_size
                         )
@@ -3373,6 +3377,8 @@ class DeepseekV2ForCausalLM(nn.Module):
                         (experts.w13_weight, experts.w13_weight_scale_inv),
                         (experts.w2_weight, experts.w2_weight_scale_inv),
                     ]:
+                        if torch.distributed.get_rank() == 0:
+                            print(f"hi going to call requant {type(experts)=} {experts.quant_method=}")
                         requant_weight_ue8m0_inplace(w[0], w[1], weight_block_size)
             else:
                 mlp = layer.mlp
@@ -3381,6 +3387,8 @@ class DeepseekV2ForCausalLM(nn.Module):
                     mlp.gate_up_proj,
                     mlp.down_proj,
                 ]:
+                    if torch.distributed.get_rank() == 0:
+                        print(f"hi going to call requant {type(module)=} {module.quant_method=}")
                     requant_weight_ue8m0_inplace(
                         module.weight, module.weight_scale_inv, weight_block_size
                     )
