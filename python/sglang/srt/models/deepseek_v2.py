@@ -3203,7 +3203,7 @@ class DeepseekV2ForCausalLM(nn.Module):
                         )
                         and self._executed_weight_requant_ue8m0
                     ):
-                        weight_scale = inverse_transform_scale_ue8m0(weight_scale)
+                        weight_scale = inverse_transform_scale_ue8m0(weight_scale, mn=weight.shape[-2])
 
                     if (
                         _is_cuda
