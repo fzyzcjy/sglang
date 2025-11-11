@@ -503,6 +503,7 @@ def inverse_transform_scale_ue8m0(sf_packed, mn):
 # Inverse impl can refer to DeepGEMM's torch impl in get_mn_major_tma_aligned_packed_ue8m0_tensor_torch_impl
 def _inverse_transform_scale_ue8m0_impl(sf_packed):
     """
+    NOTE: We assume k is aligned
     :param sf_packed: (scale_mn, scale_k/4) int32
     :return: (scale_mn, scale_k), float32
     """
@@ -510,16 +511,21 @@ def _inverse_transform_scale_ue8m0_impl(sf_packed):
     assert len(sf_packed.shape) == 2
     assert sf_packed.dtype == torch.int32
 
+    mn_repeat_128, k_div_4 = sf_packed.shape
+    mn = mn_repeat_128 // block_size
+    k = k_div_4 * 4
+
     # packed u8 -> fp32
-    sf_u8 = sf_packed.contiguous().view(torch.uint8)
+    sf_u8 = sf_packed.contiguous().flatten().view(torch.uint8).view(mn_repeat_128, k)
     sf_fp32 = (sf_u8.to(torch.int32) << 23).view(torch.float32)
 
     # remove repeat
-    sf_reshaped = sf_fp32.view(sf_fp32.shape[-2] // block_size, block_size, sf_fp32.shape[-1])
+    sf_reshaped = sf_fp32.view(mn, block_size, k)
     sf_unrepeated = sf_reshaped[:, 0:1, :]
     assert torch.all(sf_unrepeated == sf_reshaped)
     sf_unrepeated = sf_unrepeated.squeeze(1).contiguous()
 
+    assert sf_unrepeated.shape == (mn, k)
     return sf_unrepeated
 
 
