@@ -3,7 +3,7 @@ import unittest
 
 from sglang.test.test_utils import CustomTestCase
 
-from python.sglang.srt.layers.quantization.fp8_utils import transform_scale_ue8m0, inverse_transform_scale_ue8m0, \
+from sglang.srt.layers.quantization.fp8_utils import transform_scale_ue8m0, inverse_transform_scale_ue8m0, \
     quant_weight_ue8m0
 
 
