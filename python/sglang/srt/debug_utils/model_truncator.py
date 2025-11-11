@@ -24,17 +24,18 @@ def main(args):
     _transform_index(safetensors_index)
     (output_path / filename_index).write_text(json.dumps(safetensors_index, indent=4))
 
-    for path_safetensor in sorted(list(input_path.glob("*.safetensors"))):
-        state_dict = load_file(path_safetensor)
-        _transform_safetensor_file(state_dict, safetensors_index)
-        save_file(state_dict, output_path / path_safetensor.relative_to(input_path))
+    for path_safetensors in sorted(list(input_path.glob("*.safetensors"))):
+        state_dict = load_file(path_safetensors)
+        _transform_safetensors_file(state_dict, safetensors_index)
+        save_file(state_dict, output_path / path_safetensors.relative_to(input_path))
 
 
 def _transform_index(safetensors_index):
     TODO
 
 
-def _transform_safetensor_file(state_dict: Dict[str, torch.Tensor], safetensors_index: Dict[str, str]):
+def _transform_safetensors_file(state_dict: Dict[str, torch.Tensor], safetensors_index):
+    names_to_remove = set(state_dict) - set(safetensors_index["weight_map"])
     TODO
 
 
