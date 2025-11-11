@@ -511,7 +511,7 @@ def _inverse_transform_scale_ue8m0_impl(sf_packed):
     assert sf_packed.dtype == torch.int32
 
     # packed u8 -> fp32
-    sf_u8 = sf_packed.view(torch.uint8)
+    sf_u8 = sf_packed.contiguous().view(torch.uint8)
     sf_fp32 = (sf_u8.to(torch.int32) << 23).view(torch.float32)
 
     # remove repeat
