@@ -30,6 +30,7 @@ def main(args):
         state_dict = load_file(path_input_safetensors)
         _transform_safetensors_file(state_dict, safetensors_index, debug_name=str(path_output_safetensors))
         if len(state_dict) > 0:
+            print(f"Save {len(state_dict)} tensors to {path_output_safetensors}")
             save_file(state_dict, path_output_safetensors)
         else:
             print(f"Skip saving {path_output_safetensors} since it is empty")
