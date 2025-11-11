@@ -3515,11 +3515,21 @@ class DeepseekV2ForCausalLM(nn.Module):
             assert self.num_fused_shared_experts == 1
             log_info_on_rank0(logger, "Shared experts fusion optimization enabled.")
 
+        def get_tensor_info(x):
+            if not isinstance(x, torch.Tensor):
+                return f"type={type(x)} value={x}"
+            min = x.float().min() if x.numel() > 0 else None
+            max = x.float().max() if x.numel() > 0 else None
+            mean = x.float().mean() if x.numel() > 0 else None
+            return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} req_grad={x.requires_grad} min={min} max={max} mean={mean}"
+
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = []
             params_dict = dict(self.named_parameters())
             weight_names = []
             for name, loaded_weight in weights:
+                if torch.distributed.get_rank() == 0:
+                    print(f"hi load_weights {name=} {get_tensor_info(loaded_weight)=}")
                 use_async_loading = should_async_load(loaded_weight)
                 layer_id = get_layer_id(name)
                 if (
