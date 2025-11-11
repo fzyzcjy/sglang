@@ -40,6 +40,7 @@ def main(args):
 def _transform_index(args, safetensors_index):
     weight_map = safetensors_index["weight_map"]
     weight_map = {name: loc for name, loc in weight_map.items() if _filter_tensor_name(args, name)}
+    safetensors_index["weight_map"] = weight_map
 
 
 def _transform_safetensors_file(state_dict: Dict[str, torch.Tensor], safetensors_index, debug_name: str):
@@ -60,6 +61,10 @@ def _filter_tensor_name(args, tensor_name: str):
 
 
 if __name__ == "__main__":
+    """
+    Example:
+    python sglang.srt.debug_utils.model_truncator --input-path TODO --output-path TODO
+    """
     parser = ArgumentParser(description="Create truncated model for fast debugging.")
     parser.add_argument("--input-path", type=str, required=True)
     parser.add_argument("--output-path", type=str, required=True)
