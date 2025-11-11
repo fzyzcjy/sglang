@@ -1,15 +1,14 @@
 # This file also references Slime :: fp8_cast_bf16.py
-import re
-
-import torch
 import json
 import os
-from pathlib import Path
+import re
 from argparse import ArgumentParser
+from pathlib import Path
 from typing import Dict
 
-from safetensors.torch import load_file, save_file
+import torch
 from huggingface_hub import snapshot_download
+from safetensors.torch import load_file, save_file
 
 
 def main(args):
@@ -23,20 +22,28 @@ def main(args):
         os.system(f"cp -rf {dir_input}/{pattern} {dir_output}")
 
     _transform_json(
-        dir_input, dir_output, "config.json",
+        dir_input,
+        dir_output,
+        "config.json",
         lambda data: _transform_config(args, data),
     )
 
     safetensors_index = _transform_json(
-        dir_input, dir_output, "model.safetensors.index.json",
+        dir_input,
+        dir_output,
+        "model.safetensors.index.json",
         lambda data: _transform_safetensors_index(args, data),
     )
 
     for path_input_safetensors in sorted(list(dir_input.glob("*.safetensors"))):
-        path_output_safetensors = dir_output / path_input_safetensors.relative_to(dir_input)
+        path_output_safetensors = dir_output / path_input_safetensors.relative_to(
+            dir_input
+        )
 
         state_dict = load_file(path_input_safetensors)
-        _transform_safetensors_file(state_dict, safetensors_index, debug_name=str(path_output_safetensors))
+        _transform_safetensors_file(
+            state_dict, safetensors_index, debug_name=str(path_output_safetensors)
+        )
         if len(state_dict) > 0:
             print(f"Save {len(state_dict)} tensors to {path_output_safetensors}")
             save_file(state_dict, path_output_safetensors)
@@ -57,11 +64,15 @@ def _transform_config(args, config_json):
 
 def _transform_safetensors_index(args, safetensors_index):
     weight_map = safetensors_index["weight_map"]
-    weight_map = {name: loc for name, loc in weight_map.items() if _filter_tensor_name(args, name)}
+    weight_map = {
+        name: loc for name, loc in weight_map.items() if _filter_tensor_name(args, name)
+    }
     safetensors_index["weight_map"] = weight_map
 
 
-def _transform_safetensors_file(state_dict: Dict[str, torch.Tensor], safetensors_index, debug_name: str):
+def _transform_safetensors_file(
+    state_dict: Dict[str, torch.Tensor], safetensors_index, debug_name: str
+):
     names_to_remove = set(state_dict) - set(safetensors_index["weight_map"])
     print(f"Remove {names_to_remove} in {debug_name}")
     for name in names_to_remove:
@@ -81,7 +92,7 @@ def _filter_tensor_name(args, tensor_name: str):
 if __name__ == "__main__":
     """
     Example:
-    python sglang.srt.debug_utils.model_truncator --input deepseek-ai/DeepSeek-V3-0324 --output /tmp/DeepSeek-V3-0324-5layer
+    python -m sglang.srt.debug_utils.model_truncator --input deepseek-ai/DeepSeek-V3-0324 --output /tmp/DeepSeek-V3-0324-5layer
     hf upload my_name/DeepSeek-V3-0324-5layer /tmp/DeepSeek-V3-0324-5layer
 
     Alternatively, the following may be used on-the-fly.
