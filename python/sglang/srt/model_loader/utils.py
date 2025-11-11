@@ -13,6 +13,7 @@ from torch import nn
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
 from sglang.srt.configs.model_config import ModelConfig, ModelImpl
+from sglang.srt.utils import dispose_tensor
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,7 @@ class PostLoadWeightTransformUtils:
             return False
         del param._sglang_post_load_weight_metadata
 
+        dispose_tensor(param.data)
         param.data = torch.empty_like(meta.original_meta_tensor, device=param.device)
         return True
 
