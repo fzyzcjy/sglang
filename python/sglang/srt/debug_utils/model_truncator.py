@@ -1,5 +1,6 @@
 # This file also references Slime :: fp8_cast_bf16.py
 
+import json
 import os
 from pathlib import Path
 from argparse import ArgumentParser
@@ -14,7 +15,16 @@ def main(args):
     for pattern in ["config.json", "generation_config.json", "*.py", "tokenizer*"]:
         os.system(f"cp -rf {input_path}/{pattern} {output_path}")
 
+    filename_index = "model.safetensors.index.json"
+    tensor_index = json.loads((input_path / filename_index).read_text())
+    tensor_index = _transform_index(tensor_index)
+    (output_path / filename_index).write_text(json.dumps(tensor_index, indent=4))
+
     TODO
+
+
+def _transform_index(src):
+    return TODO
 
 
 if __name__ == "__main__":
