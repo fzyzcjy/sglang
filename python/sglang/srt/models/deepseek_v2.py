@@ -97,7 +97,7 @@ from sglang.srt.layers.quantization.fp8_utils import (
     normalize_e4m3fn_to_e4m3fnuz,
     quant_weight_ue8m0,
     requant_weight_ue8m0_inplace,
-    transform_scale_ue8m0_inplace, inverse_transform_scale_ue8m0,
+    transform_scale_ue8m0_inplace,
 )
 from sglang.srt.layers.quantization.int8_utils import (
     block_dequant as int8_block_dequant,
@@ -3196,14 +3196,6 @@ class DeepseekV2ForCausalLM(nn.Module):
                     else:
                         weight = w
                         weight_scale = self_attn.kv_b_proj.weight_scale_inv
-
-                    if (
-                        should_deepgemm_weight_requant_ue8m0(
-                            weight_block_size=getattr(self.quant_config, "weight_block_size", None)
-                        )
-                        and self._executed_weight_requant_ue8m0
-                    ):
-                        weight_scale = inverse_transform_scale_ue8m0(weight_scale, mn=weight.shape[-2])
 
                     if (
                         _is_cuda
