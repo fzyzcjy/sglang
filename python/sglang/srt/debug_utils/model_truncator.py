@@ -26,7 +26,7 @@ def main(args):
 
     for path_safetensors in sorted(list(input_path.glob("*.safetensors"))):
         state_dict = load_file(path_safetensors)
-        _transform_safetensors_file(state_dict, safetensors_index)
+        _transform_safetensors_file(state_dict, safetensors_index, debug_name=str(path_safetensors))
         save_file(state_dict, output_path / path_safetensors.relative_to(input_path))
 
 
@@ -34,9 +34,11 @@ def _transform_index(safetensors_index):
     TODO
 
 
-def _transform_safetensors_file(state_dict: Dict[str, torch.Tensor], safetensors_index):
+def _transform_safetensors_file(state_dict: Dict[str, torch.Tensor], safetensors_index, debug_name: str):
     names_to_remove = set(state_dict) - set(safetensors_index["weight_map"])
-    TODO
+    print(f"Remove {names_to_remove} in {debug_name}")
+    for name in names_to_remove:
+        del state_dict[name]
 
 
 if __name__ == "__main__":
