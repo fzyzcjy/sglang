@@ -13,22 +13,27 @@ from huggingface_hub import snapshot_download
 
 
 def main(args):
-    input_path = Path(snapshot_download(args.input))
-    output_path = Path(args.output)
-    print(f"{input_path=} {output_path=}")
+    dir_input = Path(snapshot_download(args.input))
+    dir_output = Path(args.output)
+    print(f"{dir_input=} {dir_output=}")
 
-    output_path.mkdir(parents=True, exist_ok=True)
+    dir_output.mkdir(parents=True, exist_ok=True)
 
-    for pattern in ["config.json", "generation_config.json", "*.py", "tokenizer*"]:
-        os.system(f"cp -rf {input_path}/{pattern} {output_path}")
+    for pattern in ["generation_config.json", "*.py", "tokenizer*"]:
+        os.system(f"cp -rf {dir_input}/{pattern} {dir_output}")
 
-    filename_index = "model.safetensors.index.json"
-    safetensors_index = json.loads((input_path / filename_index).read_text())
-    _transform_index(args, safetensors_index)
-    (output_path / filename_index).write_text(json.dumps(safetensors_index, indent=4))
+    _transform_json(
+        dir_input, dir_output, "config.json",
+        lambda data: _transform_config(args, data),
+    )
 
-    for path_input_safetensors in sorted(list(input_path.glob("*.safetensors"))):
-        path_output_safetensors = output_path / path_input_safetensors.relative_to(input_path)
+    safetensors_index = _transform_json(
+        dir_input, dir_output, "model.safetensors.index.json",
+        lambda data: _transform_safetensors_index(args, data),
+    )
+
+    for path_input_safetensors in sorted(list(dir_input.glob("*.safetensors"))):
+        path_output_safetensors = dir_output / path_input_safetensors.relative_to(dir_input)
 
         state_dict = load_file(path_input_safetensors)
         _transform_safetensors_file(state_dict, safetensors_index, debug_name=str(path_output_safetensors))
@@ -39,7 +44,18 @@ def main(args):
             print(f"Skip saving {path_output_safetensors} since it is empty")
 
 
-def _transform_index(args, safetensors_index):
+def _transform_json(dir_input, dir_output, filename, fn):
+    data = json.loads((dir_input / filename).read_text())
+    fn(data)
+    (dir_output / filename).write_text(json.dumps(data, indent=4))
+    return data
+
+
+def _transform_config(args, config_json):
+    config_json["num_hidden_layers"] = args.keep_num_layers
+
+
+def _transform_safetensors_index(args, safetensors_index):
     weight_map = safetensors_index["weight_map"]
     weight_map = {name: loc for name, loc in weight_map.items() if _filter_tensor_name(args, name)}
     safetensors_index["weight_map"] = weight_map
