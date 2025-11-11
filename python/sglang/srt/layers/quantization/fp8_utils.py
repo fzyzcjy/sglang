@@ -493,6 +493,7 @@ def transform_scale_ue8m0(sf, mn):
 def inverse_transform_scale_ue8m0(sf_packed, mn):
     sf_fp32 = TODO
 
+    # Can call consistency check every time since this is only called on startup
     sf_packed_recreated = transform_scale_ue8m0(sf_fp32, mn=mn)
     assert torch.all(sf_packed == sf_packed_recreated), f"{sf_packed=} {sf_packed_recreated}"
 
