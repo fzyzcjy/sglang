@@ -1,4 +1,5 @@
 # This file also references Slime :: fp8_cast_bf16.py
+import re
 
 import torch
 import json
@@ -21,7 +22,7 @@ def main(args):
 
     filename_index = "model.safetensors.index.json"
     safetensors_index = json.loads((input_path / filename_index).read_text())
-    _transform_index(safetensors_index)
+    _transform_index(args, safetensors_index)
     (output_path / filename_index).write_text(json.dumps(safetensors_index, indent=4))
 
     for path_input_safetensors in sorted(list(input_path.glob("*.safetensors"))):
@@ -36,8 +37,9 @@ def main(args):
             print(f"Skip saving {path_output_safetensors} since it is empty")
 
 
-def _transform_index(safetensors_index):
-    TODO
+def _transform_index(args, safetensors_index):
+    weight_map = safetensors_index["weight_map"]
+    weight_map = {name: loc for name, loc in weight_map.items() if _filter_tensor_name(args, name)}
 
 
 def _transform_safetensors_file(state_dict: Dict[str, torch.Tensor], safetensors_index, debug_name: str):
@@ -47,8 +49,19 @@ def _transform_safetensors_file(state_dict: Dict[str, torch.Tensor], safetensors
         del state_dict[name]
 
 
+def _filter_tensor_name(args, tensor_name: str):
+    # We focus on DeepSeek-like names currently, but can be easily extended to more kinds of models
+    m = re.match(r"^model.layers.(\d+).*", tensor_name)
+    if m is None:
+        return True
+
+    layer_id = int(m.group(0))
+    return layer_id < args.keep_num_layers
+
+
 if __name__ == "__main__":
     parser = ArgumentParser(description="Create truncated model for fast debugging.")
     parser.add_argument("--input-path", type=str, required=True)
     parser.add_argument("--output-path", type=str, required=True)
+    parser.add_argument("--keep-num-layers", type=int, required=True)
     main(parser.parse_args())
