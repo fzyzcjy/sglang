@@ -3308,7 +3308,9 @@ class DeepseekV2ForCausalLM(nn.Module):
                 self_attn.use_deep_gemm_bmm = True
 
         if (
-            should_deepgemm_weight_requant_ue8m0(self.quant_config)
+            should_deepgemm_weight_requant_ue8m0(
+                weight_block_size=getattr(self.quant_config, "weight_block_size", None)
+            )
             and not self._executed_weight_requant_ue8m0
         ):
             self._executed_weight_requant_ue8m0 = True

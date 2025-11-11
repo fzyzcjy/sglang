@@ -456,7 +456,9 @@ class LongcatFlashForCausalLMNextN(LongcatFlashForCausalLM):
                 self.config.hidden_size / self.config.kv_lora_rank
             ) ** 0.5
 
-        if should_deepgemm_weight_requant_ue8m0(self.quant_config):
+        if should_deepgemm_weight_requant_ue8m0(
+            weight_block_size=getattr(self.quant_config, "weight_block_size", None)
+        ):
             self._weight_requant_ue8m0()
 
     def _weight_requant_ue8m0(self):
