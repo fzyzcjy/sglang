@@ -4,7 +4,6 @@
 import concurrent.futures
 import contextlib
 import logging
-from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Type
 
 import torch
@@ -13,7 +12,6 @@ from torch import nn
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
 from sglang.srt.configs.model_config import ModelConfig, ModelImpl
-from sglang.srt.utils import dispose_tensor
 
 logger = logging.getLogger(__name__)
 
@@ -119,45 +117,6 @@ def post_load_weights(model: nn.Module, model_config: ModelConfig):
             model.post_load_weights(is_nextn=True)
         else:
             model.post_load_weights()
-
-
-@dataclass
-class _PostLoadWeightTransformMetadata:
-    original_meta_tensor: torch.Tensor
-
-
-class PostLoadWeightTransformUtils:
-    @classmethod
-    def set(cls, param: torch.nn.Parameter, original_weight: torch.Tensor):
-        assert isinstance(param, torch.nn.Parameter), f"{type(param)=}"
-        assert isinstance(original_weight, torch.Tensor), f"{type(original_weight)=}"
-        assert original_weight.device.type == "meta"
-        assert not hasattr(param, "_sglang_post_load_weight_metadata")
-        param._sglang_post_load_weight_metadata = _PostLoadWeightTransformMetadata(
-            original_meta_tensor=original_weight
-        )
-
-    @classmethod
-    def restore(cls, param: torch.nn.Parameter):
-        assert isinstance(param, torch.nn.Parameter), f"{type(param)=}"
-        meta = getattr(param, "_sglang_post_load_weight_metadata", None)
-        if meta is None:
-            return False
-        del param._sglang_post_load_weight_metadata
-
-        dispose_tensor(param.data)
-        param.data = torch.empty_like(meta.original_meta_tensor, device=param.device)
-        return True
-
-    @classmethod
-    def restore_multi(cls, params: Iterable[torch.nn.Parameter]):
-        count = 0
-        for param in params:
-            acted = cls.restore(param)
-            count += int(acted)
-
-        if count > 0:
-            logger.info(f"PostLoadWeightMetadataUtils restored {count} tensors.")
 
 
 def should_async_load(weight: torch.Tensor) -> bool:

@@ -414,13 +414,8 @@ def block_quant_dequant(
 
 
 def requant_weight_ue8m0_inplace(weight, weight_scale_inv, weight_block_size):
-    from sglang.srt.model_loader.utils import PostLoadWeightTransformUtils
-
     assert isinstance(weight, torch.nn.Parameter)
     assert isinstance(weight_scale_inv, torch.nn.Parameter)
-
-    old_weight_meta = weight.data.to("meta")
-    old_weight_scale_inv_meta = weight_scale_inv.data.to("meta")
 
     new_weight, new_weight_scale_inv = _requant_weight_ue8m0(
         weight.to(weight_scale_inv.device), weight_scale_inv, weight_block_size
@@ -428,9 +423,6 @@ def requant_weight_ue8m0_inplace(weight, weight_scale_inv, weight_block_size):
 
     offloader.update_param(weight, new_weight)
     weight_scale_inv.data = new_weight_scale_inv
-
-    PostLoadWeightTransformUtils.set(weight, old_weight_meta)
-    PostLoadWeightTransformUtils.set(weight_scale_inv, old_weight_scale_inv_meta)
 
 
 def _requant_weight_ue8m0(

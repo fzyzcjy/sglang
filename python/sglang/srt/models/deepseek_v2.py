@@ -113,11 +113,7 @@ from sglang.srt.model_executor.forward_batch_info import ForwardBatch, PPProxyTe
 from sglang.srt.model_executor.piecewise_cuda_graph_runner import (
     is_in_piecewise_cuda_graph,
 )
-from sglang.srt.model_loader.utils import (
-    PostLoadWeightTransformUtils,
-    maybe_executor_submit,
-    should_async_load,
-)
+from sglang.srt.model_loader.utils import maybe_executor_submit, should_async_load
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.single_batch_overlap import SboFlags
@@ -3467,8 +3463,6 @@ class DeepseekV2ForCausalLM(nn.Module):
             weights = self._quant_nextn_moe_to_fp8_ue8m0(
                 weights, nextn_layer_id=nextn_layer_id
             )
-
-        PostLoadWeightTransformUtils.restore_multi(self.parameters())
 
         stacked_params_mapping = [
             # (param_name, shard_name, shard_id)
