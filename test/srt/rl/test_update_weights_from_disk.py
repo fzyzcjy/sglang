@@ -77,13 +77,15 @@ class TestEngineUpdateWeightsFromDisk(CustomTestCase):
 class TestServerUpdateWeightsFromDisk(CustomTestCase):
     model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
     model_after_update = DEFAULT_SMALL_MODEL_NAME_FOR_TEST.replace("-Instruct", "")
+    launch_server_other_args = []
 
     @classmethod
     def setUpClass(cls):
         cls.base_url = DEFAULT_URL_FOR_TEST
         with envs.SGLANG_JIT_DEEPGEMM_PRECOMPILE.override(False):
             cls.process = popen_launch_server(
-                cls.model, cls.base_url, timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH
+                cls.model, cls.base_url, timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+                other_args=cls.launch_server_other_args,
             )
 
     @classmethod
