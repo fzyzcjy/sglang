@@ -24,10 +24,15 @@ def main(args):
     _transform_index(safetensors_index)
     (output_path / filename_index).write_text(json.dumps(safetensors_index, indent=4))
 
-    for path_safetensors in sorted(list(input_path.glob("*.safetensors"))):
-        state_dict = load_file(path_safetensors)
-        _transform_safetensors_file(state_dict, safetensors_index, debug_name=str(path_safetensors))
-        save_file(state_dict, output_path / path_safetensors.relative_to(input_path))
+    for path_input_safetensors in sorted(list(input_path.glob("*.safetensors"))):
+        path_output_safetensors = output_path / path_input_safetensors.relative_to(input_path)
+
+        state_dict = load_file(path_input_safetensors)
+        _transform_safetensors_file(state_dict, safetensors_index, debug_name=str(path_output_safetensors))
+        if len(state_dict) > 0:
+            save_file(state_dict, path_output_safetensors)
+        else:
+            print(f"Skip saving {path_output_safetensors} since it is empty")
 
 
 def _transform_index(safetensors_index):
