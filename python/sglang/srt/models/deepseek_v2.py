@@ -203,6 +203,15 @@ _is_cublas_ge_129 = is_nvidia_cublas_cu12_version_ge_12_9()
 logger = logging.getLogger(__name__)
 
 
+def get_tensor_info(x):
+    if not isinstance(x, torch.Tensor):
+        return f"type={type(x)} value={x}"
+    min = x.float().min() if x.numel() > 0 else None
+    max = x.float().max() if x.numel() > 0 else None
+    mean = x.float().mean() if x.numel() > 0 else None
+    return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} req_grad={x.requires_grad} min={min} max={max} mean={mean}"
+
+
 def enable_nextn_moe_bf16_cast_to_fp8(quant_config):
     return (
         quant_config is not None
@@ -3129,6 +3138,10 @@ class DeepseekV2ForCausalLM(nn.Module):
         return self.model.end_layer
 
     def post_load_weights(self, is_nextn=False, weight_names=None):
+        if torch.distributed.get_rank() == 0:
+            print(
+                f"hi post_load_weights START {[(name, get_tensor_info(x)) for name, x in self.named_parameters()]=}"
+            )
 
         # Perform post-processing after loading weights
         if is_nextn:
@@ -3326,6 +3339,11 @@ class DeepseekV2ForCausalLM(nn.Module):
         if is_nextn and enable_nextn_moe_bf16_cast_to_fp8(self.quant_config):
             self._transform_scale_nextn_moe_ue8m0()
 
+        if torch.distributed.get_rank() == 0:
+            print(
+                f"hi post_load_weights END {[(name, get_tensor_info(x)) for name, x in self.named_parameters()]=}"
+            )
+
     def _weight_requant_ue8m0(self, is_nextn=False):
         weight_block_size = self.quant_config.weight_block_size
 
@@ -3514,14 +3532,6 @@ class DeepseekV2ForCausalLM(nn.Module):
         if self.num_fused_shared_experts > 0:
             assert self.num_fused_shared_experts == 1
             log_info_on_rank0(logger, "Shared experts fusion optimization enabled.")
-
-        def get_tensor_info(x):
-            if not isinstance(x, torch.Tensor):
-                return f"type={type(x)} value={x}"
-            min = x.float().min() if x.numel() > 0 else None
-            max = x.float().max() if x.numel() > 0 else None
-            mean = x.float().mean() if x.numel() > 0 else None
-            return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} req_grad={x.requires_grad} min={min} max={max} mean={mean}"
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = []
