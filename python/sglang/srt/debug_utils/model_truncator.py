@@ -65,8 +65,8 @@ def _filter_tensor_name(args, tensor_name: str):
 if __name__ == "__main__":
     """
     Example:
-    python sglang.srt.debug_utils.model_truncator --input deepseek-ai/DeepSeek-V3 --output /tmp/DeepSeek-V3-5layer
-    hf upload my_name/DeepSeek-V3-5layer /tmp/DeepSeek-V3-5layer
+    python sglang.srt.debug_utils.model_truncator --input deepseek-ai/DeepSeek-V3-0324 --output /tmp/DeepSeek-V3-0324-5layer
+    hf upload my_name/DeepSeek-V3-0324-5layer /tmp/DeepSeek-V3-0324-5layer
     """
     parser = ArgumentParser(description="Create truncated model for fast debugging.")
     parser.add_argument("--input", type=str, required=True)
