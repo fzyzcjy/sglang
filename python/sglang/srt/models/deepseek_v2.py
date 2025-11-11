@@ -3055,6 +3055,7 @@ class DeepseekV2ForCausalLM(nn.Module):
             }
         )
         self.capture_aux_hidden_states = False
+        self._executed_weight_requant_ue8m0 = False
 
     @property
     def routed_experts_weights_of_layer(self):
@@ -3306,7 +3307,11 @@ class DeepseekV2ForCausalLM(nn.Module):
                 self_attn.w_vc = bind_or_assign(self_attn.w_vc, w_vc.contiguous())
                 self_attn.use_deep_gemm_bmm = True
 
-        if should_deepgemm_weight_requant_ue8m0(self.quant_config):
+        if (
+            should_deepgemm_weight_requant_ue8m0(self.quant_config)
+            and not self._executed_weight_requant_ue8m0
+        ):
+            self._executed_weight_requant_ue8m0 = True
             self._weight_requant_ue8m0(is_nextn)
 
         # TODO can move weight_requant_ue8m0 and transform_scale_ue8m0 into Fp8LinearMethod.process_weights_after_loading
