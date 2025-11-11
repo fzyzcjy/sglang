@@ -12,6 +12,7 @@ from torch import nn
 from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
 from sglang.srt.configs.model_config import ModelConfig, ModelImpl
+from sglang.srt.layers import deep_gemm_wrapper
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,16 @@ def post_load_weights(model: nn.Module, model_config: ModelConfig):
             model.post_load_weights(is_nextn=True)
         else:
             model.post_load_weights()
+
+
+def should_deepgemm_weight_requant_ue8m0(quant_config):
+    return (
+        deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM
+        and deep_gemm_wrapper.DEEPGEMM_SCALE_UE8M0
+        # TODO use `getattr` instead
+        and hasattr(quant_config, "weight_block_size")
+        and quant_config.weight_block_size is not None
+    )
 
 
 def should_async_load(weight: torch.Tensor) -> bool:
