@@ -9,11 +9,13 @@ from argparse import ArgumentParser
 from typing import Dict
 
 from safetensors.torch import load_file, save_file
+from huggingface_hub import snapshot_download
 
 
 def main(args):
-    input_path = Path(args.input_path)
-    output_path = Path(args.output_path)
+    input_path = Path(snapshot_download(args.input))
+    output_path = Path("/tmp") / args.output.replace("/", "--")
+    print(f"{input_path=} {output_path=}")
 
     output_path.mkdir(parents=True, exist_ok=True)
 
@@ -63,10 +65,10 @@ def _filter_tensor_name(args, tensor_name: str):
 if __name__ == "__main__":
     """
     Example:
-    python sglang.srt.debug_utils.model_truncator --input-path deepseek-ai/DeepSeek-V3 --output-path my_name/DeepSeek-V3-5layer
+    python sglang.srt.debug_utils.model_truncator --input deepseek-ai/DeepSeek-V3 --output my_name/DeepSeek-V3-5layer
     """
     parser = ArgumentParser(description="Create truncated model for fast debugging.")
-    parser.add_argument("--input-path", type=str, required=True)
-    parser.add_argument("--output-path", type=str, required=True)
+    parser.add_argument("--input", type=str, required=True)
+    parser.add_argument("--output", type=str, required=True)
     parser.add_argument("--keep-num-layers", type=int, required=True)
     main(parser.parse_args())
