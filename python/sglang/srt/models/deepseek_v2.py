@@ -3142,6 +3142,16 @@ class DeepseekV2ForCausalLM(nn.Module):
             print(
                 f"hi post_load_weights START {[(name, get_tensor_info(x)) for name, x in self.named_parameters()]=}"
             )
+            a = self.model.layers[0].self_attn
+            print(
+                f"hi layer0-selfattn at-START "
+                f"{get_tensor_info(a.w_kc)=} "
+                f"{get_tensor_info(a.w_vc)=} "
+                f"{get_tensor_info(a.w_scale)=} "
+                f"{get_tensor_info(a.w_scale_k)=} "
+                f"{get_tensor_info(a.w_scale_v)=} "
+                f"{get_tensor_info(a.use_deep_gemm_bmm)=} "
+            )
 
         # Perform post-processing after loading weights
         if is_nextn:
@@ -3342,6 +3352,16 @@ class DeepseekV2ForCausalLM(nn.Module):
         if torch.distributed.get_rank() == 0:
             print(
                 f"hi post_load_weights END {[(name, get_tensor_info(x)) for name, x in self.named_parameters()]=}"
+            )
+            a = self.model.layers[0].self_attn
+            print(
+                f"hi layer0-selfattn at-END "
+                f"{get_tensor_info(a.w_kc)=} "
+                f"{get_tensor_info(a.w_vc)=} "
+                f"{get_tensor_info(a.w_scale)=} "
+                f"{get_tensor_info(a.w_scale_k)=} "
+                f"{get_tensor_info(a.w_scale_v)=} "
+                f"{get_tensor_info(a.use_deep_gemm_bmm)=} "
             )
 
     def _weight_requant_ue8m0(self, is_nextn=False):
