@@ -131,14 +131,10 @@ class TestServerUpdateWeightsFromDisk(CustomTestCase):
         updated_model_path = self.get_model_info()
         print(f"[Server Mode] updated_model_path: {updated_model_path}")
         self.assertEqual(updated_model_path, new_model_path)
-        if self.model_after_update != self.model:
-            self.assertNotEqual(updated_model_path, origin_model_path)
+        self.assertNotEqual(updated_model_path, origin_model_path)
 
         updated_response = self.run_decode()
-        if self.model_after_update != self.model:
-            self.assertNotEqual(origin_response[:32], updated_response[:32])
-        else:
-            self.assertEqual(origin_response[:32], updated_response[:32])
+        self.assertNotEqual(origin_response[:32], updated_response[:32])
 
         ret = self.run_update_weights(origin_model_path)
         self.assertTrue(ret["success"])
