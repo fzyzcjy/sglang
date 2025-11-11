@@ -63,7 +63,7 @@ def _filter_tensor_name(args, tensor_name: str):
 if __name__ == "__main__":
     """
     Example:
-    python sglang.srt.debug_utils.model_truncator --input-path TODO --output-path TODO
+    python sglang.srt.debug_utils.model_truncator --input-path deepseek-ai/DeepSeek-V3 --output-path my_name/DeepSeek-V3-5layer
     """
     parser = ArgumentParser(description="Create truncated model for fast debugging.")
     parser.add_argument("--input-path", type=str, required=True)
