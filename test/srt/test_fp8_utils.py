@@ -3,13 +3,17 @@ import unittest
 
 from sglang.test.test_utils import CustomTestCase
 
-from python.sglang.srt.layers.quantization.fp8_utils import transform_scale_ue8m0, inverse_transform_scale_ue8m0
+from python.sglang.srt.layers.quantization.fp8_utils import transform_scale_ue8m0, inverse_transform_scale_ue8m0, \
+    quant_weight_ue8m0
 
 
 class TestInverseTransformScaleUe8m0(CustomTestCase):
     def test_round_trip(self):
-        sf_fp32 = TODO
-        mn = TODO
+        weight_bf16 = TODO
+        weight_block_size = [128, 128]
+
+        qweight, sf_fp32 = quant_weight_ue8m0(weight_bf16, weight_block_size=weight_block_size)
+        mn = qweight.shape[-2]
 
         sf_packed = transform_scale_ue8m0(sf_fp32, mn=mn)
         sf_fp32 = inverse_transform_scale_ue8m0(sf_packed, mn=mn)
