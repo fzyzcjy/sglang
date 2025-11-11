@@ -491,7 +491,7 @@ def transform_scale_ue8m0(sf, mn):
 
 
 def inverse_transform_scale_ue8m0(sf_packed, mn):
-    sf_fp32 = _inverse_transform_scale_ue8m0_impl(sf_packed, mn)
+    sf_fp32 = _inverse_transform_scale_ue8m0_impl(sf_packed)
     # Can call consistency check every time since this is only called on startup
     sf_packed_recreated = transform_scale_ue8m0(sf_fp32, mn=mn)
     assert torch.all(
@@ -500,8 +500,26 @@ def inverse_transform_scale_ue8m0(sf_packed, mn):
     return sf_fp32
 
 
-def _inverse_transform_scale_ue8m0_impl(sf_packed, mn):
-    return TODO
+# Inverse impl can refer to DeepGEMM's torch impl in get_mn_major_tma_aligned_packed_ue8m0_tensor_torch_impl
+def _inverse_transform_scale_ue8m0_impl(sf_packed):
+    """
+    :param sf_packed: (scale_mn, scale_k/4) int32
+    :return: (scale_mn, scale_k), float32
+    """
+    block_size = 128
+    assert len(sf_packed.shape) == 2
+    assert sf_packed.dtype == torch.int32
+
+    # packed u8 -> fp32
+    sf_u8 = sf_packed.view(torch.uint8)
+    sf_fp32 = (sf_u8.to(torch.int32) << 23).view(torch.float32)
+
+    # remove repeat
+    sf_reshaped = sf_fp32.view(sf_fp32.shape[-2] // block_size, block_size, sf_fp32.shape[-1])
+    assert torch.all(sf_reshaped[:, 0:1, :] == sf_reshaped)
+    sf_fp32_reduced = sf_reshaped.squeeze(1).contiguous()
+
+    return sf_fp32_reduced
 
 
 # COPIED FROM DeepGEMM
