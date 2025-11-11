@@ -22,18 +22,22 @@ class TestInverseTransformScaleUe8m0(CustomTestCase):
 
             weight_block_size = [128, 128]
 
-            qweight, sf_fp32 = quant_weight_ue8m0(
+            qweight, sf_fp32_original = quant_weight_ue8m0(
                 weight_bf16, weight_block_size=weight_block_size
             )
             mn = qweight.shape[-2]
 
-            sf_packed = transform_scale_ue8m0(sf_fp32, mn=mn)
-            sf_fp32 = inverse_transform_scale_ue8m0(sf_packed, mn=mn)
+            sf_packed_original = transform_scale_ue8m0(sf_fp32_original, mn=mn)
+            sf_fp32_recreated = inverse_transform_scale_ue8m0(sf_packed_original, mn=mn)
 
             sf_packed_recreated = transform_scale_ue8m0(sf_fp32, mn=mn)
+
             assert torch.all(
-                sf_packed == sf_packed_recreated
-            ), f"{sf_packed=} {sf_packed_recreated}"
+                sf_packed_original == sf_packed_recreated
+            ), f"{sf_packed_original=} {sf_packed_recreated}"
+            assert torch.all(
+                sf_fp32_original == sf_fp32_recreated
+            ), f"{sf_fp32_original=} {sf_fp32_recreated}"
 
 
 if __name__ == "__main__":
