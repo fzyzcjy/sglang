@@ -71,5 +71,5 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="Create truncated model for fast debugging.")
     parser.add_argument("--input", type=str, required=True)
     parser.add_argument("--output", type=str, required=True)
-    parser.add_argument("--keep-num-layers", type=int, required=True)
+    parser.add_argument("--keep-num-layers", type=int, default=5)
     main(parser.parse_args())
