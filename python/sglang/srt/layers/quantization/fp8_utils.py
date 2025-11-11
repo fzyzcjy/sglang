@@ -516,10 +516,11 @@ def _inverse_transform_scale_ue8m0_impl(sf_packed):
 
     # remove repeat
     sf_reshaped = sf_fp32.view(sf_fp32.shape[-2] // block_size, block_size, sf_fp32.shape[-1])
-    assert torch.all(sf_reshaped[:, 0:1, :] == sf_reshaped)
-    sf_fp32_reduced = sf_reshaped.squeeze(1).contiguous()
+    sf_unrepeated = sf_reshaped[:, 0:1, :]
+    assert torch.all(sf_unrepeated == sf_reshaped)
+    sf_unrepeated = sf_unrepeated.squeeze(1).contiguous()
 
-    return sf_fp32_reduced
+    return sf_unrepeated
 
 
 # COPIED FROM DeepGEMM
