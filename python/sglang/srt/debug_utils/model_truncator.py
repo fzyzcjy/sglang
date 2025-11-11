@@ -1,7 +1,11 @@
+from pathlib import Path
 from argparse import ArgumentParser
 
 
 def main(args):
+    output_path = Path(args.output_path)
+    output_path.mkdir(parents=True, exist_ok=True)
+
     TODO
 
 
