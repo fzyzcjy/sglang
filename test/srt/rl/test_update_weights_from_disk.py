@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
 import sglang as sgl
-from sglang.srt.environ import envs
 from sglang.srt.utils import kill_process_tree
 from sglang.test.test_utils import (
     DEFAULT_SMALL_MODEL_NAME_FOR_TEST,
@@ -75,18 +74,13 @@ class TestEngineUpdateWeightsFromDisk(CustomTestCase):
 # HTTP Server Mode Tests (Single-configuration)
 ###############################################################################
 class TestServerUpdateWeightsFromDisk(CustomTestCase):
-    model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
-    model_after_update = DEFAULT_SMALL_MODEL_NAME_FOR_TEST.replace("-Instruct", "")
-    launch_server_other_args = []
-
     @classmethod
     def setUpClass(cls):
+        cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
         cls.base_url = DEFAULT_URL_FOR_TEST
-        with envs.SGLANG_JIT_DEEPGEMM_PRECOMPILE.override(False):
-            cls.process = popen_launch_server(
-                cls.model, cls.base_url, timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-                other_args=cls.launch_server_other_args,
-            )
+        cls.process = popen_launch_server(
+            cls.model, cls.base_url, timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH
+        )
 
     @classmethod
     def tearDownClass(cls):
@@ -124,7 +118,7 @@ class TestServerUpdateWeightsFromDisk(CustomTestCase):
         print(f"[Server Mode] origin_model_path: {origin_model_path}")
         origin_response = self.run_decode()
 
-        new_model_path = self.model_after_update
+        new_model_path = DEFAULT_SMALL_MODEL_NAME_FOR_TEST.replace("-Instruct", "")
         ret = self.run_update_weights(new_model_path)
         self.assertTrue(ret["success"])
 
@@ -149,7 +143,7 @@ class TestServerUpdateWeightsFromDisk(CustomTestCase):
         print(f"[Server Mode] origin_model_path: {origin_model_path}")
         origin_response = self.run_decode()
 
-        new_model_path = self.model + "wrong"
+        new_model_path = DEFAULT_SMALL_MODEL_NAME_FOR_TEST.replace("-Instruct", "wrong")
         ret = self.run_update_weights(new_model_path)
         self.assertFalse(ret["success"])
 
