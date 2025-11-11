@@ -30,7 +30,7 @@ class TestInverseTransformScaleUe8m0(CustomTestCase):
             sf_packed_original = transform_scale_ue8m0(sf_fp32_original, mn=mn)
             sf_fp32_recreated = inverse_transform_scale_ue8m0(sf_packed_original, mn=mn)
 
-            sf_packed_recreated = transform_scale_ue8m0(sf_fp32, mn=mn)
+            sf_packed_recreated = transform_scale_ue8m0(sf_fp32_recreated, mn=mn)
 
             assert torch.all(
                 sf_packed_original == sf_packed_recreated
