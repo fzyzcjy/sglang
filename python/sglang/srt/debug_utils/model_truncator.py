@@ -80,7 +80,7 @@ def _transform_safetensors_file(
     state_dict: Dict[str, torch.Tensor], safetensors_index, debug_name: str
 ):
     names_to_remove = set(state_dict) - set(safetensors_index["weight_map"])
-    print(f"Remove {names_to_remove} in {debug_name}")
+    print(f"Remove {list(names_to_remove)} in {debug_name}")
     for name in names_to_remove:
         del state_dict[name]
 
