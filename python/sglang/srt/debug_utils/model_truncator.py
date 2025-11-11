@@ -11,7 +11,7 @@ def main(args):
 
     output_path.mkdir(parents=True, exist_ok=True)
 
-    for pattern in ["config.json", "*.py", "tokenizer*"]:
+    for pattern in ["config.json", "generation_config.json", "*.py", "tokenizer*"]:
         os.system(f"cp -rf {input_path}/{pattern} {output_path}")
 
     TODO
