@@ -490,8 +490,13 @@ def transform_scale_ue8m0(sf, mn):
     return sf
 
 
-def inverse_transform_scale_ue8m0(sf):
-    return TODO
+def inverse_transform_scale_ue8m0(sf_packed):
+    sf_fp32 = TODO
+
+    sf_packed_recreated = transform_scale_ue8m0(sf_fp32, mn=TODO)
+    assert torch.all(sf_packed == sf_packed_recreated), f"{sf_packed=} {sf_packed_recreated}"
+
+    return sf_fp32
 
 
 # COPIED FROM DeepGEMM
