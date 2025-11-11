@@ -12,7 +12,7 @@ from safetensors.torch import load_file, save_file
 
 
 def main(args):
-    dir_input = Path(snapshot_download(args.input))
+    dir_input = Path(_maybe_snapshot_download(args.input))
     dir_output = Path(args.output)
     print(f"{dir_input=} {dir_output=}")
 
@@ -51,6 +51,12 @@ def main(args):
             print(f"Skip saving {path_output_safetensors} since it is empty")
 
 
+def _maybe_snapshot_download(path):
+    if Path(path).exists():
+        return path
+    return snapshot_download(path)
+
+
 def _transform_json(dir_input, dir_output, filename, fn):
     data = json.loads((dir_input / filename).read_text())
     fn(data)
@@ -85,7 +91,7 @@ def _filter_tensor_name(args, tensor_name: str):
     if m is None:
         return True
 
-    layer_id = int(m.group(0))
+    layer_id = int(m.group(1))
     return layer_id < args.keep_num_layers
 
 
