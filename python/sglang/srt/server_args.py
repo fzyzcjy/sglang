@@ -511,6 +511,7 @@ class ServerArgs:
     delete_ckpt_after_loading: bool = False
     enable_memory_saver: bool = False
     enable_weights_cpu_backup: bool = False
+    enable_draft_weights_cpu_backup: bool = False
     allow_auto_truncate: bool = False
     enable_custom_logit_processor: bool = False
     flashinfer_mla_disable_ragged: bool = False
@@ -565,6 +566,7 @@ class ServerArgs:
     # For Multi-Modal
     mm_max_concurrent_calls: int = 32
     mm_per_request_timeout: float = 10.0
+    enable_broadcast_mm_inputs_process: bool = False
 
     # For checkpoint decryption
     decrypted_config_file: Optional[str] = None
@@ -3408,7 +3410,12 @@ class ServerArgs:
         parser.add_argument(
             "--enable-weights-cpu-backup",
             action="store_true",
-            help="Save model weights to CPU memory during release_weights_occupation and resume_weights_occupation",
+            help="Save model weights (both main model and draft model, if any) to CPU memory during release_weights_occupation and resume_weights_occupation",
+        )
+        parser.add_argument(
+            "--enable-draft-weights-cpu-backup",
+            action="store_true",
+            help="Save draft model weights to CPU memory during release_weights_occupation and resume_weights_occupation",
         )
         parser.add_argument(
             "--allow-auto-truncate",
@@ -3655,6 +3662,12 @@ class ServerArgs:
             type=int,
             default=ServerArgs.mm_per_request_timeout,
             help="The timeout for each multi-modal request in seconds.",
+        )
+        parser.add_argument(
+            "--enable-broadcast-mm-inputs-process",
+            action="store_true",
+            default=ServerArgs.enable_broadcast_mm_inputs_process,
+            help="Enable broadcast mm-inputs process in scheduler.",
         )
 
         # For checkpoint decryption
