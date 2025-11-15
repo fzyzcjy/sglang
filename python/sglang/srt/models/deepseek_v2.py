@@ -29,6 +29,7 @@ import tqdm
 from torch import nn
 from transformers import PretrainedConfig
 
+from sglang.srt.compilation.piecewise_context_manager import is_in_piecewise_cuda_graph
 from sglang.srt.configs.model_config import (
     get_nsa_index_head_dim,
     get_nsa_index_n_heads,
@@ -89,6 +90,7 @@ from sglang.srt.layers.quantization.fp8_kernel import (
     per_token_group_quant_mla_deep_gemm_masked_fp8,
 )
 from sglang.srt.layers.quantization.fp8_utils import (
+    ENABLE_FLASHINFER_FP8_GEMM,
     block_quant_dequant,
     block_quant_to_tensor_quant,
     channel_quant_to_tensor_quant,
@@ -109,9 +111,6 @@ from sglang.srt.layers.vocab_parallel_embedding import (
     VocabParallelEmbedding,
 )
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, PPProxyTensors
-from sglang.srt.model_executor.piecewise_cuda_graph_runner import (
-    is_in_piecewise_cuda_graph,
-)
 from sglang.srt.model_loader.utils import (
     maybe_executor_submit,
     should_async_load,
@@ -3438,7 +3437,8 @@ class DeepseekV2ForCausalLM(nn.Module):
                 self_attn.use_deep_gemm_bmm = True
 
         if (
-            should_deepgemm_weight_requant_ue8m0(
+            not ENABLE_FLASHINFER_FP8_GEMM
+            and should_deepgemm_weight_requant_ue8m0(
                 weight_block_size=getattr(self.quant_config, "weight_block_size", None)
             )
             and not self._executed_weight_requant_ue8m0
