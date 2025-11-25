@@ -3,6 +3,9 @@ from typing import Dict, Iterable, Tuple
 
 import torch
 
+from sglang.srt.layers.quantization.fp8_utils import inverse_transform_scale_ue8m0
+from sglang.srt.layers.quantization.fp8_utils import block_quant_dequant
+
 logger = logging.getLogger(__name__)
 
 
@@ -110,7 +113,14 @@ def _postprocess_tensors(raw: Dict[str, torch.Tensor]) -> Iterable[Tuple[str, to
     for name in interest_names:
         w_q = raw[name]
         w_s = raw[name.replace(".weight", ".weight_scale_inv")]
-        w_dequant = TODO
+        # TODO this is only needed for Blackwell
+        w_s_inverse_transformed = inverse_transform_scale_ue8m0(w_s, mn=w_q.shape[-2])
+        w_dequant = block_quant_dequant(
+            w_q,
+            w_s_inverse_transformed,
+            block_size=weight_block_size,
+            dtype=torch.bfloat16,
+        )
         yield name, w_dequant
 
     for name in remain_names:
