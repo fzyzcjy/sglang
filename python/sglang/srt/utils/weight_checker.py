@@ -106,7 +106,11 @@ def _postprocess_tensors(raw: Dict[str, torch.Tensor]) -> Iterable[Tuple[str, to
         name for name in remain_names
         if name.endswith(".weight") and name.replace(".weight", ".weight_scale_inv") in raw
     ]
-    TODO
+    remain_names = [x for x in remain_names if x not in interest_names]
+    for name in interest_names:
+        weight = raw[name]
+        scale = raw[name.replace(".weight", ".weight_scale_inv")]
+        TODO
 
     for name in remain_names:
         yield name, raw[name]
