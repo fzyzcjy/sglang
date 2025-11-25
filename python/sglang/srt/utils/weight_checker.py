@@ -1,5 +1,5 @@
 import logging
-from typing import Dict
+from typing import Dict, Iterable, Tuple
 
 import torch
 
@@ -39,8 +39,8 @@ class WeightChecker:
         assert self._snapshot_tensors is not None
 
         _check_tensors(
-            expect_tensors=self._snapshot_tensors,
-            actual_tensors=dict(self._model_state()),
+            expect_tensors=_postprocess_tensors(self._snapshot_tensors),
+            actual_tensors=_postprocess_tensors(dict(self._model_state())),
         )
 
     def _model_state(self):
@@ -50,18 +50,19 @@ class WeightChecker:
 
 
 def _check_tensors(
-    expect_tensors: Dict[str, torch.Tensor], actual_tensors: Dict[str, torch.Tensor]
+        expect_tensors: Iterable[Tuple[str, torch.Tensor]], actual_tensors: Iterable[Tuple[str, torch.Tensor]]
 ):
     from sglang.srt.debug_utils.dumper import get_tensor_info
-
-    assert len(expect_tensors) == len(actual_tensors)
 
     good_names = []
     error_messages = []
 
-    for name in expect_tensors:
-        expect = expect_tensors[name].cuda()
-        actual = actual_tensors[name].cuda()
+    for (expect_name, expect), (actual_name, actual) in zip(expect_tensors, actual_tensors, strict=True):
+        assert expect_name == actual_name, f"{expect_name=} {actual_name=}"
+        name = expect_name
+
+        expect = expect.cuda()
+        actual = actual.cuda()
 
         if torch.all(expect == actual):
             good_names.append(name)
@@ -95,3 +96,7 @@ def _random_like(t: torch.Tensor):
     return torch.randint(
         low=int(info.min), high=int(info.max), size=shape, device=device, dtype=dtype
     )
+
+
+def _postprocess_tensors(raw: Dict[str, torch.Tensor]) -> Iterable[Tuple[str, torch.Tensor]]:
+    TODO
