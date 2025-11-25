@@ -1,6 +1,4 @@
 import logging
-from dataclasses import dataclass
-from enum import Enum, auto
 from typing import Dict, Iterable, Tuple
 
 import torch
@@ -66,11 +64,15 @@ def _check_tensors(
     error_messages = []
     info_messages = []
 
-    for (expect_name, expect_should_compare, expect), (actual_name, actual_should_compare, actual) in zip(
-        expect_tensors, actual_tensors, strict=True
-    ):
+    for (expect_name, expect_should_compare, expect), (
+        actual_name,
+        actual_should_compare,
+        actual,
+    ) in zip(expect_tensors, actual_tensors, strict=True):
         assert expect_name == actual_name, f"{expect_name=} {actual_name=}"
-        assert expect_should_compare == actual_should_compare, f"{expect_should_compare=} {actual_should_compare=}"
+        assert (
+            expect_should_compare == actual_should_compare
+        ), f"{expect_should_compare=} {actual_should_compare=}"
         name = expect_name
         should_compare = expect_should_compare
 
