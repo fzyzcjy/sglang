@@ -30,6 +30,7 @@ class WeightChecker:
     def _snapshot(self):
         for name, param in self._model_runner.model.named_parameters():
             from sglang.srt.debug_utils.dumper import dumper
+
             dumper.dump("weight_checker_old_state", param, param_name=name)
 
         named_tensors = [
@@ -49,6 +50,7 @@ class WeightChecker:
 
         for name, param in self._model_runner.model.named_parameters():
             from sglang.srt.debug_utils.dumper import dumper
+
             dumper.dump("weight_checker_new_state", param, param_name=name)
 
         _check_tensors(
