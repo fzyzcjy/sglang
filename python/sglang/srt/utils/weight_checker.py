@@ -99,4 +99,9 @@ def _random_like(t: torch.Tensor):
 
 
 def _postprocess_tensors(raw: Dict[str, torch.Tensor]) -> Iterable[Tuple[str, torch.Tensor]]:
+    remain_keys = sorted(list(raw))
+
     TODO
+
+    for k in remain_keys:
+        yield k, raw[k]
