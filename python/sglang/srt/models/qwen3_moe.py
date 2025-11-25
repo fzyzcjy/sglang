@@ -812,6 +812,9 @@ class Qwen3MoeForCausalLM(nn.Module):
             self._cached_params_dict = dict(self.named_parameters())
         params_dict = self._cached_params_dict
         for name, loaded_weight in weights:
+            from sglang.srt.debug_utils.dumper import get_tensor_info
+            print(f"hi [{torch.distributed.get_rank()}] {type(self)}.load_weights "
+                  f"{name=} {get_tensor_info(loaded_weight)=} ")
             layer_id = get_layer_id(name)
             if (
                 layer_id is not None
