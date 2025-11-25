@@ -156,4 +156,4 @@ def get_tensor_info(x):
     torch.set_printoptions(precision=10)
     x_sample = str(x.flatten()[:5])
     torch.set_printoptions(precision=4)
-    return f"shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} req_grad={x.requires_grad} min={min} max={max} mean={mean} x_sample={x_sample}"
+    return f"type={type(x)} shape={x.shape} dtype={x.dtype} device={x.device} stride={x.stride()} req_grad={x.requires_grad} min={min} max={max} mean={mean} x_sample={x_sample}"
