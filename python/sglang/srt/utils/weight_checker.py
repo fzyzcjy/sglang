@@ -101,6 +101,11 @@ def _random_like(t: torch.Tensor):
 def _postprocess_tensors(raw: Dict[str, torch.Tensor]) -> Iterable[Tuple[str, torch.Tensor]]:
     remain_names = sorted(list(raw))
 
+    # dequant fp8
+    interest_names = [
+        name for name in remain_names
+        if name.endswith(".weight") and name.replace(".weight", ".weight_scale_inv") in raw
+    ]
     TODO
 
     for name in remain_names:
