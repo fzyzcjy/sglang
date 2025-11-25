@@ -119,6 +119,8 @@ def _random_like(t: torch.Tensor):
 def _postprocess_tensors(
     raw: Dict[str, torch.Tensor]
 ) -> Iterable[Tuple[str, bool, torch.Tensor]]:
+    from sglang.srt.debug_utils.dumper import get_tensor_info
+
     skip_compare_names = []
 
     # dequant fp8
@@ -132,16 +134,21 @@ def _postprocess_tensors(
     for name in quant_names:
         w_q = raw[name]
         w_s = raw[name.replace(".weight", ".weight_scale_inv")]
-        # TODO this is only needed for Blackwell
-        w_s_inverse_transformed = inverse_transform_scale_ue8m0(w_s, mn=w_q.shape[-2])
-        w_dequant = block_quant_dequant(
-            w_q,
-            w_s_inverse_transformed,
-            # TODO do not hardcode
-            block_size=[128, 128],
-            dtype=torch.bfloat16,
-        )
-        yield name, True, w_dequant
+
+        try:
+            # TODO this is only needed for Blackwell
+            w_s_inverse_transformed = inverse_transform_scale_ue8m0(w_s, mn=w_q.shape[-2])
+            w_dequant = block_quant_dequant(
+                w_q,
+                w_s_inverse_transformed,
+                # TODO do not hardcode
+                block_size=[128, 128],
+                dtype=torch.bfloat16,
+            )
+            yield name, True, w_dequant
+        except Exception as e:
+            e.add_note(f"when handling {name=} {get_tensor_info(w_q)=} {get_tensor_info(w_s)=}")
+            raise
 
     for name in raw:
         should_compare = name not in skip_compare_names
