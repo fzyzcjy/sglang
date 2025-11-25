@@ -1,4 +1,6 @@
 import logging
+from dataclasses import dataclass
+from enum import Enum, auto
 from typing import Dict, Iterable, Tuple
 
 import torch
@@ -55,19 +57,22 @@ class WeightChecker:
 
 
 def _check_tensors(
-    expect_tensors: Iterable[Tuple[str, torch.Tensor]],
-    actual_tensors: Iterable[Tuple[str, torch.Tensor]],
+    expect_tensors: Iterable[Tuple[str, bool, torch.Tensor]],
+    actual_tensors: Iterable[Tuple[str, bool, torch.Tensor]],
 ):
     from sglang.srt.debug_utils.dumper import get_tensor_info
 
     good_names = []
     error_messages = []
+    info_messages = []
 
-    for (expect_name, expect), (actual_name, actual) in zip(
+    for (expect_name, expect_should_compare, expect), (actual_name, actual_should_compare, actual) in zip(
         expect_tensors, actual_tensors, strict=True
     ):
         assert expect_name == actual_name, f"{expect_name=} {actual_name=}"
+        assert expect_should_compare == actual_should_compare, f"{expect_should_compare=} {actual_should_compare=}"
         name = expect_name
+        should_compare = expect_should_compare
 
         expect = expect.cuda()
         actual = actual.cuda()
@@ -76,15 +81,18 @@ def _check_tensors(
             good_names.append(name)
         else:
             abs_diff = (actual.float() - expect.float()).abs()
-            error_messages.append(
+            msg = (
                 f"name={name} "
                 f"max_abs_err={abs_diff.max()} "
                 f"mean_abs_err={abs_diff.mean()} "
                 f"{get_tensor_info(expect)=} "
                 f"{get_tensor_info(actual)=} "
             )
+            (error_messages if should_compare else info_messages).append(msg)
 
-    logger.info(f"[check_tensors] passed: {good_names}")
+    logger.info(f"[check_tensors] equal tensors: {good_names}")
+    if len(info_messages) > 0:
+        logger.info(f"[check_tensors] info: {info_messages}")
     if len(error_messages) > 0:
         raise Exception(f"check tensor equality failed:\n" + "\n".join(error_messages))
 
@@ -108,18 +116,18 @@ def _random_like(t: torch.Tensor):
 
 def _postprocess_tensors(
     raw: Dict[str, torch.Tensor]
-) -> Iterable[Tuple[str, torch.Tensor]]:
-    remain_names = sorted(list(raw))
+) -> Iterable[Tuple[str, bool, torch.Tensor]]:
+    skip_compare_names = []
 
     # dequant fp8
-    interest_names = [
+    quant_names = [
         name
-        for name in remain_names
+        for name in raw
         if name.endswith(".weight")
         and name.replace(".weight", ".weight_scale_inv") in raw
     ]
-    remain_names = [x for x in remain_names if x not in interest_names]
-    for name in interest_names:
+    skip_compare_names += quant_names
+    for name in quant_names:
         w_q = raw[name]
         w_s = raw[name.replace(".weight", ".weight_scale_inv")]
         # TODO this is only needed for Blackwell
@@ -131,7 +139,8 @@ def _postprocess_tensors(
             block_size=[128, 128],
             dtype=torch.bfloat16,
         )
-        yield name, w_dequant
+        yield name, True, w_dequant
 
-    for name in remain_names:
-        yield name, raw[name]
+    for name in raw:
+        should_compare = name not in skip_compare_names
+        yield name, should_compare, raw[name]
