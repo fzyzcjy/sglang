@@ -475,6 +475,9 @@ class Qwen3ForCausalLM(nn.Module):
 
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
+            from sglang.srt.debug_utils.dumper import get_tensor_info
+            print(f"[{torch.distributed.get_rank()}] load_weights item START {name=} {get_tensor_info(loaded_weight)=}")
+
             if "Embedding" in self.config.name_or_path:
                 name = add_prefix(name, "model")
             layer_id = get_layer_id(name)
@@ -519,6 +522,7 @@ class Qwen3ForCausalLM(nn.Module):
                     continue
                 param = params_dict[name]
                 weight_loader = param.weight_loader
+                print(f"[{torch.distributed.get_rank()}] load_weights CALL-a {weight_loader=} {name=} {get_tensor_info(loaded_weight)=} {get_tensor_info(param)=}")
                 weight_loader(param, loaded_weight, shard_id)
                 break
             else:
@@ -531,6 +535,7 @@ class Qwen3ForCausalLM(nn.Module):
                     weight_loader = getattr(
                         param, "weight_loader", default_weight_loader
                     )
+                    print(f"[{torch.distributed.get_rank()}] load_weights CALL-b {weight_loader=} {name=} {get_tensor_info(loaded_weight)=} {get_tensor_info(param)=}")
                     weight_loader(param, loaded_weight)
                 else:
                     logger.warning(f"Parameter {name} not found in params_dict")
