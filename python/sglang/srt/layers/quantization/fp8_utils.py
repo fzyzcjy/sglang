@@ -549,7 +549,10 @@ def _inverse_transform_scale_ue8m0_impl(sf_packed):
     sf_unrepeated = sf_reshaped[:, 0:1, :]
     if not torch.all(sf_unrepeated == sf_reshaped):
         from sglang.srt.debug_utils.dumper import get_tensor_info
-        raise ValueError(f"{get_tensor_info(sf_unrepeated)=} {get_tensor_info(sf_reshaped)=}")
+
+        raise ValueError(
+            f"{get_tensor_info(sf_unrepeated)=} {get_tensor_info(sf_reshaped)=}"
+        )
     sf_unrepeated = sf_unrepeated.squeeze(1).contiguous()
 
     assert sf_unrepeated.shape == (mn, k)

@@ -137,7 +137,9 @@ def _postprocess_tensors(
 
         try:
             # TODO this is only needed for Blackwell
-            w_s_inverse_transformed = inverse_transform_scale_ue8m0(w_s, mn=w_q.shape[-2])
+            w_s_inverse_transformed = inverse_transform_scale_ue8m0(
+                w_s, mn=w_q.shape[-2]
+            )
             w_dequant = block_quant_dequant(
                 w_q,
                 w_s_inverse_transformed,
@@ -147,7 +149,9 @@ def _postprocess_tensors(
             )
             yield name, True, w_dequant
         except Exception as e:
-            e.add_note(f"when handling {name=} {get_tensor_info(w_q)=} {get_tensor_info(w_s)=}")
+            e.add_note(
+                f"when handling {name=} {get_tensor_info(w_q)=} {get_tensor_info(w_s)=}"
+            )
             raise
 
     for name in raw:
