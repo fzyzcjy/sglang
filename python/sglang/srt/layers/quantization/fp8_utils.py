@@ -521,7 +521,7 @@ def inverse_transform_scale_ue8m0(sf_packed, mn):
     sf_packed_recreated = transform_scale_ue8m0(sf_fp32, mn=mn)
     assert torch.all(
         sf_packed == sf_packed_recreated
-    ), f"{sf_packed=} {sf_packed_recreated}"
+    ), f"{sf_packed=} {sf_packed_recreated=}"
     return sf_fp32
 
 
