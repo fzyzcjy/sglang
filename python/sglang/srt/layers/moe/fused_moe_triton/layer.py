@@ -575,9 +575,11 @@ class FusedMoE(torch.nn.Module):
         expert_id: int,
     ) -> None:
         from sglang.srt.debug_utils.dumper import get_tensor_info
-        if expert_id < 3:
+        if expert_id == 0:
             print(f"hi [{torch.distributed.get_rank()}] {type(self)}.weight_loader_physical "
-                  f"{get_tensor_info(param)=} {get_tensor_info(loaded_weight)=} {weight_name=} {shard_id=} {expert_id=}")
+                  f"{get_tensor_info(param)=} {get_tensor_info(loaded_weight)=} "
+                  f"{weight_name=} {shard_id=} {expert_id=} "
+                  f"{self.use_presharded_weights=}")
 
         # WARN: This makes the `expert_id` mean "local" and "global" in different cases
         if not getattr(param, "_sglang_require_global_experts", False):
