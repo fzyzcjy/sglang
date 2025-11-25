@@ -155,7 +155,7 @@ def get_tensor_info(x):
     mean = x.float().mean() if x.numel() > 0 else None
     torch.set_printoptions(precision=10)
     x_sample_head = str(x.flatten()[:5])
-    x_sample_tail = str(x.flatten()[5:])
+    x_sample_tail = str(x.flatten()[-5:])
     torch.set_printoptions(precision=4)
     return (
         f"type={type(x)} "
