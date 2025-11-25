@@ -118,7 +118,8 @@ def _postprocess_tensors(raw: Dict[str, torch.Tensor]) -> Iterable[Tuple[str, to
         w_dequant = block_quant_dequant(
             w_q,
             w_s_inverse_transformed,
-            block_size=weight_block_size,
+            # TODO do not hardcode
+            block_size=[128, 128],
             dtype=torch.bfloat16,
         )
         yield name, w_dequant
