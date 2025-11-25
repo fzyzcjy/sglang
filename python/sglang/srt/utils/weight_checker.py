@@ -3,8 +3,10 @@ from typing import Dict, Iterable, Tuple
 
 import torch
 
-from sglang.srt.layers.quantization.fp8_utils import inverse_transform_scale_ue8m0
-from sglang.srt.layers.quantization.fp8_utils import block_quant_dequant
+from sglang.srt.layers.quantization.fp8_utils import (
+    block_quant_dequant,
+    inverse_transform_scale_ue8m0,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,14 +55,17 @@ class WeightChecker:
 
 
 def _check_tensors(
-        expect_tensors: Iterable[Tuple[str, torch.Tensor]], actual_tensors: Iterable[Tuple[str, torch.Tensor]]
+    expect_tensors: Iterable[Tuple[str, torch.Tensor]],
+    actual_tensors: Iterable[Tuple[str, torch.Tensor]],
 ):
     from sglang.srt.debug_utils.dumper import get_tensor_info
 
     good_names = []
     error_messages = []
 
-    for (expect_name, expect), (actual_name, actual) in zip(expect_tensors, actual_tensors, strict=True):
+    for (expect_name, expect), (actual_name, actual) in zip(
+        expect_tensors, actual_tensors, strict=True
+    ):
         assert expect_name == actual_name, f"{expect_name=} {actual_name=}"
         name = expect_name
 
@@ -101,13 +106,17 @@ def _random_like(t: torch.Tensor):
     )
 
 
-def _postprocess_tensors(raw: Dict[str, torch.Tensor]) -> Iterable[Tuple[str, torch.Tensor]]:
+def _postprocess_tensors(
+    raw: Dict[str, torch.Tensor]
+) -> Iterable[Tuple[str, torch.Tensor]]:
     remain_names = sorted(list(raw))
 
     # dequant fp8
     interest_names = [
-        name for name in remain_names
-        if name.endswith(".weight") and name.replace(".weight", ".weight_scale_inv") in raw
+        name
+        for name in remain_names
+        if name.endswith(".weight")
+        and name.replace(".weight", ".weight_scale_inv") in raw
     ]
     remain_names = [x for x in remain_names if x not in interest_names]
     for name in interest_names:
