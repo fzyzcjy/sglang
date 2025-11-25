@@ -476,7 +476,7 @@ class Qwen3ForCausalLM(nn.Module):
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             from sglang.srt.debug_utils.dumper import dumper
-            dumper.dump("load_weights", loaded_weight, name=name)
+            dumper.dump("load_weights", loaded_weight, param_name=name)
 
             if "Embedding" in self.config.name_or_path:
                 name = add_prefix(name, "model")
