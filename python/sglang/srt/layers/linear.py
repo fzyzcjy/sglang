@@ -746,10 +746,14 @@ class MergedColumnParallelLinear(ColumnParallelLinear):
                 // block_n
                 // self.tp_size
             )
+            print(f"[{torch.distributed.get_rank()}] {type(self)}.weight_loader_v2 handle-scale "
+                  f"{shard_offset=} {shard_size=} {weight_block_size=} {block_n=} ")
         else:
             shard_offset = sum(self.output_sizes[:loaded_shard_id]) // self.tp_size
             shard_size = self.output_sizes[loaded_shard_id] // self.tp_size
 
+        print(f"[{torch.distributed.get_rank()}] {type(self)}.weight_loader_v2 CALL load_qkv_weight "
+              f"{shard_offset=} {shard_size=} {type(param)=} {param=} {getattr(param, 'format_ue8m0', False)=}")
         param.load_merged_column_weight(
             loaded_weight=loaded_weight,
             shard_id=loaded_shard_id,
