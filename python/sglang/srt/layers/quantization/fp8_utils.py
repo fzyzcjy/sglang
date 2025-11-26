@@ -8,6 +8,7 @@ from sglang.srt.layers.quantization.fp8_kernel import sglang_per_token_group_qua
 from sglang.srt.layers.quantization.mxfp4_tensor import MXFP4QuantizeUtil
 from sglang.srt.utils import ceil_div, is_blackwell_supported, offloader
 
+
 try:
     from vllm import _custom_ops as ops
 
@@ -519,9 +520,12 @@ def inverse_transform_scale_ue8m0(sf_packed, mn):
     sf_fp32 = _inverse_transform_scale_ue8m0_impl(sf_packed)
     # Can call consistency check every time since this is only called on startup
     sf_packed_recreated = transform_scale_ue8m0(sf_fp32, mn=mn)
-    assert torch.all(
-        sf_packed == sf_packed_recreated
-    ), f"{sf_packed=} {sf_packed_recreated=} {sf_fp32=}"
+    if not torch.all(sf_packed == sf_packed_recreated):
+        from sglang.srt.debug_utils.dumper import dumper
+        dumper.dump("sf_packed", sf_packed)
+        dumper.dump("sf_packed_recreated", sf_packed_recreated)
+        dumper.dump("sf_fp32", sf_fp32)
+        raise AssertionError(f"{sf_packed=} {sf_packed_recreated=} {sf_fp32=}")
     return sf_fp32
 
 
