@@ -133,7 +133,8 @@ def _postprocess_tensors(
     skip_compare_names += quant_names
     for name in quant_names:
         w_q = raw[name]
-        w_s = raw[name.replace(".weight", ".weight_scale_inv")]
+        # Match: `something.weight`, `something.experts.w2_weight`
+        w_s = raw[name.replace("weight", "weight_scale_inv")]
 
         try:
             # TODO this is only needed for Blackwell
