@@ -946,8 +946,6 @@ class QKVParallelLinear(ColumnParallelLinear):
         loaded_weight: torch.Tensor,
         loaded_shard_id: Optional[str] = None,
     ):
-        from sglang.srt.debug_utils.dumper import get_tensor_info
-        print(f"hi [{torch.distributed.get_rank()}] {type(self)}.weight_loader_v2 START {get_tensor_info(param)=} {get_tensor_info(loaded_weight)=}")
         if loaded_shard_id is None:  # special case for certain models
             if isinstance(param, PerTensorScaleParameter):
                 param.load_qkv_weight(loaded_weight=loaded_weight, shard_id=0)
