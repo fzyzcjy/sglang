@@ -556,7 +556,7 @@ def _get_mn_major_tma_aligned_packed_ue8m0_tensor_torch_impl(
 def inverse_transform_scale_ue8m0(sf_packed, mn):
     sf_fp32 = _inverse_transform_scale_ue8m0_impl(sf_packed)
     # Can call consistency check every time since this is only called on startup
-    sf_packed_recreated = transform_scale_ue8m0(sf_fp32, mn=mn)
+    sf_packed_recreated = transform_scale_ue8m0(sf_fp32, mn=mn, use_torch_impl=True)
     assert torch.all(
         sf_packed == sf_packed_recreated
     ), f"{sf_packed=} {sf_packed_recreated=} {sf_fp32=}"
