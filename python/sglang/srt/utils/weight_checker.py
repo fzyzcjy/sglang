@@ -128,8 +128,7 @@ def _postprocess_tensors(
         name
         for name in raw
         # Match: `something.weight`, `something.experts.w2_weight`
-        if name.endswith("weight")
-        and name.replace("weight", "weight_scale_inv") in raw
+        if name.endswith("weight") and name.replace("weight", "weight_scale_inv") in raw
     ]
     skip_compare_names += quant_names
     for name in quant_names:
