@@ -8,7 +8,6 @@ from sglang.srt.layers.quantization.fp8_kernel import sglang_per_token_group_qua
 from sglang.srt.layers.quantization.mxfp4_tensor import MXFP4QuantizeUtil
 from sglang.srt.utils import ceil_div, is_blackwell_supported, offloader
 
-
 try:
     from vllm import _custom_ops as ops
 
@@ -511,7 +510,11 @@ def transform_scale_ue8m0_inplace(param, mn):
 def transform_scale_ue8m0(sf, mn, use_torch_impl: bool = False):
     import deep_gemm.utils.layout
 
-    get_mn_major_tma_aligned_packed_ue8m0_tensor = (_get_mn_major_tma_aligned_packed_ue8m0_tensor_torch_impl if use_torch_impl else deep_gemm.utils.layout.get_mn_major_tma_aligned_packed_ue8m0_tensor)
+    get_mn_major_tma_aligned_packed_ue8m0_tensor = (
+        _get_mn_major_tma_aligned_packed_ue8m0_tensor_torch_impl
+        if use_torch_impl
+        else deep_gemm.utils.layout.get_mn_major_tma_aligned_packed_ue8m0_tensor
+    )
 
     sf = sf.index_select(-2, torch.arange(mn, device=sf.device) // 128)
     sf = get_mn_major_tma_aligned_packed_ue8m0_tensor(sf)
@@ -519,7 +522,9 @@ def transform_scale_ue8m0(sf, mn, use_torch_impl: bool = False):
 
 
 # Copied from DeepGEMM tests
-def _get_mn_major_tma_aligned_packed_ue8m0_tensor_torch_impl(x: torch.Tensor) -> torch.Tensor:
+def _get_mn_major_tma_aligned_packed_ue8m0_tensor_torch_impl(
+    x: torch.Tensor,
+) -> torch.Tensor:
     from deep_gemm.utils import align, get_tma_aligned_size
 
     assert x.dtype == torch.float and x.dim() in (2, 3)
@@ -540,7 +545,9 @@ def _get_mn_major_tma_aligned_packed_ue8m0_tensor_torch_impl(x: torch.Tensor) ->
     padded = padded.view(-1).view(dtype=torch.int).view(b, aligned_mn, aligned_k // 4)
 
     # Finally, transpose
-    transposed = torch.zeros((b, aligned_k // 4, aligned_mn), device=x.device, dtype=torch.int).mT
+    transposed = torch.zeros(
+        (b, aligned_k // 4, aligned_mn), device=x.device, dtype=torch.int
+    ).mT
     transposed[:, :, :] = padded
     aligned_x = transposed[:, :mn, :]
     return aligned_x.squeeze(0) if remove_dim else aligned_x
