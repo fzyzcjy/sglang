@@ -574,7 +574,7 @@ def _inverse_transform_scale_ue8m0_impl(sf_packed):
         return torch.stack([_inverse_transform_scale_ue8m0_impl(x) for x in sf_packed], dim=0)
 
     block_size = 128
-    assert len(sf_packed.shape) == 2
+    assert len(sf_packed.shape) == 2, f"{sf_packed.shape=}"
     assert sf_packed.dtype == torch.int32
 
     mn_repeat_128, k_div_4 = sf_packed.shape
