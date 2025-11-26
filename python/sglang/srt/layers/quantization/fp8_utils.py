@@ -508,15 +508,18 @@ def transform_scale_ue8m0_inplace(param, mn):
 
 
 # NOTE copy and modified from DeepGEMM
-def transform_scale_ue8m0(sf, mn):
+def transform_scale_ue8m0(sf, mn, use_torch_impl: bool = False):
     import deep_gemm.utils.layout
 
+    get_mn_major_tma_aligned_packed_ue8m0_tensor = (_get_mn_major_tma_aligned_packed_ue8m0_tensor_torch_impl if use_torch_impl else deep_gemm.utils.layout.get_mn_major_tma_aligned_packed_ue8m0_tensor)
+
     sf = sf.index_select(-2, torch.arange(mn, device=sf.device) // 128)
-    sf = get_mn_major_tma_aligned_packed_ue8m0_tensor_torch_impl(sf)
+    sf = get_mn_major_tma_aligned_packed_ue8m0_tensor(sf)
     return sf
 
 
-def get_mn_major_tma_aligned_packed_ue8m0_tensor_torch_impl(x: torch.Tensor) -> torch.Tensor:
+# Copied from DeepGEMM tests
+def _get_mn_major_tma_aligned_packed_ue8m0_tensor_torch_impl(x: torch.Tensor) -> torch.Tensor:
     from deep_gemm.utils import align, get_tma_aligned_size
 
     assert x.dtype == torch.float and x.dim() in (2, 3)
@@ -547,12 +550,9 @@ def inverse_transform_scale_ue8m0(sf_packed, mn):
     sf_fp32 = _inverse_transform_scale_ue8m0_impl(sf_packed)
     # Can call consistency check every time since this is only called on startup
     sf_packed_recreated = transform_scale_ue8m0(sf_fp32, mn=mn)
-    if not torch.all(sf_packed == sf_packed_recreated):
-        from sglang.srt.debug_utils.dumper import dumper
-        dumper.dump("sf_packed", sf_packed)
-        dumper.dump("sf_packed_recreated", sf_packed_recreated)
-        dumper.dump("sf_fp32", sf_fp32)
-        raise AssertionError(f"{sf_packed=} {sf_packed_recreated=} {sf_fp32=}")
+    assert torch.all(
+        sf_packed == sf_packed_recreated
+    ), f"{sf_packed=} {sf_packed_recreated=} {sf_fp32=}"
     return sf_fp32
 
 
