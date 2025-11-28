@@ -619,6 +619,8 @@ async def async_request_profile(api_url: str) -> RequestFuncOutput:
             body = {
                 "activities": getattr(args, "profile_activities", []),
             }
+            if (x := getattr(args, "profile_num_steps", None)) is not None:
+                body["num_steps"] = x
             async with session.post(url=api_url, json=body) as response:
                 if response.status == 200:
                     output.success = True
@@ -2612,6 +2614,7 @@ if __name__ == "__main__":
         default=["CPU", "GPU"],
         choices=["CPU", "GPU", "CUDA_PROFILER"],
     )
+    parser.add_argument("--profile-num-steps", type=int, default=None)
     parser.add_argument(
         "--lora-name",
         type=str,
