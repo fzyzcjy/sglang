@@ -49,10 +49,6 @@ class GenerationBatchResult:
         e.g., next_token_ids, logits outputs
         """
         if return_logprob:
-            if self.logits_output.next_token_logits is not None:
-                self.logits_output.next_token_logits = (
-                    self.logits_output.next_token_logits.to("cpu", non_blocking=True)
-                )
             if self.logits_output.next_token_logprobs is not None:
                 self.logits_output.next_token_logprobs = (
                     self.logits_output.next_token_logprobs.to("cpu", non_blocking=True)
