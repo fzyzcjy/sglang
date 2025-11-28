@@ -621,6 +621,7 @@ async def async_request_profile(api_url: str) -> RequestFuncOutput:
             }
             if (x := getattr(args, "profile_num_steps", None)) is not None:
                 body["num_steps"] = x
+            print(f"async_request_profile {api_url=} {body=}")
             async with session.post(url=api_url, json=body) as response:
                 if response.status == 200:
                     output.success = True
