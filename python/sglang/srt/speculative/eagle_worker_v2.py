@@ -556,6 +556,7 @@ class EAGLEWorkerV2(BaseSpecWorker):
         self.speculative_num_steps = server_args.speculative_num_steps
         self.speculative_num_draft_tokens = server_args.speculative_num_draft_tokens
         self.enable_nan_detection = server_args.enable_nan_detection
+        self.tp_rank = tp_rank
         self.gpu_id = gpu_id
         self.device = server_args.device
         self._target_worker = target_worker
