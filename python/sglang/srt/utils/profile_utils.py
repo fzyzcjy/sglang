@@ -6,6 +6,7 @@ from typing import List, Optional, Callable
 
 import torch
 
+from sglang.srt.managers.io_struct import ProfileReqOutput
 from sglang.srt.model_executor.forward_batch_info import ForwardMode
 
 _is_npu = is_npu()
@@ -69,6 +70,12 @@ class ProfileManager:
         TODO
 
     def start(self):
+        return ProfileReqOutput(success=True, message="Succeeded")
+
+    def stop(self):
+        return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
+
+    def _do_start(self, stage: Optional[str] = None):
         stage_str = f" for {stage.name}" if stage else ""
         logger.info(
             f"Profiling starts{stage_str}. Traces will be saved to: {self.output_dir} (with profile id: {self.profile_id})",
@@ -76,9 +83,7 @@ class ProfileManager:
 
         TODO
 
-        return ProfileReqOutput(success=True, message="Succeeded")
-
-    def stop(self):
+    def _do_stop(self):
         if not self.profile_in_progress:
             return ProfileReqOutput(
                 success=False,
@@ -99,8 +104,6 @@ class ProfileManager:
         )
         self.profile_in_progress = False
         self.profiler_start_forward_ct = None
-
-        return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
 
 
 def _get_stage_from_forward_mode(forward_mode: ForwardMode):
@@ -170,7 +173,8 @@ class _ProfilerList(_ProfilerBase):
 
 
 class _ProfilerConcreteBase(_ProfilerBase):
-    def __init__(self, output_dir: str, output_prefix: str, output_suffix: str, profile_id: str, tp_rank: int, cpu_group):
+    def __init__(self, output_dir: str, output_prefix: str, output_suffix: str, profile_id: str, tp_rank: int,
+                 cpu_group):
         self.output_dir = output_dir
         self.output_prefix = output_prefix
         self.output_suffix = output_suffix
