@@ -146,25 +146,33 @@ class _StageBasedTrigger:
 
     def step(self, stage: str):
         # Incr counter
-        if (x := self.running_state) is not None:
-            x.curr_count += 1
+        if (s := self.running_state) is not None:
+            s.curr_count += 1
 
         # Maybe stop
         if (
-                ((x := self.running_state) is not None)
+                ((s := self.running_state) is not None)
                 and (
-                (x.curr_count > self.stage_configs[x.curr_stage].target_count)
-                or (stage != x.curr_stage)
+                (s.curr_count > self.stage_configs[s.curr_stage].target_count)
+                or (stage != s.curr_stage)
         )
         ):
-            del self.stage_configs[x.curr_stage]
+            del self.stage_configs[s.curr_stage]
             self.running_state = None
             self.on_stop()
 
         # Maybe start
         if TODO:
-            self.running_state = stage
+            self.running_state = self._RunningState(
+                curr_stage=stage,
+                curr_count=0,
+            )
             self.on_start()
+
+        # Sanity check
+        assert (self.running_state is not None) == (stage in self.stage_configs)
+        if (s := self.running_state) is not None:
+            assert s.curr_stage == stage
 
 
 # ======================================== Concrete profilers ==========================================
