@@ -136,8 +136,10 @@ class _ProfilerList(_ProfilerBase):
 
 
 class _ProfilerConcreteBase(_ProfilerBase):
-    def __init__(self, output_dir: str, output_suffix: str, profile_id: str, tp_rank: int, cpu_group):
+    def __init__(self, output_dir: str, output_prefix: str, output_suffix: str, profile_id: str, tp_rank: int,
+                 cpu_group):
         self.output_dir = output_dir
+        self.output_prefix = output_prefix
         self.output_suffix = output_suffix
         self.profile_id = profile_id
         self.tp_rank = tp_rank
@@ -175,11 +177,6 @@ class _ProfilerTorch(_ProfilerConcreteBase):
         self.torch_profiler.start()
 
     def stop(self):
-        if profile_prefix:
-            stage_prefix = profile_prefix + "-"
-        else:
-            stage_prefix = ""
-
         self.torch_profiler.stop()
         if not _is_npu:
             # Build filename with only non-zero ranks to maintain backward compatibility
@@ -194,7 +191,7 @@ class _ProfilerTorch(_ProfilerConcreteBase):
                 filename_parts.append(f"EP-{getattr(self, 'moe_ep_rank', 0)}")
 
             filename = (
-                    stage_prefix
+                    (self.output_prefix + "-" if self.output_prefix else "")
                     + "-".join(filename_parts)
                     + self.output_suffix
                     + ".trace.json.gz"
