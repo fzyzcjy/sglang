@@ -76,13 +76,6 @@ class _ProfilerBase(ABC):
             ans.append(_ProfilerRPD(**kwargs))
         return ans
 
-    def __init__(self, output_dir: str, output_suffix: str, profile_id: str, tp_rank: int, cpu_group):
-        self.output_dir = output_dir
-        self.output_suffix = output_suffix
-        self.profile_id = profile_id
-        self.tp_rank = tp_rank
-        self.cpu_group = cpu_group
-
     def start(self):
         raise NotImplementedError
 
@@ -90,7 +83,16 @@ class _ProfilerBase(ABC):
         raise NotImplementedError
 
 
-class _ProfilerTorch(_ProfilerBase):
+class _ProfilerConcreteBase(_ProfilerBase):
+    def __init__(self, output_dir: str, output_suffix: str, profile_id: str, tp_rank: int, cpu_group):
+        self.output_dir = output_dir
+        self.output_suffix = output_suffix
+        self.profile_id = profile_id
+        self.tp_rank = tp_rank
+        self.cpu_group = cpu_group
+
+
+class _ProfilerTorch(_ProfilerConcreteBase):
     def __init__(self, with_stack: bool, record_shapes: bool, activities, **kwargs):
         super().__init__(**kwargs)
         self.with_stack = with_stack
@@ -154,7 +156,7 @@ class _ProfilerTorch(_ProfilerBase):
         # TODO: migrate `_merge_profile_traces`
 
 
-class _ProfilerMemory(_ProfilerBase):
+class _ProfilerMemory(_ProfilerConcreteBase):
     def start(self):
         torch.cuda.memory._record_memory_history(max_entries=100000)
 
@@ -170,7 +172,7 @@ class _ProfilerMemory(_ProfilerBase):
         torch.cuda.memory._record_memory_history(enabled=None)
 
 
-class _ProfilerCudart(_ProfilerBase):
+class _ProfilerCudart(_ProfilerConcreteBase):
     def start(self):
         torch.cuda.cudart().cudaProfilerStart()
 
@@ -178,7 +180,7 @@ class _ProfilerCudart(_ProfilerBase):
         torch.cuda.cudart().cudaProfilerStop()
 
 
-class _ProfilerRPD(_ProfilerBase):
+class _ProfilerRPD(_ProfilerConcreteBase):
     def start(self):
         from rpdTracerControl import rpdTracerControl
 
