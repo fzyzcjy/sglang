@@ -27,7 +27,17 @@ class ProfileManager:
         TODO
 
     def start(self):
+        stage_str = f" for {stage.name}" if stage else ""
+        logger.info(
+            f"Profiling starts{stage_str}. Traces will be saved to: {self.torch_profiler_output_dir} (with profile id: {self.profile_id})",
+        )
+
+        activities = self.profiler_activities
+        with_stack = self.torch_profiler_with_stack
+        record_shapes = self.torch_profiler_record_shapes
+
         TODO
+
         return ProfileReqOutput(success=True, message="Succeeded")
 
     def stop(self):
@@ -37,7 +47,30 @@ class ProfileManager:
                 message="Profiling is not in progress. Call /start_profile first.",
             )
 
+        self.torch_profiler_output_dir.mkdir(parents=True, exist_ok=True)
+
+        if self.profile_prefix:
+            stage_prefix = self.profile_prefix + "-"
+        else:
+            stage_prefix = ""
+
+        stage_suffix = f"-{stage.name}" if stage else ""
+        logger.info("Stop profiling" + stage_suffix + "...")
+
         TODO
+
+        merge_message = self._merge_profile_traces()
+
+        logger.info(
+            "Profiling done. Traces are saved to: %s%s",
+            self.torch_profiler_output_dir,
+            merge_message,
+        )
+        self.torch_profiler = None
+        self.profile_in_progress = False
+        self.profiler_start_forward_ct = None
+
+        return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
 
         return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
 
@@ -180,43 +213,3 @@ class _ProfilerRPD(_ProfilerBase):
             rpd_to_chrome_trace("trace.rpd", self.rpd_profile_path)
         self.rpd_profiler = None
         self.rpd_profiler_path = None
-
-
-class ProfilerCore:
-    def start(self):
-        stage_str = f" for {stage.name}" if stage else ""
-        logger.info(
-            f"Profiling starts{stage_str}. Traces will be saved to: {self.torch_profiler_output_dir} (with profile id: {self.profile_id})",
-        )
-
-        activities = self.profiler_activities
-        with_stack = self.torch_profiler_with_stack
-        record_shapes = self.torch_profiler_record_shapes
-
-        TODO
-
-    def stop(self):
-        self.torch_profiler_output_dir.mkdir(parents=True, exist_ok=True)
-
-        if self.profile_prefix:
-            stage_prefix = self.profile_prefix + "-"
-        else:
-            stage_prefix = ""
-
-        stage_suffix = f"-{stage.name}" if stage else ""
-        logger.info("Stop profiling" + stage_suffix + "...")
-
-        TODO
-
-        merge_message = self._merge_profile_traces()
-
-        logger.info(
-            "Profiling done. Traces are saved to: %s%s",
-            self.torch_profiler_output_dir,
-            merge_message,
-        )
-        self.torch_profiler = None
-        self.profile_in_progress = False
-        self.profiler_start_forward_ct = None
-
-        return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
