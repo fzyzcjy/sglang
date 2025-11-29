@@ -335,10 +335,12 @@ class _ProfilerMemory(_ProfilerConcreteBase):
 class _ProfilerCudart(_ProfilerConcreteBase):
     def start(self):
         if self.first_rank_in_node:
+            logger.info(f"Call cudaProfilerStart")
             torch.cuda.cudart().cudaProfilerStart()
 
     def stop(self):
         if self.first_rank_in_node:
+            logger.info(f"Call cudaProfilerStop")
             torch.cuda.cudart().cudaProfilerStop()
 
 
