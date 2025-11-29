@@ -137,6 +137,7 @@ class _StageBasedTrigger:
         self.on_stop = on_stop
 
         self.running_state: Optional[_StageBasedTrigger._RunningState] = None
+        # When a stage is in the dict, it means it is being or should be executed
         self.stage_configs: Dict[str, _StageBasedTrigger._StageConfig] = {}
 
     def configure(self, num_steps: int, interesting_stages: List[str]):
