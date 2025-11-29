@@ -78,9 +78,8 @@ class ProfileManager:
         return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
 
     def _do_start(self, stage: Optional[str] = None):
-        stage_str = f" for {stage.name}" if stage else ""
         logger.info(
-            f"Profiling starts{stage_str}. Traces will be saved to: {self.output_dir} (with profile id: {self.profile_id})",
+            f"Profiling starts{f' for {stage}' if stage else ''}. Traces will be saved to: {self.output_dir} (with profile id: {self.profile_id})",
         )
 
         TODO
