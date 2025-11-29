@@ -70,7 +70,18 @@ class SchedulerProfilerMixin:
         profile_prefix: str = "",
     ) -> ProfileReqOutput:
         if envs.SGLANG_PROFILE_V2:
-            return self._profile_manager.configure()
+            return self._profile_manager.configure(
+                output_dir=output_dir,
+                start_step=start_step,
+                num_steps=num_steps,
+                activities=activities,
+                with_stack=with_stack,
+                record_shapes=record_shapes,
+                profile_by_stage=profile_by_stage,
+                profile_id=profile_id,
+                merge_profiles=merge_profiles,
+                profile_prefix=profile_prefix,
+            )
 
         if self.profile_in_progress:
             return ProfileReqOutput(

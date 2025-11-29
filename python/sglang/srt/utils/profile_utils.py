@@ -46,6 +46,7 @@ class ProfileManager:
 
     def configure(
         self,
+        *,
         output_dir: Optional[str],
         start_step: Optional[int],
         num_steps: Optional[int],
@@ -56,7 +57,7 @@ class ProfileManager:
         profile_id: str,
         merge_profiles: bool,
         profile_prefix: str,
-        interesting_stages: Optional[List[str]] = None,
+        profile_stages: Optional[List[str]] = None,
     ):
         # not supported yet
         assert start_step is None
@@ -76,7 +77,7 @@ class ProfileManager:
 
         self.stage_based_trigger.configure(
             num_steps=num_steps,
-            interesting_stages=interesting_stages or ["prefill", "decode"],
+            interesting_stages=profile_stages or ["prefill", "decode"],
         )
 
         return ProfileReqOutput(success=True, message="Succeeded")
