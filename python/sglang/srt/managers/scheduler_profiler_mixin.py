@@ -118,7 +118,7 @@ class SchedulerProfilerMixin:
         self, stage: Optional[ForwardMode] = None
     ) -> ProfileReqOutput | None:
         if envs.SGLANG_PROFILE_V2:
-            return self._profile_manager.start()
+            return self._profile_manager.manual_start()
 
         stage_str = f" for {stage.name}" if stage else ""
         logger.info(
@@ -228,7 +228,7 @@ class SchedulerProfilerMixin:
         self, stage: Optional[ForwardMode] = None
     ) -> ProfileReqOutput | None:
         if envs.SGLANG_PROFILE_V2:
-            return self._profile_manager.stop()
+            return self._profile_manager.manual_stop()
 
         if not self.profile_in_progress:
             return ProfileReqOutput(

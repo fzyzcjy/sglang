@@ -76,10 +76,10 @@ class ProfileManager:
 
         return ProfileReqOutput(success=True, message="Succeeded")
 
-    def start(self):
+    def manual_start(self):
         raise NotImplementedError("manually start is only supported yet")
 
-    def stop(self):
+    def manual_stop(self):
         raise NotImplementedError("manually stop is only supported yet")
 
     def _do_start(self, stage: Optional[str] = None):
