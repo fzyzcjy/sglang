@@ -86,7 +86,7 @@ class ProfileManager:
     def stop(self):
         try:
             self._do_stop()
-            return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
+            return ProfileReqOutput(success=True, message=f"Succeeded")
         except Exception as e:
             return ProfileReqOutput(success=False, message=f"Error: {e}")
 
@@ -108,8 +108,9 @@ class ProfileManager:
     def _do_stop(self):
         logger.info("Stop profiling...")
         self.profiler.stop()
+        logger.info(f"Profiling done. Traces are saved to: {self.profiler_kwargs['output_dir']}")
+        self.profiler_kwargs = None
         self.profiler = None
-        logger.info("Profiling done. Traces are saved to: %s%s", output_dir, merge_message)
 
 
 def _get_stage_from_forward_mode(forward_mode: ForwardMode):
