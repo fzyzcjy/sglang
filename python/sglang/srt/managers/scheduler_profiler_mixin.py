@@ -301,7 +301,7 @@ class SchedulerProfilerMixin:
 
     def _profile_batch_predicate(self, batch):
         if envs.SGLANG_PROFILE_V2:
-            self._profile_manager.step()
+            self._profile_manager.step(forward_mode=batch.forward_mode)
             return
 
         if self.profile_by_stage:

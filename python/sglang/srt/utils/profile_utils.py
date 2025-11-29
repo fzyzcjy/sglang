@@ -6,6 +6,8 @@ from typing import List
 
 import torch
 
+from sglang.srt.model_executor.forward_batch_info import ForwardMode
+
 _is_npu = is_npu()
 if _is_npu:
     import torch_npu
@@ -24,8 +26,12 @@ class ProfileManager:
     def __init__(self):
         self.stage_based_dispatcher = _StageBasedDispatcher()
 
-    def step(self):
-        self.stage_based_dispatcher.step(stage=TODO)
+    def step(self, forward_mode: ForwardMode):
+        stage = _get_stage_from_forward_mode(forward_mode)
+        if stage is None:
+            return
+
+        self.stage_based_dispatcher.step(stage=stage)
 
     def start(self):
         stage_str = f" for {stage.name}" if stage else ""
@@ -60,6 +66,17 @@ class ProfileManager:
         self.profiler_start_forward_ct = None
 
         return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
+
+
+def _get_stage_from_forward_mode(forward_mode: ForwardMode):
+    if forward_mode.is_prefill():
+        return "prefill"
+    elif forward_mode.is_decode():
+        return "decode"
+    elif forward_mode.is_idle():
+        return None
+    else:
+        raise RuntimeError(f"unsupported profile stage: {forward_mode=}")
 
 
 class _StageBasedDispatcher:
