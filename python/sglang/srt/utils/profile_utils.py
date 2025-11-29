@@ -56,7 +56,6 @@ class ProfilerCore:
             self.rpd_profiler.setPythonTrace(True)
             self.rpd_profiler.start()
             self.rpd_profiler.rangePush("", "rpd profile range", "")
-            self.profile_in_progress = True
         elif torchprof_activities:
             self.torch_profiler = torch.profiler.profile(
                 activities=torchprof_activities,
@@ -71,15 +70,12 @@ class ProfilerCore:
                 ),
             )
             self.torch_profiler.start()
-            self.profile_in_progress = True
 
         if "MEM" in activities:
             torch.cuda.memory._record_memory_history(max_entries=100000)
-            self.profile_in_progress = True
 
         if "CUDA_PROFILER" in activities:
             torch.cuda.cudart().cudaProfilerStart()
-            self.profile_in_progress = True
 
         return ProfileReqOutput(success=True, message="Succeeded")
 
