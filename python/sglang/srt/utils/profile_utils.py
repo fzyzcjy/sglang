@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 class ProfileManager:
     def __init__(self, tp_rank: int, cpu_group):
         self.stage_based_trigger = _StageBasedTrigger(
-            all_stages=["prefill", "decode"],
             on_start=self._do_start,
             on_stop=self._do_stop,
         )
@@ -74,6 +73,7 @@ class ProfileManager:
 
         self.stage_based_trigger.configure(
             num_steps=num_steps,
+            interesting_stages=["prefill", "decode"],
         )
 
         return ProfileReqOutput(success=True, message="Succeeded")
@@ -127,8 +127,7 @@ class _StageBasedTrigger:
     class _StateOfStage:
         target_count: int
 
-    def __init__(self, all_stages, on_start: Callable, on_stop: Callable):
-        self.all_stages = all_stages
+    def __init__(self, on_start: Callable, on_stop: Callable):
         self.on_start = on_start
         self.on_stop = on_stop
 
@@ -136,9 +135,9 @@ class _StageBasedTrigger:
         self.running_count: Optional[int] = None
         self.state_of_stage: Dict[str, _StageBasedTrigger._StateOfStage] = {}
 
-    def configure(self, num_steps: int):
+    def configure(self, num_steps: int, interesting_stages: List[str]):
         self.running_stage = None
-        self.state_of_stage = {stage: _StageBasedTrigger._StateOfStage(target_count=num_steps) for stage in self.all_stages}
+        self.state_of_stage = {stage: _StageBasedTrigger._StateOfStage(target_count=num_steps) for stage in interesting_stages}
 
     def step(self, stage: str):
         if stage != self.running_stage:
