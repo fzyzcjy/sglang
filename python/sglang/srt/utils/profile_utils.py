@@ -99,18 +99,11 @@ class ProfileManager:
         self.profiler.start()
 
     def _do_stop(self):
-        Path(self.profiler_kwargs["output_dir"]).mkdir(parents=True, exist_ok=True)
-        self.profiler.stop()
-
         logger.info("Stop profiling" + output_suffix + "...")
-
-        TODO
-
-        logger.info(
-            "Profiling done. Traces are saved to: %s%s",
-            self.output_dir,
-            merge_message,
-        )
+        output_dir = Path(self.profiler_kwargs["output_dir"])
+        output_dir.mkdir(parents=True, exist_ok=True)
+        self.profiler.stop()
+        logger.info("Profiling done. Traces are saved to: %s%s", output_dir, merge_message)
 
 
 def _get_stage_from_forward_mode(forward_mode: ForwardMode):
