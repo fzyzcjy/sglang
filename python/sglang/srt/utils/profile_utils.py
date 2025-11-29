@@ -67,7 +67,9 @@ class ProfileManager:
             profile_id=profile_id,
         )
 
-        TODO
+        self.stage_based_trigger.configure(
+            num_steps=num_steps,
+        )
 
     def start(self):
         try:
@@ -122,6 +124,9 @@ class _StageBasedTrigger:
     def __init__(self, on_start: Callable, on_stop: Callable):
         self.on_start = on_start
         self.on_stop = on_stop
+
+    def configure(self, num_steps: int):
+        TODO
 
     def step(self, stage: str):
         TODO
