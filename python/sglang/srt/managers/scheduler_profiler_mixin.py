@@ -341,7 +341,10 @@ class SchedulerProfilerMixin:
 
     def profile(self, recv_req: ProfileReq):
         if envs.SGLANG_PROFILE_V2:
-            TODO
+            if recv_req.type == ProfileReqType.START_PROFILE:
+                TODO
+            else:
+                TODO
             return
 
         if recv_req.type == ProfileReqType.START_PROFILE:
