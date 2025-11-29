@@ -62,8 +62,7 @@ class ProfileManager:
             with_stack=with_stack,
             record_shapes=record_shapes,
             output_dir=output_dir,
-            output_prefix=output_prefix,
-            output_suffix=output_suffix,
+            output_prefix=profile_prefix,
             profile_id=profile_id,
         )
 
@@ -94,13 +93,13 @@ class ProfileManager:
             **self.profiler_kwargs,
             tp_rank=self.tp_rank,
             cpu_group=self.cpu_group,
+            output_suffix=f"-{stage}" if stage else "",
         )
         self.profiler.start()
 
     def _do_stop(self):
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        output_suffix = f"-{stage.name}" if stage else ""
         logger.info("Stop profiling" + output_suffix + "...")
 
         TODO
