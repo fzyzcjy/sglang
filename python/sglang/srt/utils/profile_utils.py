@@ -195,16 +195,7 @@ class ProfilerCore:
         with_stack = self.torch_profiler_with_stack
         record_shapes = self.torch_profiler_record_shapes
 
-        if "RPD" in activities:  # for ROCM
-            MOVED
-        elif torchprof_activities:
-            MOVED
-
-        if "MEM" in activities:
-            MOVED
-
-        if "CUDA_PROFILER" in activities:
-            MOVED
+        TODO
 
     def stop(self):
         self.torch_profiler_output_dir.mkdir(parents=True, exist_ok=True)
