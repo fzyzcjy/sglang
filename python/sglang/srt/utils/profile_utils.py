@@ -2,7 +2,7 @@ import logging
 import os
 import time
 from abc import ABC
-from typing import List, Optional, Callable
+from typing import Callable, List, Optional
 
 import torch
 
@@ -40,17 +40,17 @@ class ProfileManager:
         self.stage_based_trigger.step(stage=stage)
 
     def configure(
-            self,
-            output_dir: Optional[str],
-            start_step: Optional[int],
-            num_steps: Optional[int],
-            activities: Optional[List[str]],
-            with_stack: Optional[bool],
-            record_shapes: Optional[bool],
-            profile_by_stage: bool,
-            profile_id: str,
-            merge_profiles: bool,
-            profile_prefix: str,
+        self,
+        output_dir: Optional[str],
+        start_step: Optional[int],
+        num_steps: Optional[int],
+        activities: Optional[List[str]],
+        with_stack: Optional[bool],
+        record_shapes: Optional[bool],
+        profile_by_stage: bool,
+        profile_id: str,
+        merge_profiles: bool,
+        profile_prefix: str,
     ):
         # not supported yet
         assert start_step is None
@@ -90,10 +90,11 @@ class ProfileManager:
             f"(with profile id: {self.profiler_kwargs['profile_id']})",
         )
 
-        self.profiler = _ProfilerBase.create(**self.profiler_kwargs,
-                                             tp_rank=self.tp_rank,
-                                             cpu_group=self.cpu_group,
-                                             )
+        self.profiler = _ProfilerBase.create(
+            **self.profiler_kwargs,
+            tp_rank=self.tp_rank,
+            cpu_group=self.cpu_group,
+        )
         self.profiler.start()
 
     def _do_stop(self):
@@ -124,6 +125,7 @@ def _get_stage_from_forward_mode(forward_mode: ForwardMode):
 
 # ======================================== Stage related ==========================================
 
+
 class _StageBasedTrigger:
     def __init__(self, on_start: Callable, on_stop: Callable):
         self.on_start = on_start
@@ -148,13 +150,20 @@ class _StageBasedTrigger:
 
 # ======================================== Concrete profilers ==========================================
 
+
 class _ProfilerBase(ABC):
     @staticmethod
     def create(activities, with_stack, record_shapes, **kwargs):
         inners = []
         if ("CPU" in activities) or ("GPU" in activities):
             inners.append(
-                _ProfilerTorch(**kwargs, activities=activities, with_stack=with_stack, record_shapes=record_shapes))
+                _ProfilerTorch(
+                    **kwargs,
+                    activities=activities,
+                    with_stack=with_stack,
+                    record_shapes=record_shapes,
+                )
+            )
         if "MEM" in activities:
             inners.append(_ProfilerMemory(**kwargs))
         if "CUDA_PROFILER" in activities:
@@ -185,7 +194,15 @@ class _ProfilerList(_ProfilerBase):
 
 
 class _ProfilerConcreteBase(_ProfilerBase):
-    def __init__(self, output_dir: str, output_prefix: str, output_suffix: str, profile_id: str, tp_rank: int, cpu_group):
+    def __init__(
+        self,
+        output_dir: str,
+        output_prefix: str,
+        output_suffix: str,
+        profile_id: str,
+        tp_rank: int,
+        cpu_group,
+    ):
         self.output_dir = output_dir
         self.output_prefix = output_prefix
         self.output_suffix = output_suffix
@@ -213,13 +230,13 @@ class _ProfilerTorch(_ProfilerConcreteBase):
         self.torch_profiler = torch.profiler.profile(
             activities=torchprof_activities,
             with_stack=self.with_stack if self.with_stack is not None else True,
-            record_shapes=self.record_shapes if self.record_shapes is not None else False,
+            record_shapes=(
+                self.record_shapes if self.record_shapes is not None else False
+            ),
             on_trace_ready=(
                 None
                 if not _is_npu
-                else torch_npu.profiler.tensorboard_trace_handler(
-                    self.output_dir
-                )
+                else torch_npu.profiler.tensorboard_trace_handler(self.output_dir)
             ),
         )
         self.torch_profiler.start()
@@ -239,10 +256,10 @@ class _ProfilerTorch(_ProfilerConcreteBase):
                 filename_parts.append(f"EP-{getattr(self, 'moe_ep_rank', 0)}")
 
             filename = (
-                    (self.output_prefix + "-" if self.output_prefix else "")
-                    + "-".join(filename_parts)
-                    + self.output_suffix
-                    + ".trace.json.gz"
+                (self.output_prefix + "-" if self.output_prefix else "")
+                + "-".join(filename_parts)
+                + self.output_suffix
+                + ".trace.json.gz"
             )
 
             self.torch_profiler.export_chrome_trace(
