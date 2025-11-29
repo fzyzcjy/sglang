@@ -127,16 +127,20 @@ class _StageBasedTrigger:
     class _StageConfig:
         target_count: int
 
+    @dataclass
+    class _RunningState:
+        curr_stage: str
+        curr_count: int
+
     def __init__(self, on_start: Callable, on_stop: Callable):
         self.on_start = on_start
         self.on_stop = on_stop
 
-        self.running_stage: Optional[str] = None
-        self.running_count: Optional[int] = None
+        self.running_state = None
         self.stage_configs = {}
 
     def configure(self, num_steps: int, interesting_stages: List[str]):
-        self.running_stage = None
+        assert self.running_state is None
         self.stage_configs = {stage: self._StageConfig(target_count=num_steps) for stage in interesting_stages}
 
     def step(self, stage: str):
