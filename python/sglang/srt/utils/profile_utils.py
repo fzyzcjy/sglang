@@ -9,6 +9,7 @@ import torch
 
 from sglang.srt.managers.io_struct import ProfileReqOutput
 from sglang.srt.model_executor.forward_batch_info import ForwardMode
+from sglang.srt.utils import is_npu
 
 _is_npu = is_npu()
 if _is_npu:
@@ -72,6 +73,8 @@ class ProfileManager:
         self.stage_based_trigger.configure(
             num_steps=num_steps,
         )
+
+        return ProfileReqOutput(success=True, message="Succeeded")
 
     def start(self):
         try:
