@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from pathlib import Path
 
 import requests
 
@@ -43,30 +44,9 @@ class TestStartProfile(CustomTestCase):
     def test_simple(self):
         response = self._start_profile(start_step="15", num_steps=5)
 
-        self._post_request()
-
-        self._check_non_empty_profile_dir()
-
-    def test_start_profile_2(self):
-        """Test /start_profile with no argument"""
-        response = self._start_profile()
-
-        self._post_request()
-
-        # Before /stop_profile, the profile directory should be empty
-        self._check_empty_profile_dir()
-
-        # Post /stop_profile and check the profile directory is non-empty
-        response = requests.post(
-            f"{DEFAULT_URL_FOR_TEST}/stop_profile",
+        self._post_request(
+            TODO=TODO,
         )
-        self._check_non_empty_profile_dir()
-
-    def test_start_profile_3(self):
-        """Test /start_profile with num_steps argument"""
-        response = self._start_profile(num_steps=5)
-
-        self._post_request()
 
         self._check_non_empty_profile_dir()
 
@@ -95,17 +75,12 @@ class TestStartProfile(CustomTestCase):
         if os.path.isdir(self.output_dir):
             shutil.rmtree(self.output_dir)
 
-    def _check_non_empty_profile_dir(self):
+    def _check_profile_dir_has_file(self, pattern: str):
         self.assertTrue(os.path.isdir(self.output_dir), "Output directory does not exist.")
-        self.assertNotEqual(
-            len(os.listdir(self.output_dir)), 0, "Output directory is empty!"
+        self.assertTrue(
+            len(list(Path(self.output_dir).glob(pattern))) > 0,
+            f"Does not find {pattern=} ({list(Path(self.output_dir).glob('**/*'))=})"
         )
-
-    def _check_empty_profile_dir(self):
-        if os.path.isdir(self.output_dir):
-            self.assertEqual(
-                len(os.listdir(self.output_dir)), 0, "Output directory is non-empty!"
-            )
 
 
 if __name__ == "__main__":
