@@ -136,18 +136,22 @@ class _StageBasedTrigger:
         self.on_start = on_start
         self.on_stop = on_stop
 
-        self.running_state = None
-        self.stage_configs = {}
+        self.running_state: Optional[_StageBasedTrigger._RunningState] = None
+        self.stage_configs: Dict[str, _StageBasedTrigger._StageConfig] = {}
 
     def configure(self, num_steps: int, interesting_stages: List[str]):
         assert self.running_state is None
         self.stage_configs = {stage: self._StageConfig(target_count=num_steps) for stage in interesting_stages}
 
     def step(self, stage: str):
+        # Incr counter
+        if (x := self.running_state) is not None:
+            x.curr_count += 1
+
         # Maybe stop
         if (
-                (self.running_state is not None)
-                and TODO
+                ((x := self.running_state) is not None)
+                and (x.curr_count > self.stage_configs[x.curr_stage].target_count)
         ):
             self.running_state = None
 
