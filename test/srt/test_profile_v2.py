@@ -41,15 +41,28 @@ class TestStartProfile(CustomTestCase):
     def setUp(self):
         self._clear_profile_dir()
 
-    def test_simple(self):
+    def test_profile_by_stage(self):
         self._start_profile(
+            profile_by_stage=True,
             num_steps=10,
         )
 
         self._post_request()
 
-        self._check_profile_dir_has_file(pattern="-prefill")
-        self._check_profile_dir_has_file(pattern="-decode")
+        self._check_profile_output(pattern="-prefill", expect_existence=True)
+        self._check_profile_output(pattern="-decode", expect_existence=True)
+
+    def test_decode_only(self):
+        self._start_profile(
+            profile_by_stage=True,
+            profile_stages=["decode"],
+            num_steps=10,
+        )
+
+        self._post_request()
+
+        self._check_profile_output(pattern="-prefill", expect_existence=False)  # NOTE
+        self._check_profile_output(pattern="-decode", expect_existence=True)
 
     def _start_profile(self, **kwargs):
         """Start profiling with optional parameters."""
@@ -76,10 +89,11 @@ class TestStartProfile(CustomTestCase):
         if os.path.isdir(self.output_dir):
             shutil.rmtree(self.output_dir)
 
-    def _check_profile_dir_has_file(self, pattern: str):
+    def _check_profile_output(self, pattern: str, expect_existence: bool):
         self.assertTrue(os.path.isdir(self.output_dir), "Output directory does not exist.")
-        self.assertTrue(
+        self.assertEqual(
             len(list(Path(self.output_dir).glob(pattern))) > 0,
+            expect_existence,
             f"Does not find {pattern=} ({list(Path(self.output_dir).glob('**/*'))=})"
         )
 
