@@ -52,6 +52,8 @@ class _ProfilerBase(ABC):
             ans.append(_ProfilerTorch())
         if "MEM" in activities:
             ans.append(_ProfilerMemory())
+        if "CUDA_PROFILER" in activities:
+            ans.append(_ProfilerCudart())
         if "RPD" in activities:  # for ROCM
             ans.append(_ProfilerRPD())
         return ans
@@ -94,6 +96,14 @@ class _ProfilerTorch(_ProfilerBase):
 class _ProfilerMemory(_ProfilerBase):
     def start(self):
         torch.cuda.memory._record_memory_history(max_entries=100000)
+
+    def stop(self):
+        TODO
+
+
+class _ProfilerCudart(_ProfilerBase):
+    def start(self):
+        torch.cuda.cudart().cudaProfilerStart()
 
     def stop(self):
         TODO
@@ -153,7 +163,7 @@ class ProfilerCore:
             MOVED
 
         if "CUDA_PROFILER" in activities:
-            torch.cuda.cudart().cudaProfilerStart()
+            MOVED
 
     def stop(self):
         self.torch_profiler_output_dir.mkdir(parents=True, exist_ok=True)
