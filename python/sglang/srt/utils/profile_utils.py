@@ -140,9 +140,11 @@ class _StageBasedTrigger:
         self.state_of_stage = {stage: _StageBasedTrigger._StateOfStage(target_count=num_steps) for stage in self.all_stages}
 
     def step(self, stage: str):
-        state = self.state_of_stage.get(stage)
-        if state is None:
-            return
+        if stage != self.running_stage:
+            if self.running_stage is not None:
+                self.on_stop(self.running_stage)
+            self.on_start(stage)
+        self.running_stage = stage
 
         TODO
 
