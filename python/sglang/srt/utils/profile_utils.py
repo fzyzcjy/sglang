@@ -2,7 +2,7 @@ import logging
 import os
 import time
 from abc import ABC
-from typing import List
+from typing import List, Optional
 
 import torch
 
@@ -33,7 +33,19 @@ class ProfileManager:
 
         self.stage_based_dispatcher.step(stage=stage)
 
-    def configure(self):
+    def configure(
+            self,
+            output_dir: Optional[str],
+            start_step: Optional[int],
+            num_steps: Optional[int],
+            activities: Optional[List[str]],
+            with_stack: Optional[bool],
+            record_shapes: Optional[bool],
+            profile_by_stage: bool,
+            profile_id: str,
+            merge_profiles: bool,
+            profile_prefix: str,
+    ):
         # not supported yet
         assert start_step is None
         assert profile_by_stage, "only support profile_by_stage=true noe"
