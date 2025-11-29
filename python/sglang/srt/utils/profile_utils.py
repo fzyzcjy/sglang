@@ -45,6 +45,13 @@ class ProfileManager:
 
 
 class _ProfilerBase(ABC):
+    @staticmethod
+    def create_profilers():
+        ans = []
+        if "RPD" in activities:  # for ROCM
+            ans.append(_ProfilerRPD())
+        return ans
+
     def start(self):
         raise NotImplementedError
 
@@ -55,6 +62,40 @@ class _ProfilerBase(ABC):
 class _ProfilerTorch(_ProfilerBase):
     def start(self):
         TODO
+
+    def stop(self):
+        TODO
+
+
+class _ProfilerRPD(_ProfilerBase):
+    def start(self):
+        from rpdTracerControl import rpdTracerControl
+
+        rpdTracerControl.skipCreate()
+
+        self.rpd_profile_path = os.path.join(
+            self.torch_profiler_output_dir,
+            "rpd-" + str(time.time()) + f"-TP-{self.tp_rank}" + ".trace.json.gz",
+            )
+
+        if self.tp_rank == 0:
+            import sqlite3
+
+            from rocpd.schema import RocpdSchema
+
+            if os.path.exists("trace.rpd"):
+                os.unlink("trace.rpd")
+            schema = RocpdSchema()
+            connection = sqlite3.connect("trace.rpd")
+            schema.writeSchema(connection)
+            connection.commit()
+            del connection
+        torch.distributed.barrier(self.cpu_group)
+
+        self.rpd_profiler = rpdTracerControl()
+        self.rpd_profiler.setPythonTrace(True)
+        self.rpd_profiler.start()
+        self.rpd_profiler.rangePush("", "rpd profile range", "")
 
     def stop(self):
         TODO
@@ -80,33 +121,7 @@ class ProfilerCore:
         ]
 
         if "RPD" in activities:  # for ROCM
-            from rpdTracerControl import rpdTracerControl
-
-            rpdTracerControl.skipCreate()
-
-            self.rpd_profile_path = os.path.join(
-                self.torch_profiler_output_dir,
-                "rpd-" + str(time.time()) + f"-TP-{self.tp_rank}" + ".trace.json.gz",
-            )
-
-            if self.tp_rank == 0:
-                import sqlite3
-
-                from rocpd.schema import RocpdSchema
-
-                if os.path.exists("trace.rpd"):
-                    os.unlink("trace.rpd")
-                schema = RocpdSchema()
-                connection = sqlite3.connect("trace.rpd")
-                schema.writeSchema(connection)
-                connection.commit()
-                del connection
-            torch.distributed.barrier(self.cpu_group)
-
-            self.rpd_profiler = rpdTracerControl()
-            self.rpd_profiler.setPythonTrace(True)
-            self.rpd_profiler.start()
-            self.rpd_profiler.rangePush("", "rpd profile range", "")
+            MOVED
         elif torchprof_activities:
             self.torch_profiler = torch.profiler.profile(
                 activities=torchprof_activities,
