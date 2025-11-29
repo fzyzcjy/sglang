@@ -2,6 +2,7 @@ import logging
 import os
 import time
 from abc import ABC
+from pathlib import Path
 from typing import Callable, List, Optional
 
 import torch
@@ -40,17 +41,17 @@ class ProfileManager:
         self.stage_based_trigger.step(stage=stage)
 
     def configure(
-        self,
-        output_dir: Optional[str],
-        start_step: Optional[int],
-        num_steps: Optional[int],
-        activities: Optional[List[str]],
-        with_stack: Optional[bool],
-        record_shapes: Optional[bool],
-        profile_by_stage: bool,
-        profile_id: str,
-        merge_profiles: bool,
-        profile_prefix: str,
+            self,
+            output_dir: Optional[str],
+            start_step: Optional[int],
+            num_steps: Optional[int],
+            activities: Optional[List[str]],
+            with_stack: Optional[bool],
+            record_shapes: Optional[bool],
+            profile_by_stage: bool,
+            profile_id: str,
+            merge_profiles: bool,
+            profile_prefix: str,
     ):
         # not supported yet
         assert start_step is None
@@ -98,7 +99,8 @@ class ProfileManager:
         self.profiler.start()
 
     def _do_stop(self):
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        Path(self.profiler_kwargs["output_dir"]).mkdir(parents=True, exist_ok=True)
+        self.profiler.stop()
 
         logger.info("Stop profiling" + output_suffix + "...")
 
@@ -194,13 +196,13 @@ class _ProfilerList(_ProfilerBase):
 
 class _ProfilerConcreteBase(_ProfilerBase):
     def __init__(
-        self,
-        output_dir: str,
-        output_prefix: str,
-        output_suffix: str,
-        profile_id: str,
-        tp_rank: int,
-        cpu_group,
+            self,
+            output_dir: str,
+            output_prefix: str,
+            output_suffix: str,
+            profile_id: str,
+            tp_rank: int,
+            cpu_group,
     ):
         self.output_dir = output_dir
         self.output_prefix = output_prefix
@@ -255,10 +257,10 @@ class _ProfilerTorch(_ProfilerConcreteBase):
                 filename_parts.append(f"EP-{getattr(self, 'moe_ep_rank', 0)}")
 
             filename = (
-                (self.output_prefix + "-" if self.output_prefix else "")
-                + "-".join(filename_parts)
-                + self.output_suffix
-                + ".trace.json.gz"
+                    (self.output_prefix + "-" if self.output_prefix else "")
+                    + "-".join(filename_parts)
+                    + self.output_suffix
+                    + ".trace.json.gz"
             )
 
             self.torch_profiler.export_chrome_trace(
