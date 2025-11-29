@@ -75,6 +75,7 @@ class _ProfilerBase(ABC):
             inners.append(_ProfilerCudart(**kwargs))
         if "RPD" in activities:  # for ROCM
             inners.append(_ProfilerRPD(**kwargs))
+
         return _ProfilerList(inners)
 
     def start(self):
