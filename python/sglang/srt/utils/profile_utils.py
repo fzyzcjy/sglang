@@ -2,8 +2,9 @@ import logging
 import os
 import time
 from abc import ABC
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Dict
 
 import torch
 
@@ -121,11 +122,16 @@ def _get_stage_from_forward_mode(forward_mode: ForwardMode):
 
 
 class _StageBasedTrigger:
+    @dataclass
+    class _StateOfStage:
+        target_count: int
+
     def __init__(self, on_start: Callable, on_stop: Callable):
         self.on_start = on_start
         self.on_stop = on_stop
 
-        self.running = False
+        self.running_stage: Optional[str] = None
+        self.state_of_stage: Optional[Dict[str, _StageBasedTrigger._StateOfStage]] = None
 
     def configure(self, num_steps: int):
         TODO
