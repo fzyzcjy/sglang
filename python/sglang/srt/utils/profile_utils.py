@@ -77,18 +77,10 @@ class ProfileManager:
         return ProfileReqOutput(success=True, message="Succeeded")
 
     def start(self):
-        try:
-            self._do_start()
-            return ProfileReqOutput(success=True, message="Succeeded")
-        except Exception as e:
-            return ProfileReqOutput(success=False, message=f"Error: {e}")
+        raise NotImplementedError("manually start is only supported yet")
 
     def stop(self):
-        try:
-            self._do_stop()
-            return ProfileReqOutput(success=True, message=f"Succeeded")
-        except Exception as e:
-            return ProfileReqOutput(success=False, message=f"Error: {e}")
+        raise NotImplementedError("manually stop is only supported yet")
 
     def _do_start(self, stage: Optional[str] = None):
         logger.info(
@@ -140,12 +132,6 @@ class _StageBasedTrigger:
 
     def step(self, stage: str):
         TODO
-
-    def manual_start(self):
-        raise NotImplementedError("manual_start is only supported in non-stage mode")
-
-    def manual_stop(self):
-        raise NotImplementedError("manual_stop is only supported in non-stage mode")
 
 
 # ======================================== Concrete profilers ==========================================
