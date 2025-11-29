@@ -74,16 +74,16 @@ class ProfileManager:
 
 class _ProfilerBase(ABC):
     @staticmethod
-    def create_profilers(activities):
+    def create_profilers(activities, **kwargs):
         ans = []
         if ("CPU" in activities) or ("GPU" in activities):
-            ans.append(_ProfilerTorch())
+            ans.append(_ProfilerTorch(**kwargs))
         if "MEM" in activities:
-            ans.append(_ProfilerMemory())
+            ans.append(_ProfilerMemory(**kwargs))
         if "CUDA_PROFILER" in activities:
-            ans.append(_ProfilerCudart())
+            ans.append(_ProfilerCudart(**kwargs))
         if "RPD" in activities:  # for ROCM
-            ans.append(_ProfilerRPD())
+            ans.append(_ProfilerRPD(**kwargs))
         return ans
 
     def __init__(self, profile_id: str, tp_rank: int, cpu_group):
