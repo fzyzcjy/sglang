@@ -162,7 +162,10 @@ class _StageBasedTrigger:
             self.on_stop()
 
         # Maybe start
-        if TODO:
+        if (
+                (self.running_state is None)
+            and (stage in self.stage_configs)
+        ):
             self.running_state = self._RunningState(
                 curr_stage=stage,
                 curr_count=0,
