@@ -49,11 +49,6 @@ class ProfileManager:
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        if self.profile_prefix:
-            stage_prefix = self.profile_prefix + "-"
-        else:
-            stage_prefix = ""
-
         stage_suffix = f"-{stage.name}" if stage else ""
         logger.info("Stop profiling" + stage_suffix + "...")
 
@@ -131,6 +126,11 @@ class _ProfilerTorch(_ProfilerBase):
         self.torch_profiler.start()
 
     def stop(self):
+        if profile_prefix:
+            stage_prefix = profile_prefix + "-"
+        else:
+            stage_prefix = ""
+
         self.torch_profiler.stop()
         if not _is_npu:
             # Build filename with only non-zero ranks to maintain backward compatibility
