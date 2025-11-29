@@ -1970,12 +1970,13 @@ async def benchmark(
             if pd_profile_urls:
                 await _call_profile_pd(pd_profile_urls, "stop")
         else:
-            print("Stopping profiler...")
-            profile_output = await async_request_profile(
-                api_url=base_url + "/stop_profile"
-            )
-            if profile_output.success:
-                print("Profiler stopped")
+            if getattr(args, "profile_num_steps", None) is None:
+                print("Stopping profiler...")
+                profile_output = await async_request_profile(
+                    api_url=base_url + "/stop_profile"
+                )
+                if profile_output.success:
+                    print("Profiler stopped")
 
     if pbar is not None:
         pbar.close()
