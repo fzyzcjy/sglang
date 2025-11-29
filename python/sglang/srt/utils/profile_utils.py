@@ -201,7 +201,6 @@ class _ProfilerConcreteBase(_ProfilerBase):
         self.profile_id = profile_id
         self.tp_rank = tp_rank
         self.cpu_group = cpu_group
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
 
 
 class _ProfilerTorch(_ProfilerConcreteBase):
@@ -235,6 +234,8 @@ class _ProfilerTorch(_ProfilerConcreteBase):
         self.torch_profiler.start()
 
     def stop(self):
+        Path(self.output_dir).mkdir(parents=True, exist_ok=True)
+
         self.torch_profiler.stop()
         if not _is_npu:
             # Build filename with only non-zero ranks to maintain backward compatibility
@@ -268,6 +269,8 @@ class _ProfilerMemory(_ProfilerConcreteBase):
         torch.cuda.memory._record_memory_history(max_entries=100000)
 
     def stop(self):
+        Path(self.output_dir).mkdir(parents=True, exist_ok=True)
+
         memory_profile_path = os.path.join(
             self.output_dir,
             str(time.time())
@@ -289,6 +292,8 @@ class _ProfilerCudart(_ProfilerConcreteBase):
 
 class _ProfilerRPD(_ProfilerConcreteBase):
     def start(self):
+        Path(self.output_dir).mkdir(parents=True, exist_ok=True)
+
         from rpdTracerControl import rpdTracerControl
 
         rpdTracerControl.skipCreate()
