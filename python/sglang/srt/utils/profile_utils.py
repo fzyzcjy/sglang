@@ -49,8 +49,8 @@ class ProfileManager:
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        stage_suffix = f"-{stage.name}" if stage else ""
-        logger.info("Stop profiling" + stage_suffix + "...")
+        output_suffix = f"-{stage.name}" if stage else ""
+        logger.info("Stop profiling" + output_suffix + "...")
 
         TODO
 
@@ -82,8 +82,9 @@ class _ProfilerBase(ABC):
             ans.append(_ProfilerRPD(**kwargs))
         return ans
 
-    def __init__(self, output_dir: str, profile_id: str, tp_rank: int, cpu_group):
+    def __init__(self, output_dir: str, output_suffix: str, profile_id: str, tp_rank: int, cpu_group):
         self.output_dir = output_dir
+        self.output_suffix = output_suffix
         self.profile_id = profile_id
         self.tp_rank = tp_rank
         self.cpu_group = cpu_group
@@ -147,7 +148,7 @@ class _ProfilerTorch(_ProfilerBase):
             filename = (
                     stage_prefix
                     + "-".join(filename_parts)
-                    + stage_suffix
+                    + self.output_suffix
                     + ".trace.json.gz"
             )
 
@@ -166,7 +167,7 @@ class _ProfilerMemory(_ProfilerBase):
             self.output_dir,
             str(time.time())
             + f"-TP-{self.tp_rank}-memory"
-            + stage_suffix
+            + self.output_suffix
             + ".pickle",
         )
         torch.cuda.memory._dump_snapshot(memory_profile_path)
