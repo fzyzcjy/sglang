@@ -66,6 +66,11 @@ class ProfileManager:
         ), "only support profile_by_stage=true now"  # `false` can be easily supported
         assert not merge_profiles
 
+        if output_dir is None:
+            output_dir = os.getenv("SGLANG_TORCH_PROFILER_DIR", "/tmp")
+        if activities is None:
+            activities = ["CPU", "GPU"]
+
         self.profiler_kwargs = dict(
             activities=activities,
             with_stack=with_stack,

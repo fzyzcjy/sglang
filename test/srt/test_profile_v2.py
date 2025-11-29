@@ -1,8 +1,6 @@
 import os
 import shutil
-import subprocess
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
@@ -90,11 +88,13 @@ class TestStartProfile(CustomTestCase):
             shutil.rmtree(self.output_dir)
 
     def _check_profile_output(self, pattern: str, expect_existence: bool):
-        self.assertTrue(os.path.isdir(self.output_dir), "Output directory does not exist.")
+        self.assertTrue(
+            os.path.isdir(self.output_dir), "Output directory does not exist."
+        )
         self.assertEqual(
             len(list(Path(self.output_dir).glob(pattern))) > 0,
             expect_existence,
-            f"Does not find {pattern=} ({list(Path(self.output_dir).glob('**/*'))=})"
+            f"Does not find {pattern=} ({list(Path(self.output_dir).glob('**/*'))=})",
         )
 
 
