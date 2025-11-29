@@ -79,6 +79,8 @@ def _get_stage_from_forward_mode(forward_mode: ForwardMode):
         raise RuntimeError(f"unsupported profile stage: {forward_mode=}")
 
 
+# ======================================== Stage related ==========================================
+
 class _StageBasedDispatcher:
     def __init__(self):
         TODO
