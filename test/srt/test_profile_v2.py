@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 import unittest
 
@@ -23,6 +24,7 @@ class TestStartProfile(CustomTestCase):
     def setUpClass(cls):
         cls.output_dir = tempfile.mkdtemp()
         envs.SGLANG_TORCH_PROFILER_DIR.set(cls.output_dir)
+        envs.SGLANG_PROFILE_V2.set(True)
         cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.process = popen_launch_server(
