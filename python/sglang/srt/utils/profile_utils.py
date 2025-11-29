@@ -54,6 +54,18 @@ class ProfileManager:
         assert profile_by_stage, "only support profile_by_stage=true noe"
         assert not merge_profiles
 
+        self.profiler_kwargs = dict(
+            activities=activities,
+            with_stack=with_stack,
+            record_shapes=record_shapes,
+            output_dir=output_dir,
+            output_prefix=output_prefix,
+            output_suffix=output_suffix,
+            profile_id=profile_id,
+            tp_rank=tp_rank,
+            cpu_group=cpu_group,
+        )
+
         TODO
 
     def start(self):
@@ -158,8 +170,7 @@ class _ProfilerList(_ProfilerBase):
 
 
 class _ProfilerConcreteBase(_ProfilerBase):
-    def __init__(self, output_dir: str, output_prefix: str, output_suffix: str, profile_id: str, tp_rank: int,
-                 cpu_group):
+    def __init__(self, output_dir: str, output_prefix: str, output_suffix: str, profile_id: str, tp_rank: int, cpu_group):
         self.output_dir = output_dir
         self.output_prefix = output_prefix
         self.output_suffix = output_suffix
