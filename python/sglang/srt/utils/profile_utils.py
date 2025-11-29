@@ -48,6 +48,8 @@ class _ProfilerBase(ABC):
     @staticmethod
     def create_profilers():
         ans = []
+        if ("CPU" in activities) or ("GPU" in activities):
+            ans.append(_ProfilerTorch())
         if "RPD" in activities:  # for ROCM
             ans.append(_ProfilerRPD())
         return ans
@@ -61,7 +63,27 @@ class _ProfilerBase(ABC):
 
 class _ProfilerTorch(_ProfilerBase):
     def start(self):
-        TODO
+        activity_map = {
+            "CPU": torch.profiler.ProfilerActivity.CPU,
+            "GPU": torch.profiler.ProfilerActivity.CUDA,
+        }
+        torchprof_activities = [
+            activity_map[a] for a in activities if a in activity_map
+        ]
+
+        self.torch_profiler = torch.profiler.profile(
+            activities=torchprof_activities,
+            with_stack=with_stack if with_stack is not None else True,
+            record_shapes=record_shapes if record_shapes is not None else False,
+            on_trace_ready=(
+                None
+                if not _is_npu
+                else torch_npu.profiler.tensorboard_trace_handler(
+                    self.torch_profiler_output_dir
+                )
+            ),
+        )
+        self.torch_profiler.start()
 
     def stop(self):
         TODO
@@ -112,30 +134,10 @@ class ProfilerCore:
         with_stack = self.torch_profiler_with_stack
         record_shapes = self.torch_profiler_record_shapes
 
-        activity_map = {
-            "CPU": torch.profiler.ProfilerActivity.CPU,
-            "GPU": torch.profiler.ProfilerActivity.CUDA,
-        }
-        torchprof_activities = [
-            activity_map[a] for a in activities if a in activity_map
-        ]
-
         if "RPD" in activities:  # for ROCM
             MOVED
         elif torchprof_activities:
-            self.torch_profiler = torch.profiler.profile(
-                activities=torchprof_activities,
-                with_stack=with_stack if with_stack is not None else True,
-                record_shapes=record_shapes if record_shapes is not None else False,
-                on_trace_ready=(
-                    None
-                    if not _is_npu
-                    else torch_npu.profiler.tensorboard_trace_handler(
-                        self.torch_profiler_output_dir
-                    )
-                ),
-            )
-            self.torch_profiler.start()
+            MOVED
 
         if "MEM" in activities:
             torch.cuda.memory._record_memory_history(max_entries=100000)
