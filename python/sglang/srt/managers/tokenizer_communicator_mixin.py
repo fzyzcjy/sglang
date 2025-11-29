@@ -345,6 +345,7 @@ class TokenizerCommunicatorMixin:
             profile_id=str(time.time()),
             merge_profiles=merge_profiles,
             profile_prefix=profile_prefix,
+            profile_stages=profile_stages,
         )
         return await self._execute_profile(req)
 
