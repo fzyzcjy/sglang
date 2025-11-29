@@ -29,7 +29,7 @@ class ProfileManager:
     def start(self):
         stage_str = f" for {stage.name}" if stage else ""
         logger.info(
-            f"Profiling starts{stage_str}. Traces will be saved to: {self.torch_profiler_output_dir} (with profile id: {self.profile_id})",
+            f"Profiling starts{stage_str}. Traces will be saved to: {self.output_dir} (with profile id: {self.profile_id})",
         )
 
         activities = self.profiler_activities
@@ -47,7 +47,7 @@ class ProfileManager:
                 message="Profiling is not in progress. Call /start_profile first.",
             )
 
-        self.torch_profiler_output_dir.mkdir(parents=True, exist_ok=True)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
         if self.profile_prefix:
             stage_prefix = self.profile_prefix + "-"
@@ -63,7 +63,7 @@ class ProfileManager:
 
         logger.info(
             "Profiling done. Traces are saved to: %s%s",
-            self.torch_profiler_output_dir,
+            self.output_dir,
             merge_message,
         )
         self.profile_in_progress = False
@@ -86,7 +86,8 @@ class _ProfilerBase(ABC):
             ans.append(_ProfilerRPD(**kwargs))
         return ans
 
-    def __init__(self, profile_id: str, tp_rank: int, cpu_group):
+    def __init__(self, output_dir: str, profile_id: str, tp_rank: int, cpu_group):
+        self.output_dir = output_dir
         self.profile_id = profile_id
         self.tp_rank = tp_rank
         self.cpu_group = cpu_group
@@ -116,7 +117,7 @@ class _ProfilerTorch(_ProfilerBase):
                 None
                 if not _is_npu
                 else torch_npu.profiler.tensorboard_trace_handler(
-                    self.torch_profiler_output_dir
+                    self.output_dir
                 )
             ),
         )
@@ -144,7 +145,7 @@ class _ProfilerTorch(_ProfilerBase):
             )
 
             self.torch_profiler.export_chrome_trace(
-                os.path.join(self.torch_profiler_output_dir, filename)
+                os.path.join(self.output_dir, filename)
             )
         torch.distributed.barrier(self.cpu_group)
 
@@ -155,7 +156,7 @@ class _ProfilerMemory(_ProfilerBase):
 
     def stop(self):
         memory_profile_path = os.path.join(
-            self.torch_profiler_output_dir,
+            self.output_dir,
             str(time.time())
             + f"-TP-{self.tp_rank}-memory"
             + stage_suffix
@@ -180,7 +181,7 @@ class _ProfilerRPD(_ProfilerBase):
         rpdTracerControl.skipCreate()
 
         self.rpd_profile_path = os.path.join(
-            self.torch_profiler_output_dir,
+            self.output_dir,
             "rpd-" + str(time.time()) + f"-TP-{self.tp_rank}" + ".trace.json.gz",
         )
 
