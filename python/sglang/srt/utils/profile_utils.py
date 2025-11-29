@@ -97,6 +97,7 @@ class ProfileManager:
             f"(with profile id: {self.profiler_kwargs['profile_id']})",
         )
 
+        assert self.profiler is None
         self.profiler = _ProfilerBase.create(
             **self.profiler_kwargs,
             tp_rank=self.tp_rank,
