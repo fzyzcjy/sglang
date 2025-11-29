@@ -21,7 +21,8 @@ class TestStartProfile(CustomTestCase):
 
     @classmethod
     def setUpClass(cls):
-        envs.SGLANG_TORCH_PROFILER_DIR.set(OUTPUT_DIR)
+        cls.output_dir = tempfile.mkdtemp()
+        envs.SGLANG_TORCH_PROFILER_DIR.set(cls.output_dir)
         cls.model = DEFAULT_SMALL_MODEL_NAME_FOR_TEST
         cls.base_url = DEFAULT_URL_FOR_TEST
         cls.process = popen_launch_server(
@@ -89,20 +90,19 @@ class TestStartProfile(CustomTestCase):
         self.assertEqual(response.status_code, 200)
 
     def _clear_profile_dir(self):
-        if os.path.isdir(OUTPUT_DIR):
-            # Remove the directory and all its contents
-            shutil.rmtree(OUTPUT_DIR)
+        if os.path.isdir(self.output_dir):
+            shutil.rmtree(self.output_dir)
 
     def _check_non_empty_profile_dir(self):
-        self.assertTrue(os.path.isdir(OUTPUT_DIR), "Output directory does not exist.")
+        self.assertTrue(os.path.isdir(self.output_dir), "Output directory does not exist.")
         self.assertNotEqual(
-            len(os.listdir(OUTPUT_DIR)), 0, "Output directory is empty!"
+            len(os.listdir(self.output_dir)), 0, "Output directory is empty!"
         )
 
     def _check_empty_profile_dir(self):
-        if os.path.isdir(OUTPUT_DIR):
+        if os.path.isdir(self.output_dir):
             self.assertEqual(
-                len(os.listdir(OUTPUT_DIR)), 0, "Output directory is non-empty!"
+                len(os.listdir(self.output_dir)), 0, "Output directory is non-empty!"
             )
 
 
