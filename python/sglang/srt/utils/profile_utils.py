@@ -66,11 +66,8 @@ class ProfileManager:
             self.torch_profiler_output_dir,
             merge_message,
         )
-        self.torch_profiler = None
         self.profile_in_progress = False
         self.profiler_start_forward_ct = None
-
-        return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
 
         return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
 
