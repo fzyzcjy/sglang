@@ -152,14 +152,19 @@ class _StageBasedTrigger:
         # Maybe stop
         if (
                 ((x := self.running_state) is not None)
-                and (x.curr_count > self.stage_configs[x.curr_stage].target_count)
+                and (
+                (x.curr_count > self.stage_configs[x.curr_stage].target_count)
+                or (stage != x.curr_stage)
+        )
         ):
             del self.stage_configs[x.curr_stage]
             self.running_state = None
             self.on_stop()
 
         # Maybe start
-        TODO
+        if TODO:
+            self.running_state = stage
+            self.on_start()
 
 
 # ======================================== Concrete profilers ==========================================
