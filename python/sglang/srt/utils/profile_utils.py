@@ -113,12 +113,12 @@ class _ProfilerTorch(_ProfilerBase):
             "GPU": torch.profiler.ProfilerActivity.CUDA,
         }
         torchprof_activities = [
-            activity_map[a] for a in activities if a in activity_map
+            activity_map[a] for a in self.activities if a in activity_map
         ]
 
         self.torch_profiler = torch.profiler.profile(
             activities=torchprof_activities,
-            with_stack=self.with_stack if with_stack is not None else True,
+            with_stack=self.with_stack if self.with_stack is not None else True,
             record_shapes=self.record_shapes if self.record_shapes is not None else False,
             on_trace_ready=(
                 None
