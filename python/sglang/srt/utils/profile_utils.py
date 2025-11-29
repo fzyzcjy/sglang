@@ -2,6 +2,7 @@ import logging
 import os
 import time
 from abc import ABC
+from typing import List
 
 import torch
 
@@ -63,24 +64,38 @@ class ProfileManager:
 
 class _ProfilerBase(ABC):
     @staticmethod
-    def create_profilers(activities, with_stack, record_shapes, **kwargs):
-        ans = []
+    def create(activities, with_stack, record_shapes, **kwargs):
+        inners = []
         if ("CPU" in activities) or ("GPU" in activities):
-            ans.append(
+            inners.append(
                 _ProfilerTorch(**kwargs, activities=activities, with_stack=with_stack, record_shapes=record_shapes))
         if "MEM" in activities:
-            ans.append(_ProfilerMemory(**kwargs))
+            inners.append(_ProfilerMemory(**kwargs))
         if "CUDA_PROFILER" in activities:
-            ans.append(_ProfilerCudart(**kwargs))
+            inners.append(_ProfilerCudart(**kwargs))
         if "RPD" in activities:  # for ROCM
-            ans.append(_ProfilerRPD(**kwargs))
-        return ans
+            inners.append(_ProfilerRPD(**kwargs))
+        return _ProfilerList(inners)
 
     def start(self):
         raise NotImplementedError
 
     def stop(self):
         raise NotImplementedError
+
+
+class _ProfilerList(_ProfilerBase):
+    def __init__(self, inners: List[_ProfilerBase]):
+        self.inners = inners
+
+
+    def start(self):
+        for inner in self.inners:
+            inner.start()
+
+    def stop(self):
+        for inner in self.inners:
+            inner.stop()
 
 
 class _ProfilerConcreteBase(_ProfilerBase):
