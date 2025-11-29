@@ -33,6 +33,14 @@ class ProfileManager:
 
         self.stage_based_dispatcher.step(stage=stage)
 
+    def configure(self):
+        # not supported yet
+        assert start_step is None
+        assert profile_by_stage, "only support profile_by_stage=true noe"
+        assert not merge_profiles
+
+        TODO
+
     def start(self):
         stage_str = f" for {stage.name}" if stage else ""
         logger.info(
