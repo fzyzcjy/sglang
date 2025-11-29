@@ -132,6 +132,8 @@ class _StageBasedTrigger:
         self.on_start = on_start
         self.on_stop = on_stop
 
+        self.running = False
+
     def configure(self, num_steps: int):
         TODO
 
@@ -139,15 +141,14 @@ class _StageBasedTrigger:
         TODO
 
     def manual_start(self):
+        if not self.running:
+            raise Exception("Cannot start when already in progress.")
+
         TODO
 
     def manual_stop(self):
-        if not self.profile_in_progress:
-            TODO_raise
-            return ProfileReqOutput(
-                success=False,
-                message="Profiling is not in progress. Call /start_profile first.",
-            )
+        if not self.running:
+            raise Exception("Cannot stop when not in progress.")
 
         TODO
 
