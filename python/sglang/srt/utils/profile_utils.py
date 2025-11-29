@@ -24,10 +24,9 @@ logger = logging.getLogger(__name__)
 
 class ProfileManager:
     def __init__(self):
-        TODO_handle_stage_for_this
         self.stage_based_trigger = _StageBasedTrigger(
-            on_start=self.start,
-            on_stop=self.stop,
+            on_start=TODO,
+            on_stop=TODO,
         )
 
     def step(self, forward_mode: ForwardMode):
