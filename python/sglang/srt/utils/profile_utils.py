@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 class ProfileManager:
     def __init__(self):
         self.stage_based_trigger = _StageBasedTrigger(
-            on_start=TODO,
-            on_stop=TODO,
+            on_start=self._do_start,
+            on_stop=self._do_stop,
         )
 
     def step(self, forward_mode: ForwardMode):
@@ -70,9 +70,11 @@ class ProfileManager:
         TODO
 
     def start(self):
+        self._do_start()
         return ProfileReqOutput(success=True, message="Succeeded")
 
     def stop(self):
+        self._do_stop()
         return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
 
     def _do_start(self, stage: Optional[str] = None):
@@ -84,12 +86,6 @@ class ProfileManager:
         TODO
 
     def _do_stop(self):
-        if not self.profile_in_progress:
-            return ProfileReqOutput(
-                success=False,
-                message="Profiling is not in progress. Call /start_profile first.",
-            )
-
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         output_suffix = f"-{stage.name}" if stage else ""
@@ -129,6 +125,13 @@ class _StageBasedTrigger:
         TODO
 
     def manual_stop(self):
+        if not self.profile_in_progress:
+            TODO_raise
+            return ProfileReqOutput(
+                success=False,
+                message="Profiling is not in progress. Call /start_profile first.",
+            )
+
         TODO
 
 
