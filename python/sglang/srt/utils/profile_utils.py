@@ -24,11 +24,13 @@ logger = logging.getLogger(__name__)
 
 
 class ProfileManager:
-    def __init__(self):
+    def __init__(self, tp_rank: int, cpu_group):
         self.stage_based_trigger = _StageBasedTrigger(
             on_start=self._do_start,
             on_stop=self._do_stop,
         )
+        self.tp_rank = tp_rank
+        self.cpu_group = cpu_group
 
     def step(self, forward_mode: ForwardMode):
         stage = _get_stage_from_forward_mode(forward_mode)
@@ -63,8 +65,6 @@ class ProfileManager:
             output_prefix=output_prefix,
             output_suffix=output_suffix,
             profile_id=profile_id,
-            tp_rank=tp_rank,
-            cpu_group=cpu_group,
         )
 
         TODO
@@ -90,7 +90,10 @@ class ProfileManager:
             f"(with profile id: {self.profiler_kwargs['profile_id']})",
         )
 
-        self.profiler = _ProfilerBase.create(**self.profiler_kwargs)
+        self.profiler = _ProfilerBase.create(**self.profiler_kwargs,
+                                             tp_rank=self.tp_rank,
+                                             cpu_group=self.cpu_group,
+                                             )
         self.profiler.start()
 
     def _do_stop(self):
@@ -182,8 +185,7 @@ class _ProfilerList(_ProfilerBase):
 
 
 class _ProfilerConcreteBase(_ProfilerBase):
-    def __init__(self, output_dir: str, output_prefix: str, output_suffix: str, profile_id: str, tp_rank: int,
-                 cpu_group):
+    def __init__(self, output_dir: str, output_prefix: str, output_suffix: str, profile_id: str, tp_rank: int, cpu_group):
         self.output_dir = output_dir
         self.output_prefix = output_prefix
         self.output_suffix = output_suffix

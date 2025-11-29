@@ -30,7 +30,10 @@ logger = logging.getLogger(__name__)
 class SchedulerProfilerMixin:
     def init_profiler(self):
         if envs.SGLANG_PROFILE_V2:
-            self._profile_manager = ProfileManager()
+            self._profile_manager = ProfileManager(
+                tp_rank=self.tp_rank,
+                cpu_group=self.cpu_group,
+            )
             return
 
         self.torch_profiler = None
