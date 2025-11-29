@@ -113,6 +113,12 @@ class _StageBasedTrigger:
     def step(self, stage: str):
         TODO
 
+    def manual_start(self):
+        TODO
+
+    def manual_stop(self):
+        TODO
+
 
 # ======================================== Concrete profilers ==========================================
 
