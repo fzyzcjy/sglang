@@ -1,6 +1,8 @@
 import logging
 import os
 import time
+from abc import ABC
+
 import torch
 
 _is_npu = is_npu()
@@ -22,6 +24,22 @@ class ProfileManager:
         TODO
 
     def step(self):
+        TODO
+
+
+class _ProfilerBase(ABC):
+    def start(self):
+        raise NotImplementedError
+
+    def stop(self):
+        raise NotImplementedError
+
+
+class _ProfilerTorch(_ProfilerBase):
+    def start(self):
+        TODO
+
+    def stop(self):
         TODO
 
 
@@ -96,4 +114,77 @@ class ProfilerCore:
         return ProfileReqOutput(success=True, message="Succeeded")
 
     def stop(self):
-        TODO
+        self.torch_profiler_output_dir.mkdir(parents=True, exist_ok=True)
+
+        if self.profile_prefix:
+            stage_prefix = self.profile_prefix + "-"
+        else:
+            stage_prefix = ""
+
+        stage_suffix = f"-{stage.name}" if stage else ""
+        logger.info("Stop profiling" + stage_suffix + "...")
+        if self.torch_profiler is not None:
+            self.torch_profiler.stop()
+            if not _is_npu:
+                # Build filename with only non-zero ranks to maintain backward compatibility
+                filename_parts = [self.profile_id, f"TP-{self.tp_rank}"]
+
+                # Only add other ranks if parallelism is enabled (size > 1)
+                if getattr(self, "dp_size", 1) > 1:
+                    filename_parts.append(f"DP-{getattr(self, 'dp_rank', 0)}")
+                if getattr(self, "pp_size", 1) > 1:
+                    filename_parts.append(f"PP-{getattr(self, 'pp_rank', 0)}")
+                if getattr(self, "moe_ep_size", 1) > 1:
+                    filename_parts.append(f"EP-{getattr(self, 'moe_ep_rank', 0)}")
+
+                filename = (
+                        stage_prefix
+                        + "-".join(filename_parts)
+                        + stage_suffix
+                        + ".trace.json.gz"
+                )
+
+                self.torch_profiler.export_chrome_trace(
+                    os.path.join(self.torch_profiler_output_dir, filename)
+                )
+            torch.distributed.barrier(self.cpu_group)
+
+        if self.rpd_profiler is not None:
+            self.rpd_profiler.rangePop()
+            self.rpd_profiler.stop()
+            self.rpd_profiler.flush()
+
+            torch.distributed.barrier(self.cpu_group)
+            if self.tp_rank == 0:
+                from sglang.srt.utils.rpd_utils import rpd_to_chrome_trace
+
+                rpd_to_chrome_trace("trace.rpd", self.rpd_profile_path)
+            self.rpd_profiler = None
+            self.rpd_profiler_path = None
+
+        if self.profiler_activities is not None and "MEM" in self.profiler_activities:
+            memory_profile_path = os.path.join(
+                self.torch_profiler_output_dir,
+                str(time.time())
+                + f"-TP-{self.tp_rank}-memory"
+                + stage_suffix
+                + ".pickle",
+            )
+            torch.cuda.memory._dump_snapshot(memory_profile_path)
+            torch.cuda.memory._record_memory_history(enabled=None)
+
+        if "CUDA_PROFILER" in self.profiler_activities:
+            torch.cuda.cudart().cudaProfilerStop()
+
+        merge_message = self._merge_profile_traces()
+
+        logger.info(
+            "Profiling done. Traces are saved to: %s%s",
+            self.torch_profiler_output_dir,
+            merge_message,
+        )
+        self.torch_profiler = None
+        self.profile_in_progress = False
+        self.profiler_start_forward_ct = None
+
+        return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
