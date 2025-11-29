@@ -124,7 +124,7 @@ def _get_stage_from_forward_mode(forward_mode: ForwardMode):
 
 class _StageBasedTrigger:
     @dataclass
-    class _StateOfStage:
+    class _StageConfig:
         target_count: int
 
     def __init__(self, on_start: Callable, on_stop: Callable):
@@ -133,11 +133,11 @@ class _StageBasedTrigger:
 
         self.running_stage: Optional[str] = None
         self.running_count: Optional[int] = None
-        self.state_of_stage: Dict[str, _StageBasedTrigger._StateOfStage] = {}
+        self.stage_configs = {}
 
     def configure(self, num_steps: int, interesting_stages: List[str]):
         self.running_stage = None
-        self.state_of_stage = {stage: _StageBasedTrigger._StateOfStage(target_count=num_steps) for stage in interesting_stages}
+        self.stage_configs = {stage: self._StageConfig(target_count=num_steps) for stage in interesting_stages}
 
     def step(self, stage: str):
         # Maybe stop
