@@ -17,7 +17,7 @@ if _is_npu:
 logger = logging.getLogger(__name__)
 
 
-class Profiler:
+class ProfileManager:
     def __init__(self):
         TODO
 

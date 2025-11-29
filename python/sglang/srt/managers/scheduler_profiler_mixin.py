@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 class SchedulerProfilerMixin:
     def init_profiler(self):
         if envs.SGLANG_PROFILE_V2:
-            self._profiler = Profiler()
+            self._profile_manager = ProfileManager()
             return
 
         self.torch_profiler = None
@@ -301,7 +301,7 @@ class SchedulerProfilerMixin:
 
     def _profile_batch_predicate(self, batch):
         if envs.SGLANG_PROFILE_V2:
-            self._profiler.step()
+            self._profile_manager.step()
             return
 
         if self.profile_by_stage:
