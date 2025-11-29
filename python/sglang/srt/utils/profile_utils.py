@@ -86,6 +86,10 @@ class _ProfilerBase(ABC):
             ans.append(_ProfilerRPD())
         return ans
 
+    def __init__(self, tp_rank: int, cpu_group):
+        self.tp_rank = tp_rank
+        self.cpu_group = cpu_group
+
     def start(self):
         raise NotImplementedError
 
