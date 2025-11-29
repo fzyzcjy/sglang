@@ -32,10 +32,6 @@ class ProfileManager:
             f"Profiling starts{stage_str}. Traces will be saved to: {self.output_dir} (with profile id: {self.profile_id})",
         )
 
-        activities = self.profiler_activities
-        with_stack = self.torch_profiler_with_stack
-        record_shapes = self.torch_profiler_record_shapes
-
         TODO
 
         return ProfileReqOutput(success=True, message="Succeeded")
@@ -53,8 +49,6 @@ class ProfileManager:
         logger.info("Stop profiling" + output_suffix + "...")
 
         TODO
-
-        merge_message = self._merge_profile_traces()
 
         logger.info(
             "Profiling done. Traces are saved to: %s%s",
@@ -156,6 +150,8 @@ class _ProfilerTorch(_ProfilerBase):
                 os.path.join(self.output_dir, filename)
             )
         torch.distributed.barrier(self.cpu_group)
+
+        # TODO: migrate `_merge_profile_traces`
 
 
 class _ProfilerMemory(_ProfilerBase):
