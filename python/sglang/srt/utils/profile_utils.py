@@ -26,6 +26,23 @@ class ProfileManager:
     def step(self):
         TODO
 
+    def start_profile(self):
+        TODO
+        return ProfileReqOutput(success=True, message="Succeeded")
+
+    def stop_profile(
+            self, stage: Optional[ForwardMode] = None
+    ) -> ProfileReqOutput | None:
+        if not self.profile_in_progress:
+            return ProfileReqOutput(
+                success=False,
+                message="Profiling is not in progress. Call /start_profile first.",
+            )
+
+        TODO
+
+        return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
+
 
 class _ProfilerBase(ABC):
     def start(self):
@@ -110,8 +127,6 @@ class ProfilerCore:
 
         if "CUDA_PROFILER" in activities:
             torch.cuda.cudart().cudaProfilerStart()
-
-        return ProfileReqOutput(success=True, message="Succeeded")
 
     def stop(self):
         self.torch_profiler_output_dir.mkdir(parents=True, exist_ok=True)
