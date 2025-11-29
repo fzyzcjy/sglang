@@ -2,7 +2,7 @@ import logging
 import os
 import time
 from abc import ABC
-from typing import List, Optional
+from typing import List, Optional, Callable
 
 import torch
 
@@ -102,8 +102,9 @@ def _get_stage_from_forward_mode(forward_mode: ForwardMode):
 # ======================================== Stage related ==========================================
 
 class _StageBasedDispatcher:
-    def __init__(self):
-        TODO
+    def __init__(self, on_start: Callable, on_stop: Callable):
+        self.on_start = on_start
+        self.on_stop = on_stop
 
     def step(self, stage: str):
         TODO
