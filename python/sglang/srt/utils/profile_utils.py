@@ -86,7 +86,8 @@ class _ProfilerBase(ABC):
             ans.append(_ProfilerRPD())
         return ans
 
-    def __init__(self, tp_rank: int, cpu_group):
+    def __init__(self, profile_id: str, tp_rank: int, cpu_group):
+        self.profile_id = profile_id
         self.tp_rank = tp_rank
         self.cpu_group = cpu_group
 
