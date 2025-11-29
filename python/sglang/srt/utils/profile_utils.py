@@ -142,16 +142,10 @@ class _StageBasedTrigger:
         TODO
 
     def manual_start(self):
-        if not self.running:
-            raise Exception("Cannot start when already in progress.")
-
-        TODO
+        raise NotImplementedError("manual_start is only supported in non-stage mode")
 
     def manual_stop(self):
-        if not self.running:
-            raise Exception("Cannot stop when not in progress.")
-
-        TODO
+        raise NotImplementedError("manual_stop is only supported in non-stage mode")
 
 
 # ======================================== Concrete profilers ==========================================
