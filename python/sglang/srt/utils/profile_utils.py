@@ -50,6 +50,8 @@ class _ProfilerBase(ABC):
         ans = []
         if ("CPU" in activities) or ("GPU" in activities):
             ans.append(_ProfilerTorch())
+        if "MEM" in activities:
+            ans.append(_ProfilerMemory())
         if "RPD" in activities:  # for ROCM
             ans.append(_ProfilerRPD())
         return ans
@@ -89,6 +91,14 @@ class _ProfilerTorch(_ProfilerBase):
         TODO
 
 
+class _ProfilerMemory(_ProfilerBase):
+    def start(self):
+        torch.cuda.memory._record_memory_history(max_entries=100000)
+
+    def stop(self):
+        TODO
+
+
 class _ProfilerRPD(_ProfilerBase):
     def start(self):
         from rpdTracerControl import rpdTracerControl
@@ -98,7 +108,7 @@ class _ProfilerRPD(_ProfilerBase):
         self.rpd_profile_path = os.path.join(
             self.torch_profiler_output_dir,
             "rpd-" + str(time.time()) + f"-TP-{self.tp_rank}" + ".trace.json.gz",
-            )
+        )
 
         if self.tp_rank == 0:
             import sqlite3
@@ -140,7 +150,7 @@ class ProfilerCore:
             MOVED
 
         if "MEM" in activities:
-            torch.cuda.memory._record_memory_history(max_entries=100000)
+            MOVED
 
         if "CUDA_PROFILER" in activities:
             torch.cuda.cudart().cudaProfilerStart()
