@@ -140,13 +140,10 @@ class _StageBasedTrigger:
         self.state_of_stage = {stage: _StageBasedTrigger._StateOfStage(target_count=num_steps) for stage in interesting_stages}
 
     def step(self, stage: str):
-        if stage != self.running_stage:
-            if self.running_stage is not None:
-                self.on_stop(self.running_stage)
-            self.on_start(stage)
-            TODO_maybe_not_start
-        self.running_stage = stage
+        # Maybe stop
+        TODO
 
+        # Maybe start
         TODO
 
 
