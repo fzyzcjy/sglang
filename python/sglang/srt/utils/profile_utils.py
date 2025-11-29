@@ -145,7 +145,11 @@ class _StageBasedTrigger:
 
     def step(self, stage: str):
         # Maybe stop
-        TODO
+        if (
+                (self.running_state is not None)
+                and TODO
+        ):
+            self.running_state = None
 
         # Maybe start
         TODO
