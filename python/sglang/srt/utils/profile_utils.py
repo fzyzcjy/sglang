@@ -22,10 +22,10 @@ logger = logging.getLogger(__name__)
 
 class ProfileManager:
     def __init__(self):
-        TODO
+        self.stage_based_dispatcher = _StageBasedDispatcher()
 
     def step(self):
-        TODO
+        self.stage_based_dispatcher.step(stage=TODO)
 
     def start(self):
         stage_str = f" for {stage.name}" if stage else ""
