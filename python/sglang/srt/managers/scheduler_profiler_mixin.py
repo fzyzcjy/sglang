@@ -11,6 +11,7 @@ from sglang.srt.managers.io_struct import ProfileReq, ProfileReqOutput, ProfileR
 from sglang.srt.model_executor.forward_batch_info import ForwardMode
 from sglang.srt.utils import is_npu
 from sglang.srt.utils.profile_merger import ProfileMerger
+from sglang.srt.utils.profile_utils import Profiler
 
 _is_npu = is_npu()
 if _is_npu:
@@ -29,7 +30,7 @@ logger = logging.getLogger(__name__)
 class SchedulerProfilerMixin:
     def init_profiler(self):
         if envs.SGLANG_PROFILE_V2:
-            self._profiler = TODO
+            self._profiler = Profiler()
             return
 
         self.torch_profiler = None
@@ -300,7 +301,7 @@ class SchedulerProfilerMixin:
 
     def _profile_batch_predicate(self, batch):
         if envs.SGLANG_PROFILE_V2:
-            TODO
+            self._profiler.step()
             return
 
         if self.profile_by_stage:
