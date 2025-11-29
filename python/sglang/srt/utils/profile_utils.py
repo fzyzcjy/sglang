@@ -5,8 +5,10 @@ class Profiler:
     def step(self):
         TODO
 
-    def start_profile(self):
+
+class ProfilerCore:
+    def start(self):
         TODO
 
-    def stop_profile(self):
+    def stop(self):
         TODO
