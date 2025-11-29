@@ -4,7 +4,7 @@ import time
 from abc import ABC
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Optional, Dict
+from typing import Callable, Dict, List, Optional
 
 import torch
 
@@ -45,21 +45,23 @@ class ProfileManager:
         self.stage_based_trigger.step(stage=stage)
 
     def configure(
-            self,
-            output_dir: Optional[str],
-            start_step: Optional[int],
-            num_steps: Optional[int],
-            activities: Optional[List[str]],
-            with_stack: Optional[bool],
-            record_shapes: Optional[bool],
-            profile_by_stage: bool,
-            profile_id: str,
-            merge_profiles: bool,
-            profile_prefix: str,
+        self,
+        output_dir: Optional[str],
+        start_step: Optional[int],
+        num_steps: Optional[int],
+        activities: Optional[List[str]],
+        with_stack: Optional[bool],
+        record_shapes: Optional[bool],
+        profile_by_stage: bool,
+        profile_id: str,
+        merge_profiles: bool,
+        profile_prefix: str,
     ):
         # not supported yet
         assert start_step is None
-        assert profile_by_stage, "only support profile_by_stage=true now"  # `false` can be easily supported
+        assert (
+            profile_by_stage
+        ), "only support profile_by_stage=true now"  # `false` can be easily supported
         assert not merge_profiles
 
         self.profiler_kwargs = dict(
@@ -103,7 +105,9 @@ class ProfileManager:
     def _do_stop(self):
         logger.info("Stop profiling...")
         self.profiler.stop()
-        logger.info(f"Profiling done. Traces are saved to: {self.profiler_kwargs['output_dir']}")
+        logger.info(
+            f"Profiling done. Traces are saved to: {self.profiler_kwargs['output_dir']}"
+        )
         self.profiler_kwargs = None
         self.profiler = None
 
@@ -142,7 +146,10 @@ class _StageBasedTrigger:
 
     def configure(self, num_steps: int, interesting_stages: List[str]):
         assert self.running_state is None
-        self.stage_configs = {stage: self._StageConfig(target_count=num_steps) for stage in interesting_stages}
+        self.stage_configs = {
+            stage: self._StageConfig(target_count=num_steps)
+            for stage in interesting_stages
+        }
 
     def step(self, stage: str):
         # Incr counter
@@ -150,22 +157,16 @@ class _StageBasedTrigger:
             s.curr_count += 1
 
         # Maybe stop
-        if (
-                ((s := self.running_state) is not None)
-                and (
-                (s.curr_count > self.stage_configs[s.curr_stage].target_count)
-                or (stage != s.curr_stage)
-        )
+        if ((s := self.running_state) is not None) and (
+            (s.curr_count > self.stage_configs[s.curr_stage].target_count)
+            or (stage != s.curr_stage)
         ):
             del self.stage_configs[s.curr_stage]
             self.running_state = None
             self.on_stop()
 
         # Maybe start
-        if (
-                (self.running_state is None)
-            and (stage in self.stage_configs)
-        ):
+        if (self.running_state is None) and (stage in self.stage_configs):
             self.running_state = self._RunningState(
                 curr_stage=stage,
                 curr_count=0,
@@ -225,13 +226,13 @@ class _ProfilerList(_ProfilerBase):
 
 class _ProfilerConcreteBase(_ProfilerBase):
     def __init__(
-            self,
-            output_dir: str,
-            output_prefix: str,
-            output_suffix: str,
-            profile_id: str,
-            tp_rank: int,
-            cpu_group,
+        self,
+        output_dir: str,
+        output_prefix: str,
+        output_suffix: str,
+        profile_id: str,
+        tp_rank: int,
+        cpu_group,
     ):
         self.output_dir = output_dir
         self.output_prefix = output_prefix
@@ -288,10 +289,10 @@ class _ProfilerTorch(_ProfilerConcreteBase):
                 filename_parts.append(f"EP-{getattr(self, 'moe_ep_rank', 0)}")
 
             filename = (
-                    (self.output_prefix + "-" if self.output_prefix else "")
-                    + "-".join(filename_parts)
-                    + self.output_suffix
-                    + ".trace.json.gz"
+                (self.output_prefix + "-" if self.output_prefix else "")
+                + "-".join(filename_parts)
+                + self.output_suffix
+                + ".trace.json.gz"
             )
 
             self.torch_profiler.export_chrome_trace(
