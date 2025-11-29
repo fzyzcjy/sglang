@@ -6,6 +6,7 @@ from typing import List, Optional
 
 import torch
 
+from sglang.srt.environ import envs
 from sglang.srt.managers.io_struct import ProfileReq, ProfileReqOutput, ProfileReqType
 from sglang.srt.model_executor.forward_batch_info import ForwardMode
 from sglang.srt.utils import is_npu
@@ -27,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 class SchedulerProfilerMixin:
     def init_profiler(self):
+        if envs.SGLANG_PROFILE_V2:
+            self._profiler = TODO
+            return
+
         self.torch_profiler = None
         self.torch_profiler_output_dir: Optional[Path] = None
         self.profiler_activities: Optional[List[str]] = None
@@ -294,6 +299,10 @@ class SchedulerProfilerMixin:
         return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
 
     def _profile_batch_predicate(self, batch):
+        if envs.SGLANG_PROFILE_V2:
+            TODO
+            return
+
         if self.profile_by_stage:
             if batch.forward_mode.is_prefill():
                 if self.profiler_prefill_ct == 0:
@@ -330,6 +339,10 @@ class SchedulerProfilerMixin:
                 self.start_profile()
 
     def profile(self, recv_req: ProfileReq):
+        if envs.SGLANG_PROFILE_V2:
+            TODO
+            return
+
         if recv_req.type == ProfileReqType.START_PROFILE:
             if recv_req.profile_by_stage or recv_req.start_step:
                 return self.init_profile(
