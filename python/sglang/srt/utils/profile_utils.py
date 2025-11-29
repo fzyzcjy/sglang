@@ -63,7 +63,11 @@ class ProfileManager:
 
 
 class _StageBasedDispatcher:
-    TODO
+    def __init__(self):
+        TODO
+
+    def step(self, stage: str):
+        TODO
 
 
 class _ProfilerBase(ABC):
