@@ -26,13 +26,11 @@ class ProfileManager:
     def step(self):
         TODO
 
-    def start_profile(self):
+    def start(self):
         TODO
         return ProfileReqOutput(success=True, message="Succeeded")
 
-    def stop_profile(
-            self, stage: Optional[ForwardMode] = None
-    ) -> ProfileReqOutput | None:
+    def stop(self):
         if not self.profile_in_progress:
             return ProfileReqOutput(
                 success=False,
@@ -46,7 +44,7 @@ class ProfileManager:
 
 class _ProfilerBase(ABC):
     @staticmethod
-    def create_profilers():
+    def create_profilers(activities):
         ans = []
         if ("CPU" in activities) or ("GPU" in activities):
             ans.append(_ProfilerTorch())
