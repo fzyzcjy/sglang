@@ -1,6 +1,18 @@
+import logging
 import os
 import time
 import torch
+
+_is_npu = is_npu()
+if _is_npu:
+    import torch_npu
+
+    patches = [
+        ["profiler.profile", torch_npu.profiler.profile],
+        ["profiler.ProfilerActivity.CUDA", torch_npu.profiler.ProfilerActivity.NPU],
+        ["profiler.ProfilerActivity.CPU", torch_npu.profiler.ProfilerActivity.CPU],
+    ]
+    torch_npu._apply_patches(patches)
 
 logger = logging.getLogger(__name__)
 
