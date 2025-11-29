@@ -102,8 +102,6 @@ class ProfileManager:
             self.output_dir,
             merge_message,
         )
-        self.profile_in_progress = False
-        self.profiler_start_forward_ct = None
 
 
 def _get_stage_from_forward_mode(forward_mode: ForwardMode):
