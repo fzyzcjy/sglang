@@ -42,13 +42,14 @@ class TestStartProfile(CustomTestCase):
         self._clear_profile_dir()
 
     def test_simple(self):
-        response = self._start_profile(start_step="15", num_steps=5)
-
-        self._post_request(
-            TODO=TODO,
+        self._start_profile(
+            num_steps=10,
         )
 
-        self._check_non_empty_profile_dir()
+        self._post_request()
+
+        self._check_profile_dir_has_file(pattern="-prefill")
+        self._check_profile_dir_has_file(pattern="-decode")
 
     def _start_profile(self, **kwargs):
         """Start profiling with optional parameters."""
