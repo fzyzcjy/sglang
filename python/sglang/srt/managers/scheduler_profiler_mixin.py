@@ -11,7 +11,7 @@ from sglang.srt.managers.io_struct import ProfileReq, ProfileReqOutput, ProfileR
 from sglang.srt.model_executor.forward_batch_info import ForwardMode
 from sglang.srt.utils import is_npu
 from sglang.srt.utils.profile_merger import ProfileMerger
-from sglang.srt.utils.profile_utils import Profiler
+from sglang.srt.utils.profile_utils import ProfileManager
 
 _is_npu = is_npu()
 if _is_npu:
@@ -66,6 +66,9 @@ class SchedulerProfilerMixin:
         merge_profiles: bool = False,
         profile_prefix: str = "",
     ) -> ProfileReqOutput:
+        if envs.SGLANG_PROFILE_V2:
+            return self._profile_manager.configure()
+
         if self.profile_in_progress:
             return ProfileReqOutput(
                 success=False,
@@ -111,6 +114,9 @@ class SchedulerProfilerMixin:
     def start_profile(
         self, stage: Optional[ForwardMode] = None
     ) -> ProfileReqOutput | None:
+        if envs.SGLANG_PROFILE_V2:
+            return self._profile_manager.start()
+
         stage_str = f" for {stage.name}" if stage else ""
         logger.info(
             f"Profiling starts{stage_str}. Traces will be saved to: {self.torch_profiler_output_dir} (with profile id: {self.profile_id})",
@@ -218,6 +224,9 @@ class SchedulerProfilerMixin:
     def stop_profile(
         self, stage: Optional[ForwardMode] = None
     ) -> ProfileReqOutput | None:
+        if envs.SGLANG_PROFILE_V2:
+            return self._profile_manager.stop()
+
         if not self.profile_in_progress:
             return ProfileReqOutput(
                 success=False,
@@ -340,10 +349,6 @@ class SchedulerProfilerMixin:
                 self.start_profile()
 
     def profile(self, recv_req: ProfileReq):
-        if envs.SGLANG_PROFILE_V2:
-            TODO
-            return
-
         if recv_req.type == ProfileReqType.START_PROFILE:
             if recv_req.profile_by_stage or recv_req.start_step:
                 return self.init_profile(
