@@ -171,7 +171,7 @@ class _StageBasedTrigger:
                 curr_stage=stage,
                 curr_count=0,
             )
-            self.on_start()
+            self.on_start(stage=stage)
 
         # Sanity check
         assert (self.running_state is not None) == (stage in self.stage_configs)
