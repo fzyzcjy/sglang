@@ -153,7 +153,9 @@ class _StageBasedTrigger:
                 ((x := self.running_state) is not None)
                 and (x.curr_count > self.stage_configs[x.curr_stage].target_count)
         ):
+            del self.stage_configs[x.curr_stage]
             self.running_state = None
+            self.on_stop()
 
         # Maybe start
         TODO
