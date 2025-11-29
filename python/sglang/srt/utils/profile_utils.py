@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 class ProfileManager:
     def __init__(self):
         TODO_handle_stage_for_this
-        self.stage_based_dispatcher = _StageBasedDispatcher(
+        self.stage_based_trigger = _StageBasedTrigger(
             on_start=self.start,
             on_stop=self.stop,
         )
@@ -35,7 +35,7 @@ class ProfileManager:
         if stage is None:
             return
 
-        self.stage_based_dispatcher.step(stage=stage)
+        self.stage_based_trigger.step(stage=stage)
 
     def configure(
             self,
@@ -105,7 +105,7 @@ def _get_stage_from_forward_mode(forward_mode: ForwardMode):
 
 # ======================================== Stage related ==========================================
 
-class _StageBasedDispatcher:
+class _StageBasedTrigger:
     def __init__(self, on_start: Callable, on_stop: Callable):
         self.on_start = on_start
         self.on_stop = on_stop
