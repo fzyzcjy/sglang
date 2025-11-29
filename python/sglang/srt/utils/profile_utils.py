@@ -133,14 +133,15 @@ class _StageBasedTrigger:
         self.on_stop = on_stop
 
         self.running_stage: Optional[str] = None
-        self.state_of_stage: Optional[Dict[str, _StageBasedTrigger._StateOfStage]] = None
+        self.state_of_stage: Dict[str, _StageBasedTrigger._StateOfStage] = {}
 
     def configure(self, num_steps: int):
         self.running_stage = None
         self.state_of_stage = {stage: _StageBasedTrigger._StateOfStage(target_count=num_steps) for stage in self.all_stages}
 
     def step(self, stage: str):
-        if self.state_of_stage is None:
+        state = self.state_of_stage.get(stage)
+        if state is None:
             return
 
         TODO
