@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 class ProfileManager:
     def __init__(self, tp_rank: int, cpu_group):
         self.stage_based_trigger = _StageBasedTrigger(
+            all_stages=["prefill", "decode"],
             on_start=self._do_start,
             on_stop=self._do_stop,
         )
@@ -126,7 +127,8 @@ class _StageBasedTrigger:
     class _StateOfStage:
         target_count: int
 
-    def __init__(self, on_start: Callable, on_stop: Callable):
+    def __init__(self, all_stages, on_start: Callable, on_stop: Callable):
+        self.all_stages = all_stages
         self.on_start = on_start
         self.on_stop = on_stop
 
@@ -134,9 +136,13 @@ class _StageBasedTrigger:
         self.state_of_stage: Optional[Dict[str, _StageBasedTrigger._StateOfStage]] = None
 
     def configure(self, num_steps: int):
-        TODO
+        self.running_stage = None
+        self.state_of_stage = {stage: _StageBasedTrigger._StateOfStage(target_count=num_steps) for stage in self.all_stages}
 
     def step(self, stage: str):
+        if self.state_of_stage is None:
+            return
+
         TODO
 
 
