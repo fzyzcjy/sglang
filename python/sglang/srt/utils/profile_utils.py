@@ -115,7 +115,6 @@ class ProfileManager:
         logger.info(
             f"Profiling done. Traces are saved to: {self.profiler_kwargs['output_dir']}"
         )
-        self.profiler_kwargs = None
         self.profiler = None
 
 
