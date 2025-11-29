@@ -87,6 +87,8 @@ class _StageBasedDispatcher:
         TODO
 
 
+# ======================================== Concrete profilers ==========================================
+
 class _ProfilerBase(ABC):
     @staticmethod
     def create(activities, with_stack, record_shapes, **kwargs):
