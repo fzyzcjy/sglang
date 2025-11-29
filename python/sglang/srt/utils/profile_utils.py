@@ -74,10 +74,11 @@ class ProfileManager:
 
 class _ProfilerBase(ABC):
     @staticmethod
-    def create_profilers(activities, **kwargs):
+    def create_profilers(activities, with_stack, record_shapes, **kwargs):
         ans = []
         if ("CPU" in activities) or ("GPU" in activities):
-            ans.append(_ProfilerTorch(**kwargs))
+            ans.append(
+                _ProfilerTorch(**kwargs, activities=activities, with_stack=with_stack, record_shapes=record_shapes))
         if "MEM" in activities:
             ans.append(_ProfilerMemory(**kwargs))
         if "CUDA_PROFILER" in activities:
@@ -100,6 +101,12 @@ class _ProfilerBase(ABC):
 
 
 class _ProfilerTorch(_ProfilerBase):
+    def __init__(self, with_stack: bool, record_shapes: bool, activities, **kwargs):
+        super().__init__(**kwargs)
+        self.with_stack = with_stack
+        self.record_shapes = record_shapes
+        self.activities = activities
+
     def start(self):
         activity_map = {
             "CPU": torch.profiler.ProfilerActivity.CPU,
@@ -111,8 +118,8 @@ class _ProfilerTorch(_ProfilerBase):
 
         self.torch_profiler = torch.profiler.profile(
             activities=torchprof_activities,
-            with_stack=with_stack if with_stack is not None else True,
-            record_shapes=record_shapes if record_shapes is not None else False,
+            with_stack=self.with_stack if with_stack is not None else True,
+            record_shapes=self.record_shapes if self.record_shapes is not None else False,
             on_trace_ready=(
                 None
                 if not _is_npu
