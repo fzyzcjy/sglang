@@ -70,12 +70,18 @@ class ProfileManager:
         TODO
 
     def start(self):
-        self._do_start()
-        return ProfileReqOutput(success=True, message="Succeeded")
+        try:
+            self._do_start()
+            return ProfileReqOutput(success=True, message="Succeeded")
+        except Exception as e:
+            return ProfileReqOutput(success=False, message=f"Error: {e}")
 
     def stop(self):
-        self._do_stop()
-        return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
+        try:
+            self._do_stop()
+            return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
+        except Exception as e:
+            return ProfileReqOutput(success=False, message=f"Error: {e}")
 
     def _do_start(self, stage: Optional[str] = None):
         logger.info(
