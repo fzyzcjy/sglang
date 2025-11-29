@@ -212,5 +212,3 @@ class _ProfilerRPD(_ProfilerBase):
             from sglang.srt.utils.rpd_utils import rpd_to_chrome_trace
 
             rpd_to_chrome_trace("trace.rpd", self.rpd_profile_path)
-        self.rpd_profiler = None
-        self.rpd_profiler_path = None
