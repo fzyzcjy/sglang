@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 class ProfileManager:
     def __init__(self):
+        TODO_handle_stage_for_this
         self.stage_based_dispatcher = _StageBasedDispatcher(
             on_start=self.start,
             on_stop=self.stop,
