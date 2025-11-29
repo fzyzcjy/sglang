@@ -79,10 +79,13 @@ class ProfileManager:
 
     def _do_start(self, stage: Optional[str] = None):
         logger.info(
-            f"Profiling starts{f' for {stage}' if stage else ''}. Traces will be saved to: {self.output_dir} (with profile id: {self.profile_id})",
+            f"Profiling starts{f' for {stage}' if stage else ''}. "
+            f"Traces will be saved to: {self.profiler_kwargs['output_dir']} "
+            f"(with profile id: {self.profiler_kwargs['profile_id']})",
         )
 
-        TODO
+        self.profiler = _ProfilerBase.create(**self.profiler_kwargs)
+        self.profiler.start()
 
     def _do_stop(self):
         self.output_dir.mkdir(parents=True, exist_ok=True)
