@@ -55,7 +55,7 @@ class ProfileManager:
     ):
         # not supported yet
         assert start_step is None
-        assert profile_by_stage, "only support profile_by_stage=true noe"
+        assert profile_by_stage, "only support profile_by_stage=true now"  # `false` can be easily supported
         assert not merge_profiles
 
         self.profiler_kwargs = dict(
