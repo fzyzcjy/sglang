@@ -62,6 +62,10 @@ class ProfileManager:
         return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
 
 
+class _StageBasedDispatcher:
+    TODO
+
+
 class _ProfilerBase(ABC):
     @staticmethod
     def create(activities, with_stack, record_shapes, **kwargs):
@@ -88,7 +92,6 @@ class _ProfilerBase(ABC):
 class _ProfilerList(_ProfilerBase):
     def __init__(self, inners: List[_ProfilerBase]):
         self.inners = inners
-
 
     def start(self):
         for inner in self.inners:
