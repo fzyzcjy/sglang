@@ -47,8 +47,8 @@ class TestStartProfile(CustomTestCase):
 
         self._post_request()
 
-        self._check_profile_output(pattern="-prefill", expect_existence=True)
-        self._check_profile_output(pattern="-decode", expect_existence=True)
+        self._check_profile_output(pattern="*-prefill*", expect_existence=True)
+        self._check_profile_output(pattern="*-decode*", expect_existence=True)
 
     def test_decode_only(self):
         self._start_profile(
@@ -59,8 +59,8 @@ class TestStartProfile(CustomTestCase):
 
         self._post_request()
 
-        self._check_profile_output(pattern="-prefill", expect_existence=False)  # NOTE
-        self._check_profile_output(pattern="-decode", expect_existence=True)
+        self._check_profile_output(pattern="*-prefill*", expect_existence=False)  # NOTE
+        self._check_profile_output(pattern="*-decode*", expect_existence=True)
 
     def _start_profile(self, **kwargs):
         """Start profiling with optional parameters."""
