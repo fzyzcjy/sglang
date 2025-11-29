@@ -32,6 +32,8 @@ class ProfileManager:
         )
         self.tp_rank = tp_rank
         self.cpu_group = cpu_group
+        self.profiler_kwargs = None
+        self.profiler = None
 
     def step(self, forward_mode: ForwardMode):
         stage = _get_stage_from_forward_mode(forward_mode)
@@ -103,6 +105,7 @@ class ProfileManager:
     def _do_stop(self):
         logger.info("Stop profiling...")
         self.profiler.stop()
+        self.profiler = None
         logger.info("Profiling done. Traces are saved to: %s%s", output_dir, merge_message)
 
 
