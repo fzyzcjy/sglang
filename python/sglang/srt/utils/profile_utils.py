@@ -99,9 +99,7 @@ class ProfileManager:
         self.profiler.start()
 
     def _do_stop(self):
-        logger.info("Stop profiling" + output_suffix + "...")
-        output_dir = Path(self.profiler_kwargs["output_dir"])
-        output_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("Stop profiling...")
         self.profiler.stop()
         logger.info("Profiling done. Traces are saved to: %s%s", output_dir, merge_message)
 
@@ -203,6 +201,7 @@ class _ProfilerConcreteBase(_ProfilerBase):
         self.profile_id = profile_id
         self.tp_rank = tp_rank
         self.cpu_group = cpu_group
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
 
 
 class _ProfilerTorch(_ProfilerConcreteBase):
