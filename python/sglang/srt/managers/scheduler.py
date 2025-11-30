@@ -804,8 +804,10 @@ class Scheduler(
                     (server_args.speculative_eagle_topk or 1)
                     * (server_args.speculative_num_steps or 1)
                 )
+                + 10
             )
         )
+        print(f"hi hacked {self.decode_mem_cache_buf_multiplier=}!")
 
         embedding_cache_size = envs.SGLANG_VLM_CACHE_SIZE_MB.get()
         init_mm_embedding_cache(embedding_cache_size * 1024 * 1024)
