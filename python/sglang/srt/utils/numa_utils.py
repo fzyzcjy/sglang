@@ -33,7 +33,7 @@ exec numactl {numactl_args} {multiprocessing.spawn.get_executable()} "$@"'''
     )
     path.write_text(script)
     path.chmod(0o777)
-    return path
+    return str(path)
 
 
 @contextmanager
