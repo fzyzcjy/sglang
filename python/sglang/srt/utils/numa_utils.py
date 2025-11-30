@@ -19,9 +19,9 @@ def configure_subprocess(server_args: ServerArgs, gpu_id: int):
     ) is not None and envs.SGLANG_NUMA_BIND_V2.get():
         numa_node = numa_nodes[gpu_id]
         numactl_args = f"--cpunodebind={numa_node} --membind={numa_node}"
-        executable = _create_numactl_executable(numactl_args=numactl_args)
-        with _mp_set_executable(executable=executable):
-            pass
+        executable, debug_str = _create_numactl_executable(numactl_args=numactl_args)
+        with _mp_set_executable(executable=executable, debug_str=debug_str):
+            yield
     else:
         yield
 
@@ -34,17 +34,17 @@ exec numactl {numactl_args} {multiprocessing.spawn.get_executable()} "$@"'''
     )
     path.write_text(script)
     path.chmod(0o777)
-    return str(path)
+    return str(path), f"{script=}"
 
 
 @contextmanager
-def _mp_set_executable(executable: str):
+def _mp_set_executable(executable: str, debug_str: str):
     start_method = multiprocessing.get_start_method()
     assert start_method == "spawn", f"{start_method=}"
 
     old_executable = os.fsdecode(multiprocessing.spawn.get_executable())
     multiprocessing.spawn.set_executable(executable)
-    logger.info(f"mp.set_executable {old_executable} -> {executable}")
+    logger.info(f"mp.set_executable {old_executable} -> {executable} ({debug_str})")
     try:
         yield
     finally:
