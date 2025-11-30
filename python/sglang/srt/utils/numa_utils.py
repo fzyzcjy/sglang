@@ -27,8 +27,9 @@ def configure_subprocess(server_args: ServerArgs, gpu_id: int):
 
 
 def _create_numactl_executable(numactl_args: str):
+    old_executable = os.fsdecode(multiprocessing.spawn.get_executable())
     script = f'''#!/bin/sh
-exec numactl {numactl_args} {multiprocessing.spawn.get_executable()} "$@"'''
+exec numactl {numactl_args} {old_executable} "$@"'''
     path = Path(
         f"/tmp/sglang_temp_file_{time.time()}_{random.randrange(0, 10000000)}.sh"
     )
