@@ -41,12 +41,14 @@ def _mp_set_executable(executable: str):
     start_method = multiprocessing.get_start_method()
     assert start_method == "spawn", f"{start_method=}"
 
-    old_executable = multiprocessing.spawn.get_executable()
+    old_executable = os.fsdecode(multiprocessing.spawn.get_executable())
     multiprocessing.spawn.set_executable(executable)
     logger.info(f"mp.set_executable {old_executable} -> {executable}")
     try:
         yield
     finally:
-        assert multiprocessing.spawn.get_executable() == executable
+        assert (
+            os.fsdecode(multiprocessing.spawn.get_executable()) == executable
+        ), f"{multiprocessing.spawn.get_executable()=}"
         multiprocessing.spawn.set_executable(old_executable)
         logger.info(f"mp.set_executable revert to {old_executable}")
