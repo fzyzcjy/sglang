@@ -1,3 +1,4 @@
+import multiprocessing
 from contextlib import contextmanager
 
 from sglang import ServerArgs
@@ -17,6 +18,9 @@ def configure_subprocess(server_args: ServerArgs, gpu_id: int):
 
 @contextmanager
 def _configure_subprocess_numactl(numactl_args: str):
+    start_method = multiprocessing.get_start_method()
+    assert start_method == "spawn", f"{start_method=}"
+
     TODO
     try:
         yield
