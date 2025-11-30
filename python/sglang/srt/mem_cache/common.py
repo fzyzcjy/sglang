@@ -262,8 +262,6 @@ def alloc_paged_token_slots_extend(
     # Over estimate the number of tokens: assume each request needs a new page.
     allocator = tree_cache.token_to_kv_pool_allocator
     num_tokens = extend_num_tokens + len(seq_lens_cpu) * allocator.page_size
-    print(f"hack: evict much more!! original {num_tokens=}")
-    num_tokens = num_tokens * 4
     evict_from_tree_cache(tree_cache, num_tokens)
 
     state = None
