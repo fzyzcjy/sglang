@@ -804,7 +804,7 @@ class Scheduler(
                     (server_args.speculative_eagle_topk or 1)
                     * (server_args.speculative_num_steps or 1)
                 )
-                + 1
+                + 10
             )
         )
         print(f"hi hacked {self.decode_mem_cache_buf_multiplier=}!")
