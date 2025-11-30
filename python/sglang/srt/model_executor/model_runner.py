@@ -1722,6 +1722,8 @@ class ModelRunner:
                     * self.server_args.speculative_eagle_topk
                     # verify
                     + max_num_reqs * self.server_args.speculative_num_draft_tokens
+                    # NOTE MODIFIED as lsyin suggests
+                    + max_num_reqs * self.server_args.page_size
                     # buffer
                     + 100
                 )
