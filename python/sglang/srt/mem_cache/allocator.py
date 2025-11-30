@@ -504,6 +504,8 @@ class PagedTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
             prefix_lens=prefix_lens_cpu,
         )
         if num_new_pages > len(self.free_pages):
+            print(f"hi {type(self)}.alloc_extend return none {num_new_pages=} {len(self.free_pages)=} "
+                  f"{seq_lens_cpu=} {self.page_size=} {prefix_lens_cpu=}")
             return None
 
         self.free_pages = self.free_pages[num_new_pages:]
