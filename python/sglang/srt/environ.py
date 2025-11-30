@@ -401,6 +401,7 @@ def example_with_implicit_bool_avoidance():
             yield
         except Exception as e:
             assert message_matcher in str(e), f"{e=}"
+            print(f"assert_throws find expected error: {e}")
             return
         raise AssertionError(f"assert_throws do not see exceptions")
 
