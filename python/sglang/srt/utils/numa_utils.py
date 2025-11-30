@@ -33,7 +33,7 @@ exec numactl {numactl_args} {multiprocessing.spawn.get_executable()} "$@"'''
 def save_to_temp_file(text: str, ext: str):
     path = Path(f"/tmp/miles_temp_file_{time.time()}_{random.randrange(0, 10000000)}.{ext}")
     path.write_text(text)
-    path.chmod(777)
+    path.chmod(0o777)
     return str(path)
 
 
