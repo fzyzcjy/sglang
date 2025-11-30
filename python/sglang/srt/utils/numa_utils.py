@@ -1,8 +1,11 @@
+import logging
 import multiprocessing
 from contextlib import contextmanager
 
 from sglang import ServerArgs
 from sglang.srt.environ import envs
+
+logger = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -28,7 +31,10 @@ def _mp_set_executable(executable: str):
 
     old_executable = multiprocessing.spawn.get_executable()
     multiprocessing.spawn.set_executable(executable)
+    logger.info(f"mp.set_executable {old_executable} -> {executable}")
     try:
         yield
     finally:
+        assert multiprocessing.spawn.get_executable() == executable
         multiprocessing.spawn.set_executable(old_executable)
+        logger.info(f"mp.set_executable revert to {old_executable}")
