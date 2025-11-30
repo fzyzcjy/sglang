@@ -21,6 +21,8 @@ def configure_subprocess(server_args: ServerArgs, gpu_id: int):
 
 
 def _create_numactl_executable(numactl_args: str):
+    script = f'''#!/bin/sh
+exec numactl {numactl_args} {multiprocessing.spawn.get_executable()} "$@"'''
     return TODO
 
 
