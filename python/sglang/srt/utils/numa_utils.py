@@ -21,8 +21,11 @@ def _configure_subprocess_numactl(numactl_args: str):
     start_method = multiprocessing.get_start_method()
     assert start_method == "spawn", f"{start_method=}"
 
-    TODO
+    old_executable = multiprocessing.spawn.get_executable()
+    new_executable = TODO
+
+    multiprocessing.spawn.set_executable(new_executable)
     try:
         yield
     finally:
-        TODO
+        multiprocessing.spawn.set_executable(old_executable)
