@@ -1729,7 +1729,6 @@ class ModelRunner:
                 # token_to_kv_pool, so we should make sure to match max_total_num_tokens.
                 self.max_total_num_tokens = self.server_args.draft_runner_cache_size
                 self.server_args.max_num_reqs = max_num_reqs
-        print(f"hi init_memory_pool MIDDLE {self.is_draft_worker=} {self.max_total_num_tokens=} {self.server_args.draft_runner_cache_size=} {self.server_args.max_num_reqs=}")
 
         if max_total_tokens is not None:
             if max_total_tokens > self.max_total_num_tokens:
