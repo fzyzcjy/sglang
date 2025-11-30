@@ -245,6 +245,7 @@ def evict_from_tree_cache(tree_cache: BasePrefixCache | None, num_tokens: int):
             tree_cache.evict(full_num_tokens, swa_num_tokens)
     else:
         # Standard allocator
+        print(f"hi evict_from_tree_cache {allocator.available_size()=} {num_tokens=}")
         if allocator.available_size() < num_tokens:
             tree_cache.evict(num_tokens)
 
