@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 class SchedulerProfilerMixin:
     def init_profiler(self):
-        if envs.SGLANG_PROFILE_V2:
+        if envs.SGLANG_PROFILE_V2.get():
             self._profile_manager = ProfileManager(
                 tp_rank=self.tp_rank,
                 cpu_group=self.cpu_group,
@@ -72,7 +72,7 @@ class SchedulerProfilerMixin:
         profile_prefix: str = "",
         profile_stages: Optional[List[str]] = None,
     ) -> ProfileReqOutput:
-        if envs.SGLANG_PROFILE_V2:
+        if envs.SGLANG_PROFILE_V2.get():
             return self._profile_manager.configure(
                 output_dir=output_dir,
                 start_step=start_step,
@@ -132,7 +132,7 @@ class SchedulerProfilerMixin:
     def start_profile(
         self, stage: Optional[ForwardMode] = None
     ) -> ProfileReqOutput | None:
-        if envs.SGLANG_PROFILE_V2:
+        if envs.SGLANG_PROFILE_V2.get():
             return self._profile_manager.manual_start()
 
         stage_str = f" for {stage.name}" if stage else ""
@@ -243,7 +243,7 @@ class SchedulerProfilerMixin:
     def stop_profile(
         self, stage: Optional[ForwardMode] = None
     ) -> ProfileReqOutput | None:
-        if envs.SGLANG_PROFILE_V2:
+        if envs.SGLANG_PROFILE_V2.get():
             return self._profile_manager.manual_stop()
 
         if not self.profile_in_progress:
@@ -329,7 +329,7 @@ class SchedulerProfilerMixin:
         return ProfileReqOutput(success=True, message=f"Succeeded.{merge_message}")
 
     def _profile_batch_predicate(self, batch):
-        if envs.SGLANG_PROFILE_V2:
+        if envs.SGLANG_PROFILE_V2.get():
             self._profile_manager.step(forward_mode=batch.forward_mode)
             return
 
