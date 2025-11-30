@@ -76,9 +76,10 @@ from sglang.srt.utils import (
     kill_process_tree,
     launch_dummy_health_check_server,
     maybe_reindex_device_id,
+    numa_utils,
     prepare_model_and_tokenizer,
     set_prometheus_multiproc_dir,
-    set_ulimit, numa_utils,
+    set_ulimit,
 )
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
 from sglang.version import __version__
