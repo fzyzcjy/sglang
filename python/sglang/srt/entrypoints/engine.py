@@ -847,7 +847,9 @@ def _launch_subprocesses(
                             writer,
                         ),
                     )
-                    with memory_saver_adapter.configure_subprocess(), numa_utils.configure_subprocess():
+                    with memory_saver_adapter.configure_subprocess(), numa_utils.configure_subprocess(
+                        server_args, gpu_id
+                    ):
                         proc.start()
 
                 scheduler_procs.append(proc)
