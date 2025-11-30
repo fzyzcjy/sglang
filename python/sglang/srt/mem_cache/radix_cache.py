@@ -545,8 +545,6 @@ class RadixCache(BasePrefixCache):
         if self.disable:
             return
 
-        print(f"hi evict START {num_tokens=}")
-
         start_time = time.perf_counter()
         leaves = self._collect_leaves()
         eviction_heap = [
@@ -556,7 +554,6 @@ class RadixCache(BasePrefixCache):
 
         num_evicted = 0
         while num_evicted < num_tokens and len(eviction_heap):
-            print(f"hi evict LOOP {num_evicted=} {len(eviction_heap)=}")
             _priority, x = heapq.heappop(eviction_heap)
 
             self.token_to_kv_pool_allocator.free(x.value)
