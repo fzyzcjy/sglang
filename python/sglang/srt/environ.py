@@ -410,7 +410,7 @@ def example_with_implicit_bool_avoidance():
             pass
 
     with assert_throws("Please use `envs.YOUR_FLAG.get()` instead of `envs.YOUR_FLAG`"):
-        if (1 == 1) or envs.SGLANG_TEST_RETRACT:
+        if (1 != 1) or envs.SGLANG_TEST_RETRACT:
             pass
 
     with assert_throws("Please use `envs.YOUR_FLAG.get()` instead of `envs.YOUR_FLAG`"):
