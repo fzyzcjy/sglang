@@ -376,6 +376,7 @@ class Glm4MoeSparseMoeBlock(nn.Module):
             num_expert_group = config.n_group
             topk_group = config.topk_group
             use_grouped_topk = (num_expert_group != 1) or (topk_group != 1)
+            print(f"HACK! {use_grouped_topk=} {num_expert_group=} {topk_group=}")
             self.topk = TopK(
                 top_k=self.top_k,
                 renormalize=config.norm_topk_prob,
