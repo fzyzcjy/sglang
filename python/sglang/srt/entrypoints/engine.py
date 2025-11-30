@@ -78,7 +78,7 @@ from sglang.srt.utils import (
     maybe_reindex_device_id,
     prepare_model_and_tokenizer,
     set_prometheus_multiproc_dir,
-    set_ulimit,
+    set_ulimit, numa_utils,
 )
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
 from sglang.version import __version__
@@ -846,7 +846,7 @@ def _launch_subprocesses(
                             writer,
                         ),
                     )
-                    with memory_saver_adapter.configure_subprocess():
+                    with memory_saver_adapter.configure_subprocess(), numa_utils.configure_subprocess():
                         proc.start()
 
                 scheduler_procs.append(proc)
