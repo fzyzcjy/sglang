@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 
 @contextmanager
 def configure_subprocess(server_args: ServerArgs, gpu_id: int):
-    if (numa_nodes := server_args.numa_node) is not None and envs.SGLANG_NUMA_BIND_V2.get():
+    if (
+        numa_nodes := server_args.numa_node
+    ) is not None and envs.SGLANG_NUMA_BIND_V2.get():
         numa_node = numa_nodes[gpu_id]
         numactl_args = f"--cpunodebind={numa_node} --membind={numa_node}"
         executable = _create_numactl_executable(numactl_args=numactl_args)
@@ -26,7 +28,9 @@ def configure_subprocess(server_args: ServerArgs, gpu_id: int):
 def _create_numactl_executable(numactl_args: str):
     script = f'''#!/bin/sh
 exec numactl {numactl_args} {multiprocessing.spawn.get_executable()} "$@"'''
-    path = Path(f"/tmp/sglang_temp_file_{time.time()}_{random.randrange(0, 10000000)}.sh")
+    path = Path(
+        f"/tmp/sglang_temp_file_{time.time()}_{random.randrange(0, 10000000)}.sh"
+    )
     path.write_text(script)
     path.chmod(0o777)
     return path
