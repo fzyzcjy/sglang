@@ -446,8 +446,9 @@ async def async_request_openai_chat_completions(
 
     # TODO put it to other functions when `pbar` logic is refactored
     if getattr(args, "print_requests", False):
+        curr_t = time.time()
         print(
-            f'rid={rid} time={time.time()} message="request end" output="{str(output)}"'
+            f'rid={rid} time={curr_t} time_delta={curr_t - st} message="request end" output="{str(output)}"'
         )
 
     if pbar:
