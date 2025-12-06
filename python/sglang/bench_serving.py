@@ -436,7 +436,7 @@ async def async_request_openai_chat_completions(
             output.error = "".join(traceback.format_exception(*exc_info))
 
     # TODO put it to other functions when `pbar` logic is refactored
-    if getattr(args, "print_errors", False) and not output.success:
+    if getattr(args, "print_requests", False) and not output.success:
         curr_t = time.time()
         print(f"request failed: {curr_t=} delta_t={curr_t - st} {output.error=} {output=}")
 
@@ -2332,7 +2332,7 @@ def run_benchmark(args_: argparse.Namespace):
     if not hasattr(args, "served_model_name"):
         args.served_model_name = None
 
-    if getattr(args, "print_errors", False):
+    if getattr(args, "print_requests", False):
         assert args.backend == "sglang-oai-chat"  # only support this now
 
     print(f"benchmark_args={args}")
@@ -2674,7 +2674,7 @@ if __name__ == "__main__":
         "--output-details", action="store_true", help="Output details of benchmarking."
     )
     parser.add_argument(
-        "--print-errors",
+        "--print-requests",
         action="store_true",
         help="Print errors immediately during benchmarking. Useful to quickly realize issues.",
     )
