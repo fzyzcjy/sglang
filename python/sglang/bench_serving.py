@@ -437,7 +437,8 @@ async def async_request_openai_chat_completions(
 
     # TODO put it to other functions when `pbar` logic is refactored
     if getattr(args, "print_errors", False) and not output.success:
-        print(f"request failed: {output.error=} {output=}")
+        curr_t = time.time()
+        print(f"request failed: {curr_t=} delta_t={curr_t - st} {output.error=} {output=}")
 
     if pbar:
         pbar.update(1)
