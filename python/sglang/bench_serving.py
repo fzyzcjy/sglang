@@ -435,6 +435,10 @@ async def async_request_openai_chat_completions(
             exc_info = sys.exc_info()
             output.error = "".join(traceback.format_exception(*exc_info))
 
+    # TODO put it to other functions when `pbar` logic is refactored
+    if getattr(args, "print_errors", False) and not output.success:
+        print(f"request failed: {output.error=} {output=}")
+
     if pbar:
         pbar.update(1)
     return output
@@ -2664,6 +2668,11 @@ if __name__ == "__main__":
     parser.add_argument("--output-file", type=str, help="Output JSONL file name.")
     parser.add_argument(
         "--output-details", action="store_true", help="Output details of benchmarking."
+    )
+    parser.add_argument(
+        "--print-errors",
+        action="store_true",
+        help="Print errors immediately during benchmarking. Useful to quickly realize issues.",
     )
     parser.add_argument(
         "--disable-tqdm",
