@@ -2331,6 +2331,9 @@ def run_benchmark(args_: argparse.Namespace):
     if not hasattr(args, "served_model_name"):
         args.served_model_name = None
 
+    if getattr(args, "print_errors", False):
+        assert args.backend == "sglang-oai-chat"  # only support this now
+
     print(f"benchmark_args={args}")
 
     # Set global environments
