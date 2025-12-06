@@ -319,6 +319,15 @@ async def async_request_openai_chat_completions(
         "chat/completions"
     ), "OpenAI Chat Completions API URL must end with 'chat/completions'."
 
+    # TODO put it to other functions when `pbar` logic is refactored
+    if getattr(args, "print_requests", False):
+        import uuid
+
+        rid = str(uuid.uuid4())
+        print(
+            f'rid={rid} time={time.time()} message="request start" request_func_input="{str(request_func_input)}"'
+        )
+
     if request_func_input.image_data:
         # Build multi-image content: a list of image_url entries followed by the text
         content_items = [
@@ -436,9 +445,10 @@ async def async_request_openai_chat_completions(
             output.error = "".join(traceback.format_exception(*exc_info))
 
     # TODO put it to other functions when `pbar` logic is refactored
-    if getattr(args, "print_requests", False) and not output.success:
-        curr_t = time.time()
-        print(f"request failed: {curr_t=} delta_t={curr_t - st} {output.error=} {output=}")
+    if getattr(args, "print_requests", False):
+        print(
+            f'rid={rid} time={time.time()} message="request end" output="{str(output)}"'
+        )
 
     if pbar:
         pbar.update(1)
@@ -2676,7 +2686,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--print-requests",
         action="store_true",
-        help="Print errors immediately during benchmarking. Useful to quickly realize issues.",
+        help="Print requests immediately during benchmarking. Useful to quickly realize issues.",
     )
     parser.add_argument(
         "--disable-tqdm",
