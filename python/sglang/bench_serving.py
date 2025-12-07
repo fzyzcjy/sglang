@@ -26,6 +26,7 @@ import traceback
 import uuid
 import warnings
 from argparse import ArgumentParser
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -150,7 +151,8 @@ async def async_request_trt_llm(
     api_url = request_func_input.api_url
     assert api_url.endswith("generate_stream")
 
-    async with _get_bench_client_session() as session:
+    with nullcontext():
+        session = _get_bench_client_session()
         payload = {
             "accumulate_tokens": True,
             "text_input": request_func_input.prompt,
@@ -223,7 +225,8 @@ async def async_request_openai_completions(
 
     prompt = request_func_input.prompt
 
-    async with _get_bench_client_session() as session:
+    with nullcontext():
+        session = _get_bench_client_session()
         payload = {
             "model": request_func_input.model,
             "prompt": prompt,
@@ -361,7 +364,8 @@ async def async_request_openai_chat_completions(
     else:
         messages = [{"role": "user", "content": request_func_input.prompt}]
 
-    async with _get_bench_client_session() as session:
+    with nullcontext():
+        session = _get_bench_client_session()
         payload = {
             "model": request_func_input.model,
             "messages": messages,
@@ -480,7 +484,8 @@ async def async_request_truss(
 
     prompt = request_func_input.prompt
 
-    async with _get_bench_client_session() as session:
+    with nullcontext():
+        session = _get_bench_client_session()
         payload = {
             "model": request_func_input.model,
             "prompt": prompt,
@@ -557,7 +562,8 @@ async def async_request_sglang_generate(
     api_url = request_func_input.api_url
     prompt = request_func_input.prompt
 
-    async with _get_bench_client_session() as session:
+    with nullcontext():
+        session = _get_bench_client_session()
         payload = {
             ("text" if isinstance(prompt, str) else "input_ids"): prompt,
             "sampling_params": {
@@ -655,7 +661,8 @@ async def async_request_gserver(
 
 
 async def async_request_profile(api_url: str) -> RequestFuncOutput:
-    async with _get_bench_client_session() as session:
+    with nullcontext():
+        session = _get_bench_client_session()
         output = RequestFuncOutput()
         try:
             body = {
