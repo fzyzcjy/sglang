@@ -23,8 +23,10 @@ import shutil
 import sys
 import time
 import traceback
+import uuid
 import warnings
 from argparse import ArgumentParser
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
@@ -331,11 +333,11 @@ async def async_request_openai_chat_completions(
 
     # TODO put it to other functions when `pbar` logic is refactored
     if getattr(args, "print_requests", False):
-        import uuid
-
         rid = str(uuid.uuid4())
+        input_partial = deepcopy(request_func_input)
+        input_partial.prompt = "..."
         print(
-            f'rid={rid} time={time.time()} message="request start" request_func_input="{str(request_func_input)}"'
+            f'rid={rid} time={time.time()} message="request start" request_func_input="{str(input_partial)}"'
         )
 
     if request_func_input.image_data:
@@ -457,8 +459,10 @@ async def async_request_openai_chat_completions(
     # TODO put it to other functions when `pbar` logic is refactored
     if getattr(args, "print_requests", False):
         curr_t = time.time()
+        output_partial = deepcopy(output)
+        output_partial.generated_text = "..."
         print(
-            f'rid={rid} time={curr_t} time_delta={curr_t - st} message="request end" output="{str(output)}"'
+            f'rid={rid} time={curr_t} time_delta={curr_t - st} message="request end" output="{str(output_partial)}"'
         )
 
     if pbar:
