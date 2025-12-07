@@ -73,7 +73,9 @@ def _create_bench_client_session():
 
     aiohttp_timeout = aiohttp.ClientTimeout(total=BENCH_AIOHTTP_TIMEOUT_SECONDS)
     return aiohttp.ClientSession(
-        timeout=aiohttp_timeout, read_bufsize=BENCH_AIOHTTP_READ_BUFSIZE_BYTES
+        timeout=aiohttp_timeout,
+        read_bufsize=BENCH_AIOHTTP_READ_BUFSIZE_BYTES,
+        connector=aiohttp.TCPConnector(limit=0, limit_per_host=0, ssl=False),
     )
 
 
