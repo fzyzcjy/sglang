@@ -74,20 +74,8 @@ def _create_bench_client_session():
 
     aiohttp_timeout = aiohttp.ClientTimeout(total=BENCH_AIOHTTP_TIMEOUT_SECONDS)
     return aiohttp.ClientSession(
-        timeout=aiohttp_timeout,
-        read_bufsize=BENCH_AIOHTTP_READ_BUFSIZE_BYTES,
-        connector=aiohttp.TCPConnector(limit=0, limit_per_host=0, ssl=False),
+        timeout=aiohttp_timeout, read_bufsize=BENCH_AIOHTTP_READ_BUFSIZE_BYTES
     )
-
-
-_bench_client_session = None
-
-
-def _get_bench_client_session():
-    global _bench_client_session
-    if _bench_client_session is None:
-        _bench_client_session = _create_bench_client_session()
-    return _bench_client_session
 
 
 @dataclass
@@ -151,8 +139,7 @@ async def async_request_trt_llm(
     api_url = request_func_input.api_url
     assert api_url.endswith("generate_stream")
 
-    with nullcontext():
-        session = _get_bench_client_session()
+    async with _create_bench_client_session() as session:
         payload = {
             "accumulate_tokens": True,
             "text_input": request_func_input.prompt,
@@ -225,8 +212,7 @@ async def async_request_openai_completions(
 
     prompt = request_func_input.prompt
 
-    with nullcontext():
-        session = _get_bench_client_session()
+    async with _create_bench_client_session() as session:
         payload = {
             "model": request_func_input.model,
             "prompt": prompt,
@@ -365,8 +351,7 @@ async def async_request_openai_chat_completions(
     else:
         messages = [{"role": "user", "content": request_func_input.prompt}]
 
-    with nullcontext():
-        session = _get_bench_client_session()
+    async with _create_bench_client_session() as session:
         payload = {
             "model": request_func_input.model,
             "messages": messages,
@@ -485,8 +470,7 @@ async def async_request_truss(
 
     prompt = request_func_input.prompt
 
-    with nullcontext():
-        session = _get_bench_client_session()
+    async with _create_bench_client_session() as session:
         payload = {
             "model": request_func_input.model,
             "prompt": prompt,
@@ -563,8 +547,7 @@ async def async_request_sglang_generate(
     api_url = request_func_input.api_url
     prompt = request_func_input.prompt
 
-    with nullcontext():
-        session = _get_bench_client_session()
+    async with _create_bench_client_session() as session:
         payload = {
             ("text" if isinstance(prompt, str) else "input_ids"): prompt,
             "sampling_params": {
@@ -662,8 +645,7 @@ async def async_request_gserver(
 
 
 async def async_request_profile(api_url: str) -> RequestFuncOutput:
-    with nullcontext():
-        session = _get_bench_client_session()
+    async with _create_bench_client_session() as session:
         output = RequestFuncOutput()
         try:
             body = {
