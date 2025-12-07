@@ -341,8 +341,9 @@ async def async_request_openai_chat_completions(
         rid = str(uuid.uuid4())
         input_partial = deepcopy(request_func_input)
         input_partial.prompt = "..."
+        request_start_time = time.time()
         print(
-            f'rid={rid} time={time.time()} message="request start" request_func_input="{str(input_partial)}"'
+            f'rid={rid} time={request_start_time} message="request start" request_func_input="{str(input_partial)}"'
         )
 
     if request_func_input.image_data:
@@ -468,7 +469,7 @@ async def async_request_openai_chat_completions(
         output_partial = deepcopy(output)
         output_partial.generated_text = "..."
         print(
-            f'rid={rid} time={curr_t} time_delta={curr_t - st} message="request end" output="{str(output_partial)}"'
+            f'rid={rid} time={curr_t} time_delta={curr_t - request_start_time} message="request end" output="{str(output_partial)}"'
         )
 
     if pbar:
