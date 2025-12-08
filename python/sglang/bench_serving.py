@@ -1646,13 +1646,13 @@ def sample_generated_shared_prefix_requests(
     # Generate system prompts for each group
     system_prompts = []
     for i in range(num_groups):
-        system_prompt = gen_prompt(tokenizer, system_prompt_lens[i])
+        system_prompt = gen_prompt(tokenizer, system_prompt_lens[i].item())
         system_prompts.append(system_prompt)
 
     # Generate questions
     questions = []
     for i in range(num_groups * prompts_per_group):
-        question = gen_prompt(tokenizer, question_lens[i])
+        question = gen_prompt(tokenizer, question_lens[i].item())
         questions.append(question)
 
     # Combine system prompts with questions
@@ -1678,11 +1678,11 @@ def sample_generated_shared_prefix_requests(
                 DatasetRow(
                     prompt=full_prompt,
                     prompt_len=prompt_len,
-                    output_len=output_lens[flat_index],
+                    output_len=output_lens[flat_index].item(),
                 )
             )
             total_input_tokens += prompt_len
-            total_output_tokens += output_lens[flat_index]
+            total_output_tokens += output_lens[flat_index].item()
 
     # Shuffle questions
     random.shuffle(input_requests)
