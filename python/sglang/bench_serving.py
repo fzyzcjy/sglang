@@ -836,7 +836,7 @@ def get_dataset(args, tokenizer, model_id=None):
             system_prompt_len=args.gsp_system_prompt_len,
             question_len=args.gsp_question_len,
             output_len=args.gsp_output_len,
-            range_ratio=args.gsp_range_ratio,
+            range_ratio=getattr(args, "gsp_range_ratio", 1.0),
             tokenizer=tokenizer,
             args=args,
         )
@@ -1621,23 +1621,35 @@ def sample_generated_shared_prefix_requests(
         with open(cache_path, "rb") as f:
             return pickle.load(f)
 
-    system_prompt_lens = TODO
-    question_lens = TODO
-    output_lens = TODO
+    system_prompt_lens = compute_random_lens(
+        full_len=system_prompt_len,
+        range_ratio=range_ratio,
+        num=num_groups,
+    )
+    question_lens = compute_random_lens(
+        full_len=question_len,
+        range_ratio=range_ratio,
+        num=num_groups * prompts_per_group,
+    )
+    output_lens = compute_random_lens(
+        full_len=output_len,
+        range_ratio=range_ratio,
+        num=num_groups * prompts_per_group,
+    )
     del system_prompt_len, question_len, output_len
 
     print("\nGenerating new input data...")
 
     # Generate system prompts for each group
     system_prompts = []
-    for _ in range(num_groups):
-        system_prompt = gen_prompt(tokenizer, system_prompt_len)
+    for i in range(num_groups):
+        system_prompt = gen_prompt(tokenizer, system_prompt_lens[i])
         system_prompts.append(system_prompt)
 
     # Generate questions
     questions = []
-    for _ in range(num_groups * prompts_per_group):
-        question = gen_prompt(tokenizer, question_len)
+    for i in range(num_groups * prompts_per_group):
+        question = gen_prompt(tokenizer, question_lens[i])
         questions.append(question)
 
     # Combine system prompts with questions
@@ -1650,7 +1662,8 @@ def sample_generated_shared_prefix_requests(
         for prompt_idx in tqdm(
             range(prompts_per_group), desc="Generating questions", leave=False
         ):
-            question = questions[group_idx * prompts_per_group + prompt_idx]
+            flat_index = group_idx * prompts_per_group + prompt_idx
+            question = questions[flat_index]
             full_prompt = f"{system_prompt}\n\n{question}"
             prompt_len = (
                 1
@@ -1662,11 +1675,11 @@ def sample_generated_shared_prefix_requests(
                 DatasetRow(
                     prompt=full_prompt,
                     prompt_len=prompt_len,
-                    output_len=output_len,
+                    output_len=output_lens[flat_index],
                 )
             )
             total_input_tokens += prompt_len
-            total_output_tokens += output_len
+            total_output_tokens += output_lens[flat_index]
 
     # Shuffle questions
     random.shuffle(input_requests)
