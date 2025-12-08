@@ -836,6 +836,7 @@ def get_dataset(args, tokenizer, model_id=None):
             system_prompt_len=args.gsp_system_prompt_len,
             question_len=args.gsp_question_len,
             output_len=args.gsp_output_len,
+            range_ratio=args.gsp_range_ratio,
             tokenizer=tokenizer,
             args=args,
         )
@@ -1254,6 +1255,14 @@ def sample_sharegpt_requests(
     return filtered_dataset
 
 
+def compute_random_lens(full_len: int, range_ratio: float, num: int):
+    return np.random.randint(
+        max(int(full_len * range_ratio), 1),
+        full_len + 1,
+        size=num,
+    )
+
+
 def sample_random_requests(
     input_len: int,
     output_len: int,
@@ -1264,15 +1273,15 @@ def sample_random_requests(
     random_sample: bool = True,
     return_text: bool = True,
 ) -> List[DatasetRow]:
-    input_lens = np.random.randint(
-        max(int(input_len * range_ratio), 1),
-        input_len + 1,
-        size=num_prompts,
+    input_lens = compute_random_lens(
+        full_len=input_len,
+        range_ratio=range_ratio,
+        num=num_prompts,
     )
-    output_lens = np.random.randint(
-        int(output_len * range_ratio),
-        output_len + 1,
-        size=num_prompts,
+    output_lens = compute_random_lens(
+        full_len=output_len,
+        range_ratio=range_ratio,
+        num=num_prompts,
     )
 
     if random_sample:
@@ -1495,11 +1504,15 @@ def sample_image_requests(
         )
 
     # Sample text lengths
-    input_lens = np.random.randint(
-        max(int(input_len * range_ratio), 1), input_len + 1, size=num_requests
+    input_lens = compute_random_lens(
+        full_len=input_len,
+        range_ratio=range_ratio,
+        num=num_requests,
     )
-    output_lens = np.random.randint(
-        int(output_len * range_ratio), output_len + 1, size=num_requests
+    output_lens = compute_random_lens(
+        full_len=output_len,
+        range_ratio=range_ratio,
+        num=num_requests,
     )
 
     def _gen_random_image_data_uri(
@@ -1595,6 +1608,7 @@ def sample_generated_shared_prefix_requests(
     system_prompt_len: int,
     question_len: int,
     output_len: int,
+    range_ratio: float,
     tokenizer: PreTrainedTokenizerBase,
     args: argparse.Namespace,
 ) -> List[DatasetRow]:
@@ -1602,10 +1616,15 @@ def sample_generated_shared_prefix_requests(
     cache_path = get_gen_prefix_cache_path(args, tokenizer)
 
     # Try to load from cache first
-    if cache_path.exists():
+    if cache_path.exists() and range_ratio == 1:
         print(f"\nLoading cached generated input data from {cache_path}")
         with open(cache_path, "rb") as f:
             return pickle.load(f)
+
+    system_prompt_lens = TODO
+    question_lens = TODO
+    output_lens = TODO
+    del system_prompt_len, question_len, output_len
 
     print("\nGenerating new input data...")
 
@@ -2884,6 +2903,13 @@ if __name__ == "__main__":
         type=int,
         default=256,
         help="Target length in tokens for outputs in generated-shared-prefix dataset",
+    )
+    parser.add_argument(
+        "--gsp-range-ratio",
+        type=float,
+        # WARN: The default 1.0 is for backward compatibility, and is different from the default 0.0 for random dataset
+        default=1.0,
+        help="Range of sampled ratio of input/output length, used only for gsp dataset.",
     )
     group.add_argument(
         "--gsp-fast-prepare",
