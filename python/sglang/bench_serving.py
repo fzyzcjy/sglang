@@ -1633,7 +1633,11 @@ def sample_generated_shared_prefix_requests(
         ):
             question = questions[group_idx * prompts_per_group + prompt_idx]
             full_prompt = f"{system_prompt}\n\n{question}"
-            prompt_len = len(tokenizer.encode(full_prompt))
+            prompt_len = (
+                1
+                if getattr(args, "gsp_fast_prepare", False)
+                else len(tokenizer.encode(full_prompt))
+            )
 
             input_requests.append(
                 DatasetRow(
@@ -1653,14 +1657,15 @@ def sample_generated_shared_prefix_requests(
     print(f"Number of groups: {num_groups}")
     print(f"Prompts per group: {prompts_per_group}")
     print(f"Total prompts: {len(input_requests)}")
-    print(f"Total input tokens: {total_input_tokens}")
-    print(f"Total output tokens: {total_output_tokens}")
-    print(
-        f"Average system prompt length: {sum(len(tokenizer.encode(sp)) for sp in system_prompts) / len(system_prompts):.1f} tokens"
-    )
-    print(
-        f"Average question length: {sum(len(tokenizer.encode(q)) for q in questions) / len(questions):.1f} tokens\n"
-    )
+    if not getattr(args, "gsp_fast_prepare", False):
+        print(f"Total input tokens: {total_input_tokens}")
+        print(f"Total output tokens: {total_output_tokens}")
+        print(
+            f"Average system prompt length: {sum(len(tokenizer.encode(sp)) for sp in system_prompts) / len(system_prompts):.1f} tokens"
+        )
+        print(
+            f"Average question length: {sum(len(tokenizer.encode(q)) for q in questions) / len(questions):.1f} tokens\n"
+        )
 
     # Save to cache
     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2879,6 +2884,11 @@ if __name__ == "__main__":
         type=int,
         default=256,
         help="Target length in tokens for outputs in generated-shared-prefix dataset",
+    )
+    group.add_argument(
+        "--gsp-fast-prepare",
+        action="store_true",
+        help="Speedup preparing by removing statistics computation, which will make some output statistics inaccurate but suitable for pressure tests.",
     )
     mooncake_group = parser.add_argument_group("mooncake dataset arguments")
     mooncake_group.add_argument(
