@@ -1621,6 +1621,9 @@ def sample_generated_shared_prefix_requests(
         with open(cache_path, "rb") as f:
             return pickle.load(f)
 
+    print(f"\nGenerating new input data... "
+          f"({num_groups=}, {prompts_per_group}, {system_prompt_len=}, {question_len=}, {output_len=}, {range_ratio=})")
+
     system_prompt_lens = compute_random_lens(
         full_len=system_prompt_len,
         range_ratio=range_ratio,
@@ -1637,8 +1640,6 @@ def sample_generated_shared_prefix_requests(
         num=num_groups * prompts_per_group,
     )
     del system_prompt_len, question_len, output_len
-
-    print("\nGenerating new input data...")
 
     # Generate system prompts for each group
     system_prompts = []
