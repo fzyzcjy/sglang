@@ -456,7 +456,9 @@ async def async_request_openai_chat_completions(
                         output.latency = latency
                         output.output_len = output_len
                 else:
-                    output.error = response.reason or ""
+                    output.error = (
+                        (response.reason or "") + ": " + (await response.text())
+                    )
                     output.success = False
         except Exception:
             output.success = False
