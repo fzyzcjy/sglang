@@ -680,7 +680,7 @@ fn map_reqwest_error_to_status(err: &reqwest::Error) -> StatusCode {
     if err.is_timeout() {
         StatusCode::GATEWAY_TIMEOUT
     } else if err.is_connect() {
-        StatusCode::BAD_GATEWAY
+        StatusCode::BAD_GATEWAY // TODO which?
     } else if let Some(status) = err.status() {
         status
     } else {
