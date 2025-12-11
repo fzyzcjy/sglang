@@ -37,10 +37,6 @@ pub fn init_metrics() {
         "Total number of upstream engine HTTP responses by status code"
     );
     describe_counter!(
-        "sgl_router_http_responses_total",
-        "Total number of HTTP responses by status code"
-    );
-    describe_counter!(
         "sgl_router_upstream_http_responses_total",
         "Total number of upstream engine HTTP responses by status code"
     );
