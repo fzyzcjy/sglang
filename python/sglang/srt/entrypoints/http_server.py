@@ -1649,6 +1649,10 @@ def _wait_and_warmup(
     if server_args.debug_tensor_dump_input_file:
         kill_process_tree(os.getpid())
 
+    if envs.SGLANG_EXIT_ON_READY.get():
+        print("Stop SGLang since SGLANG_EXIT_ON_READY=1", flush=True)
+        kill_process_tree(os.getpid())
+
     if launch_callback is not None:
         launch_callback()
 
