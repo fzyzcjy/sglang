@@ -74,6 +74,35 @@ impl Router {
         })
     }
 
+    /// Map reqwest::Error to appropriate HTTP status code for gateway
+    /// 
+    /// - Timeout errors -> 504 Gateway Timeout
+    /// - Connection errors -> 502 Bad Gateway
+    /// - HTTP errors with status code -> 502 Bad Gateway (upstream error)
+    /// - Other errors -> 502 Bad Gateway
+    fn map_reqwest_error_to_status(err: &reqwest::Error) -> StatusCode {
+        if err.is_timeout() {
+            StatusCode::GATEWAY_TIMEOUT
+        } else if err.is_connect() {
+            StatusCode::BAD_GATEWAY
+        } else if let Some(status) = err.status() {
+            // If there's an HTTP status code, it means we got a response but it was an error
+            // For gateway, we should return 502 for upstream errors (4xx/5xx)
+            if status.is_server_error() {
+                StatusCode::BAD_GATEWAY
+            } else if status.is_client_error() {
+                // Client errors from upstream should also be treated as bad gateway
+                // since the gateway itself didn't cause the error
+                StatusCode::BAD_GATEWAY
+            } else {
+                StatusCode::BAD_GATEWAY
+            }
+        } else {
+            // Other network/request errors
+            StatusCode::BAD_GATEWAY
+        }
+    }
+
     fn select_first_worker(&self) -> Result<String, String> {
         let workers = self.worker_registry.get_all();
         let healthy_workers: Vec<_> = workers.iter().filter(|w| w.is_healthy()).collect();
@@ -123,11 +152,10 @@ impl Router {
                                 .into_response(),
                         }
                     }
-                    Err(e) => (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Request failed: {}", e),
-                    )
-                        .into_response(),
+                    Err(e) => {
+                        let status = Self::map_reqwest_error_to_status(&e);
+                        (status, format!("Request failed: {}", e)).into_response()
+                    }
                 }
             }
             Err(e) => (StatusCode::SERVICE_UNAVAILABLE, e).into_response(),
@@ -373,13 +401,8 @@ impl Router {
                     }
                 }
                 Err(e) => {
-                    last_response = Some(
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            format!("Request failed: {}", e),
-                        )
-                            .into_response(),
-                    );
+                    let status = Self::map_reqwest_error_to_status(&e);
+                    last_response = Some((status, format!("Request failed: {}", e)).into_response());
                 }
             }
         }
@@ -523,11 +546,8 @@ impl Router {
                     }
                 }
 
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Request failed: {}", e),
-                )
-                    .into_response();
+                let status = Self::map_reqwest_error_to_status(&e);
+                return (status, format!("Request failed: {}", e)).into_response();
             }
         };
 
