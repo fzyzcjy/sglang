@@ -41,6 +41,10 @@ pub fn init_metrics() {
         "Total number of HTTP responses by status code"
     );
     describe_counter!(
+        "sgl_router_upstream_http_responses_total",
+        "Total number of upstream engine HTTP responses by status code"
+    );
+    describe_counter!(
         "sgl_router_retries_total",
         "Total number of request retries by route"
     );
@@ -282,8 +286,8 @@ pub fn start_prometheus(config: PrometheusConfig) {
     let duration_matcher = Matcher::Suffix(String::from("duration_seconds"));
     let duration_bucket: Vec<f64> = config.duration_buckets.unwrap_or_else(|| {
         vec![
-            0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 15.0, 30.0,
-            45.0, 60.0, 90.0, 120.0, 180.0, 240.0,
+            0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 15.0, 30.0, 45.0,
+            60.0, 90.0, 120.0, 180.0, 240.0,
         ]
     });
 
@@ -730,6 +734,7 @@ mod tests {
         let config = PrometheusConfig {
             port: 8080,
             host: "127.0.0.1".to_string(),
+            duration_buckets: None,
         };
         assert_eq!(config.port, 8080);
         assert_eq!(config.host, "127.0.0.1");
@@ -740,6 +745,7 @@ mod tests {
         let config = PrometheusConfig {
             port: 9090,
             host: "192.168.1.1".to_string(),
+            duration_buckets: None,
         };
         let cloned = config.clone();
         assert_eq!(cloned.port, config.port);
@@ -754,6 +760,7 @@ mod tests {
             let config = PrometheusConfig {
                 port: 29000,
                 host: ip_str.to_string(),
+                duration_buckets: None,
             };
 
             let ip_addr: IpAddr = config.host.parse().unwrap();
@@ -769,6 +776,7 @@ mod tests {
             let config = PrometheusConfig {
                 port: 29000,
                 host: ip_str.to_string(),
+                duration_buckets: None,
             };
 
             let ip_addr: IpAddr = config.host.parse().unwrap();
@@ -784,6 +792,7 @@ mod tests {
             let config = PrometheusConfig {
                 port: 29000,
                 host: ip_str.to_string(),
+                duration_buckets: None,
             };
 
             let ip_addr: IpAddr = config
@@ -803,6 +812,7 @@ mod tests {
             let config = PrometheusConfig {
                 port,
                 host: host.to_string(),
+                duration_buckets: None,
             };
 
             let ip_addr: IpAddr = config.host.parse().unwrap();
@@ -821,6 +831,7 @@ mod tests {
             let config = PrometheusConfig {
                 port,
                 host: "127.0.0.1".to_string(),
+                duration_buckets: None,
             };
 
             let ip_addr: IpAddr = config.host.parse().unwrap();
@@ -986,6 +997,7 @@ mod tests {
             let config = PrometheusConfig {
                 port,
                 host: "127.0.0.1".to_string(),
+                duration_buckets: None,
             };
 
             assert_eq!(config.port, port);
@@ -997,6 +1009,7 @@ mod tests {
         let config = PrometheusConfig {
             port: 29000,
             host: "127.0.0.1".to_string(),
+            duration_buckets: None,
         };
 
         let ip_addr: IpAddr = config.host.parse().unwrap();
