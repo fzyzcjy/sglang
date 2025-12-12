@@ -2,8 +2,11 @@
 
 use std::sync::Arc;
 
-use axum::response::Response;
-use serde_json::to_value;
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use serde_json::{json, to_value};
 use tracing::{debug, error, warn};
 
 use crate::{
@@ -63,15 +66,24 @@ pub fn validate_worker_availability(
     let available_models = worker_registry.get_models();
 
     if !available_models.contains(&model.to_string()) {
-        return Some(error::service_unavailable_with_param(
-            format!(
-                "No workers available for model '{}'. Available models: {}",
-                model,
-                available_models.join(", ")
-            ),
-            "model",
-            "no_available_workers",
-        ));
+        return Some(
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(json!({
+                    "error": {
+                        "message": format!(
+                            "No workers available for model '{}'. Available models: {}",
+                            model,
+                            available_models.join(", ")
+                        ),
+                        "type": "service_unavailable",
+                        "param": "model",
+                        "code": "no_available_workers"
+                    }
+                })),
+            )
+                .into_response(),
+        );
     }
 
     None
