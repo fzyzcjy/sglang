@@ -1762,6 +1762,7 @@ class Scheduler(
             self.chunked_prefill_size,
             running_bs if self.is_mixed_chunk else 0,
             self.priority_scheduling_preemption_threshold,
+            prefill_max_requests=self.server_args.prefill_max_requests,
         )
 
         if self.chunked_req is not None:
