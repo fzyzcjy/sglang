@@ -27,6 +27,7 @@ use tracing::{debug, error, field::Empty, info, info_span, warn, Span};
 pub use crate::core::token_bucket::TokenBucket;
 use crate::{
     observability::metrics::RouterMetrics,
+    routers::error::extract_error_code_from_response,
     server::AppState,
     wasm::{
         module::{MiddlewareAttachPoint, WasmModuleAttachPoint},
@@ -307,6 +308,8 @@ impl<B> OnRequest<B> for RequestLogger {
             span.record("request_id", request_id.0.as_str());
         }
 
+        RouterMetrics::record_http_request();
+
         // Log the request start
         info!(
             target: "sgl_model_gateway::request",
@@ -334,7 +337,11 @@ impl<B> OnResponse<B> for ResponseLogger {
         let status = response.status();
         let status_code = status.as_u16();
 
-        RouterMetrics::record_http_status_code(status_code);
+        let error_code = extract_error_code_from_response(response);
+
+        // TODO support `route` information
+        RouterMetrics::record_http_status_code(status_code, error_code);
+        RouterMetrics::record_request_duration(latency);
 
         // Record these in the span for structured logging/observability tools
         span.record("status_code", status_code);
