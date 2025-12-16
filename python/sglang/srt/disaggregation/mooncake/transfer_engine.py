@@ -178,12 +178,15 @@ class MooncakeTransferEngine:
                 device_name if device_name is not None else "",
             )
         else:
+            if (x := envs.SGLANG_PD_TE_PORT_BASE.get()) is not None:
+                hostname += f":{x + self.gpu_id}"
             ret_value = self.engine.initialize(
                 hostname,
                 "P2PHANDSHAKE",
                 "rdma",
                 device_name if device_name is not None else "",
             )
+        logger.debug(f"Mooncake Transfer Engine initialized at {hostname}.")
         if ret_value != 0:
             logger.error("Mooncake Transfer Engine initialization failed.")
             raise RuntimeError("Mooncake Transfer Engine initialization failed.")

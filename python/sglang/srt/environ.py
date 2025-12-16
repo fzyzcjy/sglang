@@ -217,6 +217,10 @@ class Envs:
     # Hi-Cache
     SGLANG_HICACHE_HF3FS_CONFIG_PATH = EnvStr(None)
 
+    # PD Disaggregation
+    SGLANG_PD_KV_MANAGER_PORT_BASE = EnvInt(None)
+    SGLANG_PD_TE_PORT_BASE = EnvInt(None)
+
     # Mooncake KV Transfer
     SGLANG_MOONCAKE_CUSTOM_MEM_POOL = EnvStr(None)
     ENABLE_ASCEND_TRANSFER_WITH_MOONCAKE = EnvBool(False)

@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import numpy.typing as npt
 import requests
+import torch
 import zmq
 from aiohttp import web
 
@@ -23,6 +24,7 @@ from sglang.srt.disaggregation.base.conn import (
 )
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.distributed import get_pp_group
+from sglang.srt.environ import envs
 from sglang.srt.layers.dp_attention import (
     get_attention_dp_rank,
     get_attention_dp_size,
@@ -76,6 +78,8 @@ class CommonKVManager(BaseKVManager):
         self.rank_port, self.server_socket = get_zmq_socket_on_host(
             context, zmq.PULL, host=zmq_bind_host
         )
+        if (x := envs.SGLANG_PD_KV_MANAGER_PORT_BASE.get()) is not None:
+            self.rank_port = x + torch.cuda.current_device()
         logger.debug(f"kv manager bind to {zmq_bind_host}:{self.rank_port}")
 
         self.request_status: Dict[int, KVPoll] = {}
