@@ -1917,6 +1917,8 @@ class Scheduler(
                 self.server_args
             )
             self.num_retracted_reqs = len(retracted_reqs)
+            if self.enable_metrics and (x := len(retracted_reqs)) > 0:
+                self.metrics_collector.increment_num_retracted_reqs(x)
             self.new_token_ratio = new_token_ratio
             for req in reqs_to_abort:
                 abort_reason: FINISH_ABORT = req.to_finish
