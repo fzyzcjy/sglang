@@ -2000,9 +2000,10 @@ class Scheduler(
                 with self.forward_stream_ctx:
                     self.forward_stream.wait_stream(self.default_stream)
                     self.future_map.resolve_future(model_worker_batch)
-                    batch_result = self.model_worker.forward_batch_generation(
-                        model_worker_batch
-                    )
+                    with self.record_forward_metrics(batch):
+                        batch_result = self.model_worker.forward_batch_generation(
+                            model_worker_batch
+                        )
                     # FIXME(lsyin): maybe move this to forward_batch_generation
                     batch_result.copy_done = torch.get_device_module(
                         self.device
@@ -2035,9 +2036,10 @@ class Scheduler(
                 batch_result = self.tp_worker.forward_batch_split_prefill(batch)
                 future_indices_or_next_token_ids = batch_result.next_token_ids
             else:
-                batch_result = self.model_worker.forward_batch_generation(
-                    batch_or_worker_batch
-                )
+                with self.record_forward_metrics(batch):
+                    batch_result = self.model_worker.forward_batch_generation(
+                        batch_or_worker_batch
+                    )
                 future_indices_or_next_token_ids = batch_result.next_token_ids
                 self.update_cache_from_scheduler(batch, batch_result)
 
