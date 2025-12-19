@@ -389,7 +389,7 @@ class TpModelWorker(BaseTpWorker):
                     can_run_cuda_graph=can_run_cuda_graph,
                 )
 
-            logits_output, can_run_cuda_graph = self.model_runner.forward(
+            out = self.model_runner.forward(
                 forward_batch,
                 pp_proxy_tensors=pp_proxy_tensors,
                 skip_attn_backend_init=skip_attn_backend_init,
