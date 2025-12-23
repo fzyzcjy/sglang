@@ -1045,10 +1045,9 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
                     ] = state.response_sent_to_client_ts
                 if self.log_requests:
                     max_length, skip_names, out_skip_names = self.log_request_metadata
-                    if self.model_config.is_multimodal_gen:
-                        msg = f"Finish: obj={dataclass_to_string_truncated(obj, max_length, skip_names=skip_names)}"
-                    else:
-                        msg = f"Finish: obj={dataclass_to_string_truncated(obj, max_length, skip_names=skip_names)}, out={dataclass_to_string_truncated(out, max_length, skip_names=out_skip_names)}"
+                    msg = f"Finish: obj={dataclass_to_string_truncated(obj, max_length, skip_names=skip_names)}"
+                    if not self.model_config.is_multimodal_gen:
+                        msg += f", out={dataclass_to_string_truncated(out, max_length, skip_names=out_skip_names)}"
                     logger.info(msg)
 
                 if self.request_metrics_exporter_manager.exporter_enabled():
