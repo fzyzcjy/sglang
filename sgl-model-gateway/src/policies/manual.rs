@@ -66,6 +66,7 @@ pub struct ManualPolicy {
 
 impl ManualPolicy {
     pub fn new() -> Self {
+        tracing::debug!("ManualPolicy initialized");
         Self {
             routing_map: DashMap::new(),
         }
@@ -140,7 +141,11 @@ impl ManualPolicy {
 impl LoadBalancingPolicy for ManualPolicy {
     fn select_worker(&self, workers: &[Arc<dyn Worker>], info: &SelectWorkerInfo) -> Option<usize> {
         let (result, branch) = self.select_worker_impl(workers, info);
-        Metrics::record_worker_manual_policy_branch(branch.as_str());
+
+        let branch_str = branch.as_str();
+        tracing::debug!("select_worker result={:?} branch={}", result, branch_str);
+        Metrics::record_worker_manual_policy_branch(branch_str);
+
         result
     }
 
