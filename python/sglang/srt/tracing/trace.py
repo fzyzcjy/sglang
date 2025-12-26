@@ -522,7 +522,7 @@ def trace_req_finish(
     if not tracing_enabled:
         return
 
-    print_trace_info("req_finish", "", rid=rid, attrs=attrs)
+    print_trace_info("req_finish", name, rid=rid, attrs=attrs)
     return
 
     rid = str(rid)
