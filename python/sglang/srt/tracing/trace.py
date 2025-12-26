@@ -442,9 +442,6 @@ def trace_req_start(
     if not tracing_enabled:
         return
 
-    print_trace_info("req_start", "", rid=rid)
-    return
-
     rid = str(rid)
 
     ts = ts or __get_cur_time_ns()
@@ -522,9 +519,6 @@ def trace_req_finish(
     if not tracing_enabled:
         return
 
-    print_trace_info("req_finish", name, rid=rid, attrs=attrs)
-    return
-
     rid = str(rid)
     if rid not in reqs_context:
         return
@@ -556,9 +550,6 @@ def trace_slice_start(
 ):
     if not tracing_enabled:
         return
-
-    print_trace_info("slice_start", name, rid=rid)
-    return
 
     rid = str(rid)
     if rid not in reqs_context:
@@ -612,9 +603,6 @@ def trace_slice_end(
 ):
     if not tracing_enabled:
         return
-
-    print_trace_info("slice_end", name, rid=rid, attrs=attrs)
-    return
 
     rid = str(rid)
     if rid not in reqs_context:
@@ -675,9 +663,6 @@ def trace_event(
     if not tracing_enabled:
         return
 
-    print_trace_info("event", name, rid=rid, attrs=attrs)
-    return
-
     rid = str(rid)
     if rid not in reqs_context:
         return
@@ -728,9 +713,6 @@ def trace_slice_batch(
     if not tracing_enabled:
         return
 
-    print_trace_info("slice_end", name, rids=[r.rid for r in reqs])
-    return
-
     for req in reqs:
         trace_slice(
             name,
@@ -749,30 +731,9 @@ def trace_event_batch(
     if not tracing_enabled:
         return
 
-    print_trace_info("event", name, rids=[r.rid for r in reqs], attrs=attrs)
-    return
-
     bid = uuid.uuid4().hex[:8]
     _attrs = {"bid": bid, "batch_size": len(reqs)}
     _attrs.update(attrs)
 
     for req in reqs:
         trace_event(name, req.rid, ts=ts, attrs=_attrs)
-
-
-def print_trace_info(event: str, name: str, rid: str = None, rids=None, attrs: dict = None):
-    ts_ns = int(time.time() * 1e9)
-    event_dict = {
-        "event": event,
-        "name": name,
-        "timestamp_ns": ts_ns,
-        "attributes": attrs or {},
-    }
-
-    assert rid is not None or rids is not None
-    if rid is not None:
-        event_dict["rid"] = rid
-    if rids is not None:
-        event_dict["rids"] = rids
-
-    print(f"SGLANG_TRACE={json.dumps(event_dict, ensure_ascii=False)}")
