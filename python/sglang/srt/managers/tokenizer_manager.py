@@ -87,6 +87,7 @@ from sglang.srt.server_args import (
     set_global_server_args_for_tokenizer,
 )
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
+from sglang.srt.temp_log import temp_log
 from sglang.srt.tracing.trace import (
     extract_trace_headers,
     trace_get_proc_propagate_context,
@@ -462,6 +463,11 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
 
         # Normalize the request
         obj.normalize_batch_and_arguments()
+        if obj.is_single:
+            temp_log({"event": "req_start", "rid": obj.rid})
+        else:
+            for rid in obj.rid:
+                temp_log({"event": "req_start", "rid": rid})
         if self.enable_trace:
             self._trace_request_start(obj, created_time, request, traceparent)
         if self.server_args.language_only:
@@ -1538,6 +1544,7 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
                     self._calculate_timing_metrics(meta_info, state, recv_obj, i)
 
                 trace_req_finish(rid, ts=int(state.finished_time * 1e9))
+                temp_log({"event": "req_finish", "rid": rid})
 
                 del self.rid_to_state[rid]
 
