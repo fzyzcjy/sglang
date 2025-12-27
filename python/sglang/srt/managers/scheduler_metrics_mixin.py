@@ -14,6 +14,7 @@ from sglang.srt.managers.schedule_policy import PrefillAdder
 from sglang.srt.managers.scheduler import Req, ScheduleBatch
 from sglang.srt.managers.utils import GenerationBatchResult
 from sglang.srt.metrics.collector import SchedulerMetricsCollector, SchedulerStats
+from sglang.srt.temp_log import temp_log
 from sglang.srt.utils import get_bool_env_var
 from sglang.srt.utils.device_timer import DeviceTimer
 
@@ -137,7 +138,16 @@ class SchedulerMetricsMixin:
         self.last_input_throughput = self.last_prefill_tokens / gap_latency
         self.last_prefill_tokens = adder.log_input_tokens
 
-        # assert self.temp_prefill_info is None # TODO re-enable
+        temp_log({
+            "event": "log_prefill_stats",
+            "forward_mode": "na",
+            "forward_ct": self.forward_ct,
+            # ref: running_bs := len(self.running_batch.reqs)
+            "running_rids": [req.rid for req in self.running_batch.reqs],
+            "queued_rids": [req.rid for req in self.waiting_queue],
+        })
+
+        assert self.temp_prefill_info is None
         self.temp_prefill_info = dict(
             adder_log_input_tokens=adder.log_input_tokens,
             adder_log_hit_tokens=adder.log_hit_tokens,
@@ -273,6 +283,14 @@ class SchedulerMetricsMixin:
         self: Scheduler, can_run_cuda_graph: bool, running_batch: ScheduleBatch = None
     ):
         batch = running_batch or self.running_batch
+
+        temp_log({
+            "event": "log_decode_stats",
+            "forward_mode": batch.forward_mode.name,
+            "forward_ct": self.forward_ct,
+            "running_rids": [req.rid for req in batch.reqs],
+            "queued_rids": [req.rid for req in self.waiting_queue],
+        })
 
         gap_latency = time.perf_counter() - self.last_decode_stats_tic
         self.last_decode_stats_tic = time.perf_counter()
