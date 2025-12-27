@@ -2174,7 +2174,7 @@ class Scheduler(
                 "event": "run_batch",
                 "forward_mode": batch.forward_mode.name,
                 "forward_ct": self.forward_ct,
-                "running_rids": [req.rid for req in self.running_batch.reqs],
+                "running_rids": [req.rid for req in batch.reqs],
                 "queued_rids": [req.rid for req in self.waiting_queue],
             })
 
