@@ -167,6 +167,7 @@ from sglang.srt.multiplex.multiplexing_mixin import SchedulerMultiplexMixin
 from sglang.srt.parser.reasoning_parser import ReasoningParser
 from sglang.srt.server_args import PortArgs, ServerArgs, get_global_server_args
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
+from sglang.srt.temp_log import temp_log
 from sglang.srt.tracing.trace import (
     process_tracing_init,
     trace_event_batch,
@@ -2233,6 +2234,15 @@ class Scheduler(
     ) -> Union[GenerationBatchResult, EmbeddingBatchResult]:
         """Run a batch."""
         self.forward_ct += 1
+
+        if not ((batch.forward_mode == ForwardMode.DECODE) and (self.forward_ct % 10 != 0)):
+            temp_log({
+                "event": "run_batch",
+                "forward_mode": batch.forward_mode.name,
+                "forward_ct": self.forward_ct,
+                "running_rids": [req.rid for req in self.running_batch.reqs],
+                "queued_rids": [req.rid for req in self.waiting_queue],
+            })
 
         # Whether to run the profiler
         self._profile_batch_predicate(batch)
