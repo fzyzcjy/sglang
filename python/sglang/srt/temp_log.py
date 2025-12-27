@@ -69,5 +69,5 @@ def temp_log(a_dict: Dict[str, Any]):
     line = json.dumps(a_dict, ensure_ascii=False) + "\n"
     with _temp_log_lock:
         _temp_log_file.write(line)
-        _temp_log_file.flush()
+        # _temp_log_file.flush()
 
