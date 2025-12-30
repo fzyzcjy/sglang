@@ -47,6 +47,9 @@ if is_npu():
     NPU_ROTARY_MUL_MAX_HEAD_SIZE = 896
 
 
+_printed_rope_native = False
+
+
 def _rotate_neox(x: torch.Tensor) -> torch.Tensor:
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
@@ -990,6 +993,19 @@ class DeepseekScalingRotaryEmbedding(RotaryEmbedding):
             )
         else:
             return self.forward_native(positions, query, key, offsets)
+
+    def forward_cuda(
+        self,
+        positions: torch.Tensor,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        offsets: torch.Tensor = None,
+    ):
+        global _printed_rope_native
+        if not _printed_rope_native:
+            print("hi hack: RoPE use native torch!", flush=True)
+            _printed_rope_native = True
+        return self.forward_native(positions, query, key, offsets)
 
 
 class Llama3RotaryEmbedding(RotaryEmbedding):
