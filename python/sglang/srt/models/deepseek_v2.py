@@ -232,6 +232,10 @@ _is_cublas_ge_129 = is_nvidia_cublas_cu12_version_ge_12_9()
 
 logger = logging.getLogger(__name__)
 
+_printed_moe_gate_naive = False
+_printed_fused_qkv_a = False
+_printed_dual_stream = False
+
 
 def enable_nextn_moe_bf16_cast_to_fp8(quant_config):
     return (
@@ -563,6 +567,12 @@ class MoEGate(nn.Module):
         gemm_output_zero_allocator: BumpAllocator = None,
         forward_batch: ForwardBatch = None,
     ):
+        global _printed_moe_gate_naive
+        if not _printed_moe_gate_naive:
+            print("hi hack: MoEGate.forward use naive F.linear!", flush=True)
+            _printed_moe_gate_naive = True
+        return F.linear(hidden_states, self.weight, None)
+
         if use_intel_amx_backend(self):
             return torch.ops.sgl_kernel.weight_packed_linear(
                 hidden_states,
@@ -796,12 +806,11 @@ class DeepseekV2MoE(nn.Module):
         if not self._enable_a2a_moe:
             from sglang.srt.model_executor.cuda_graph_runner import get_is_capture_mode
 
-            if (
-                self.alt_stream is not None
-                and self.num_fused_shared_experts == 0
-                and hidden_states.shape[0] > 0
-                and get_is_capture_mode()
-            ):
+            global _printed_dual_stream
+            if not _printed_dual_stream:
+                print("hi hack: disable moe dual stream!", flush=True)
+                _printed_dual_stream = True
+            if False:  # NOTE HACK
                 return self.forward_normal_dual_stream(
                     hidden_states,
                     should_allreduce_fusion,
@@ -1680,12 +1689,13 @@ class DeepseekV2AttentionMLA(nn.Module):
         self, hidden_states: torch.Tensor, forward_batch: ForwardBatch
     ):
         assert self.q_lora_rank is not None
-        if (
-            (not isinstance(hidden_states, tuple))
-            and hidden_states.shape[0] >= 1
-            and hidden_states.shape[0] <= 16
-            and self.use_min_latency_fused_a_gemm
-        ):
+
+        global _printed_fused_qkv_a
+        if not _printed_fused_qkv_a:
+            print("hi hack: fused_qkv_a_proj_with_mqa use naive!", flush=True)
+            _printed_fused_qkv_a = True
+
+        if False:  # NOTE HACK
             qkv_latent = dsv3_fused_a_gemm(
                 hidden_states, self.fused_qkv_a_proj_with_mqa.weight.T
             )

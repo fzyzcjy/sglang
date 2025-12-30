@@ -78,6 +78,7 @@ elif _is_npu:
 
 FUSE_ALLREDUCE_MAX_BATCH_SIZE = 2048
 
+_printed_allreduce_fusion_hack = False
 
 class ScatterMode(Enum):
     """
@@ -549,6 +550,12 @@ class LayerCommunicator:
     def should_fuse_mlp_allreduce_with_next_layer(
         self, forward_batch: ForwardBatch
     ) -> bool:
+        global _printed_allreduce_fusion_hack
+        if not _printed_allreduce_fusion_hack:
+            print("hi hack: disable allreduce fusion!", flush=True)
+            _printed_allreduce_fusion_hack = True
+        return False
+
         if (
             is_dp_attention_enabled()
             and self._speculative_algo is not None
