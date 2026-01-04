@@ -1675,6 +1675,8 @@ class Scheduler(
                 )
 
     def _add_request_to_queue(self, req: Req, is_retracted: bool = False):
+        if is_retracted:
+            temp_log({"event": "req_retracted", "rid": req.rid})
         if self.disaggregation_mode == DisaggregationMode.NULL:
             if not self._set_or_validate_priority(req):
                 return
@@ -1717,6 +1719,7 @@ class Scheduler(
                 },
                 rid=req.rid,
             )
+            temp_log({"event": "abort_sent_to_tokenizer", "rid": req.rid, "reason": "priority_disabled"})
             self.send_to_tokenizer.send_output(abort_req, req)
             return False
         return True
@@ -1751,6 +1754,7 @@ class Scheduler(
                 req_to_abort = candidate_req
                 message = "The request is aborted by a higher priority request."
 
+        temp_log({"event": "abort_sent_to_tokenizer", "rid": req_to_abort.rid, "reason": "queue_full"})
         self.send_to_tokenizer.send_output(
             AbortReq(
                 finished_reason={
@@ -2187,6 +2191,7 @@ class Scheduler(
             self.new_token_ratio = new_token_ratio
             for req in reqs_to_abort:
                 abort_reason: FINISH_ABORT = req.to_finish
+                temp_log({"event": "abort_sent_to_tokenizer", "rid": req.rid, "reason": "retract_abort"})
                 self.send_to_tokenizer.send_output(
                     AbortReq(abort_message=abort_reason.message, rid=req.rid), req
                 )
@@ -2638,6 +2643,7 @@ class Scheduler(
         return RpcReqOutput(success, "" if not exec else str(exec))
 
     def abort_request(self, recv_req: AbortReq):
+        temp_log({"event": "abort_request_called", "rid": recv_req.rid, "abort_all": recv_req.abort_all})
         # Delete requests in the waiting queue
         to_del = []
         for i, req in enumerate(self.waiting_queue):
@@ -2653,6 +2659,8 @@ class Scheduler(
             if self.enable_hicache_storage:
                 # to release prefetch events associated with the request
                 self.tree_cache.release_aborted_request(req.rid)
+            temp_log({"event": "req_aborted", "rid": req.rid, "location": "waiting_queue"})
+            temp_log({"event": "abort_sent_to_tokenizer", "rid": req.rid, "reason": "abort_request"})
             self.send_to_tokenizer.send_output(AbortReq(rid=req.rid), req)
             # For disaggregation decode mode, the request in the waiting queue has KV cache allocated.
             if self.disaggregation_mode == DisaggregationMode.DECODE:
@@ -2673,6 +2681,7 @@ class Scheduler(
             # In this case, we change the input_ids to be only one token to make this prefill cheap.
             if recv_req.abort_all or req.rid.startswith(recv_req.rid):
                 logger.debug(f"Abort grammar queue request. {req.rid=}")
+                temp_log({"event": "req_aborted", "rid": req.rid, "location": "grammar_queue"})
                 if req.grammar:
                     req.grammar.cancel()
                 req.set_finish_with_abort("Aborted by AbortReq.")
@@ -2720,6 +2729,7 @@ class Scheduler(
                 # The request will still run one decode forward pass.
                 # Then we reuse all existing code to clean up the KV cache allocation.
                 logger.debug(f"Abort running request. {req.rid=}")
+                temp_log({"event": "req_aborted", "rid": req.rid, "location": "running_batch"})
                 req.to_finish = FINISH_ABORT()
 
     def _pause_engine(self) -> Tuple[List[Req], int]:

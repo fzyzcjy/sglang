@@ -1572,8 +1572,11 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
         ],
     ):
         for i, rid in enumerate(recv_obj.rids):
+            finished = recv_obj.finished_reasons[i] is not None
+            temp_log({"event": "tok_handle_start", "rid": rid, "finished": finished})
             state = self.rid_to_state.get(rid, None)
             if state is None:
+                temp_log({"event": "tok_rid_not_found", "rid": rid, "finished": finished})
                 logger.error(
                     f"Received output for {rid=} but the state was deleted in TokenizerManager."
                 )

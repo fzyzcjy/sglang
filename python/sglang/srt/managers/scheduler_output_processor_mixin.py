@@ -23,6 +23,7 @@ from sglang.srt.managers.schedule_batch import (
 )
 from sglang.srt.mem_cache.common import release_kv_cache
 from sglang.srt.server_args import get_global_server_args
+from sglang.srt.temp_log import temp_log
 from sglang.srt.tracing.trace import trace_slice, trace_slice_batch, trace_slice_end
 
 if TYPE_CHECKING:
@@ -394,6 +395,7 @@ class SchedulerOutputProcessorMixin:
                 # NOTE: This (req.finished() or req.is_retracted) should only happen when overlap scheduling is enabled.
                 # (currently not, e.g. Eagle V1 still check finish during forward)
                 # And all the over-allocated tokens will be freed in `release_kv_cache`.
+                temp_log({"event": "overlap_skip", "rid": req.rid, "finished": req.finished(), "is_retracted": req.is_retracted})
                 continue
 
             new_accepted_len = 1
@@ -410,6 +412,7 @@ class SchedulerOutputProcessorMixin:
             req.check_finished(new_accepted_len)
 
             if req.finished():
+                temp_log({"event": "scheduler_req_finished", "rid": req.rid})
                 self.maybe_collect_routed_experts(req)
 
                 if self.server_args.disaggregation_decode_enable_offload_kvcache:
@@ -1073,6 +1076,9 @@ class SchedulerOutputProcessorMixin:
         if reqs or is_idle_batch:
             if self.model_config.is_multimodal_gen:
                 return
+
+            for rid, finished_reason in zip(rids, finished_reasons):
+                temp_log({"event": "scheduler_stream_output", "rid": rid, "finished": finished_reason is not None})
 
             self.send_to_detokenizer.send_output(
                 BatchTokenIDOutput(

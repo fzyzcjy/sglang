@@ -43,6 +43,7 @@ from sglang.srt.utils import (
 )
 from sglang.srt.utils.hf_transformers_utils import get_tokenizer
 from sglang.srt.utils.watchdog import Watchdog
+from sglang.srt.temp_log import temp_log
 from sglang.utils import (
     TypeBasedDispatcher,
     find_printable_text,
@@ -138,8 +139,14 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
         while True:
             with self.soft_watchdog.disable():
                 recv_obj = self.recv_from_scheduler.recv_pyobj()
+            if hasattr(recv_obj, "rids"):
+                for rid, finished_reason in zip(recv_obj.rids, recv_obj.finished_reasons):
+                    temp_log({"event": "detok_recv", "rid": rid, "finished": finished_reason is not None})
             output = self._request_dispatcher(recv_obj)
             if output is not None:
+                if hasattr(output, "rids"):
+                    for rid, finished_reason in zip(output.rids, output.finished_reasons):
+                        temp_log({"event": "detok_send", "rid": rid, "finished": finished_reason is not None})
                 self.send_to_tokenizer.send_pyobj(output)
             self.soft_watchdog.feed()
 
