@@ -1462,6 +1462,7 @@ class Scheduler(
         self,
         recv_req: TokenizedGenerateReqInput,
     ):
+        temp_log({"event": "scheduler_recv_req", "rid": recv_req.rid})
         # Create a new request
         if (
             recv_req.session_params is None
@@ -1684,6 +1685,7 @@ class Scheduler(
                 return
             self._prefetch_kvcache(req)
             self.waiting_queue.append(req)
+            temp_log({"event": "add_to_waiting_queue", "rid": req.rid, "is_retracted": is_retracted})
             req.time_stats.wait_queue_entry_time = time.perf_counter()
             trace_slice_end(RequestStage.REQUEST_PROCESS, req.rid, auto_next_anon=True)
         elif self.disaggregation_mode == DisaggregationMode.PREFILL:
@@ -1910,6 +1912,8 @@ class Scheduler(
 
         if ret:
             trace_event_batch("schedule", ret.reqs)
+            for req in ret.reqs:
+                temp_log({"event": "selected_for_batch", "rid": req.rid, "forward_mode": ret.forward_mode.name})
 
         return ret
 
@@ -2240,14 +2244,13 @@ class Scheduler(
         """Run a batch."""
         self.forward_ct += 1
 
-        if not ((batch.forward_mode == ForwardMode.DECODE) and (self.forward_ct % 10 != 0)):
-            temp_log({
-                "event": "run_batch",
-                "forward_mode": batch.forward_mode.name,
-                "forward_ct": self.forward_ct,
-                "running_rids": [req.rid for req in batch.reqs],
-                "queued_rids": [req.rid for req in self.waiting_queue],
-            })
+        temp_log({
+            "event": "run_batch",
+            "forward_mode": batch.forward_mode.name,
+            "forward_ct": self.forward_ct,
+            "running_rids": [req.rid for req in batch.reqs],
+            "queued_rids": [req.rid for req in self.waiting_queue],
+        })
 
         # Whether to run the profiler
         self._profile_batch_predicate(batch)

@@ -126,6 +126,7 @@ class SchedulerOutputProcessorMixin:
             for i, (req, next_token_id) in enumerate(zip(batch.reqs, next_token_ids)):
                 if req.finished() or req.is_retracted:
                     # decode req in mixed batch or retracted req
+                    temp_log({"event": "prefill_skip", "rid": req.rid, "finished": req.finished(), "is_retracted": req.is_retracted})
                     continue
 
                 if req.is_chunked <= 0:
@@ -137,6 +138,7 @@ class SchedulerOutputProcessorMixin:
                     req.check_finished()
 
                     if req.finished():
+                        temp_log({"event": "prefill_req_finished", "rid": req.rid})
                         self.maybe_collect_routed_experts(req)
                         release_kv_cache(req, self.tree_cache)
                         req.time_stats.completion_time = time.perf_counter()
