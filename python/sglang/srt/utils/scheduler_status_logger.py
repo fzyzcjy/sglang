@@ -14,10 +14,13 @@ if TYPE_CHECKING:
 
 class SchedulerStatusLogger:
     def __init__(self, targets: List[str], dump_interval: float):
-        self.loggers = create_log_targets(targets=targets, name_prefix=__name__)
         self.dump_interval = dump_interval
+        self.targets = targets
+
+        self.loggers = None
+        self.rank = None
+
         self.last_dump_time = 0.0
-        self.rank = dist.get_rank() if dist.is_initialized() else 0
 
     @staticmethod
     def maybe_create() -> Optional["SchedulerStatusLogger"]:
@@ -36,6 +39,11 @@ class SchedulerStatusLogger:
         now = time.time()
         if now - self.last_dump_time < self.dump_interval:
             return
+
+        if self.loggers is None:
+            self.loggers = create_log_targets(targets=self.targets, name_prefix=__name__)
+        if self.rank is None:
+            self.rank = dist.get_rank()
 
         self.last_dump_time = now
         log_json(
