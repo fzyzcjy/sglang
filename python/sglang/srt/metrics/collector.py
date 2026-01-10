@@ -862,9 +862,9 @@ class SchedulerMetricsCollector:
         self.prefill_delayer_outcomes_total.labels(
             **self.labels,
             input_estimation=input_estimation,
-            output_allow=str(output_allow).lower(),
+            output_allow=str(int(output_allow)),
             output_reason=output_reason,
-            actual_execution=str(actual_execution).lower(),
+            actual_execution=str(int(actual_execution)),
         ).inc(1)
 
     def increment_retracted_reqs(
