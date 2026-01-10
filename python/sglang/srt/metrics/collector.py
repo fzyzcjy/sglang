@@ -288,7 +288,7 @@ class SchedulerMetricsCollector:
         self,
         labels: Dict[str, str],
         enable_lora: bool = False,
-        server_args: Optional["ServerArgs"] = None,
+        prefill_delayer_max_delay_passes: int = 30,
     ) -> None:
         # We need to import prometheus_client after setting the env variable `PROMETHEUS_MULTIPROC_DIR`
         from prometheus_client import Counter, Gauge, Histogram, Summary
@@ -798,36 +798,19 @@ class SchedulerMetricsCollector:
             labelnames=list(labels.keys()) + ["category", "num_prefill_ranks"],
         )
 
-        max_delay = server_args.prefill_delayer_max_delay_passes
         self.prefill_delayer_wait_forward_passes = Histogram(
             name="sglang:prefill_delayer_wait_forward_passes",
             documentation="Histogram of forward passes waited by prefill delayer.",
             labelnames=labels.keys(),
-            buckets=sorted(
-                set(
-                    x
-                    for x in (
-                        server_args.prefill_delayer_forward_passes_buckets
-                        or [5, 20, 50, 100, 200]
-                    )
-                    if x < max_delay
-                )
-                # Need bucket "<=0" for zero-delay cases, and "max_delay-1" to distinguish "max_delay" timeout passes
-                | {0, max_delay - 1}
-            ),
+            # Need bucket "<=0" for zero-delay cases
+            buckets=[0, 5, 20, prefill_delayer_max_delay_passes - 1],
         )
         self.prefill_delayer_wait_seconds = Histogram(
             name="sglang:prefill_delayer_wait_seconds",
             documentation="Histogram of wait time in seconds by prefill delayer.",
             labelnames=labels.keys(),
-            buckets=sorted(
-                set(
-                    server_args.prefill_delayer_wait_seconds_buckets
-                    or [1, 2, 5, 10, 20, 50, 100, 200, 500]
-                )
-                # Need bucket "<=0" for zero-delay cases
-                | {0}
-            ),
+            # Need bucket "<=0" for zero-delay cases
+            buckets=[0, 5, 20, 100, 500],
         )
         self.prefill_delayer_outcomes_total = Counter(
             name="sglang:prefill_delayer_outcomes_total",

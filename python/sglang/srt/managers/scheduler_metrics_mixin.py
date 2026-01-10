@@ -101,7 +101,7 @@ class SchedulerMetricsMixin:
             self.metrics_collector = SchedulerMetricsCollector(
                 labels=labels,
                 enable_lora=self.enable_lora,
-                server_args=self.server_args,
+                prefill_delayer_max_delay_passes=self.server_args.prefill_delayer_max_delay_passes,
             )
 
             if ENABLE_METRICS_DEVICE_TIMER:

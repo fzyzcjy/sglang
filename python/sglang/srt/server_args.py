@@ -314,8 +314,6 @@ class ServerArgs:
     enable_prefill_delayer: bool = False
     prefill_delayer_max_delay_passes: int = 30
     prefill_delayer_token_usage_low_watermark: Optional[float] = None
-    prefill_delayer_forward_passes_buckets: Optional[List[float]] = None
-    prefill_delayer_wait_seconds_buckets: Optional[List[float]] = None
 
     # Runtime options
     device: Optional[str] = None
@@ -2911,20 +2909,6 @@ class ServerArgs:
             type=float,
             default=None,
             help="Token usage low watermark for prefill delayer.",
-        )
-        parser.add_argument(
-            "--prefill-delayer-forward-passes-buckets",
-            type=float,
-            nargs="+",
-            default=None,
-            help="Custom buckets for prefill delayer forward passes histogram. 0 and max_delay_passes-1 will be auto-added.",
-        )
-        parser.add_argument(
-            "--prefill-delayer-wait-seconds-buckets",
-            type=float,
-            nargs="+",
-            default=None,
-            help="Custom buckets for prefill delayer wait seconds histogram. 0 will be auto-added.",
         )
 
         # Runtime options
