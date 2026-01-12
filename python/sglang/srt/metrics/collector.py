@@ -1021,10 +1021,14 @@ class SchedulerMetricsCollector:
             self.num_unique_running_routing_keys, stats.num_unique_running_routing_keys
         )
         self.routing_key_running_req_count.set_by_current_observations(
-            self.labels, stats.routing_key_running_req_counts
+            labels=self.labels,
+            observations=stats.routing_key_running_req_counts,
+            weights=stats.routing_key_running_req_counts,
         )
         self.routing_key_all_req_count.set_by_current_observations(
-            self.labels, stats.routing_key_all_req_counts
+            labels=self.labels,
+            observations=stats.routing_key_all_req_counts,
+            weights=stats.routing_key_all_req_counts,
         )
 
         self.last_log_time = time.perf_counter()

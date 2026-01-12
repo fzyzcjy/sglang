@@ -76,5 +76,44 @@ class TestBucketLabelsCounts(unittest.TestCase):
         self.assertEqual(buckets.compute_bucket_counts([9.9, 10.1, 30.5]), [1, 1, 1, 0])
 
 
+class TestBucketLabelsWeights(unittest.TestCase):
+    """Test BucketLabels.compute_bucket_counts with weights."""
+
+    def test_weighted_single_value(self):
+        buckets = BucketLabels([10, 30, 60])
+        self.assertEqual(
+            buckets.compute_bucket_counts([5], weights=[42]), [42, 0, 0, 0]
+        )
+
+    def test_weighted_multiple_values(self):
+        buckets = BucketLabels([10, 30, 60])
+        self.assertEqual(
+            buckets.compute_bucket_counts([5, 15, 100], weights=[10, 20, 30]),
+            [10, 20, 0, 30],
+        )
+
+    def test_weighted_multiple_values_same_bucket(self):
+        buckets = BucketLabels([10, 30, 60])
+        self.assertEqual(
+            buckets.compute_bucket_counts([1, 2, 3, 4, 5], weights=[10, 20, 30, 40, 50]),
+            [150, 0, 0, 0],
+        )
+
+    def test_weights_none_same_as_default(self):
+        buckets = BucketLabels([10, 30, 60])
+        observations = [5, 10, 15, 40, 100]
+        self.assertEqual(
+            buckets.compute_bucket_counts(observations, weights=None),
+            buckets.compute_bucket_counts(observations),
+        )
+
+    def test_weighted_exact_boundaries(self):
+        buckets = BucketLabels([10, 30, 60])
+        self.assertEqual(
+            buckets.compute_bucket_counts([10, 30, 60], weights=[5, 10, 15]),
+            [5, 10, 15, 0],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

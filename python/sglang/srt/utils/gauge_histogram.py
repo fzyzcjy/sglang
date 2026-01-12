@@ -8,7 +8,7 @@ sgl-model-gateway/src/observability/gauge_histogram.rs
 """
 
 import bisect
-from typing import Dict, Iterator, List, Tuple, Union
+from typing import Dict, Iterator, List, Optional, Tuple, Union
 
 
 class BucketLabels:
@@ -28,13 +28,17 @@ class BucketLabels:
     def __iter__(self) -> Iterator[Tuple[str, str]]:
         return iter(self._labels)
 
-    def compute_bucket_counts(self, observations: List[Union[int, float]]) -> List[int]:
+    def compute_bucket_counts(
+        self,
+        observations: List[Union[int, float]],
+        weights: Optional[List[int]] = None,
+    ) -> List[int]:
         """Compute how many observations fall into each bucket. O(n) complexity."""
         counts = [0] * len(self)
-        for v in observations:
+        for i, v in enumerate(observations):
             # bisect_left finds insertion point; values at boundary go to current bucket
             idx = bisect.bisect_left(self._upper_bounds, v)
-            counts[idx] += 1
+            counts[idx] += weights[i] if weights is not None else 1
         return counts
 
 
@@ -66,10 +70,13 @@ class GaugeHistogram:
             self._gauge.labels(**labels, gt=gt, le=le).set(count)
 
     def set_by_current_observations(
-        self, labels: Dict[str, str], observations: List[Union[int, float]]
+        self,
+        labels: Dict[str, str],
+        observations: List[Union[int, float]],
+        weights: Optional[List[int]] = None,
     ):
         """Compute bucket counts from observations and set them."""
-        counts = self._buckets.compute_bucket_counts(observations)
+        counts = self._buckets.compute_bucket_counts(observations, weights)
         self.set_raw(labels, counts)
 
     def buckets(self) -> BucketLabels:
