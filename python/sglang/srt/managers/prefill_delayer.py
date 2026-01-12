@@ -25,13 +25,15 @@ class _State:
         return dataclasses.replace(self, delayed_count=self.delayed_count + 1)
 
 
-class _NegotiateOutput(NamedTuple):
+@dataclass
+class _NegotiateOutput:
     next_state: Optional[_State]
     input_estimation: str
     output_allow: bool
     output_reason: str
     num_prefillable: int
     num_token_watermark_force_allow: int
+    prev_state: Optional[_State] = None
 
 
 class PrefillDelayer:
@@ -77,11 +79,13 @@ class PrefillDelayer:
     def _negotiate_should_allow_prefill(
         self, local_prefillable: bool, token_usage: float
     ) -> _NegotiateOutput:
+        prev_state = self._curr_state
         out = self._negotiate_should_allow_prefill_pure(
-            prev_state=self._curr_state,
+            prev_state=prev_state,
             local_prefillable=local_prefillable,
             token_usage=token_usage,
         )
+        out.prev_state = prev_state
         self._curr_state = out.next_state
         return out
 
@@ -148,7 +152,7 @@ class PrefillDelayer:
                 )
 
             prev_delayed_count = prev_state.delayed_count if prev_state else 0
-            if prev_delayed_count < self._max_delay_passes - 1:
+            if prev_delayed_count < self._max_delay_passes:
                 next_state = prev_state or _State()
                 next_state = next_state.bump_delayed_count()
                 return _NegotiateOutput(
@@ -241,7 +245,7 @@ def _record_single_pass_result(
             }
 
     if metrics_collector is not None:
-        if (s := output.next_state) is not None:
+        if (s := output.prev_state) is not None:
             wait_seconds = time.perf_counter() - s.start_time
             forward_passes = s.delayed_count
         else:
