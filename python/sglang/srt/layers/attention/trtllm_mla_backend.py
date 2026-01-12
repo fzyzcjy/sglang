@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from sglang.srt.debug_utils.dumper import get_tensor_info
+
 """
 Support attention backend for TRTLLM MLA kernels from flashinfer.
 """
@@ -922,7 +924,7 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
         bmm1_scale = q_scale * k_scale * layer.scaling
 
         # Call TRT-LLM kernel
-        raw_out = flashinfer.decode.trtllm_batch_decode_with_kv_cache_mla(
+        d = dict(
             query=query,
             kv_cache=kv_cache,
             workspace_buffer=self.workspace_buffer,
@@ -934,6 +936,9 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
             max_seq_len=metadata.max_seq_len_k,
             bmm1_scale=bmm1_scale,
         )
+        for k, v in d.items():
+            print(f"{k=} {get_tensor_info(v)=}")
+        raw_out = flashinfer.decode.trtllm_batch_decode_with_kv_cache_mla(**d)
 
         # Reshape output directly without slicing
         output = raw_out.view(-1, layer.tp_q_head_num * layer.v_head_dim)
