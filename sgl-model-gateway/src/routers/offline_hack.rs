@@ -9,7 +9,7 @@ use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use reqwest::RequestBuilder;
 use serde::Deserialize;
-use tracing::{error, info};
+use tracing::{error, debug};
 
 use crate::core::WorkerLoadGuard;
 
@@ -32,7 +32,7 @@ impl OfflineStore {
     }
 
     pub fn store(&self, receipt_id: String, body: Bytes, status: StatusCode) {
-        info!(
+        debug!(
             receipt_id = %receipt_id,
             status = %status,
             body_len = body.len(),
@@ -44,7 +44,7 @@ impl OfflineStore {
 
     pub fn retrieve(&self, receipt_id: &str) -> Option<(Bytes, StatusCode)> {
         self.results.remove(receipt_id).map(|(id, r)| {
-            info!(
+            debug!(
                 receipt_id = %id,
                 status = %r.status,
                 body_len = r.body.len(),
@@ -77,7 +77,7 @@ pub fn spawn_offline_request(
 ) -> Response {
     let receipt_id = generate_receipt_id();
     let receipt_id_clone = receipt_id.clone();
-    info!(receipt_id = %receipt_id, "Offline mode: spawning background request");
+    debug!(receipt_id = %receipt_id, "Offline mode: spawning background request");
 
     tokio::spawn(async move {
         let res = match request_builder.send().await {
