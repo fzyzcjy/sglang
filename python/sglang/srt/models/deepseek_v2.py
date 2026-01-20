@@ -2743,7 +2743,6 @@ class DeepseekV2DecoderLayer(nn.Module):
         gemm_output_zero_allocator: BumpAllocator = None,
         llama_4_scaling: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        print(f"[{torch.distributed.get_rank()}] Layer.forward START {hidden_states.shape=} {residual.shape if residual is not None else None=}")
         quant_format = (
             "mxfp4"
             if (
@@ -2778,7 +2777,6 @@ class DeepseekV2DecoderLayer(nn.Module):
             quant_format,
         )
 
-        print(f"[{torch.distributed.get_rank()}] Layer.forward before-attn {hidden_states.shape=}")
         hidden_states = self.self_attn(
             positions=positions,
             hidden_states=hidden_states,
@@ -2786,7 +2784,6 @@ class DeepseekV2DecoderLayer(nn.Module):
             zero_allocator=zero_allocator,
             llama_4_scaling=llama_4_scaling,
         )
-        print(f"[{torch.distributed.get_rank()}] Layer.forward after-attn {hidden_states.shape=}")
 
         hidden_states, residual = self.layer_communicator.prepare_mlp(
             hidden_states, residual, forward_batch
@@ -2806,7 +2803,6 @@ class DeepseekV2DecoderLayer(nn.Module):
         if isinstance(self.mlp, DeepseekV2MLP):
             gemm_output_zero_allocator = None
 
-        print(f"[{torch.distributed.get_rank()}] Layer.forward before-mlp {hidden_states.shape=}")
         hidden_states = self.mlp(
             hidden_states,
             forward_batch,
@@ -2814,7 +2810,6 @@ class DeepseekV2DecoderLayer(nn.Module):
             use_reduce_scatter,
             gemm_output_zero_allocator,
         )
-        print(f"[{torch.distributed.get_rank()}] Layer.forward after-mlp {hidden_states.shape=}")
 
         if not self.nsa_enable_prefill_cp and should_allreduce_fusion:
             hidden_states._sglang_needs_allreduce_fusion = True
@@ -2824,7 +2819,6 @@ class DeepseekV2DecoderLayer(nn.Module):
                 hidden_states, residual, forward_batch
             )
 
-        print(f"[{torch.distributed.get_rank()}] Layer.forward END {hidden_states.shape=} {residual.shape if residual is not None else None=}")
         return hidden_states, residual
 
     def op_comm_prepare_attn(
