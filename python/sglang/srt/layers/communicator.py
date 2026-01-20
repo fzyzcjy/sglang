@@ -340,6 +340,7 @@ class LayerCommunicator:
         self._speculative_algo = SpeculativeAlgorithm.from_string(
             get_global_server_args().speculative_algorithm
         )
+        print(f"[{torch.distributed.get_rank()}] hi LayerCommunicator {self.layer_scatter_modes=}")
 
     def _post_init_communicate(self):
         self._communicate_simple_fn = CommunicateSimpleFn.get_fn(
