@@ -53,18 +53,7 @@ class TestDumperPureFunctions:
 
 class TestDumperDistributed:
     def test_basic(self, tmp_path):
-        self._run_distributed_test(self._test_basic_func, tmpdir=str(tmp_path))
-
-    def test_http_enable(self):
-        self._run_distributed_test(self._test_http_func)
-
-    def test_filter(self, tmp_path):
-        self._run_distributed_test(self._test_filter_func, tmpdir=str(tmp_path))
-
-    def test_write_disabled(self, tmp_path):
-        self._run_distributed_test(
-            self._test_write_disabled_func, tmpdir=str(tmp_path)
-        )
+        _run_distributed_test(self._test_basic_func, tmpdir=str(tmp_path))
 
     @staticmethod
     def _test_basic_func(rank, tmpdir):
@@ -92,13 +81,14 @@ class TestDumperDistributed:
         )
 
         dist.barrier()
-        filenames = TestDumperDistributed._get_filenames(tmpdir)
-
-        TestDumperDistributed._assert_files(
-            filenames,
+        _assert_files(
+            _get_filenames(tmpdir),
             exist=["tensor_a", "tensor_b", "arg=100", "ctx_arg=200", "obj_a", "obj_b"],
             not_exist=["tensor_skip"],
         )
+
+    def test_http_enable(self):
+        _run_distributed_test(self._test_http_func)
 
     @staticmethod
     def _test_http_func(rank):
@@ -118,6 +108,9 @@ class TestDumperDistributed:
             dist.barrier()
             assert dumper._enable == enable
 
+    def test_filter(self, tmp_path):
+        _run_distributed_test(self._test_filter_func, tmpdir=str(tmp_path))
+
     @staticmethod
     def _test_filter_func(rank, tmpdir):
         os.environ["SGLANG_DUMPER_DIR"] = tmpdir
@@ -129,9 +122,13 @@ class TestDumperDistributed:
         dumper.dump("skip_this", torch.randn(5, device=f"cuda:{rank}"))
 
         dist.barrier()
-        filenames = TestDumperDistributed._get_filenames(tmpdir)
-        TestDumperDistributed._assert_files(
-            filenames, exist=["keep_this"], not_exist=["skip_this"]
+        _assert_files(
+            _get_filenames(tmpdir), exist=["keep_this"], not_exist=["skip_this"]
+        )
+
+    def test_write_disabled(self, tmp_path):
+        _run_distributed_test(
+            self._test_write_disabled_func, tmpdir=str(tmp_path)
         )
 
     @staticmethod
@@ -144,63 +141,63 @@ class TestDumperDistributed:
         dumper.dump("no_write", torch.randn(5, device=f"cuda:{rank}"))
 
         dist.barrier()
-        assert len(TestDumperDistributed._get_filenames(tmpdir)) == 0
+        assert len(_get_filenames(tmpdir)) == 0
 
-    @staticmethod
-    def _run_distributed_test(func, world_size=2, **kwargs):
-        ctx = mp.get_context("spawn")
-        result_queue = ctx.Queue()
-        processes = []
 
-        for rank in range(world_size):
-            p = ctx.Process(
-                target=TestDumperDistributed._run_worker,
-                args=(rank, world_size, func, result_queue, kwargs),
-            )
-            p.start()
-            processes.append(p)
+def _run_distributed_test(func, world_size=2, **kwargs):
+    ctx = mp.get_context("spawn")
+    result_queue = ctx.Queue()
+    processes = []
 
-        for p in processes:
-            p.join()
-
-        errors = [result_queue.get() for _ in range(world_size)]
-        errors = [e for e in errors if e]
-        if errors:
-            raise AssertionError("\n".join(errors))
-
-    @staticmethod
-    def _run_worker(rank, world_size, func, result_queue, kwargs):
-        os.environ.update(
-            MASTER_ADDR="localhost",
-            MASTER_PORT="29500",
-            RANK=str(rank),
-            WORLD_SIZE=str(world_size),
+    for rank in range(world_size):
+        p = ctx.Process(
+            target=_run_worker,
+            args=(rank, world_size, func, result_queue, kwargs),
         )
-        torch.cuda.set_device(rank)
-        dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
+        p.start()
+        processes.append(p)
 
-        try:
-            func(rank, **kwargs)
-            result_queue.put(None)
-        except Exception as e:
-            import traceback
+    for p in processes:
+        p.join()
 
-            result_queue.put(f"Rank {rank}: {e}\n{traceback.format_exc()}")
-        finally:
-            dist.destroy_process_group()
+    errors = [result_queue.get() for _ in range(world_size)]
+    errors = [e for e in errors if e]
+    if errors:
+        raise AssertionError("\n".join(errors))
 
-    @staticmethod
-    def _get_filenames(tmpdir):
-        return {f.name for f in Path(tmpdir).glob("sglang_dump_*/*.pt")}
 
-    @staticmethod
-    def _assert_files(filenames, *, exist=(), not_exist=()):
-        for p in exist:
-            assert any(p in f for f in filenames), f"{p} not found in {filenames}"
-        for p in not_exist:
-            assert not any(
-                p in f for f in filenames
-            ), f"{p} should not exist in {filenames}"
+def _run_worker(rank, world_size, func, result_queue, kwargs):
+    os.environ.update(
+        MASTER_ADDR="localhost",
+        MASTER_PORT="29500",
+        RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+    )
+    torch.cuda.set_device(rank)
+    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
+
+    try:
+        func(rank, **kwargs)
+        result_queue.put(None)
+    except Exception as e:
+        import traceback
+
+        result_queue.put(f"Rank {rank}: {e}\n{traceback.format_exc()}")
+    finally:
+        dist.destroy_process_group()
+
+
+def _get_filenames(tmpdir):
+    return {f.name for f in Path(tmpdir).glob("sglang_dump_*/*.pt")}
+
+
+def _assert_files(filenames, *, exist=(), not_exist=()):
+    for p in exist:
+        assert any(p in f for f in filenames), f"{p} not found in {filenames}"
+    for p in not_exist:
+        assert not any(
+            p in f for f in filenames
+        ), f"{p} should not exist in {filenames}"
 
 
 if __name__ == "__main__":
