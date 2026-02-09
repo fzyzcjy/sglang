@@ -76,9 +76,7 @@ class TestDumperDistributed:
         dumper.override_enable(True)
 
         dumper.on_forward_pass_start()
-        dumper.dump_dict(
-            "obj", {"a": torch.randn(3, device=f"cuda:{rank}"), "b": 42}
-        )
+        dumper.dump_dict("obj", {"a": torch.randn(3, device=f"cuda:{rank}"), "b": 42})
 
         dist.barrier()
         filenames = _get_filenames(tmpdir)
@@ -127,9 +125,7 @@ class TestDumperDistributed:
         _assert_files(filenames, exist=["keep_this"], not_exist=["skip_this"])
 
     def test_write_disabled(self, tmp_path):
-        run_distributed_test(
-            self._test_write_disabled_func, tmpdir=str(tmp_path)
-        )
+        run_distributed_test(self._test_write_disabled_func, tmpdir=str(tmp_path))
 
     @staticmethod
     def _test_write_disabled_func(rank, tmpdir):
