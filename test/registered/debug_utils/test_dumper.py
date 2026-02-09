@@ -7,9 +7,9 @@ import pytest
 import requests
 import torch
 import torch.distributed as dist
-import torch.multiprocessing as mp
 
 from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
+from sglang.test.test_utils import run_distributed_test
 
 register_cuda_ci(est_time=30, suite="nightly-2-gpu", nightly=True)
 register_amd_ci(est_time=60, suite="nightly-amd", nightly=True)
@@ -53,7 +53,7 @@ class TestDumperPureFunctions:
 
 class TestDumperDistributed:
     def test_basic(self, tmp_path):
-        _run_distributed_test(self._test_basic_func, tmpdir=str(tmp_path))
+        run_distributed_test(self._test_basic_func, tmpdir=str(tmp_path))
 
     @staticmethod
     def _test_basic_func(rank, tmpdir):
@@ -81,14 +81,15 @@ class TestDumperDistributed:
         )
 
         dist.barrier()
+        filenames = _get_filenames(tmpdir)
         _assert_files(
-            _get_filenames(tmpdir),
+            filenames,
             exist=["tensor_a", "tensor_b", "arg=100", "ctx_arg=200", "obj_a", "obj_b"],
             not_exist=["tensor_skip"],
         )
 
     def test_http_enable(self):
-        _run_distributed_test(self._test_http_func)
+        run_distributed_test(self._test_http_func)
 
     @staticmethod
     def _test_http_func(rank):
@@ -109,7 +110,7 @@ class TestDumperDistributed:
             assert dumper._enable == enable
 
     def test_filter(self, tmp_path):
-        _run_distributed_test(self._test_filter_func, tmpdir=str(tmp_path))
+        run_distributed_test(self._test_filter_func, tmpdir=str(tmp_path))
 
     @staticmethod
     def _test_filter_func(rank, tmpdir):
@@ -122,12 +123,11 @@ class TestDumperDistributed:
         dumper.dump("skip_this", torch.randn(5, device=f"cuda:{rank}"))
 
         dist.barrier()
-        _assert_files(
-            _get_filenames(tmpdir), exist=["keep_this"], not_exist=["skip_this"]
-        )
+        filenames = _get_filenames(tmpdir)
+        _assert_files(filenames, exist=["keep_this"], not_exist=["skip_this"])
 
     def test_write_disabled(self, tmp_path):
-        _run_distributed_test(
+        run_distributed_test(
             self._test_write_disabled_func, tmpdir=str(tmp_path)
         )
 
@@ -142,49 +142,6 @@ class TestDumperDistributed:
 
         dist.barrier()
         assert len(_get_filenames(tmpdir)) == 0
-
-
-def _run_distributed_test(func, world_size=2, **kwargs):
-    ctx = mp.get_context("spawn")
-    result_queue = ctx.Queue()
-    processes = []
-
-    for rank in range(world_size):
-        p = ctx.Process(
-            target=_run_worker,
-            args=(rank, world_size, func, result_queue, kwargs),
-        )
-        p.start()
-        processes.append(p)
-
-    for p in processes:
-        p.join()
-
-    errors = [result_queue.get() for _ in range(world_size)]
-    errors = [e for e in errors if e]
-    if errors:
-        raise AssertionError("\n".join(errors))
-
-
-def _run_worker(rank, world_size, func, result_queue, kwargs):
-    os.environ.update(
-        MASTER_ADDR="localhost",
-        MASTER_PORT="29500",
-        RANK=str(rank),
-        WORLD_SIZE=str(world_size),
-    )
-    torch.cuda.set_device(rank)
-    dist.init_process_group(backend="nccl", rank=rank, world_size=world_size)
-
-    try:
-        func(rank, **kwargs)
-        result_queue.put(None)
-    except Exception as e:
-        import traceback
-
-        result_queue.put(f"Rank {rank}: {e}\n{traceback.format_exc()}")
-    finally:
-        dist.destroy_process_group()
 
 
 def _get_filenames(tmpdir):
