@@ -113,16 +113,21 @@ class TestDumperDistributed:
     @staticmethod
     def _test_filter_func(rank, tmpdir):
         os.environ["SGLANG_DUMPER_DIR"] = tmpdir
-        os.environ["SGLANG_DUMPER_FILTER"] = "keep"
+        os.environ["SGLANG_DUMPER_FILTER"] = "^keep"
         from sglang.srt.debug_utils.dumper import dumper
 
         dumper.on_forward_pass_start()
         dumper.dump("keep_this", torch.randn(5, device=f"cuda:{rank}"))
         dumper.dump("skip_this", torch.randn(5, device=f"cuda:{rank}"))
+        dumper.dump("not_keep_this", torch.randn(5, device=f"cuda:{rank}"))
 
         dist.barrier()
         filenames = _get_filenames(tmpdir)
-        _assert_files(filenames, exist=["keep_this"], not_exist=["skip_this"])
+        _assert_files(
+            filenames,
+            exist=["keep_this"],
+            not_exist=["skip_this", "not_keep_this"],
+        )
 
     def test_write_disabled(self, tmp_path):
         run_distributed_test(self._test_write_disabled_func, tmpdir=str(tmp_path))
