@@ -115,9 +115,9 @@ class _Dumper:
 
     def dump(self, name: str, value, save: bool = True, **kwargs) -> None:
         self._dump_core(
-            name,
-            value,
-            kwargs,
+            name=name,
+            value=value,
+            extra_kwargs=kwargs,
             save=save,
             enable_value=self._enable_value,
             enable_curr_grad=False,
@@ -133,9 +133,9 @@ class _Dumper:
     ) -> None:
         for param_name, param in model.named_parameters():
             self._dump_core(
-                f"{name_prefix}__{param_name}",
-                param,
-                kwargs,
+                name=f"{name_prefix}__{param_name}",
+                value=param,
+                extra_kwargs=kwargs,
                 save=save,
                 enable_value=self._enable_model_value,
                 enable_curr_grad=self._enable_model_grad,
