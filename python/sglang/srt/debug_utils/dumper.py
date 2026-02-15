@@ -82,10 +82,14 @@ class _Dumper:
             enable_write_file=get_bool_env_var("SGLANG_DUMPER_WRITE_FILE", "1"),
             enable_value=get_bool_env_var("SGLANG_DUMPER_ENABLE_VALUE", "1"),
             enable_grad=get_bool_env_var("SGLANG_DUMPER_ENABLE_GRAD", "0"),
-            enable_model_value=get_bool_env_var("SGLANG_DUMPER_ENABLE_MODEL_VALUE", "1"),
+            enable_model_value=get_bool_env_var(
+                "SGLANG_DUMPER_ENABLE_MODEL_VALUE", "1"
+            ),
             enable_model_grad=get_bool_env_var("SGLANG_DUMPER_ENABLE_MODEL_GRAD", "1"),
             partial_name=os.environ.get("SGLANG_DUMPER_PARTIAL_NAME"),
-            enable_http_server=get_bool_env_var("SGLANG_ENABLE_DUMPER_HTTP_SERVER", "1"),
+            enable_http_server=get_bool_env_var(
+                "SGLANG_ENABLE_DUMPER_HTTP_SERVER", "1"
+            ),
         )
 
     def on_forward_pass_start(self):
