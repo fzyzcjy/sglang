@@ -118,7 +118,7 @@ class _Dumper:
             value = _materialize_value(value)
 
         if self._enable_dump_value:
-            self._dump_value(name, value, save=save, **kwargs)
+            self._dump_raw("Dumper", name, value, kwargs, save=save)
         if self._enable_dump_grad:
             self._dump_grad(name, value, save=save, **kwargs)
 
@@ -153,9 +153,6 @@ class _Dumper:
                 clone=True,
                 param=param_name,
             )
-
-    def _dump_value(self, name: str, value, save: bool, **kwargs) -> None:
-        self._dump_raw("Dumper", name, value, kwargs, save=save)
 
     def _dump_grad(self, name: str, tensor, save: bool, **kwargs) -> None:
         if not isinstance(tensor, torch.Tensor):
