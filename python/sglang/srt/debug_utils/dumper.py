@@ -178,11 +178,11 @@ class _Dumper:
                 value_tag, name, value, extra_kwargs, save=save, **log_extra
             )
 
-        if enable_curr_grad and isinstance(value, torch.Tensor) and value.grad is not None:
+        if enable_curr_grad and isinstance(value, torch.Tensor) and (g := value.grad) is not None:
             self._dump_single(
                 grad_tag,
                 f"grad__{name}",
-                value.grad,
+                g,
                 extra_kwargs,
                 save=save,
                 **log_extra,
