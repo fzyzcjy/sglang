@@ -8,6 +8,16 @@ import requests
 import torch
 import torch.distributed as dist
 
+from sglang.srt.debug_utils.dumper import (
+    _collect_megatron_parallel_info,
+    _collect_sglang_parallel_info,
+    _Dumper,
+    _materialize_value,
+    _obj_to_dict,
+    _torch_save,
+    get_tensor_info,
+    get_truncated_value,
+)
 from sglang.test.ci.ci_register import register_amd_ci, register_cuda_ci
 from sglang.test.test_utils import run_distributed_test
 
@@ -17,8 +27,6 @@ register_amd_ci(est_time=60, suite="nightly-amd", nightly=True)
 
 class TestDumperPureFunctions:
     def test_get_truncated_value(self):
-        from sglang.srt.debug_utils.dumper import get_truncated_value
-
         assert get_truncated_value(None) is None
         assert get_truncated_value(42) == 42
         assert len(get_truncated_value((torch.randn(10), torch.randn(20)))) == 2
@@ -26,8 +34,6 @@ class TestDumperPureFunctions:
         assert get_truncated_value(torch.randn(100, 100)).shape == (5, 5)
 
     def test_obj_to_dict(self):
-        from sglang.srt.debug_utils.dumper import _obj_to_dict
-
         assert _obj_to_dict({"a": 1}) == {"a": 1}
 
         class Obj:
@@ -41,8 +47,6 @@ class TestDumperPureFunctions:
         assert "method" not in result
 
     def test_get_tensor_info(self):
-        from sglang.srt.debug_utils.dumper import get_tensor_info
-
         info = get_tensor_info(torch.randn(10, 10))
         for key in ["shape=", "dtype=", "min=", "max=", "mean="]:
             assert key in info
@@ -53,8 +57,6 @@ class TestDumperPureFunctions:
 
 class TestTorchSave:
     def test_normal(self, tmp_path):
-        from sglang.srt.debug_utils.dumper import _torch_save
-
         path = str(tmp_path / "a.pt")
         tensor = torch.randn(3, 3)
 
@@ -63,8 +65,6 @@ class TestTorchSave:
         assert torch.equal(torch.load(path, weights_only=True), tensor)
 
     def test_parameter_fallback(self, tmp_path):
-        from sglang.srt.debug_utils.dumper import _torch_save
-
         class BadParam(torch.nn.Parameter):
             def __reduce_ex__(self, protocol):
                 raise RuntimeError("not pickleable")
@@ -77,8 +77,6 @@ class TestTorchSave:
         assert torch.equal(torch.load(path, weights_only=True), param.data)
 
     def test_silent_skip(self, tmp_path, capsys):
-        from sglang.srt.debug_utils.dumper import _torch_save
-
         path = str(tmp_path / "c.pt")
 
         _torch_save({"fn": lambda: None}, path)
@@ -216,10 +214,8 @@ class TestDumperFileWriteControl:
         assert len(_get_filenames(tmpdir)) == 0
 
 
-def _make_test_dumper(tmp_path: Path, **overrides) -> "_Dumper":
+def _make_test_dumper(tmp_path: Path, **overrides) -> _Dumper:
     """Create a _Dumper for CPU testing without HTTP server or distributed."""
-    from sglang.srt.debug_utils.dumper import _Dumper
-
     defaults: dict = dict(
         enable=True,
         base_dir=tmp_path,
@@ -262,36 +258,14 @@ def _load_dump(path: Path) -> dict:
 
 class TestLazyValue:
     def test_materialize_value_callable(self):
-        from sglang.srt.debug_utils.dumper import _materialize_value
-
         tensor = torch.randn(3, 3)
         result = _materialize_value(lambda: tensor)
         assert torch.equal(result, tensor)
 
     def test_materialize_value_passthrough(self):
-        from sglang.srt.debug_utils.dumper import _materialize_value
-
         tensor = torch.randn(3, 3)
         result = _materialize_value(tensor)
         assert result is tensor
-
-    def test_deepcopy_or_clone_tensor(self):
-        from sglang.srt.debug_utils.dumper import _deepcopy_or_clone
-
-        tensor = torch.randn(3, 3)
-        cloned = _deepcopy_or_clone(tensor)
-        assert torch.equal(cloned, tensor)
-        assert cloned is not tensor
-        assert cloned.data_ptr() != tensor.data_ptr()
-
-    def test_deepcopy_or_clone_dict(self):
-        from sglang.srt.debug_utils.dumper import _deepcopy_or_clone
-
-        original = {"a": [1, 2, 3]}
-        copied = _deepcopy_or_clone(original)
-        assert copied == original
-        assert copied is not original
-        assert copied["a"] is not original["a"]
 
     def test_dump_with_callable_value(self, tmp_path):
         d = _make_test_dumper(tmp_path)
@@ -347,11 +321,6 @@ class TestStaticMetadata:
         assert meta1 is meta2
 
     def test_parallel_info_graceful_fallback(self):
-        from sglang.srt.debug_utils.dumper import (
-            _collect_megatron_parallel_info,
-            _collect_sglang_parallel_info,
-        )
-
         sglang_info = _collect_sglang_parallel_info()
         assert isinstance(sglang_info, dict)
 
