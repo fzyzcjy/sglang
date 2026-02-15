@@ -426,8 +426,8 @@ class TestDumpGrad:
         expected_grad = torch.full((2, 2), 3.0)
         assert torch.equal(_load_dump(grad_path)["value"], expected_grad)
 
-    def test_disable_dump_value(self, tmp_path):
-        d = _make_test_dumper(tmp_path, enable_dump_value=False)
+    def test_disable_value(self, tmp_path):
+        d = _make_test_dumper(tmp_path, enable_value=False)
         x = torch.randn(3, 3, requires_grad=True)
         y = (x * 2).sum()
 
@@ -440,8 +440,8 @@ class TestDumpGrad:
         )
         _assert_files(filenames, exist=["grad__fwd_disabled"])
 
-    def test_disable_dump_grad(self, tmp_path):
-        d = _make_test_dumper(tmp_path, enable_dump_grad=False)
+    def test_disable_grad(self, tmp_path):
+        d = _make_test_dumper(tmp_path, enable_grad=False)
         x = torch.randn(3, 3, requires_grad=True)
         y = (x * 2).sum()
 
@@ -457,7 +457,7 @@ class TestDumpGrad:
 
 class TestDumpModel:
     def test_grad_basic(self, tmp_path):
-        d = _make_test_dumper(tmp_path, enable_dump_model_value=False)
+        d = _make_test_dumper(tmp_path, enable_model_value=False)
         model = torch.nn.Linear(4, 2)
         x = torch.randn(3, 4)
         y = model(x).sum()
@@ -471,7 +471,7 @@ class TestDumpModel:
         )
 
     def test_value_basic(self, tmp_path):
-        d = _make_test_dumper(tmp_path, enable_dump_model_grad=False)
+        d = _make_test_dumper(tmp_path, enable_model_grad=False)
         model = torch.nn.Linear(4, 2, bias=False)
 
         d.dump_model(model, name_prefix="model")
@@ -496,7 +496,7 @@ class TestDumpModel:
         )
 
     def test_no_grad_skipped(self, tmp_path):
-        d = _make_test_dumper(tmp_path, enable_dump_model_value=False)
+        d = _make_test_dumper(tmp_path, enable_model_value=False)
         model = torch.nn.Linear(4, 2)
 
         d.dump_model(model, name_prefix="model")
@@ -521,7 +521,7 @@ class TestDumpModel:
         )
 
     def test_grad_file_content(self, tmp_path):
-        d = _make_test_dumper(tmp_path, enable_dump_model_value=False)
+        d = _make_test_dumper(tmp_path, enable_model_value=False)
         model = torch.nn.Linear(4, 2, bias=False)
         x = torch.ones(1, 4)
         y = model(x).sum()
@@ -533,7 +533,7 @@ class TestDumpModel:
         assert torch.equal(_load_dump(path)["value"], model.weight.grad)
 
     def test_disable_model_grad(self, tmp_path):
-        d = _make_test_dumper(tmp_path, enable_dump_model_grad=False)
+        d = _make_test_dumper(tmp_path, enable_model_grad=False)
         model = torch.nn.Linear(4, 2)
         x = torch.randn(3, 4)
         y = model(x).sum()
@@ -545,7 +545,7 @@ class TestDumpModel:
         assert all("grad" not in f for f in filenames)
 
     def test_disable_model_value(self, tmp_path):
-        d = _make_test_dumper(tmp_path, enable_dump_model_value=False)
+        d = _make_test_dumper(tmp_path, enable_model_value=False)
         model = torch.nn.Linear(4, 2, bias=False)
         x = torch.ones(1, 4)
         y = model(x).sum()

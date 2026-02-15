@@ -47,13 +47,13 @@ class _Dumper:
         self._filter = os.environ.get("SGLANG_DUMPER_FILTER")
         self._base_dir = Path(os.environ.get("SGLANG_DUMPER_DIR", "/tmp"))
         self._enable_write_file = get_bool_env_var("SGLANG_DUMPER_WRITE_FILE", "1")
-        self._enable_dump_value = get_bool_env_var("SGLANG_DUMPER_DUMP_VALUE", "1")
-        self._enable_dump_grad = get_bool_env_var("SGLANG_DUMPER_DUMP_GRAD", "0")
-        self._enable_dump_model_value = get_bool_env_var(
-            "SGLANG_DUMPER_DUMP_MODEL_VALUE", "1"
+        self._enable_value = get_bool_env_var("SGLANG_DUMPER_ENABLE_VALUE", "1")
+        self._enable_grad = get_bool_env_var("SGLANG_DUMPER_ENABLE_GRAD", "0")
+        self._enable_model_value = get_bool_env_var(
+            "SGLANG_DUMPER_ENABLE_MODEL_VALUE", "1"
         )
-        self._enable_dump_model_grad = get_bool_env_var(
-            "SGLANG_DUMPER_DUMP_MODEL_GRAD", "1"
+        self._enable_model_grad = get_bool_env_var(
+            "SGLANG_DUMPER_ENABLE_MODEL_GRAD", "1"
         )
 
         # States
@@ -121,14 +121,14 @@ class _Dumper:
         if self._is_filtered_out(name):
             return
 
-        if self._enable_dump_value or self._enable_dump_grad:
+        if self._enable_value or self._enable_grad:
             if self._forward_pass_id < 1:
                 print("Dump without on_forward_pass_start()")
             value = _materialize_value(value)
 
-        if self._enable_dump_value:
+        if self._enable_value:
             self._dump_raw("Dumper", name, value, kwargs, save=save)
-        if self._enable_dump_grad:
+        if self._enable_grad:
             self._dump_future_grad(name, value, save=save, **kwargs)
 
     def dump_model(
@@ -143,14 +143,14 @@ class _Dumper:
             return
 
         for param_name, param in model.named_parameters():
-            if self._enable_dump_model_value:
+            if self._enable_model_value:
                 full_name = f"{name_prefix}__{param_name}"
                 if not self._is_filtered_out(full_name):
                     self._dump_raw(
                         "Dumper.Param", full_name, param, kwargs, save=save
                     )
 
-            if self._enable_dump_model_grad and param.grad is not None:
+            if self._enable_model_grad and param.grad is not None:
                 grad_name = f"{name_prefix}_grad__{param_name}"
                 if not self._is_filtered_out(grad_name):
                     self._dump_raw(
