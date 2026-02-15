@@ -117,8 +117,6 @@ class _Dumper:
         self._ensure_http_server()
         if not self._is_active:
             return
-        if self._forward_pass_id < 1 and (self._enable_value or self._enable_grad):
-            print("Dump without on_forward_pass_start()")
         self._dump_core(
             name,
             value,
@@ -170,6 +168,11 @@ class _Dumper:
     ) -> None:
         if self._is_filtered_out(name):
             return
+        if not (enable_value or enable_curr_grad or enable_future_grad):
+            return
+
+        if self._forward_pass_id < 1:
+            print("Dump without on_forward_pass_start()")
 
         value = _materialize_value(value)
 
