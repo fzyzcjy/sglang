@@ -656,3 +656,22 @@ def get_tensor_info(x):
         f"x_sample_head={x_sample_head} "
         f"x_sample_tail={x_sample_tail}"
     )
+
+
+# Copied from SGLang files to avoid dependency
+def get_bool_env_var(name: str, default: str = "false") -> bool:
+    value = os.getenv(name, default)
+    value = value.lower()
+    truthy_values = ("true", "1")
+    return value in truthy_values
+
+
+# Copied from SGLang files to avoid dependency
+def get_int_env_var(name: str, default: int = 0) -> int:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
