@@ -45,7 +45,7 @@ class _Dumper:
         self._base_dir = Path(os.environ.get("SGLANG_DUMPER_DIR", "/tmp"))
         self._enable_write_file = get_bool_env_var("SGLANG_DUMPER_WRITE_FILE", "1")
         self._enable_dump_forward = get_bool_env_var("SGLANG_DUMPER_DUMP_FORWARD", "1")
-        self._enable_dump_grad = get_bool_env_var("SGLANG_DUMPER_DUMP_GRAD", "1")
+        self._enable_dump_grad = get_bool_env_var("SGLANG_DUMPER_DUMP_GRAD", "0")
         self._output_dict_mode = get_bool_env_var("SGLANG_DUMPER_OUTPUT_DICT", "0")
 
         # States
