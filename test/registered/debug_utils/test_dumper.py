@@ -244,7 +244,7 @@ def _assert_files(filenames, *, exist=(), not_exist=()):
         ), f"{p} should not exist in {filenames}"
 
 
-def _find_dump_file(tmpdir, *, rank: int, name: str) -> Path:
+def _find_dump_file(tmpdir, *, rank: int = 0, name: str) -> Path:
     matches = [
         f
         for f in Path(tmpdir).glob("sglang_dump_*/*.pt")
@@ -422,13 +422,8 @@ class TestDumpGrad:
         d._forward_pass_id = 999
         y.backward()
 
-        grad_files = [
-            f.name
-            for f in tmp_path.glob("sglang_dump_*/*.pt")
-            if "grad__" in f.name
-        ]
-        assert len(grad_files) == 1
-        assert "forward_pass_id=42" in grad_files[0]
+        grad_file = _find_dump_file(tmp_path, name="grad__id_test")
+        assert "forward_pass_id=42" in grad_file.name
 
     def test_dump_grad_file_content(self, tmp_path):
         d = _make_test_dumper(tmp_path)
@@ -438,11 +433,7 @@ class TestDumpGrad:
         d.dump("content_check", x)
         y.backward()
 
-        grad_path = [
-            f
-            for f in tmp_path.glob("sglang_dump_*/*.pt")
-            if "grad__content_check" in f.name
-        ][0]
+        grad_path = _find_dump_file(tmp_path, name="grad__content_check")
         loaded = torch.load(grad_path, map_location="cpu", weights_only=True)
         expected_grad = torch.full((2, 2), 3.0)
         assert torch.equal(loaded, expected_grad)
@@ -519,11 +510,7 @@ class TestDumpParamGrads:
 
         d.dump_param_grads(model, name_prefix="p")
 
-        path = [
-            f
-            for f in tmp_path.glob("sglang_dump_*/*.pt")
-            if "p_grad__weight" in f.name
-        ][0]
+        path = _find_dump_file(tmp_path, name="p_grad__weight")
         loaded = torch.load(path, map_location="cpu", weights_only=True)
         assert torch.equal(loaded, model.weight.grad)
 
