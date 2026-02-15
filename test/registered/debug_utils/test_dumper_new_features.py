@@ -280,5 +280,75 @@ class TestDumpGrad:
         assert "cp_mode=zigzag" in matching[0]
 
 
+# -------------------------------------- Task 5: dump param grads ------------------------------------------
+
+
+class TestDumpParamGrads:
+    def test_basic(self, tmp_path):
+        d = _make_test_dumper(tmp_path)
+        model = torch.nn.Linear(4, 2)
+        x = torch.randn(3, 4)
+        y = model(x).sum()
+        y.backward()
+
+        d.dump_param_grads(model, name_prefix="model")
+
+        filenames = _get_filenames(tmp_path)
+        assert any("model_grad__weight" in f for f in filenames)
+        assert any("model_grad__bias" in f for f in filenames)
+
+    def test_no_grad_skipped(self, tmp_path):
+        d = _make_test_dumper(tmp_path)
+        model = torch.nn.Linear(4, 2)
+
+        d.dump_param_grads(model, name_prefix="model")
+
+        filenames = _get_filenames(tmp_path)
+        assert len(filenames) == 0
+
+    def test_filter(self, tmp_path):
+        d = _make_test_dumper(tmp_path)
+        d._filter = "weight"
+        model = torch.nn.Linear(4, 2)
+        x = torch.randn(3, 4)
+        y = model(x).sum()
+        y.backward()
+
+        d.dump_param_grads(model, name_prefix="model")
+
+        filenames = _get_filenames(tmp_path)
+        assert any("model_grad__weight" in f for f in filenames)
+        assert not any("model_grad__bias" in f for f in filenames)
+
+    def test_file_content(self, tmp_path):
+        d = _make_test_dumper(tmp_path)
+        model = torch.nn.Linear(4, 2, bias=False)
+        x = torch.ones(1, 4)
+        y = model(x).sum()
+        y.backward()
+
+        d.dump_param_grads(model, name_prefix="p")
+
+        path = [
+            f
+            for f in tmp_path.glob("sglang_dump_*/*.pt")
+            if "p_grad__weight" in f.name
+        ][0]
+        loaded = torch.load(path, map_location="cpu", weights_only=True)
+        assert torch.equal(loaded, model.weight.grad)
+
+    def test_disabled(self, tmp_path):
+        d = _make_test_dumper(tmp_path, enable_grad_dump=False)
+        model = torch.nn.Linear(4, 2)
+        x = torch.randn(3, 4)
+        y = model(x).sum()
+        y.backward()
+
+        d.dump_param_grads(model, name_prefix="model")
+
+        filenames = _get_filenames(tmp_path)
+        assert len(filenames) == 0
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-xvs"]))

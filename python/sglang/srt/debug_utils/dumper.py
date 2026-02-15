@@ -293,6 +293,60 @@ class _Dumper:
         self._ensure_partial_name()
         tensor.register_hook(grad_hook)
 
+    def dump_param_grads(
+        self, model: "torch.nn.Module", name_prefix: str = "param", **kwargs
+    ):
+        if not self._enable_grad_dump:
+            return
+
+        self._ensure_http_server()
+        if not (self._enable and (self._override_enable is not False)):
+            return
+
+        for param_name, param in model.named_parameters():
+            if param.grad is None:
+                continue
+
+            grad_name = f"{name_prefix}_grad__{param_name}"
+
+            if (f := self._filter) is not None and re.search(f, grad_name) is None:
+                continue
+
+            self._ensure_partial_name()
+            self._dump_index += 1
+
+            rank = _get_rank()
+            full_kwargs = dict(
+                forward_pass_id=self._forward_pass_id,
+                rank=rank,
+                name=grad_name,
+                dump_index=self._dump_index,
+                **kwargs,
+                **self._global_ctx,
+            )
+            full_filename = (
+                "___".join(f"{k}={v}" for k, v in full_kwargs.items()) + ".pt"
+            )
+            path = (
+                self._base_dir / f"sglang_dump_{self._partial_name}" / full_filename
+            )
+
+            grad = param.grad
+            sample_value = get_truncated_value(grad)
+
+            print(
+                f"[Dumper.ParamGrad] [{rank}, {time.time()}] {path} "
+                f"param={param_name} "
+                f"shape={grad.shape} "
+                f"dtype={grad.dtype} "
+                f"device={grad.device} "
+                f"sample_value={sample_value}"
+            )
+
+            if self._enable_write_file:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                self._save_value(grad.clone(), str(path), full_kwargs)
+
 
 def _torch_save(value, path: str):
     try:
