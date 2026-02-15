@@ -236,8 +236,6 @@ class _Dumper:
                     f"device={value.device}",
                 ]
             )
-        else:
-            parts.extend(["shape=None", "dtype=None", "device=None"])
         parts.append(f"id={id(value)}")
         for k, v in extra.items():
             parts.append(f"{k}={v}")
