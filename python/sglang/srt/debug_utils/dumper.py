@@ -5,9 +5,9 @@ import socket
 import threading
 import time
 from copy import deepcopy
+from functools import cached_property
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from functools import cached_property
 from typing import List, Optional
 
 import torch
@@ -157,7 +157,10 @@ class _Dumper:
 
             grad = param.grad
             self._log_dump(
-                "Dumper.ParamGrad", path, rank, grad,
+                "Dumper.ParamGrad",
+                path,
+                rank,
+                grad,
                 param=param_name,
             )
             self._write_dump(grad.clone(), path, full_kwargs, save=save)
@@ -184,9 +187,7 @@ class _Dumper:
         path = self._base_dir / f"sglang_dump_{self._partial_name}" / filename
         return path, full_kwargs, rank
 
-    def _write_dump(
-        self, value, path: Path, meta: dict, *, save: bool
-    ) -> None:
+    def _write_dump(self, value, path: Path, meta: dict, *, save: bool) -> None:
         if self._enable_write_file and save:
             path.parent.mkdir(parents=True, exist_ok=True)
             self._save_value(value, str(path), meta)
@@ -212,19 +213,19 @@ class _Dumper:
     def _is_filtered_out(self, name: str) -> bool:
         return (f := self._filter) is not None and re.search(f, name) is None
 
-    def _log_dump(
-        self, tag: str, path: Path, rank: int, value, **extra
-    ) -> None:
+    def _log_dump(self, tag: str, path: Path, rank: int, value, **extra) -> None:
         parts = [
             f"[{tag}] [{rank}, {time.time()}] {path}",
             f"type={type(value)}",
         ]
         if isinstance(value, torch.Tensor):
-            parts.extend([
-                f"shape={value.shape}",
-                f"dtype={value.dtype}",
-                f"device={value.device}",
-            ])
+            parts.extend(
+                [
+                    f"shape={value.shape}",
+                    f"dtype={value.dtype}",
+                    f"device={value.device}",
+                ]
+            )
         else:
             parts.extend(["shape=None", "dtype=None", "device=None"])
         parts.append(f"id={id(value)}")

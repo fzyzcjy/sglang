@@ -216,7 +216,7 @@ class TestDumperFileWriteControl:
         assert len(_get_filenames(tmpdir)) == 0
 
 
-def _make_test_dumper(tmp_path: Path, **overrides) -> "_Dumper":
+def _make_test_dumper(tmp_path: Path, **overrides):
     """Create a _Dumper for CPU testing without HTTP server or distributed."""
     from sglang.srt.debug_utils.dumper import _Dumper
 
@@ -465,6 +465,7 @@ class TestDumpGrad:
             exist=["name=grad_disabled"],
             not_exist=["grad__"],
         )
+
 
 class TestDumpParamGrads:
     def test_basic(self, tmp_path):
