@@ -106,17 +106,6 @@ class _Dumper:
     def override_enable(self, value: bool):
         self._override_enable = value
 
-    def _is_dump_disabled(
-        self,
-        ignore_enable: bool = False,
-        ignore_override_enable: bool = False,
-    ) -> bool:
-        if ignore_enable:
-            return False
-        if ignore_override_enable:
-            return not self._enable
-        return not (self._enable and (self._override_enable is not False))
-
     def _build_dump_path(
         self, name: str, extra_kwargs: dict, forward_pass_id: Optional[int] = None
     ) -> tuple:
@@ -164,37 +153,13 @@ class _Dumper:
         for name, value in data.items():
             self.dump(f"{name_prefix}_{name}", value, save=save, **kwargs)
 
-    def dump(
-        self,
-        name: str,
-        value,
-        save: bool = True,
-        print_full: bool = False,
-        format: Optional[str] = None,
-        cp_mode: Optional[str] = None,
-        ignore_enable: bool = False,
-        ignore_override_enable: bool = False,
-        **kwargs,
-    ) -> None:
+    def dump(self, name: str, value, save: bool = True, **kwargs) -> None:
         self._ensure_http_server()
 
         if self._enable_grad_dump:
-            self._dump_grad(
-                name,
-                value,
-                save=save,
-                print_full=print_full,
-                format=format,
-                cp_mode=cp_mode,
-                ignore_enable=ignore_enable,
-                ignore_override_enable=ignore_override_enable,
-                **kwargs,
-            )
+            self._dump_grad(name, value, save=save, **kwargs)
 
-        if self._is_dump_disabled(
-            ignore_enable=ignore_enable,
-            ignore_override_enable=ignore_override_enable,
-        ):
+        if not (self._enable and (self._override_enable is not False)):
             return
         if not self._enable_forward_dump:
             return
@@ -206,19 +171,10 @@ class _Dumper:
         self._ensure_partial_name()
         self._dump_index += 1
 
-        extra = dict(**kwargs)
-        if format is not None:
-            extra["format"] = format
-        if cp_mode is not None:
-            extra["cp_mode"] = cp_mode
-        path, full_kwargs, rank = self._build_dump_path(name, extra)
+        path, full_kwargs, rank = self._build_dump_path(name, kwargs)
 
         value = _materialize_value(value)
-
-        if print_full and isinstance(value, torch.Tensor):
-            sample_value = value.tolist()
-        else:
-            sample_value = get_truncated_value(value)
+        sample_value = get_truncated_value(value)
 
         print(
             f"[Dumper] [{rank}, {time.time()}] {path} "
@@ -232,22 +188,8 @@ class _Dumper:
 
         self._write_dump(value, path, full_kwargs, save=save)
 
-    def _dump_grad(
-        self,
-        name: str,
-        tensor,
-        save: bool = True,
-        print_full: bool = False,
-        format: Optional[str] = None,
-        cp_mode: Optional[str] = None,
-        ignore_enable: bool = False,
-        ignore_override_enable: bool = False,
-        **kwargs,
-    ) -> None:
-        if self._is_dump_disabled(
-            ignore_enable=ignore_enable,
-            ignore_override_enable=ignore_override_enable,
-        ):
+    def _dump_grad(self, name: str, tensor, save: bool = True, **kwargs) -> None:
+        if not (self._enable and (self._override_enable is not False)):
             return
         if not self._enable_grad_dump:
             return
@@ -266,10 +208,6 @@ class _Dumper:
 
         captured_forward_pass_id = self._forward_pass_id
         captured_extra = dict(**kwargs)
-        if format is not None:
-            captured_extra["format"] = format
-        if cp_mode is not None:
-            captured_extra["cp_mode"] = cp_mode
 
         def grad_hook(grad: torch.Tensor) -> None:
             self._dump_index += 1
@@ -279,10 +217,7 @@ class _Dumper:
                 grad_name, captured_extra, forward_pass_id=captured_forward_pass_id
             )
 
-            if print_full:
-                sample_value = grad.tolist()
-            else:
-                sample_value = get_truncated_value(grad)
+            sample_value = get_truncated_value(grad)
 
             print(
                 f"[Dumper.Grad] [{rank}, {time.time()}] {path} "
@@ -307,7 +242,7 @@ class _Dumper:
     ) -> None:
         if not self._enable_grad_dump:
             return
-        if self._is_dump_disabled():
+        if not (self._enable and (self._override_enable is not False)):
             return
 
         self._ensure_http_server()

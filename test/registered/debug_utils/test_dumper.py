@@ -473,36 +473,6 @@ class TestDumpGrad:
         assert any("name=grad_disabled" in f for f in filenames)
         assert not any("grad__" in f for f in filenames)
 
-    def test_dump_grad_no_none_format_in_filename(self, tmp_path):
-        d = _make_test_dumper(tmp_path)
-        x = torch.randn(3, 3, requires_grad=True)
-        y = (x * 2).sum()
-
-        d.dump("no_none_test", x)
-        y.backward()
-
-        grad_files = [
-            f.name
-            for f in tmp_path.glob("sglang_dump_*/*.pt")
-            if "grad__" in f.name
-        ]
-        assert len(grad_files) == 1
-        assert "format=None" not in grad_files[0]
-        assert "cp_mode=None" not in grad_files[0]
-
-    def test_dump_format_and_cp_mode_in_filename(self, tmp_path):
-        d = _make_test_dumper(tmp_path)
-        tensor = torch.randn(4, 4)
-
-        d.dump("formatted", tensor, format="bshd", cp_mode="zigzag")
-
-        filenames = _get_filenames(tmp_path)
-        matching = [f for f in filenames if "name=formatted" in f]
-        assert len(matching) == 1
-        assert "format=bshd" in matching[0]
-        assert "cp_mode=zigzag" in matching[0]
-
-
 class TestDumpParamGrads:
     def test_basic(self, tmp_path):
         d = _make_test_dumper(tmp_path)
