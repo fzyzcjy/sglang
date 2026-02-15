@@ -163,8 +163,7 @@ class _Dumper:
     def dump(self, name: str, value, save: bool = True, **kwargs) -> None:
         self._ensure_http_server()
 
-        if self._enable_grad_dump:
-            self._dump_grad(name, value, save=save, **kwargs)
+        self._dump_grad(name, value, save=save, **kwargs)
 
         if not self._is_active:
             return
