@@ -7,6 +7,7 @@ import time
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from functools import cached_property
 from typing import List, Optional
 
 import torch
@@ -54,7 +55,6 @@ class _Dumper:
         self._global_ctx = {}
         self._override_enable = None
         self._http_server_handled = False
-        self._static_meta_cache = None
 
     def on_forward_pass_start(self):
         """This should be called on all ranks."""
@@ -195,16 +195,15 @@ class _Dumper:
         if self._output_dict_mode:
             output_data = {
                 "value": value,
-                "meta": dict(**meta, **self._get_static_meta()),
+                "meta": dict(**meta, **self._static_meta),
             }
         else:
             output_data = value
         _torch_save(output_data, path)
 
-    def _get_static_meta(self):
-        if self._static_meta_cache is None:
-            self._static_meta_cache = _compute_static_meta()
-        return self._static_meta_cache
+    @cached_property
+    def _static_meta(self) -> dict:
+        return _compute_static_meta()
 
     @property
     def _is_active(self) -> bool:

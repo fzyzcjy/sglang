@@ -345,7 +345,7 @@ class TestOutputDictMode:
 class TestStaticMetadata:
     def test_static_meta_contains_world_info(self):
         d = _make_test_dumper(Path("/tmp"))
-        meta = d._get_static_meta()
+        meta = d._static_meta
         assert "world_rank" in meta
         assert "world_size" in meta
         assert meta["world_rank"] == 0
@@ -353,8 +353,8 @@ class TestStaticMetadata:
 
     def test_static_meta_caching(self):
         d = _make_test_dumper(Path("/tmp"))
-        meta1 = d._get_static_meta()
-        meta2 = d._get_static_meta()
+        meta1 = d._static_meta
+        meta2 = d._static_meta
         assert meta1 is meta2
 
     def test_parallel_info_graceful_fallback(self):
