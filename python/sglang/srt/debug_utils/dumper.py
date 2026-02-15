@@ -122,6 +122,9 @@ class _Dumper:
             enable_value=self._enable_value,
             enable_curr_grad=False,
             enable_future_grad=self._enable_grad,
+            value_tag="Dumper.Value",
+            grad_tag="Dumper.Grad",
+            log_extra={},
         )
 
     def dump_model(
@@ -142,7 +145,7 @@ class _Dumper:
                 enable_future_grad=False,
                 value_tag="Dumper.ParamValue",
                 grad_tag="Dumper.ParamGrad",
-                param=param_name,
+                log_extra=dict(param=param_name),
             )
 
     def _dump_core(
@@ -155,9 +158,9 @@ class _Dumper:
         enable_value: bool,
         enable_curr_grad: bool,
         enable_future_grad: bool,
-        value_tag: str = "Dumper",
-        grad_tag: str = "Dumper.Grad",
-        **log_extra,
+        value_tag: str,
+        grad_tag: str,
+        log_extra: dict,
     ) -> None:
         self._ensure_http_server()
 
