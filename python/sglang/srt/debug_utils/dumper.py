@@ -94,6 +94,9 @@ class _Dumper:
     def _is_active(self) -> bool:
         return self._enable and (self._override_enable is not False)
 
+    def _is_filtered_out(self, name: str) -> bool:
+        return (f := self._filter) is not None and re.search(f, name) is None
+
     def set_ctx(self, **kwargs):
         """
         Example:
@@ -167,7 +170,7 @@ class _Dumper:
             return
         if not self._enable_forward_dump:
             return
-        if (f := self._filter) is not None and re.search(f, name) is None:
+        if self._is_filtered_out(name):
             return
 
         if self._forward_pass_id < 1:
@@ -204,7 +207,7 @@ class _Dumper:
         if not tensor.requires_grad:
             print(f"[Dumper] dump_grad: {name} does not require grad, skipping")
             return
-        if (f := self._filter) is not None and re.search(f, name) is None:
+        if self._is_filtered_out(name):
             return
 
         self._ensure_http_server()
@@ -256,7 +259,7 @@ class _Dumper:
                 continue
 
             grad_name = f"{name_prefix}_grad__{param_name}"
-            if (f := self._filter) is not None and re.search(f, grad_name) is None:
+            if self._is_filtered_out(grad_name):
                 continue
 
             self._ensure_partial_name()
