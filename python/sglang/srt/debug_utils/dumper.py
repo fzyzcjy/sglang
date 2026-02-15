@@ -147,10 +147,10 @@ class _Dumper:
 
     def _dump_core(
         self,
+        *,
         name: str,
         value,
         extra_kwargs: dict,
-        *,
         save: bool,
         enable_value: bool,
         enable_curr_grad: bool,
