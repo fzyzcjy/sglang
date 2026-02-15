@@ -46,7 +46,6 @@ class _Dumper:
         self._enable_write_file = get_bool_env_var("SGLANG_DUMPER_WRITE_FILE", "1")
         self._enable_dump_value = get_bool_env_var("SGLANG_DUMPER_DUMP_VALUE", "1")
         self._enable_dump_grad = get_bool_env_var("SGLANG_DUMPER_DUMP_GRAD", "0")
-        self._output_dict_mode = get_bool_env_var("SGLANG_DUMPER_OUTPUT_DICT", "0")
 
         # States
         self._partial_name: Optional[str] = None
@@ -181,13 +180,10 @@ class _Dumper:
             self._save_value(value, str(path), meta)
 
     def _save_value(self, value, path: str, meta: dict):
-        if self._output_dict_mode:
-            output_data = {
-                "value": value,
-                "meta": dict(**meta, **self._static_meta),
-            }
-        else:
-            output_data = value
+        output_data = {
+            "value": value,
+            "meta": dict(**meta, **self._static_meta),
+        }
         _torch_save(output_data, path)
 
     @cached_property

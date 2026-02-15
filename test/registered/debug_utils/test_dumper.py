@@ -159,8 +159,8 @@ class TestDumperDistributed:
 
         dist.barrier()
         path = _find_dump_file(tmpdir, rank=rank, name="content_check")
-        loaded = torch.load(path, map_location="cpu", weights_only=True)
-        assert torch.equal(loaded, tensor.cpu())
+        loaded = torch.load(path, weights_only=False, map_location="cpu")
+        assert torch.equal(loaded["value"], tensor.cpu())
 
 
 class TestDumperFileWriteControl:
@@ -256,6 +256,10 @@ def _find_dump_file(tmpdir, *, rank: int = 0, name: str) -> Path:
     return matches[0]
 
 
+def _load_dump(path: Path) -> dict:
+    return torch.load(path, weights_only=False, map_location="cpu")
+
+
 class TestLazyValue:
     def test_materialize_value_callable(self):
         from sglang.srt.debug_utils.dumper import _materialize_value
@@ -297,46 +301,31 @@ class TestLazyValue:
         _assert_files(_get_filenames(tmp_path), exist=["name=lazy_tensor"])
 
         path = _find_dump_file(tmp_path, rank=0, name="lazy_tensor")
-        loaded = torch.load(path, map_location="cpu", weights_only=True)
-        assert torch.equal(loaded, tensor)
+        assert torch.equal(_load_dump(path)["value"], tensor)
 
 
-class TestOutputDictMode:
-    def test_save_value_normal_mode(self, tmp_path):
+class TestSaveValue:
+    def test_save_value(self, tmp_path):
         d = _make_test_dumper(tmp_path)
-        d._output_dict_mode = False
-        tensor = torch.randn(3, 3)
-        path = str(tmp_path / "normal.pt")
-
-        d._save_value(tensor, path, {"name": "test"})
-
-        loaded = torch.load(path, weights_only=True)
-        assert torch.equal(loaded, tensor)
-
-    def test_save_value_dict_mode(self, tmp_path):
-        d = _make_test_dumper(tmp_path)
-        d._output_dict_mode = True
         tensor = torch.randn(3, 3)
         path = str(tmp_path / "dict.pt")
 
         d._save_value(tensor, path, {"name": "test"})
 
-        loaded = torch.load(path, weights_only=False, map_location="cpu")
-        assert isinstance(loaded, dict)
+        loaded = _load_dump(Path(path))
         assert "value" in loaded
         assert "meta" in loaded
         assert torch.equal(loaded["value"], tensor)
         assert loaded["meta"]["name"] == "test"
 
-    def test_dump_output_dict_mode_integration(self, tmp_path):
-        d = _make_test_dumper(tmp_path, output_dict_mode=True)
+    def test_dump_output_format(self, tmp_path):
+        d = _make_test_dumper(tmp_path)
         tensor = torch.randn(4, 4)
 
         d.dump("dict_test", tensor)
 
         path = _find_dump_file(tmp_path, rank=0, name="dict_test")
-        loaded = torch.load(path, weights_only=False, map_location="cpu")
-        assert isinstance(loaded, dict)
+        loaded = _load_dump(path)
         assert torch.equal(loaded["value"], tensor)
         assert loaded["meta"]["name"] == "dict_test"
         assert loaded["meta"]["rank"] == 0
@@ -369,14 +358,14 @@ class TestStaticMetadata:
         megatron_info = _collect_megatron_parallel_info()
         assert isinstance(megatron_info, dict)
 
-    def test_dict_mode_includes_static_meta(self, tmp_path):
-        d = _make_test_dumper(tmp_path, output_dict_mode=True)
+    def test_dump_includes_static_meta(self, tmp_path):
+        d = _make_test_dumper(tmp_path)
         tensor = torch.randn(2, 2)
 
         d.dump("meta_test", tensor)
 
         path = _find_dump_file(tmp_path, rank=0, name="meta_test")
-        loaded = torch.load(path, weights_only=False, map_location="cpu")
+        loaded = _load_dump(path)
         meta = loaded["meta"]
         assert "world_rank" in meta
         assert "world_size" in meta
@@ -434,9 +423,8 @@ class TestDumpGrad:
         y.backward()
 
         grad_path = _find_dump_file(tmp_path, name="grad__content_check")
-        loaded = torch.load(grad_path, map_location="cpu", weights_only=True)
         expected_grad = torch.full((2, 2), 3.0)
-        assert torch.equal(loaded, expected_grad)
+        assert torch.equal(_load_dump(grad_path)["value"], expected_grad)
 
     def test_disable_dump_value(self, tmp_path):
         d = _make_test_dumper(tmp_path, enable_dump_value=False)
@@ -517,8 +505,7 @@ class TestDumpParamGrads:
         d.dump_param_grads(model, name_prefix="p")
 
         path = _find_dump_file(tmp_path, name="p_grad__weight")
-        loaded = torch.load(path, map_location="cpu", weights_only=True)
-        assert torch.equal(loaded, model.weight.grad)
+        assert torch.equal(_load_dump(path)["value"], model.weight.grad)
 
     def test_disabled(self, tmp_path):
         d = _make_test_dumper(tmp_path, enable_dump_grad=False)
