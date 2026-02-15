@@ -84,13 +84,6 @@ class _Dumper:
             self._partial_name = _get_partial_name()
             print(f"[Dumper] Choose partial_name={self._partial_name}")
 
-    @property
-    def _is_active(self) -> bool:
-        return self._enable and (self._override_enable is not False)
-
-    def _is_filtered_out(self, name: str) -> bool:
-        return (f := self._filter) is not None and re.search(f, name) is None
-
     def set_ctx(self, **kwargs):
         """
         Example:
@@ -149,27 +142,6 @@ class _Dumper:
             self._static_meta_cache = _compute_static_meta()
         return self._static_meta_cache
 
-    def _log_dump(
-        self, tag: str, path: Path, rank: int, value, sample_value, **extra
-    ) -> None:
-        parts = [
-            f"[{tag}] [{rank}, {time.time()}] {path}",
-            f"type={type(value)}",
-        ]
-        if isinstance(value, torch.Tensor):
-            parts.extend([
-                f"shape={value.shape}",
-                f"dtype={value.dtype}",
-                f"device={value.device}",
-            ])
-        else:
-            parts.extend(["shape=None", "dtype=None", "device=None"])
-        parts.append(f"id={id(value)}")
-        for k, v in extra.items():
-            parts.append(f"{k}={v}")
-        parts.append(f"sample_value={sample_value}")
-        print(" ".join(parts))
-
     def dump_dict(self, name_prefix, data, save: bool = True, **kwargs):
         data = _obj_to_dict(data)
         for name, value in data.items():
@@ -198,41 +170,6 @@ class _Dumper:
         sample_value = get_truncated_value(value)
         self._log_dump("Dumper", path, rank, value, sample_value)
         self._write_dump(value, path, full_kwargs, save=save)
-
-    def _dump_grad(self, name: str, tensor, save: bool = True, **kwargs) -> None:
-        if not self._is_active:
-            return
-        if not self._enable_grad_dump:
-            return
-
-        if not isinstance(tensor, torch.Tensor):
-            print(f"[Dumper] dump_grad: {name} is not a tensor, skipping")
-            return
-        if not tensor.requires_grad:
-            print(f"[Dumper] dump_grad: {name} does not require grad, skipping")
-            return
-        if self._is_filtered_out(name):
-            return
-
-        self._ensure_http_server()
-        self._ensure_partial_name()
-
-        captured_forward_pass_id = self._forward_pass_id
-        captured_extra = dict(**kwargs)
-
-        def grad_hook(grad: torch.Tensor) -> None:
-            self._dump_index += 1
-            grad_name = f"grad__{name}"
-
-            path, full_kwargs, rank = self._build_dump_path(
-                grad_name, captured_extra, forward_pass_id=captured_forward_pass_id
-            )
-
-            sample_value = get_truncated_value(grad)
-            self._log_dump("Dumper.Grad", path, rank, grad, sample_value)
-            self._write_dump(grad.clone(), path, full_kwargs, save=save)
-
-        tensor.register_hook(grad_hook)
 
     def dump_param_grads(
         self,
@@ -268,6 +205,71 @@ class _Dumper:
                 param=param_name,
             )
             self._write_dump(grad.clone(), path, full_kwargs, save=save)
+
+    # ---- private helpers (new) ----
+
+    @property
+    def _is_active(self) -> bool:
+        return self._enable and (self._override_enable is not False)
+
+    def _is_filtered_out(self, name: str) -> bool:
+        return (f := self._filter) is not None and re.search(f, name) is None
+
+    def _log_dump(
+        self, tag: str, path: Path, rank: int, value, sample_value, **extra
+    ) -> None:
+        parts = [
+            f"[{tag}] [{rank}, {time.time()}] {path}",
+            f"type={type(value)}",
+        ]
+        if isinstance(value, torch.Tensor):
+            parts.extend([
+                f"shape={value.shape}",
+                f"dtype={value.dtype}",
+                f"device={value.device}",
+            ])
+        else:
+            parts.extend(["shape=None", "dtype=None", "device=None"])
+        parts.append(f"id={id(value)}")
+        for k, v in extra.items():
+            parts.append(f"{k}={v}")
+        parts.append(f"sample_value={sample_value}")
+        print(" ".join(parts))
+
+    def _dump_grad(self, name: str, tensor, save: bool = True, **kwargs) -> None:
+        if not self._is_active:
+            return
+        if not self._enable_grad_dump:
+            return
+
+        if not isinstance(tensor, torch.Tensor):
+            print(f"[Dumper] dump_grad: {name} is not a tensor, skipping")
+            return
+        if not tensor.requires_grad:
+            print(f"[Dumper] dump_grad: {name} does not require grad, skipping")
+            return
+        if self._is_filtered_out(name):
+            return
+
+        self._ensure_http_server()
+        self._ensure_partial_name()
+
+        captured_forward_pass_id = self._forward_pass_id
+        captured_extra = dict(**kwargs)
+
+        def grad_hook(grad: torch.Tensor) -> None:
+            self._dump_index += 1
+            grad_name = f"grad__{name}"
+
+            path, full_kwargs, rank = self._build_dump_path(
+                grad_name, captured_extra, forward_pass_id=captured_forward_pass_id
+            )
+
+            sample_value = get_truncated_value(grad)
+            self._log_dump("Dumper.Grad", path, rank, grad, sample_value)
+            self._write_dump(grad.clone(), path, full_kwargs, save=save)
+
+        tensor.register_hook(grad_hook)
 
 
 def _torch_save(value, path: str):
@@ -567,6 +569,23 @@ class _ZmqRpcHandle:
 # --------------------------------- copied code (avoid dependency) --------------------------------------
 
 
+def get_bool_env_var(name: str, default: str = "false") -> bool:
+    value = os.getenv(name, default)
+    value = value.lower()
+    truthy_values = ("true", "1")
+    return value in truthy_values
+
+
+def get_int_env_var(name: str, default: int = 0) -> int:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
 def _get_local_ip_by_remote() -> Optional[str]:
     # try ipv4
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -648,22 +667,3 @@ def get_tensor_info(x):
         f"x_sample_head={x_sample_head} "
         f"x_sample_tail={x_sample_tail}"
     )
-
-
-# Copied from SGLang files to avoid dependency
-def get_bool_env_var(name: str, default: str = "false") -> bool:
-    value = os.getenv(name, default)
-    value = value.lower()
-    truthy_values = ("true", "1")
-    return value in truthy_values
-
-
-# Copied from SGLang files to avoid dependency
-def get_int_env_var(name: str, default: int = 0) -> int:
-    value = os.getenv(name)
-    if value is None or not value.strip():
-        return default
-    try:
-        return int(value)
-    except ValueError:
-        return default
