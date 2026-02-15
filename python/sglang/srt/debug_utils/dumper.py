@@ -161,9 +161,9 @@ class _Dumper:
     ) -> None:
         self._ensure_http_server()
 
-        if not self._is_active:
+        if not (self._enable and (self._override_enable is not False)):
             return
-        if self._is_filtered_out(name):
+        if (f := self._filter) is not None and re.search(f, name) is None:
             return
         if not (enable_value or enable_curr_grad or enable_future_grad):
             return
@@ -258,13 +258,6 @@ class _Dumper:
     @cached_property
     def _static_meta(self) -> dict:
         return _compute_static_meta()
-
-    @property
-    def _is_active(self) -> bool:
-        return self._enable and (self._override_enable is not False)
-
-    def _is_filtered_out(self, name: str) -> bool:
-        return (f := self._filter) is not None and re.search(f, name) is None
 
 
 def _torch_save(value, path: str):
