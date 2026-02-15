@@ -40,29 +40,53 @@ class _Dumper:
     Related: `sglang.srt.debug_utils.dump_comparator` for dump comparison
     """
 
-    def __init__(self):
-        # Flags
-        self._enable = get_bool_env_var("SGLANG_DUMPER_ENABLE", "0")
+    def __init__(
+        self,
+        *,
+        enable: bool,
+        base_dir: Path,
+        filter: Optional[str] = None,
+        enable_write_file: bool = True,
+        enable_value: bool = True,
+        enable_grad: bool = False,
+        enable_model_value: bool = True,
+        enable_model_grad: bool = True,
+        partial_name: Optional[str] = None,
+        enable_http_server: bool = True,
+    ):
+        # Config
+        self._enable = enable
         # TODO (1) support filtering kv instead of name only (2) allow HTTP req change it
-        self._filter = os.environ.get("SGLANG_DUMPER_FILTER")
-        self._base_dir = Path(os.environ.get("SGLANG_DUMPER_DIR", "/tmp"))
-        self._enable_write_file = get_bool_env_var("SGLANG_DUMPER_WRITE_FILE", "1")
-        self._enable_value = get_bool_env_var("SGLANG_DUMPER_ENABLE_VALUE", "1")
-        self._enable_grad = get_bool_env_var("SGLANG_DUMPER_ENABLE_GRAD", "0")
-        self._enable_model_value = get_bool_env_var(
-            "SGLANG_DUMPER_ENABLE_MODEL_VALUE", "1"
-        )
-        self._enable_model_grad = get_bool_env_var(
-            "SGLANG_DUMPER_ENABLE_MODEL_GRAD", "1"
-        )
+        self._filter = filter
+        self._base_dir = base_dir
+        self._enable_write_file = enable_write_file
+        self._enable_value = enable_value
+        self._enable_grad = enable_grad
+        self._enable_model_value = enable_model_value
+        self._enable_model_grad = enable_model_grad
 
         # States
-        self._partial_name: Optional[str] = None
+        self._partial_name = partial_name
         self._dump_index = 0
         self._forward_pass_id = 0
         self._global_ctx = {}
         self._override_enable = None
-        self._http_server_handled = False
+        self._http_server_handled = not enable_http_server
+
+    @classmethod
+    def from_env(cls) -> "_Dumper":
+        return cls(
+            enable=get_bool_env_var("SGLANG_DUMPER_ENABLE", "0"),
+            base_dir=Path(os.environ.get("SGLANG_DUMPER_DIR", "/tmp")),
+            filter=os.environ.get("SGLANG_DUMPER_FILTER"),
+            enable_write_file=get_bool_env_var("SGLANG_DUMPER_WRITE_FILE", "1"),
+            enable_value=get_bool_env_var("SGLANG_DUMPER_ENABLE_VALUE", "1"),
+            enable_grad=get_bool_env_var("SGLANG_DUMPER_ENABLE_GRAD", "0"),
+            enable_model_value=get_bool_env_var("SGLANG_DUMPER_ENABLE_MODEL_VALUE", "1"),
+            enable_model_grad=get_bool_env_var("SGLANG_DUMPER_ENABLE_MODEL_GRAD", "1"),
+            partial_name=os.environ.get("SGLANG_DUMPER_PARTIAL_NAME"),
+            enable_http_server=get_bool_env_var("SGLANG_ENABLE_DUMPER_HTTP_SERVER", "1"),
+        )
 
     def on_forward_pass_start(self):
         """This should be called on all ranks."""
@@ -175,22 +199,37 @@ class _Dumper:
 
         if enable_value:
             self._dump_single(
-                tag=value_tag, name=name, value=value,
-                extra_kwargs=extra_kwargs, save=save,
+                tag=value_tag,
+                name=name,
+                value=value,
+                extra_kwargs=extra_kwargs,
+                save=save,
             )
 
-        if enable_curr_grad and isinstance(value, torch.Tensor) and (g := value.grad) is not None:
+        if (
+            enable_curr_grad
+            and isinstance(value, torch.Tensor)
+            and (g := value.grad) is not None
+        ):
             self._dump_single(
-                tag=grad_tag, name=f"grad__{name}", value=g,
-                extra_kwargs=extra_kwargs, save=save,
+                tag=grad_tag,
+                name=f"grad__{name}",
+                value=g,
+                extra_kwargs=extra_kwargs,
+                save=save,
             )
 
         if enable_future_grad:
             self._register_dump_grad_hook(
-                name=name, tensor=value, save=save, **extra_kwargs,
+                name=name,
+                tensor=value,
+                save=save,
+                **extra_kwargs,
             )
 
-    def _register_dump_grad_hook(self, *, name: str, tensor, save: bool, **kwargs) -> None:
+    def _register_dump_grad_hook(
+        self, *, name: str, tensor, save: bool, **kwargs
+    ) -> None:
         if not isinstance(tensor, torch.Tensor):
             return
         if not tensor.requires_grad:
@@ -201,8 +240,11 @@ class _Dumper:
 
         def grad_hook(grad: torch.Tensor) -> None:
             self._dump_single(
-                tag="Dumper.Grad", name=f"grad__{name}", value=grad,
-                extra_kwargs=captured_extra, save=save,
+                tag="Dumper.Grad",
+                name=f"grad__{name}",
+                value=grad,
+                extra_kwargs=captured_extra,
+                save=save,
                 forward_pass_id=captured_forward_pass_id,
             )
 
@@ -318,12 +360,6 @@ def _materialize_value(value):
     if callable(value):
         value = value()
     return value
-
-
-def _deepcopy_or_clone(x):
-    if isinstance(x, torch.Tensor):
-        return x.clone()
-    return deepcopy(x)
 
 
 # -------------------------------------- static meta ------------------------------------------
@@ -609,7 +645,7 @@ def _get_local_ip_by_remote() -> Optional[str]:
 # -------------------------------------- singleton ------------------------------------------
 
 
-dumper = _Dumper()
+dumper = _Dumper.from_env()
 
 
 # -------------------------------------- other utility functions ------------------------------------------

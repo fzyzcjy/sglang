@@ -216,18 +216,18 @@ class TestDumperFileWriteControl:
         assert len(_get_filenames(tmpdir)) == 0
 
 
-def _make_test_dumper(tmp_path: Path, **overrides):
+def _make_test_dumper(tmp_path: Path, **overrides) -> "_Dumper":
     """Create a _Dumper for CPU testing without HTTP server or distributed."""
     from sglang.srt.debug_utils.dumper import _Dumper
 
-    d = _Dumper()
-    d._enable = True
-    d._base_dir = tmp_path
-    d._partial_name = "test"
-    d._http_server_handled = True
-    d._forward_pass_id = 1
-    for key, value in overrides.items():
-        setattr(d, f"_{key}", value)
+    defaults: dict = dict(
+        enable=True,
+        base_dir=tmp_path,
+        partial_name="test",
+        enable_http_server=False,
+    )
+    d = _Dumper(**{**defaults, **overrides})
+    d.on_forward_pass_start()
     return d
 
 
@@ -505,8 +505,7 @@ class TestDumpModel:
         assert len(filenames) == 0
 
     def test_filter(self, tmp_path):
-        d = _make_test_dumper(tmp_path)
-        d._filter = "weight"
+        d = _make_test_dumper(tmp_path, filter="weight")
         model = torch.nn.Linear(4, 2)
         x = torch.randn(3, 4)
         y = model(x).sum()
