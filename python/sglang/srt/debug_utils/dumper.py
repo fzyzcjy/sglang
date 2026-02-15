@@ -136,20 +136,15 @@ class _Dumper:
             if self._is_filtered_out(grad_name):
                 continue
 
-            self._ensure_partial_name()
-            self._dump_index += 1
-
-            path, full_kwargs, rank = self._build_dump_path(grad_name, kwargs)
-
-            grad = param.grad
-            self._log_dump(
+            self._dump_raw(
                 "Dumper.ParamGrad",
-                path,
-                rank,
-                grad,
+                grad_name,
+                param.grad,
+                kwargs,
+                save=save,
+                clone=True,
                 param=param_name,
             )
-            self._write_dump(grad.clone(), path, full_kwargs, save=save)
 
     # ---- private helpers ----
 
@@ -223,17 +218,10 @@ class _Dumper:
     def _dump_forward(self, name: str, value, save: bool, **kwargs) -> None:
         if not self._enable_dump_forward:
             return
-
         if self._forward_pass_id < 1:
             print("Dump without on_forward_pass_start()")
-        self._ensure_partial_name()
-        self._dump_index += 1
-
-        path, full_kwargs, rank = self._build_dump_path(name, kwargs)
-
         value = _materialize_value(value)
-        self._log_dump("Dumper", path, rank, value)
-        self._write_dump(value, path, full_kwargs, save=save)
+        self._dump_raw("Dumper", name, value, kwargs, save=save)
 
     def _dump_grad(self, name: str, tensor, save: bool, **kwargs) -> None:
         if not self._enable_dump_grad:
@@ -243,23 +231,43 @@ class _Dumper:
         if not tensor.requires_grad:
             return
 
-        self._ensure_partial_name()
-
         captured_forward_pass_id = self._forward_pass_id
         captured_extra = dict(**kwargs)
 
         def grad_hook(grad: torch.Tensor) -> None:
-            self._dump_index += 1
-            grad_name = f"grad__{name}"
-
-            path, full_kwargs, rank = self._build_dump_path(
-                grad_name, captured_extra, forward_pass_id=captured_forward_pass_id
+            self._dump_raw(
+                "Dumper.Grad",
+                f"grad__{name}",
+                grad,
+                captured_extra,
+                save=save,
+                clone=True,
+                forward_pass_id=captured_forward_pass_id,
             )
 
-            self._log_dump("Dumper.Grad", path, rank, grad)
-            self._write_dump(grad.clone(), path, full_kwargs, save=save)
-
         tensor.register_hook(grad_hook)
+
+    def _dump_raw(
+        self,
+        tag: str,
+        name: str,
+        value,
+        extra_kwargs: dict,
+        *,
+        save: bool,
+        clone: bool = False,
+        forward_pass_id: Optional[int] = None,
+        **log_extra,
+    ) -> None:
+        self._ensure_partial_name()
+        self._dump_index += 1
+        path, full_kwargs, rank = self._build_dump_path(
+            name, extra_kwargs, forward_pass_id=forward_pass_id
+        )
+        self._log_dump(tag, path, rank, value, **log_extra)
+        self._write_dump(
+            value.clone() if clone else value, path, full_kwargs, save=save
+        )
 
 
 def _torch_save(value, path: str):
