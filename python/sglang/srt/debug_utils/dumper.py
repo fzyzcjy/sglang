@@ -195,17 +195,7 @@ class _Dumper:
     ) -> None:
         self._ensure_partial_name()
         self._dump_index += 1
-        path, full_kwargs, rank = self._build_dump_path(
-            name, extra_kwargs, forward_pass_id=forward_pass_id
-        )
-        self._log_dump(tag, path, rank, value, **log_extra)
-        self._write_dump(
-            value.clone() if clone else value, path, full_kwargs, save=save
-        )
 
-    def _build_dump_path(
-        self, name: str, extra_kwargs: dict, forward_pass_id: Optional[int] = None
-    ) -> tuple:
         rank = _get_rank()
         full_kwargs = dict(
             forward_pass_id=(
@@ -219,31 +209,26 @@ class _Dumper:
             **extra_kwargs,
             **self._global_ctx,
         )
-        filename = "___".join(f"{k}={v}" for k, v in full_kwargs.items()) + ".pt"
-        path = self._base_dir / f"sglang_dump_{self._partial_name}" / filename
-        return path, full_kwargs, rank
+        full_filename = "___".join(f"{k}={v}" for k, v in full_kwargs.items()) + ".pt"
+        path = self._base_dir / f"sglang_dump_{self._partial_name}" / full_filename
 
-    def _log_dump(self, tag: str, path: Path, rank: int, value, **extra) -> None:
-        parts = [
-            f"[{tag}] [{rank}, {time.time()}] {path}",
-            f"type={type(value)}",
-        ]
-        if isinstance(value, torch.Tensor):
-            parts += [
-                f"shape={value.shape}",
-                f"dtype={value.dtype}",
-                f"device={value.device}",
-            ]
-        parts.append(f"id={id(value)}")
-        for k, v in extra.items():
-            parts.append(f"{k}={v}")
-        parts.append(f"sample_value={get_truncated_value(value)}")
-        print(" ".join(parts))
+        extra_str = "".join(f"{k}={v} " for k, v in log_extra.items())
+        print(
+            f"[{tag}] [{rank}, {time.time()}] {path} "
+            f"type={type(value)} "
+            f"shape={value.shape if isinstance(value, torch.Tensor) else None} "
+            f"dtype={value.dtype if isinstance(value, torch.Tensor) else None} "
+            f"device={value.device if isinstance(value, torch.Tensor) else None} "
+            f"id={id(value)} "
+            f"{extra_str}"
+            f"sample_value={get_truncated_value(value)}"
+        )
 
-    def _write_dump(self, value, path: Path, meta: dict, *, save: bool) -> None:
         if self._enable_write_file and save:
             path.parent.mkdir(parents=True, exist_ok=True)
-            self._save_value(value, str(path), meta)
+            self._save_value(
+                value.clone() if clone else value, str(path), full_kwargs
+            )
 
     def _save_value(self, value, path: str, meta: dict):
         output_data = {
