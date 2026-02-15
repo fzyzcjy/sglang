@@ -114,7 +114,7 @@ class _Dumper:
             self.dump(f"{name_prefix}_{name}", value, save=save, **kwargs)
 
     def dump(self, name: str, value, save: bool = True, **kwargs) -> None:
-        self._dump_core(
+        self._dump_inner(
             name=name,
             value=value,
             extra_kwargs=kwargs,
@@ -124,7 +124,6 @@ class _Dumper:
             enable_future_grad=self._enable_grad,
             value_tag="Dumper.Value",
             grad_tag="Dumper.Grad",
-            log_extra={},
         )
 
     def dump_model(
@@ -135,7 +134,7 @@ class _Dumper:
         **kwargs,
     ) -> None:
         for param_name, param in model.named_parameters():
-            self._dump_core(
+            self._dump_inner(
                 name=f"{name_prefix}__{param_name}",
                 value=param,
                 extra_kwargs=kwargs,
@@ -145,10 +144,9 @@ class _Dumper:
                 enable_future_grad=False,
                 value_tag="Dumper.ParamValue",
                 grad_tag="Dumper.ParamGrad",
-                log_extra=dict(param=param_name),
             )
 
-    def _dump_core(
+    def _dump_inner(
         self,
         *,
         name: str,
@@ -160,7 +158,6 @@ class _Dumper:
         enable_future_grad: bool,
         value_tag: str,
         grad_tag: str,
-        log_extra: dict,
     ) -> None:
         self._ensure_http_server()
 
@@ -179,13 +176,13 @@ class _Dumper:
         if enable_value:
             self._dump_single(
                 tag=value_tag, name=name, value=value,
-                extra_kwargs=extra_kwargs, save=save, **log_extra,
+                extra_kwargs=extra_kwargs, save=save,
             )
 
         if enable_curr_grad and isinstance(value, torch.Tensor) and (g := value.grad) is not None:
             self._dump_single(
                 tag=grad_tag, name=f"grad__{name}", value=g,
-                extra_kwargs=extra_kwargs, save=save, **log_extra,
+                extra_kwargs=extra_kwargs, save=save,
             )
 
         if enable_future_grad:
@@ -220,7 +217,6 @@ class _Dumper:
         extra_kwargs: dict,
         save: bool,
         forward_pass_id: Optional[int] = None,
-        **log_extra,
     ) -> None:
         self._ensure_partial_name()
         self._dump_index += 1
@@ -241,7 +237,6 @@ class _Dumper:
         full_filename = "___".join(f"{k}={v}" for k, v in full_kwargs.items()) + ".pt"
         path = self._base_dir / f"sglang_dump_{self._partial_name}" / full_filename
 
-        extra_str = "".join(f"{k}={v} " for k, v in log_extra.items())
         print(
             f"[{tag}] [{rank}, {time.time()}] {path} "
             f"type={type(value)} "
@@ -249,7 +244,6 @@ class _Dumper:
             f"dtype={value.dtype if isinstance(value, torch.Tensor) else None} "
             f"device={value.device if isinstance(value, torch.Tensor) else None} "
             f"id={id(value)} "
-            f"{extra_str}"
             f"sample_value={get_truncated_value(value)}"
         )
 
