@@ -185,7 +185,7 @@ class _Dumper:
         return path, full_kwargs, rank
 
     def _write_dump(
-        self, value, path: Path, meta: dict, *, save: bool = True
+        self, value, path: Path, meta: dict, *, save: bool
     ) -> None:
         if self._enable_write_file and save:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -234,7 +234,7 @@ class _Dumper:
         parts.append(f"sample_value={get_truncated_value(value)}")
         print(" ".join(parts))
 
-    def _dump_grad(self, name: str, tensor, save: bool = True, **kwargs) -> None:
+    def _dump_grad(self, name: str, tensor, save: bool, **kwargs) -> None:
         if not self._is_active:
             return
         if not self._enable_dump_grad:
