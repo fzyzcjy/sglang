@@ -154,70 +154,6 @@ class _Dumper:
 
     # ---- private helpers ----
 
-    def _build_dump_path(
-        self, name: str, extra_kwargs: dict, forward_pass_id: Optional[int] = None
-    ) -> tuple:
-        rank = _get_rank()
-        full_kwargs = dict(
-            forward_pass_id=(
-                forward_pass_id
-                if forward_pass_id is not None
-                else self._forward_pass_id
-            ),
-            rank=rank,
-            name=name,
-            dump_index=self._dump_index,
-            **extra_kwargs,
-            **self._global_ctx,
-        )
-        filename = "___".join(f"{k}={v}" for k, v in full_kwargs.items()) + ".pt"
-        path = self._base_dir / f"sglang_dump_{self._partial_name}" / filename
-        return path, full_kwargs, rank
-
-    def _write_dump(self, value, path: Path, meta: dict, *, save: bool) -> None:
-        if self._enable_write_file and save:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            self._save_value(value, str(path), meta)
-
-    def _save_value(self, value, path: str, meta: dict):
-        output_data = {
-            "value": value,
-            "meta": dict(**meta, **self._static_meta),
-        }
-        _torch_save(output_data, path)
-
-    @cached_property
-    def _static_meta(self) -> dict:
-        return _compute_static_meta()
-
-    @property
-    def _is_active(self) -> bool:
-        return self._enable and (self._override_enable is not False)
-
-    def _is_filtered_out(self, name: str) -> bool:
-        return (f := self._filter) is not None and re.search(f, name) is None
-
-    def _log_dump(self, tag: str, path: Path, rank: int, value, **extra) -> None:
-        parts = [
-            f"[{tag}] [{rank}, {time.time()}] {path}",
-            f"type={type(value)}",
-        ]
-        if isinstance(value, torch.Tensor):
-            parts.extend(
-                [
-                    f"shape={value.shape}",
-                    f"dtype={value.dtype}",
-                    f"device={value.device}",
-                ]
-            )
-        else:
-            parts.extend(["shape=None", "dtype=None", "device=None"])
-        parts.append(f"id={id(value)}")
-        for k, v in extra.items():
-            parts.append(f"{k}={v}")
-        parts.append(f"sample_value={get_truncated_value(value)}")
-        print(" ".join(parts))
-
     def _dump_value(self, name: str, value, save: bool, **kwargs) -> None:
         if self._forward_pass_id < 1:
             print("Dump without on_forward_pass_start()")
@@ -266,6 +202,70 @@ class _Dumper:
         self._write_dump(
             value.clone() if clone else value, path, full_kwargs, save=save
         )
+
+    def _build_dump_path(
+        self, name: str, extra_kwargs: dict, forward_pass_id: Optional[int] = None
+    ) -> tuple:
+        rank = _get_rank()
+        full_kwargs = dict(
+            forward_pass_id=(
+                forward_pass_id
+                if forward_pass_id is not None
+                else self._forward_pass_id
+            ),
+            rank=rank,
+            name=name,
+            dump_index=self._dump_index,
+            **extra_kwargs,
+            **self._global_ctx,
+        )
+        filename = "___".join(f"{k}={v}" for k, v in full_kwargs.items()) + ".pt"
+        path = self._base_dir / f"sglang_dump_{self._partial_name}" / filename
+        return path, full_kwargs, rank
+
+    def _log_dump(self, tag: str, path: Path, rank: int, value, **extra) -> None:
+        parts = [
+            f"[{tag}] [{rank}, {time.time()}] {path}",
+            f"type={type(value)}",
+        ]
+        if isinstance(value, torch.Tensor):
+            parts.extend(
+                [
+                    f"shape={value.shape}",
+                    f"dtype={value.dtype}",
+                    f"device={value.device}",
+                ]
+            )
+        else:
+            parts.extend(["shape=None", "dtype=None", "device=None"])
+        parts.append(f"id={id(value)}")
+        for k, v in extra.items():
+            parts.append(f"{k}={v}")
+        parts.append(f"sample_value={get_truncated_value(value)}")
+        print(" ".join(parts))
+
+    def _write_dump(self, value, path: Path, meta: dict, *, save: bool) -> None:
+        if self._enable_write_file and save:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._save_value(value, str(path), meta)
+
+    def _save_value(self, value, path: str, meta: dict):
+        output_data = {
+            "value": value,
+            "meta": dict(**meta, **self._static_meta),
+        }
+        _torch_save(output_data, path)
+
+    @cached_property
+    def _static_meta(self) -> dict:
+        return _compute_static_meta()
+
+    @property
+    def _is_active(self) -> bool:
+        return self._enable and (self._override_enable is not False)
+
+    def _is_filtered_out(self, name: str) -> bool:
+        return (f := self._filter) is not None and re.search(f, name) is None
 
 
 def _torch_save(value, path: str):
