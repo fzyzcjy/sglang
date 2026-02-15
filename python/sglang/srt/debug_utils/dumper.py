@@ -38,22 +38,14 @@ class _Dumper:
 
     def __init__(self):
         # Flags
-        self._enable = bool(int(os.environ.get("SGLANG_DUMPER_ENABLE", "1")))
+        self._enable = get_bool_env_var("SGLANG_DUMPER_ENABLE", "1")
         # TODO (1) support filtering kv instead of name only (2) allow HTTP req change it
         self._filter = os.environ.get("SGLANG_DUMPER_FILTER")
         self._base_dir = Path(os.environ.get("SGLANG_DUMPER_DIR", "/tmp"))
-        self._enable_write_file = bool(
-            int(os.environ.get("SGLANG_DUMPER_WRITE_FILE", "1"))
-        )
-        self._enable_forward_dump = bool(
-            int(os.environ.get("SGLANG_DUMPER_FORWARD_DUMP", "1"))
-        )
-        self._enable_grad_dump = bool(
-            int(os.environ.get("SGLANG_DUMPER_GRAD_DUMP", "1"))
-        )
-        self._output_dict_mode = bool(
-            int(os.environ.get("SGLANG_DUMPER_OUTPUT_DICT", "0"))
-        )
+        self._enable_write_file = get_bool_env_var("SGLANG_DUMPER_WRITE_FILE", "1")
+        self._enable_forward_dump = get_bool_env_var("SGLANG_DUMPER_FORWARD_DUMP", "1")
+        self._enable_grad_dump = get_bool_env_var("SGLANG_DUMPER_GRAD_DUMP", "1")
+        self._output_dict_mode = get_bool_env_var("SGLANG_DUMPER_OUTPUT_DICT", "0")
 
         # States
         self._partial_name: Optional[str] = None
@@ -447,8 +439,8 @@ def _deepcopy_or_clone(x):
 
 
 def _start_maybe_http_server(dumper):
-    http_port = int(os.environ.get("SGLANG_DUMPER_SERVER_PORT", "40000"))
-    zmq_base_port = int(os.environ.get("SGLANG_DUMPER_ZMQ_BASE_PORT", "16800"))
+    http_port = get_int_env_var("SGLANG_DUMPER_SERVER_PORT", 40000)
+    zmq_base_port = get_int_env_var("SGLANG_DUMPER_ZMQ_BASE_PORT", 16800)
     if http_port <= 0:
         return
 
