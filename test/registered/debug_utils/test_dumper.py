@@ -294,8 +294,7 @@ class TestLazyValue:
         tensor = torch.randn(4, 4)
         d.dump("lazy_tensor", lambda: tensor)
 
-        filenames = _get_filenames(tmp_path)
-        assert any("name=lazy_tensor" in f for f in filenames)
+        _assert_files(_get_filenames(tmp_path), exist=["name=lazy_tensor"])
 
         path = _find_dump_file(tmp_path, rank=0, name="lazy_tensor")
         loaded = torch.load(path, map_location="cpu", weights_only=True)
@@ -394,23 +393,24 @@ class TestDumpGrad:
 
         filenames = _get_filenames(tmp_path)
         assert any("name=test_tensor" in f and "grad__" not in f for f in filenames)
-        assert any("grad__test_tensor" in f for f in filenames)
+        _assert_files(filenames, exist=["grad__test_tensor"])
 
     def test_dump_grad_non_tensor_skipped(self, tmp_path):
         d = _make_test_dumper(tmp_path)
         d.dump("not_tensor", 42)
 
-        filenames = _get_filenames(tmp_path)
-        assert not any("grad__" in f for f in filenames)
+        _assert_files(_get_filenames(tmp_path), not_exist=["grad__"])
 
     def test_dump_grad_no_requires_grad_skipped(self, tmp_path):
         d = _make_test_dumper(tmp_path)
         x = torch.randn(3, 3, requires_grad=False)
         d.dump("no_grad_tensor", x)
 
-        filenames = _get_filenames(tmp_path)
-        assert any("name=no_grad_tensor" in f for f in filenames)
-        assert not any("grad__" in f for f in filenames)
+        _assert_files(
+            _get_filenames(tmp_path),
+            exist=["name=no_grad_tensor"],
+            not_exist=["grad__"],
+        )
 
     def test_dump_grad_captures_forward_pass_id(self, tmp_path):
         d = _make_test_dumper(tmp_path)
@@ -450,7 +450,7 @@ class TestDumpGrad:
         assert not any(
             "name=fwd_disabled" in f and "grad__" not in f for f in filenames
         )
-        assert any("grad__fwd_disabled" in f for f in filenames)
+        _assert_files(filenames, exist=["grad__fwd_disabled"])
 
     def test_disable_grad_dump(self, tmp_path):
         d = _make_test_dumper(tmp_path, enable_grad_dump=False)
@@ -460,9 +460,11 @@ class TestDumpGrad:
         d.dump("grad_disabled", x)
         y.backward()
 
-        filenames = _get_filenames(tmp_path)
-        assert any("name=grad_disabled" in f for f in filenames)
-        assert not any("grad__" in f for f in filenames)
+        _assert_files(
+            _get_filenames(tmp_path),
+            exist=["name=grad_disabled"],
+            not_exist=["grad__"],
+        )
 
 class TestDumpParamGrads:
     def test_basic(self, tmp_path):
@@ -474,9 +476,10 @@ class TestDumpParamGrads:
 
         d.dump_param_grads(model, name_prefix="model")
 
-        filenames = _get_filenames(tmp_path)
-        assert any("model_grad__weight" in f for f in filenames)
-        assert any("model_grad__bias" in f for f in filenames)
+        _assert_files(
+            _get_filenames(tmp_path),
+            exist=["model_grad__weight", "model_grad__bias"],
+        )
 
     def test_no_grad_skipped(self, tmp_path):
         d = _make_test_dumper(tmp_path)
@@ -497,9 +500,11 @@ class TestDumpParamGrads:
 
         d.dump_param_grads(model, name_prefix="model")
 
-        filenames = _get_filenames(tmp_path)
-        assert any("model_grad__weight" in f for f in filenames)
-        assert not any("model_grad__bias" in f for f in filenames)
+        _assert_files(
+            _get_filenames(tmp_path),
+            exist=["model_grad__weight"],
+            not_exist=["model_grad__bias"],
+        )
 
     def test_file_content(self, tmp_path):
         d = _make_test_dumper(tmp_path)
