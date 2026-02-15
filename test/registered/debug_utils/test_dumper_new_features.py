@@ -136,5 +136,43 @@ class TestOutputDictMode:
         assert loaded["meta"]["rank"] == 0
 
 
+# -------------------------------------- Task 3: Static Metadata ------------------------------------------
+
+
+class TestStaticMetadata:
+    def test_static_meta_contains_world_info(self):
+        d = _make_test_dumper(Path("/tmp"))
+        meta = d._get_static_meta()
+        assert "world_rank" in meta
+        assert "world_size" in meta
+        assert meta["world_rank"] == 0
+        assert meta["world_size"] == 1
+
+    def test_static_meta_caching(self):
+        d = _make_test_dumper(Path("/tmp"))
+        meta1 = d._get_static_meta()
+        meta2 = d._get_static_meta()
+        assert meta1 is meta2
+
+    def test_parallel_info_graceful_fallback(self):
+        sglang_info = dumper_module._collect_sglang_parallel_info()
+        assert isinstance(sglang_info, dict)
+
+        megatron_info = dumper_module._collect_megatron_parallel_info()
+        assert isinstance(megatron_info, dict)
+
+    def test_dict_mode_includes_static_meta(self, tmp_path):
+        d = _make_test_dumper(tmp_path, output_dict_mode=True)
+        tensor = torch.randn(2, 2)
+
+        d.dump("meta_test", tensor)
+
+        path = _find_dump_file(tmp_path, rank=0, name="meta_test")
+        loaded = torch.load(path, weights_only=False, map_location="cpu")
+        meta = loaded["meta"]
+        assert "world_rank" in meta
+        assert "world_size" in meta
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-xvs"]))
