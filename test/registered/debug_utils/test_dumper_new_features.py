@@ -174,5 +174,111 @@ class TestStaticMetadata:
         assert "world_size" in meta
 
 
+# -------------------------------------- Task 4: dump grad ------------------------------------------
+
+
+class TestDumpGrad:
+    def test_dump_grad_basic(self, tmp_path):
+        d = _make_test_dumper(tmp_path)
+        x = torch.randn(3, 3, requires_grad=True)
+        y = (x * 2).sum()
+
+        d.dump("test_tensor", x)
+        y.backward()
+
+        filenames = _get_filenames(tmp_path)
+        assert any("name=test_tensor" in f and "grad__" not in f for f in filenames)
+        assert any("grad__test_tensor" in f for f in filenames)
+
+    def test_dump_grad_non_tensor_skipped(self, tmp_path):
+        d = _make_test_dumper(tmp_path)
+        d.dump("not_tensor", 42)
+
+        filenames = _get_filenames(tmp_path)
+        assert not any("grad__" in f for f in filenames)
+
+    def test_dump_grad_no_requires_grad_skipped(self, tmp_path):
+        d = _make_test_dumper(tmp_path)
+        x = torch.randn(3, 3, requires_grad=False)
+        d.dump("no_grad_tensor", x)
+
+        filenames = _get_filenames(tmp_path)
+        assert any("name=no_grad_tensor" in f for f in filenames)
+        assert not any("grad__" in f for f in filenames)
+
+    def test_dump_grad_captures_forward_pass_id(self, tmp_path):
+        d = _make_test_dumper(tmp_path)
+        d._forward_pass_id = 42
+        x = torch.randn(3, 3, requires_grad=True)
+        y = (x * 2).sum()
+
+        d.dump("id_test", x)
+        d._forward_pass_id = 999
+        y.backward()
+
+        grad_files = [
+            f.name
+            for f in tmp_path.glob("sglang_dump_*/*.pt")
+            if "grad__" in f.name
+        ]
+        assert len(grad_files) == 1
+        assert "forward_pass_id=42" in grad_files[0]
+
+    def test_dump_grad_file_content(self, tmp_path):
+        d = _make_test_dumper(tmp_path)
+        x = torch.tensor([[1.0, 2.0], [3.0, 4.0]], requires_grad=True)
+        y = (x * 3).sum()
+
+        d.dump("content_check", x)
+        y.backward()
+
+        grad_path = [
+            f
+            for f in tmp_path.glob("sglang_dump_*/*.pt")
+            if "grad__content_check" in f.name
+        ][0]
+        loaded = torch.load(grad_path, map_location="cpu", weights_only=True)
+        expected_grad = torch.full((2, 2), 3.0)
+        assert torch.equal(loaded, expected_grad)
+
+    def test_disable_forward_dump(self, tmp_path):
+        d = _make_test_dumper(tmp_path, enable_forward_dump=False)
+        x = torch.randn(3, 3, requires_grad=True)
+        y = (x * 2).sum()
+
+        d.dump("fwd_disabled", x)
+        y.backward()
+
+        filenames = _get_filenames(tmp_path)
+        assert not any(
+            "name=fwd_disabled" in f and "grad__" not in f for f in filenames
+        )
+        assert any("grad__fwd_disabled" in f for f in filenames)
+
+    def test_disable_grad_dump(self, tmp_path):
+        d = _make_test_dumper(tmp_path, enable_grad_dump=False)
+        x = torch.randn(3, 3, requires_grad=True)
+        y = (x * 2).sum()
+
+        d.dump("grad_disabled", x)
+        y.backward()
+
+        filenames = _get_filenames(tmp_path)
+        assert any("name=grad_disabled" in f for f in filenames)
+        assert not any("grad__" in f for f in filenames)
+
+    def test_dump_format_and_cp_mode_in_filename(self, tmp_path):
+        d = _make_test_dumper(tmp_path)
+        tensor = torch.randn(4, 4)
+
+        d.dump("formatted", tensor, format="bshd", cp_mode="zigzag")
+
+        filenames = _get_filenames(tmp_path)
+        matching = [f for f in filenames if "name=formatted" in f]
+        assert len(matching) == 1
+        assert "format=bshd" in matching[0]
+        assert "cp_mode=zigzag" in matching[0]
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-xvs"]))

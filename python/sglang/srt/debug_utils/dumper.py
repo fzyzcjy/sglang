@@ -55,6 +55,12 @@ class _Dumper:
             int(os.environ.get("SGLANG_DUMPER_OUTPUT_DICT", "0"))
         )
         self._static_meta_cache = None
+        self._enable_forward_dump = bool(
+            int(os.environ.get("SGLANG_DUMPER_FORWARD_DUMP", "1"))
+        )
+        self._enable_grad_dump = bool(
+            int(os.environ.get("SGLANG_DUMPER_GRAD_DUMP", "1"))
+        )
 
     def on_forward_pass_start(self):
         """This should be called on all ranks."""
@@ -120,10 +126,43 @@ class _Dumper:
         for name, value in data.items():
             self.dump(f"{name_prefix}_{name}", value, save=save, **kwargs)
 
-    def dump(self, name, value, save: bool = True, **kwargs):
+    def dump(
+        self,
+        name,
+        value,
+        save: bool = True,
+        print_full: bool = False,
+        format: str = None,
+        cp_mode: str = None,
+        ignore_enable: bool = False,
+        ignore_override_enable: bool = False,
+        **kwargs,
+    ):
         self._ensure_http_server()
 
-        if not (self._enable and (self._override_enable is not False)):
+        if self._enable_grad_dump:
+            self._dump_grad(
+                name,
+                value,
+                save=save,
+                print_full=print_full,
+                format=format,
+                cp_mode=cp_mode,
+                ignore_enable=ignore_enable,
+                ignore_override_enable=ignore_override_enable,
+                **kwargs,
+            )
+
+        if ignore_enable:
+            pass
+        elif ignore_override_enable:
+            if not self._enable:
+                return
+        else:
+            if not (self._enable and (self._override_enable is not False)):
+                return
+
+        if not self._enable_forward_dump:
             return
         if (f := self._filter) is not None and re.search(f, name) is None:
             return
@@ -142,12 +181,19 @@ class _Dumper:
             **kwargs,
             **self._global_ctx,
         )
+        if format is not None:
+            full_kwargs["format"] = format
+        if cp_mode is not None:
+            full_kwargs["cp_mode"] = cp_mode
         full_filename = "___".join(f"{k}={v}" for k, v in full_kwargs.items()) + ".pt"
         path = self._base_dir / f"sglang_dump_{self._partial_name}" / full_filename
 
         value = _materialize_value(value)
 
-        sample_value = get_truncated_value(value)
+        if print_full and isinstance(value, torch.Tensor):
+            sample_value = value.tolist()
+        else:
+            sample_value = get_truncated_value(value)
 
         print(
             f"[Dumper] [{rank}, {time.time()}] {path} "
@@ -162,6 +208,90 @@ class _Dumper:
         if self._enable_write_file and save:
             path.parent.mkdir(parents=True, exist_ok=True)
             self._save_value(value, str(path), full_kwargs)
+
+    def _dump_grad(
+        self,
+        name,
+        tensor,
+        save: bool = True,
+        print_full: bool = False,
+        ignore_enable: bool = False,
+        ignore_override_enable: bool = False,
+        **kwargs,
+    ):
+        if ignore_enable:
+            pass
+        elif ignore_override_enable:
+            if not self._enable:
+                return
+        else:
+            if not (self._enable and (self._override_enable is not False)):
+                return
+
+        if not self._enable_grad_dump:
+            return
+
+        if not isinstance(tensor, torch.Tensor):
+            print(f"[Dumper] dump_grad: {name} is not a tensor, skipping")
+            return
+
+        if not tensor.requires_grad:
+            print(f"[Dumper] dump_grad: {name} does not require grad, skipping")
+            return
+
+        captured_forward_pass_id = self._forward_pass_id
+        captured_ctx = self._global_ctx.copy()
+        captured_kwargs = kwargs.copy()
+
+        def grad_hook(grad):
+            self._dump_index += 1
+            grad_name = f"grad__{name}"
+
+            rank = _get_rank()
+            full_kwargs = dict(
+                forward_pass_id=captured_forward_pass_id,
+                rank=rank,
+                name=grad_name,
+                dump_index=self._dump_index,
+                **captured_kwargs,
+                **captured_ctx,
+            )
+            full_filename = (
+                "___".join(f"{k}={v}" for k, v in full_kwargs.items()) + ".pt"
+            )
+            path = (
+                self._base_dir / f"sglang_dump_{self._partial_name}" / full_filename
+            )
+
+            if print_full:
+                sample_value = grad.tolist()
+            else:
+                sample_value = get_truncated_value(grad)
+
+            print(
+                f"[Dumper.Grad] [{rank}, {time.time()}] {path} "
+                f"type={type(grad)} "
+                f"shape={grad.shape} "
+                f"dtype={grad.dtype} "
+                f"device={grad.device} "
+                f"id={id(grad)} "
+                f"sample_value={sample_value}"
+            )
+
+            if self._enable_write_file and save:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                self._save_value(grad.clone(), str(path), full_kwargs)
+
+            return None
+
+        self._ensure_http_server()
+        if not (self._enable and (self._override_enable is not False)):
+            return
+        if (f := self._filter) is not None and re.search(f, name) is None:
+            return
+
+        self._ensure_partial_name()
+        tensor.register_hook(grad_hook)
 
 
 def _torch_save(value, path: str):
