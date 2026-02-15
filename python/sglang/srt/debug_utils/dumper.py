@@ -90,6 +90,10 @@ class _Dumper:
             self._partial_name = _get_partial_name()
             print(f"[Dumper] Choose partial_name={self._partial_name}")
 
+    @property
+    def _is_active(self) -> bool:
+        return self._enable and (self._override_enable is not False)
+
     def set_ctx(self, **kwargs):
         """
         Example:
@@ -159,7 +163,7 @@ class _Dumper:
         if self._enable_grad_dump:
             self._dump_grad(name, value, save=save, **kwargs)
 
-        if not (self._enable and (self._override_enable is not False)):
+        if not self._is_active:
             return
         if not self._enable_forward_dump:
             return
@@ -189,7 +193,7 @@ class _Dumper:
         self._write_dump(value, path, full_kwargs, save=save)
 
     def _dump_grad(self, name: str, tensor, save: bool = True, **kwargs) -> None:
-        if not (self._enable and (self._override_enable is not False)):
+        if not self._is_active:
             return
         if not self._enable_grad_dump:
             return
@@ -242,7 +246,7 @@ class _Dumper:
     ) -> None:
         if not self._enable_grad_dump:
             return
-        if not (self._enable and (self._override_enable is not False)):
+        if not self._is_active:
             return
 
         self._ensure_http_server()
