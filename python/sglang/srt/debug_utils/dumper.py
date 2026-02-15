@@ -155,6 +155,27 @@ class _Dumper:
             self._static_meta_cache = _compute_static_meta()
         return self._static_meta_cache
 
+    def _log_dump(
+        self, tag: str, path: Path, rank: int, value, sample_value, **extra
+    ) -> None:
+        parts = [
+            f"[{tag}] [{rank}, {time.time()}] {path}",
+            f"type={type(value)}",
+        ]
+        if isinstance(value, torch.Tensor):
+            parts.extend([
+                f"shape={value.shape}",
+                f"dtype={value.dtype}",
+                f"device={value.device}",
+            ])
+        else:
+            parts.extend(["shape=None", "dtype=None", "device=None"])
+        parts.append(f"id={id(value)}")
+        for k, v in extra.items():
+            parts.append(f"{k}={v}")
+        parts.append(f"sample_value={sample_value}")
+        print(" ".join(parts))
+
     def dump_dict(self, name_prefix, data, save: bool = True, **kwargs):
         data = _obj_to_dict(data)
         for name, value in data.items():
@@ -181,17 +202,7 @@ class _Dumper:
 
         value = _materialize_value(value)
         sample_value = get_truncated_value(value)
-
-        print(
-            f"[Dumper] [{rank}, {time.time()}] {path} "
-            f"type={type(value)} "
-            f"shape={value.shape if isinstance(value, torch.Tensor) else None} "
-            f"dtype={value.dtype if isinstance(value, torch.Tensor) else None} "
-            f"device={value.device if isinstance(value, torch.Tensor) else None} "
-            f"id={id(value)} "
-            f"sample_value={sample_value}"
-        )
-
+        self._log_dump("Dumper", path, rank, value, sample_value)
         self._write_dump(value, path, full_kwargs, save=save)
 
     def _dump_grad(self, name: str, tensor, save: bool = True, **kwargs) -> None:
@@ -224,17 +235,7 @@ class _Dumper:
             )
 
             sample_value = get_truncated_value(grad)
-
-            print(
-                f"[Dumper.Grad] [{rank}, {time.time()}] {path} "
-                f"type={type(grad)} "
-                f"shape={grad.shape} "
-                f"dtype={grad.dtype} "
-                f"device={grad.device} "
-                f"id={id(grad)} "
-                f"sample_value={sample_value}"
-            )
-
+            self._log_dump("Dumper.Grad", path, rank, grad, sample_value)
             self._write_dump(grad.clone(), path, full_kwargs, save=save)
 
         tensor.register_hook(grad_hook)
@@ -268,16 +269,10 @@ class _Dumper:
 
             grad = param.grad
             sample_value = get_truncated_value(grad)
-
-            print(
-                f"[Dumper.ParamGrad] [{rank}, {time.time()}] {path} "
-                f"param={param_name} "
-                f"shape={grad.shape} "
-                f"dtype={grad.dtype} "
-                f"device={grad.device} "
-                f"sample_value={sample_value}"
+            self._log_dump(
+                "Dumper.ParamGrad", path, rank, grad, sample_value,
+                param=param_name,
             )
-
             self._write_dump(grad.clone(), path, full_kwargs, save=save)
 
 
