@@ -111,6 +111,7 @@ class _Dumper:
             return
         if self._is_filtered_out(name):
             return
+        value = _materialize_value(value)
         self._dump_forward(name, value, save=save, **kwargs)
         self._dump_grad(name, value, save=save, **kwargs)
 
@@ -220,7 +221,6 @@ class _Dumper:
             return
         if self._forward_pass_id < 1:
             print("Dump without on_forward_pass_start()")
-        value = _materialize_value(value)
         self._dump_raw("Dumper", name, value, kwargs, save=save)
 
     def _dump_grad(self, name: str, tensor, save: bool, **kwargs) -> None:
