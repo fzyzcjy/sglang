@@ -39,7 +39,7 @@ class _Dumper:
 
     def __init__(self):
         # Flags
-        self._enable = get_bool_env_var("SGLANG_DUMPER_ENABLE", "1")
+        self._enable = get_bool_env_var("SGLANG_DUMPER_ENABLE", "0")
         # TODO (1) support filtering kv instead of name only (2) allow HTTP req change it
         self._filter = os.environ.get("SGLANG_DUMPER_FILTER")
         self._base_dir = Path(os.environ.get("SGLANG_DUMPER_DIR", "/tmp"))
