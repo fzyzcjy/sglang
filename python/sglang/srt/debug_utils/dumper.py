@@ -229,13 +229,11 @@ class _Dumper:
             f"type={type(value)}",
         ]
         if isinstance(value, torch.Tensor):
-            parts.extend(
-                [
-                    f"shape={value.shape}",
-                    f"dtype={value.dtype}",
-                    f"device={value.device}",
-                ]
-            )
+            parts += [
+                f"shape={value.shape}",
+                f"dtype={value.dtype}",
+                f"device={value.device}",
+            ]
         parts.append(f"id={id(value)}")
         for k, v in extra.items():
             parts.append(f"{k}={v}")
