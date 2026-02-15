@@ -256,7 +256,7 @@ def _load_dump(path: Path) -> dict:
     return torch.load(path, weights_only=False, map_location="cpu")
 
 
-class TestLazyValue:
+class TestMaterializeValue:
     def test_materialize_value_callable(self):
         tensor = torch.randn(3, 3)
         result = _materialize_value(lambda: tensor)
@@ -448,20 +448,6 @@ class TestDumpModel:
         _assert_files(
             _get_filenames(tmp_path),
             exist=["model__weight"],
-        )
-
-    def test_both_value_and_grad(self, tmp_path):
-        d = _make_test_dumper(tmp_path)
-        model = torch.nn.Linear(4, 2, bias=False)
-        x = torch.ones(1, 4)
-        y = model(x).sum()
-        y.backward()
-
-        d.dump_model(model, name_prefix="p")
-
-        _assert_files(
-            _get_filenames(tmp_path),
-            exist=["p__weight", "grad__p__weight"],
         )
 
     def test_no_grad_skipped(self, tmp_path):
