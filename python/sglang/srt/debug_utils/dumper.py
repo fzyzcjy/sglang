@@ -140,7 +140,7 @@ class _Dumper:
                 enable_value=self._enable_model_value,
                 enable_curr_grad=self._enable_model_grad,
                 enable_future_grad=False,
-                value_tag="Dumper.Param",
+                value_tag="Dumper.ParamValue",
                 grad_tag="Dumper.ParamGrad",
                 param=param_name,
             )
@@ -175,23 +175,22 @@ class _Dumper:
 
         if enable_value:
             self._dump_single(
-                value_tag, name, value, extra_kwargs, save=save, **log_extra
+                tag=value_tag, name=name, value=value,
+                extra_kwargs=extra_kwargs, save=save, **log_extra,
             )
 
         if enable_curr_grad and isinstance(value, torch.Tensor) and (g := value.grad) is not None:
             self._dump_single(
-                grad_tag,
-                f"grad__{name}",
-                g,
-                extra_kwargs,
-                save=save,
-                **log_extra,
+                tag=grad_tag, name=f"grad__{name}", value=g,
+                extra_kwargs=extra_kwargs, save=save, **log_extra,
             )
 
         if enable_future_grad:
-            self._register_grad_hook(name, value, save=save, **extra_kwargs)
+            self._register_grad_hook(
+                name=name, tensor=value, save=save, **extra_kwargs,
+            )
 
-    def _register_grad_hook(self, name: str, tensor, save: bool, **kwargs) -> None:
+    def _register_grad_hook(self, *, name: str, tensor, save: bool, **kwargs) -> None:
         if not isinstance(tensor, torch.Tensor):
             return
         if not tensor.requires_grad:
@@ -202,11 +201,8 @@ class _Dumper:
 
         def grad_hook(grad: torch.Tensor) -> None:
             self._dump_single(
-                "Dumper.Grad",
-                f"grad__{name}",
-                grad,
-                captured_extra,
-                save=save,
+                tag="Dumper.Grad", name=f"grad__{name}", value=grad,
+                extra_kwargs=captured_extra, save=save,
                 forward_pass_id=captured_forward_pass_id,
             )
 
@@ -214,11 +210,11 @@ class _Dumper:
 
     def _dump_single(
         self,
+        *,
         tag: str,
         name: str,
         value,
         extra_kwargs: dict,
-        *,
         save: bool,
         forward_pass_id: Optional[int] = None,
         **log_extra,
