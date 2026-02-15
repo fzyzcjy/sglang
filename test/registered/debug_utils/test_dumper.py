@@ -438,8 +438,8 @@ class TestDumpGrad:
         expected_grad = torch.full((2, 2), 3.0)
         assert torch.equal(loaded, expected_grad)
 
-    def test_disable_dump_forward(self, tmp_path):
-        d = _make_test_dumper(tmp_path, enable_dump_forward=False)
+    def test_disable_dump_value(self, tmp_path):
+        d = _make_test_dumper(tmp_path, enable_dump_value=False)
         x = torch.randn(3, 3, requires_grad=True)
         y = (x * 2).sum()
 

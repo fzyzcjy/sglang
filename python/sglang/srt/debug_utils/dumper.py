@@ -44,7 +44,7 @@ class _Dumper:
         self._filter = os.environ.get("SGLANG_DUMPER_FILTER")
         self._base_dir = Path(os.environ.get("SGLANG_DUMPER_DIR", "/tmp"))
         self._enable_write_file = get_bool_env_var("SGLANG_DUMPER_WRITE_FILE", "1")
-        self._enable_dump_forward = get_bool_env_var("SGLANG_DUMPER_DUMP_FORWARD", "1")
+        self._enable_dump_value = get_bool_env_var("SGLANG_DUMPER_DUMP_VALUE", "1")
         self._enable_dump_grad = get_bool_env_var("SGLANG_DUMPER_DUMP_GRAD", "0")
         self._output_dict_mode = get_bool_env_var("SGLANG_DUMPER_OUTPUT_DICT", "0")
 
@@ -113,11 +113,11 @@ class _Dumper:
         if self._is_filtered_out(name):
             return
 
-        if self._enable_dump_forward or self._enable_dump_grad:
+        if self._enable_dump_value or self._enable_dump_grad:
             value = _materialize_value(value)
 
-        if self._enable_dump_forward:
-            self._dump_forward(name, value, save=save, **kwargs)
+        if self._enable_dump_value:
+            self._dump_value(name, value, save=save, **kwargs)
         if self._enable_dump_grad:
             self._dump_grad(name, value, save=save, **kwargs)
 
@@ -222,7 +222,7 @@ class _Dumper:
         parts.append(f"sample_value={get_truncated_value(value)}")
         print(" ".join(parts))
 
-    def _dump_forward(self, name: str, value, save: bool, **kwargs) -> None:
+    def _dump_value(self, name: str, value, save: bool, **kwargs) -> None:
         if self._forward_pass_id < 1:
             print("Dump without on_forward_pass_start()")
         self._dump_raw("Dumper", name, value, kwargs, save=save)
