@@ -51,6 +51,9 @@ class _Dumper:
         self._global_ctx = {}
         self._override_enable = None
         self._http_server_handled = False
+        self._output_dict_mode = bool(
+            int(os.environ.get("SGLANG_DUMPER_OUTPUT_DICT", "0"))
+        )
 
     def on_forward_pass_start(self):
         """This should be called on all ranks."""
@@ -95,6 +98,16 @@ class _Dumper:
 
     def override_enable(self, value: bool):
         self._override_enable = value
+
+    def _save_value(self, value, path: str, meta: dict):
+        if self._output_dict_mode:
+            output_data = {
+                "value": value,
+                "meta": meta,
+            }
+        else:
+            output_data = value
+        _torch_save(output_data, path)
 
     def dump_dict(self, name_prefix, data, save: bool = True, **kwargs):
         data = _obj_to_dict(data)
@@ -142,7 +155,7 @@ class _Dumper:
 
         if self._enable_write_file and save:
             path.parent.mkdir(parents=True, exist_ok=True)
-            _torch_save(value, str(path))
+            self._save_value(value, str(path), full_kwargs)
 
 
 def _torch_save(value, path: str):

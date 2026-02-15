@@ -92,5 +92,49 @@ class TestLazyValue:
         assert torch.equal(loaded, tensor)
 
 
+# -------------------------------------- Task 2: Output Dict Mode ------------------------------------------
+
+
+class TestOutputDictMode:
+    def test_save_value_normal_mode(self, tmp_path):
+        d = _make_test_dumper(tmp_path)
+        d._output_dict_mode = False
+        tensor = torch.randn(3, 3)
+        path = str(tmp_path / "normal.pt")
+
+        d._save_value(tensor, path, {"name": "test"})
+
+        loaded = torch.load(path, weights_only=True)
+        assert torch.equal(loaded, tensor)
+
+    def test_save_value_dict_mode(self, tmp_path):
+        d = _make_test_dumper(tmp_path)
+        d._output_dict_mode = True
+        tensor = torch.randn(3, 3)
+        path = str(tmp_path / "dict.pt")
+
+        d._save_value(tensor, path, {"name": "test"})
+
+        loaded = torch.load(path, weights_only=False, map_location="cpu")
+        assert isinstance(loaded, dict)
+        assert "value" in loaded
+        assert "meta" in loaded
+        assert torch.equal(loaded["value"], tensor)
+        assert loaded["meta"]["name"] == "test"
+
+    def test_dump_output_dict_mode_integration(self, tmp_path):
+        d = _make_test_dumper(tmp_path, output_dict_mode=True)
+        tensor = torch.randn(4, 4)
+
+        d.dump("dict_test", tensor)
+
+        path = _find_dump_file(tmp_path, rank=0, name="dict_test")
+        loaded = torch.load(path, weights_only=False, map_location="cpu")
+        assert isinstance(loaded, dict)
+        assert torch.equal(loaded["value"], tensor)
+        assert loaded["meta"]["name"] == "dict_test"
+        assert loaded["meta"]["rank"] == 0
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-xvs"]))
