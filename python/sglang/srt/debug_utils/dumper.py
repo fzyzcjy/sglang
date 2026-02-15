@@ -30,8 +30,11 @@ class _Dumper:
     from dumper import dumper
     ```
 
-    Disable at startup and enable via HTTP:
-    1. `SGLANG_DUMPER_ENABLE=0 python ...`
+    Then run the program:
+    `SGLANG_DUMPER_ENABLE=1 python ...`
+
+    Alternatively, disable at startup and enable via HTTP:
+    1. `python ...`
     2. `curl -X POST http://localhost:40000/dumper -d '{"enable": true}'`
 
     Related: `sglang.srt.debug_utils.dump_comparator` for dump comparison
