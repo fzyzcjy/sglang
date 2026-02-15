@@ -48,7 +48,13 @@ class _Dumper:
         self._base_dir = Path(os.environ.get("SGLANG_DUMPER_DIR", "/tmp"))
         self._enable_write_file = get_bool_env_var("SGLANG_DUMPER_WRITE_FILE", "1")
         self._enable_dump_value = get_bool_env_var("SGLANG_DUMPER_DUMP_VALUE", "1")
-        self._enable_dump_grad = get_bool_env_var("SGLANG_DUMPER_DUMP_GRAD", "1")
+        self._enable_dump_grad = get_bool_env_var("SGLANG_DUMPER_DUMP_GRAD", "0")
+        self._enable_dump_model_value = get_bool_env_var(
+            "SGLANG_DUMPER_DUMP_MODEL_VALUE", "1"
+        )
+        self._enable_dump_model_grad = get_bool_env_var(
+            "SGLANG_DUMPER_DUMP_MODEL_GRAD", "1"
+        )
 
         # States
         self._partial_name: Optional[str] = None
@@ -125,36 +131,36 @@ class _Dumper:
         if self._enable_dump_grad:
             self._dump_future_grad(name, value, save=save, **kwargs)
 
-    def dump_param_grads(
+    def dump_model(
         self,
         model: "torch.nn.Module",
         name_prefix: str = "param",
         save: bool = True,
         **kwargs,
     ) -> None:
-        if not self._enable_dump_grad:
-            return
+        self._ensure_http_server()
         if not self._is_active:
             return
 
-        self._ensure_http_server()
-
         for param_name, param in model.named_parameters():
-            if param.grad is None:
-                continue
+            if self._enable_dump_model_value:
+                full_name = f"{name_prefix}__{param_name}"
+                if not self._is_filtered_out(full_name):
+                    self._dump_raw(
+                        "Dumper.Param", full_name, param, kwargs, save=save
+                    )
 
-            grad_name = f"{name_prefix}_grad__{param_name}"
-            if self._is_filtered_out(grad_name):
-                continue
-
-            self._dump_raw(
-                "Dumper.ParamGrad",
-                grad_name,
-                param.grad,
-                kwargs,
-                save=save,
-                param=param_name,
-            )
+            if self._enable_dump_model_grad and param.grad is not None:
+                grad_name = f"{name_prefix}_grad__{param_name}"
+                if not self._is_filtered_out(grad_name):
+                    self._dump_raw(
+                        "Dumper.ParamGrad",
+                        grad_name,
+                        param.grad,
+                        kwargs,
+                        save=save,
+                        param=param_name,
+                    )
 
     def _dump_future_grad(self, name: str, tensor, save: bool, **kwargs) -> None:
         if not isinstance(tensor, torch.Tensor):
