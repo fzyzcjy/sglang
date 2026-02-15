@@ -120,7 +120,7 @@ class _Dumper:
         if self._enable_dump_value:
             self._dump_raw("Dumper", name, value, kwargs, save=save)
         if self._enable_dump_grad:
-            self._dump_grad(name, value, save=save, **kwargs)
+            self._dump_future_grad(name, value, save=save, **kwargs)
 
     def dump_param_grads(
         self,
@@ -153,7 +153,7 @@ class _Dumper:
                 param=param_name,
             )
 
-    def _dump_grad(self, name: str, tensor, save: bool, **kwargs) -> None:
+    def _dump_future_grad(self, name: str, tensor, save: bool, **kwargs) -> None:
         if not isinstance(tensor, torch.Tensor):
             return
         if not tensor.requires_grad:
