@@ -37,7 +37,7 @@ class _Dumper:
     """
 
     def __init__(self):
-        # Do not import `sglang` to make this file standalone
+        # Flags
         self._enable = bool(int(os.environ.get("SGLANG_DUMPER_ENABLE", "1")))
         # TODO (1) support filtering kv instead of name only (2) allow HTTP req change it
         self._filter = os.environ.get("SGLANG_DUMPER_FILTER")
@@ -45,22 +45,24 @@ class _Dumper:
         self._enable_write_file = bool(
             int(os.environ.get("SGLANG_DUMPER_WRITE_FILE", "1"))
         )
-        self._partial_name: Optional[str] = None
-        self._dump_index = 0
-        self._forward_pass_id = 0
-        self._global_ctx = {}
-        self._override_enable = None
-        self._http_server_handled = False
-        self._output_dict_mode = bool(
-            int(os.environ.get("SGLANG_DUMPER_OUTPUT_DICT", "0"))
-        )
-        self._static_meta_cache = None
         self._enable_forward_dump = bool(
             int(os.environ.get("SGLANG_DUMPER_FORWARD_DUMP", "1"))
         )
         self._enable_grad_dump = bool(
             int(os.environ.get("SGLANG_DUMPER_GRAD_DUMP", "1"))
         )
+        self._output_dict_mode = bool(
+            int(os.environ.get("SGLANG_DUMPER_OUTPUT_DICT", "0"))
+        )
+
+        # States
+        self._partial_name: Optional[str] = None
+        self._dump_index = 0
+        self._forward_pass_id = 0
+        self._global_ctx = {}
+        self._override_enable = None
+        self._http_server_handled = False
+        self._static_meta_cache = None
 
     def on_forward_pass_start(self):
         """This should be called on all ranks."""
