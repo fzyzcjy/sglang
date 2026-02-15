@@ -150,7 +150,6 @@ class _Dumper:
                 param.grad,
                 kwargs,
                 save=save,
-                clone=True,
                 param=param_name,
             )
 
@@ -170,7 +169,6 @@ class _Dumper:
                 grad,
                 captured_extra,
                 save=save,
-                clone=True,
                 forward_pass_id=captured_forward_pass_id,
             )
 
@@ -184,7 +182,6 @@ class _Dumper:
         extra_kwargs: dict,
         *,
         save: bool,
-        clone: bool = False,
         forward_pass_id: Optional[int] = None,
         **log_extra,
     ) -> None:
@@ -222,7 +219,7 @@ class _Dumper:
         if self._enable_write_file and save:
             path.parent.mkdir(parents=True, exist_ok=True)
             output_data = {
-                "value": value.clone() if clone else value,
+                "value": value,
                 "meta": dict(**full_kwargs, **self._static_meta),
             }
             _torch_save(output_data, str(path))
