@@ -125,8 +125,7 @@ class _Dumper:
         path, full_kwargs, rank = self._build_dump_path(name, kwargs)
 
         value = _materialize_value(value)
-        sample_value = get_truncated_value(value)
-        self._log_dump("Dumper", path, rank, value, sample_value)
+        self._log_dump("Dumper", path, rank, value)
         self._write_dump(value, path, full_kwargs, save=save)
 
     def dump_param_grads(
@@ -157,9 +156,8 @@ class _Dumper:
             path, full_kwargs, rank = self._build_dump_path(grad_name, kwargs)
 
             grad = param.grad
-            sample_value = get_truncated_value(grad)
             self._log_dump(
-                "Dumper.ParamGrad", path, rank, grad, sample_value,
+                "Dumper.ParamGrad", path, rank, grad,
                 param=param_name,
             )
             self._write_dump(grad.clone(), path, full_kwargs, save=save)
@@ -216,7 +214,7 @@ class _Dumper:
         return (f := self._filter) is not None and re.search(f, name) is None
 
     def _log_dump(
-        self, tag: str, path: Path, rank: int, value, sample_value, **extra
+        self, tag: str, path: Path, rank: int, value, **extra
     ) -> None:
         parts = [
             f"[{tag}] [{rank}, {time.time()}] {path}",
@@ -233,7 +231,7 @@ class _Dumper:
         parts.append(f"id={id(value)}")
         for k, v in extra.items():
             parts.append(f"{k}={v}")
-        parts.append(f"sample_value={sample_value}")
+        parts.append(f"sample_value={get_truncated_value(value)}")
         print(" ".join(parts))
 
     def _dump_grad(self, name: str, tensor, save: bool = True, **kwargs) -> None:
@@ -265,8 +263,7 @@ class _Dumper:
                 grad_name, captured_extra, forward_pass_id=captured_forward_pass_id
             )
 
-            sample_value = get_truncated_value(grad)
-            self._log_dump("Dumper.Grad", path, rank, grad, sample_value)
+            self._log_dump("Dumper.Grad", path, rank, grad)
             self._write_dump(grad.clone(), path, full_kwargs, save=save)
 
         tensor.register_hook(grad_hook)
