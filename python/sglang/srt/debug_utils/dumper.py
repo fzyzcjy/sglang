@@ -224,16 +224,11 @@ class _Dumper:
 
         if self._enable_write_file and save:
             path.parent.mkdir(parents=True, exist_ok=True)
-            self._save_value(
-                value.clone() if clone else value, str(path), full_kwargs
-            )
-
-    def _save_value(self, value, path: str, meta: dict):
-        output_data = {
-            "value": value,
-            "meta": dict(**meta, **self._static_meta),
-        }
-        _torch_save(output_data, path)
+            output_data = {
+                "value": value.clone() if clone else value,
+                "meta": dict(**full_kwargs, **self._static_meta),
+            }
+            _torch_save(output_data, str(path))
 
     @cached_property
     def _static_meta(self) -> dict:
