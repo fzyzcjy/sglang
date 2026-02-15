@@ -189,11 +189,11 @@ class _Dumper:
             )
 
         if enable_future_grad:
-            self._register_grad_hook(
+            self._register_dump_grad_hook(
                 name=name, tensor=value, save=save, **extra_kwargs,
             )
 
-    def _register_grad_hook(self, *, name: str, tensor, save: bool, **kwargs) -> None:
+    def _register_dump_grad_hook(self, *, name: str, tensor, save: bool, **kwargs) -> None:
         if not isinstance(tensor, torch.Tensor):
             return
         if not tensor.requires_grad:
