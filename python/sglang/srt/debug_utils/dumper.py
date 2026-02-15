@@ -4,6 +4,7 @@ import re
 import socket
 import threading
 import time
+from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import List, Optional
@@ -125,6 +126,8 @@ class _Dumper:
         full_filename = "___".join(f"{k}={v}" for k, v in full_kwargs.items()) + ".pt"
         path = self._base_dir / f"sglang_dump_{self._partial_name}" / full_filename
 
+        value = _materialize_value(value)
+
         sample_value = get_truncated_value(value)
 
         print(
@@ -187,6 +190,18 @@ def _obj_to_dict(obj):
             # Skip attributes that raise an exception on access
             continue
     return ret
+
+
+def _materialize_value(value):
+    if callable(value):
+        value = value()
+    return value
+
+
+def _deepcopy_or_clone(x):
+    if isinstance(x, torch.Tensor):
+        return x.clone()
+    return deepcopy(x)
 
 
 # -------------------------------------- http control server ------------------------------------------
