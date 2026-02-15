@@ -113,6 +113,8 @@ class _Dumper:
             return
 
         if self._enable_dump_value or self._enable_dump_grad:
+            if self._forward_pass_id < 1:
+                print("Dump without on_forward_pass_start()")
             value = _materialize_value(value)
 
         if self._enable_dump_value:
@@ -153,8 +155,6 @@ class _Dumper:
             )
 
     def _dump_value(self, name: str, value, save: bool, **kwargs) -> None:
-        if self._forward_pass_id < 1:
-            print("Dump without on_forward_pass_start()")
         self._dump_raw("Dumper", name, value, kwargs, save=save)
 
     def _dump_grad(self, name: str, tensor, save: bool, **kwargs) -> None:
