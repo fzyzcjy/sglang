@@ -100,48 +100,6 @@ class _Dumper:
     def override_enable(self, value: bool):
         self._override_enable = value
 
-    def _build_dump_path(
-        self, name: str, extra_kwargs: dict, forward_pass_id: Optional[int] = None
-    ) -> tuple:
-        rank = _get_rank()
-        full_kwargs = dict(
-            forward_pass_id=(
-                forward_pass_id
-                if forward_pass_id is not None
-                else self._forward_pass_id
-            ),
-            rank=rank,
-            name=name,
-            dump_index=self._dump_index,
-            **extra_kwargs,
-            **self._global_ctx,
-        )
-        filename = "___".join(f"{k}={v}" for k, v in full_kwargs.items()) + ".pt"
-        path = self._base_dir / f"sglang_dump_{self._partial_name}" / filename
-        return path, full_kwargs, rank
-
-    def _write_dump(
-        self, value, path: Path, meta: dict, *, save: bool = True
-    ) -> None:
-        if self._enable_write_file and save:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            self._save_value(value, str(path), meta)
-
-    def _save_value(self, value, path: str, meta: dict):
-        if self._output_dict_mode:
-            output_data = {
-                "value": value,
-                "meta": dict(**meta, **self._get_static_meta()),
-            }
-        else:
-            output_data = value
-        _torch_save(output_data, path)
-
-    def _get_static_meta(self):
-        if self._static_meta_cache is None:
-            self._static_meta_cache = _compute_static_meta()
-        return self._static_meta_cache
-
     def dump_dict(self, name_prefix, data, save: bool = True, **kwargs):
         data = _obj_to_dict(data)
         for name, value in data.items():
@@ -206,7 +164,49 @@ class _Dumper:
             )
             self._write_dump(grad.clone(), path, full_kwargs, save=save)
 
-    # ---- private helpers (new) ----
+    # ---- private helpers ----
+
+    def _build_dump_path(
+        self, name: str, extra_kwargs: dict, forward_pass_id: Optional[int] = None
+    ) -> tuple:
+        rank = _get_rank()
+        full_kwargs = dict(
+            forward_pass_id=(
+                forward_pass_id
+                if forward_pass_id is not None
+                else self._forward_pass_id
+            ),
+            rank=rank,
+            name=name,
+            dump_index=self._dump_index,
+            **extra_kwargs,
+            **self._global_ctx,
+        )
+        filename = "___".join(f"{k}={v}" for k, v in full_kwargs.items()) + ".pt"
+        path = self._base_dir / f"sglang_dump_{self._partial_name}" / filename
+        return path, full_kwargs, rank
+
+    def _write_dump(
+        self, value, path: Path, meta: dict, *, save: bool = True
+    ) -> None:
+        if self._enable_write_file and save:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self._save_value(value, str(path), meta)
+
+    def _save_value(self, value, path: str, meta: dict):
+        if self._output_dict_mode:
+            output_data = {
+                "value": value,
+                "meta": dict(**meta, **self._get_static_meta()),
+            }
+        else:
+            output_data = value
+        _torch_save(output_data, path)
+
+    def _get_static_meta(self):
+        if self._static_meta_cache is None:
+            self._static_meta_cache = _compute_static_meta()
+        return self._static_meta_cache
 
     @property
     def _is_active(self) -> bool:
