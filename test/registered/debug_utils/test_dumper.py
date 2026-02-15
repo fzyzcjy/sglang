@@ -467,7 +467,7 @@ class TestDumpModel:
 
         _assert_files(
             _get_filenames(tmp_path),
-            exist=["model_grad__weight", "model_grad__bias"],
+            exist=["grad__model__weight", "grad__model__bias"],
         )
 
     def test_value_basic(self, tmp_path):
@@ -492,7 +492,7 @@ class TestDumpModel:
 
         _assert_files(
             _get_filenames(tmp_path),
-            exist=["p__weight", "p_grad__weight"],
+            exist=["p__weight", "grad__p__weight"],
         )
 
     def test_no_grad_skipped(self, tmp_path):
@@ -516,8 +516,8 @@ class TestDumpModel:
 
         _assert_files(
             _get_filenames(tmp_path),
-            exist=["model__weight", "model_grad__weight"],
-            not_exist=["model__bias", "model_grad__bias"],
+            exist=["model__weight", "grad__model__weight"],
+            not_exist=["model__bias", "grad__model__bias"],
         )
 
     def test_grad_file_content(self, tmp_path):
@@ -529,7 +529,7 @@ class TestDumpModel:
 
         d.dump_model(model, name_prefix="p")
 
-        path = _find_dump_file(tmp_path, name="p_grad__weight")
+        path = _find_dump_file(tmp_path, name="grad__p__weight")
         assert torch.equal(_load_dump(path)["value"], model.weight.grad)
 
     def test_disable_model_grad(self, tmp_path):

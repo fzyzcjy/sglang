@@ -115,21 +115,19 @@ class _Dumper:
 
     def dump(self, name: str, value, save: bool = True, **kwargs) -> None:
         self._ensure_http_server()
-
         if not self._is_active:
             return
-        if self._is_filtered_out(name):
-            return
-
-        if self._enable_value or self._enable_grad:
-            if self._forward_pass_id < 1:
-                print("Dump without on_forward_pass_start()")
-            value = _materialize_value(value)
-
-        if self._enable_value:
-            self._dump_raw("Dumper", name, value, kwargs, save=save)
-        if self._enable_grad:
-            self._dump_future_grad(name, value, save=save, **kwargs)
+        if self._forward_pass_id < 1 and (self._enable_value or self._enable_grad):
+            print("Dump without on_forward_pass_start()")
+        self._dump_core(
+            name,
+            value,
+            kwargs,
+            save=save,
+            enable_value=self._enable_value,
+            enable_curr_grad=False,
+            enable_future_grad=self._enable_grad,
+        )
 
     def dump_model(
         self,
@@ -143,26 +141,57 @@ class _Dumper:
             return
 
         for param_name, param in model.named_parameters():
-            if self._enable_model_value:
-                full_name = f"{name_prefix}__{param_name}"
-                if not self._is_filtered_out(full_name):
-                    self._dump_raw(
-                        "Dumper.Param", full_name, param, kwargs, save=save
-                    )
+            self._dump_core(
+                f"{name_prefix}__{param_name}",
+                param,
+                kwargs,
+                save=save,
+                enable_value=self._enable_model_value,
+                enable_curr_grad=self._enable_model_grad,
+                enable_future_grad=False,
+                value_tag="Dumper.Param",
+                grad_tag="Dumper.ParamGrad",
+                param=param_name,
+            )
 
-            if self._enable_model_grad and param.grad is not None:
-                grad_name = f"{name_prefix}_grad__{param_name}"
-                if not self._is_filtered_out(grad_name):
-                    self._dump_raw(
-                        "Dumper.ParamGrad",
-                        grad_name,
-                        param.grad,
-                        kwargs,
-                        save=save,
-                        param=param_name,
-                    )
+    def _dump_core(
+        self,
+        name: str,
+        value,
+        extra_kwargs: dict,
+        *,
+        save: bool,
+        enable_value: bool,
+        enable_curr_grad: bool,
+        enable_future_grad: bool,
+        value_tag: str = "Dumper",
+        grad_tag: str = "Dumper.Grad",
+        **log_extra,
+    ) -> None:
+        if self._is_filtered_out(name):
+            return
 
-    def _dump_future_grad(self, name: str, tensor, save: bool, **kwargs) -> None:
+        value = _materialize_value(value)
+
+        if enable_value:
+            self._dump_single(
+                value_tag, name, value, extra_kwargs, save=save, **log_extra
+            )
+
+        if enable_curr_grad and isinstance(value, torch.Tensor) and value.grad is not None:
+            self._dump_single(
+                grad_tag,
+                f"grad__{name}",
+                value.grad,
+                extra_kwargs,
+                save=save,
+                **log_extra,
+            )
+
+        if enable_future_grad:
+            self._register_grad_hook(name, value, save=save, **extra_kwargs)
+
+    def _register_grad_hook(self, name: str, tensor, save: bool, **kwargs) -> None:
         if not isinstance(tensor, torch.Tensor):
             return
         if not tensor.requires_grad:
@@ -172,7 +201,7 @@ class _Dumper:
         captured_extra = deepcopy(dict(**kwargs))
 
         def grad_hook(grad: torch.Tensor) -> None:
-            self._dump_raw(
+            self._dump_single(
                 "Dumper.Grad",
                 f"grad__{name}",
                 grad,
@@ -183,7 +212,7 @@ class _Dumper:
 
         tensor.register_hook(grad_hook)
 
-    def _dump_raw(
+    def _dump_single(
         self,
         tag: str,
         name: str,
