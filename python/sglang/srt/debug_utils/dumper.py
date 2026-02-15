@@ -305,6 +305,38 @@ def _get_world_size():
         return 1
 
 
+def _obj_to_dict(obj):
+    if isinstance(obj, dict):
+        return obj
+    ret = {}
+    for k in dir(obj):
+        if k.startswith("__") and k.endswith("__"):
+            continue
+        try:
+            v = getattr(obj, k)
+            if not callable(v):
+                ret[k] = v
+        except Exception:
+            # Skip attributes that raise an exception on access
+            continue
+    return ret
+
+
+def _materialize_value(value):
+    if callable(value):
+        value = value()
+    return value
+
+
+def _deepcopy_or_clone(x):
+    if isinstance(x, torch.Tensor):
+        return x.clone()
+    return deepcopy(x)
+
+
+# -------------------------------------- static meta ------------------------------------------
+
+
 def _compute_static_meta():
     result = {
         "world_rank": _get_rank(),
@@ -402,35 +434,6 @@ def _collect_megatron_parallel_info():
         info["error"] = True
 
     return info
-
-
-def _obj_to_dict(obj):
-    if isinstance(obj, dict):
-        return obj
-    ret = {}
-    for k in dir(obj):
-        if k.startswith("__") and k.endswith("__"):
-            continue
-        try:
-            v = getattr(obj, k)
-            if not callable(v):
-                ret[k] = v
-        except Exception:
-            # Skip attributes that raise an exception on access
-            continue
-    return ret
-
-
-def _materialize_value(value):
-    if callable(value):
-        value = value()
-    return value
-
-
-def _deepcopy_or_clone(x):
-    if isinstance(x, torch.Tensor):
-        return x.clone()
-    return deepcopy(x)
 
 
 # -------------------------------------- http control server ------------------------------------------
