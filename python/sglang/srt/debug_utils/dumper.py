@@ -152,8 +152,6 @@ class _Dumper:
                 param=param_name,
             )
 
-    # ---- private helpers ----
-
     def _dump_value(self, name: str, value, save: bool, **kwargs) -> None:
         if self._forward_pass_id < 1:
             print("Dump without on_forward_pass_start()")
