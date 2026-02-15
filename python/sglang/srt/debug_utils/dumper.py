@@ -43,8 +43,8 @@ class _Dumper:
         self._filter = os.environ.get("SGLANG_DUMPER_FILTER")
         self._base_dir = Path(os.environ.get("SGLANG_DUMPER_DIR", "/tmp"))
         self._enable_write_file = get_bool_env_var("SGLANG_DUMPER_WRITE_FILE", "1")
-        self._enable_forward_dump = get_bool_env_var("SGLANG_DUMPER_FORWARD_DUMP", "1")
-        self._enable_grad_dump = get_bool_env_var("SGLANG_DUMPER_GRAD_DUMP", "1")
+        self._enable_dump_forward = get_bool_env_var("SGLANG_DUMPER_DUMP_FORWARD", "1")
+        self._enable_dump_grad = get_bool_env_var("SGLANG_DUMPER_DUMP_GRAD", "1")
         self._output_dict_mode = get_bool_env_var("SGLANG_DUMPER_OUTPUT_DICT", "0")
 
         # States
@@ -112,7 +112,7 @@ class _Dumper:
 
         if not self._is_active:
             return
-        if not self._enable_forward_dump:
+        if not self._enable_dump_forward:
             return
         if self._is_filtered_out(name):
             return
@@ -136,7 +136,7 @@ class _Dumper:
         save: bool = True,
         **kwargs,
     ) -> None:
-        if not self._enable_grad_dump:
+        if not self._enable_dump_grad:
             return
         if not self._is_active:
             return
@@ -239,7 +239,7 @@ class _Dumper:
     def _dump_grad(self, name: str, tensor, save: bool = True, **kwargs) -> None:
         if not self._is_active:
             return
-        if not self._enable_grad_dump:
+        if not self._enable_dump_grad:
             return
 
         if not isinstance(tensor, torch.Tensor):

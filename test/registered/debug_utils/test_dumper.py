@@ -438,8 +438,8 @@ class TestDumpGrad:
         expected_grad = torch.full((2, 2), 3.0)
         assert torch.equal(loaded, expected_grad)
 
-    def test_disable_forward_dump(self, tmp_path):
-        d = _make_test_dumper(tmp_path, enable_forward_dump=False)
+    def test_disable_dump_forward(self, tmp_path):
+        d = _make_test_dumper(tmp_path, enable_dump_forward=False)
         x = torch.randn(3, 3, requires_grad=True)
         y = (x * 2).sum()
 
@@ -452,8 +452,8 @@ class TestDumpGrad:
         )
         _assert_files(filenames, exist=["grad__fwd_disabled"])
 
-    def test_disable_grad_dump(self, tmp_path):
-        d = _make_test_dumper(tmp_path, enable_grad_dump=False)
+    def test_disable_dump_grad(self, tmp_path):
+        d = _make_test_dumper(tmp_path, enable_dump_grad=False)
         x = torch.randn(3, 3, requires_grad=True)
         y = (x * 2).sum()
 
@@ -520,7 +520,7 @@ class TestDumpParamGrads:
         assert torch.equal(loaded, model.weight.grad)
 
     def test_disabled(self, tmp_path):
-        d = _make_test_dumper(tmp_path, enable_grad_dump=False)
+        d = _make_test_dumper(tmp_path, enable_dump_grad=False)
         model = torch.nn.Linear(4, 2)
         x = torch.randn(3, 4)
         y = model(x).sum()
