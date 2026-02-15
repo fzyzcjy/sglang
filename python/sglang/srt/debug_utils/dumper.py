@@ -107,6 +107,10 @@ class _Dumper:
 
     def dump(self, name: str, value, save: bool = True, **kwargs) -> None:
         self._ensure_http_server()
+        if not self._is_active:
+            return
+        if self._is_filtered_out(name):
+            return
         self._dump_forward(name, value, save=save, **kwargs)
         self._dump_grad(name, value, save=save, **kwargs)
 
@@ -217,11 +221,7 @@ class _Dumper:
         print(" ".join(parts))
 
     def _dump_forward(self, name: str, value, save: bool, **kwargs) -> None:
-        if not self._is_active:
-            return
         if not self._enable_dump_forward:
-            return
-        if self._is_filtered_out(name):
             return
 
         if self._forward_pass_id < 1:
@@ -236,21 +236,13 @@ class _Dumper:
         self._write_dump(value, path, full_kwargs, save=save)
 
     def _dump_grad(self, name: str, tensor, save: bool, **kwargs) -> None:
-        if not self._is_active:
-            return
         if not self._enable_dump_grad:
             return
-
         if not isinstance(tensor, torch.Tensor):
-            print(f"[Dumper] dump_grad: {name} is not a tensor, skipping")
             return
         if not tensor.requires_grad:
-            print(f"[Dumper] dump_grad: {name} does not require grad, skipping")
-            return
-        if self._is_filtered_out(name):
             return
 
-        self._ensure_http_server()
         self._ensure_partial_name()
 
         captured_forward_pass_id = self._forward_pass_id
