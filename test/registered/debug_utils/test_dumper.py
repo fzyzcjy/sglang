@@ -214,48 +214,6 @@ class TestDumperFileWriteControl:
         assert len(_get_filenames(tmpdir)) == 0
 
 
-def _make_test_dumper(tmp_path: Path, **overrides) -> _Dumper:
-    """Create a _Dumper for CPU testing without HTTP server or distributed."""
-    defaults: dict = dict(
-        enable=True,
-        base_dir=tmp_path,
-        partial_name="test",
-        enable_http_server=False,
-    )
-    d = _Dumper(**{**defaults, **overrides})
-    d.on_forward_pass_start()
-    return d
-
-
-def _get_filenames(tmpdir):
-    return {f.name for f in Path(tmpdir).glob("sglang_dump_*/*.pt")}
-
-
-def _assert_files(filenames, *, exist=(), not_exist=()):
-    for p in exist:
-        assert any(p in f for f in filenames), f"{p} not found in {filenames}"
-    for p in not_exist:
-        assert not any(
-            p in f for f in filenames
-        ), f"{p} should not exist in {filenames}"
-
-
-def _find_dump_file(tmpdir, *, rank: int = 0, name: str) -> Path:
-    matches = [
-        f
-        for f in Path(tmpdir).glob("sglang_dump_*/*.pt")
-        if f"rank={rank}" in f.name and name in f.name
-    ]
-    assert (
-        len(matches) == 1
-    ), f"Expected 1 file matching rank={rank} name={name}, got {matches}"
-    return matches[0]
-
-
-def _load_dump(path: Path) -> dict:
-    return torch.load(path, weights_only=False, map_location="cpu")
-
-
 class TestMaterializeValue:
     def test_materialize_value_callable(self):
         tensor = torch.randn(3, 3)
@@ -509,6 +467,48 @@ class TestDumpModel:
 
         filenames = _get_filenames(tmp_path)
         assert all("grad" in f for f in filenames)
+
+
+def _make_test_dumper(tmp_path: Path, **overrides) -> _Dumper:
+    """Create a _Dumper for CPU testing without HTTP server or distributed."""
+    defaults: dict = dict(
+        enable=True,
+        base_dir=tmp_path,
+        partial_name="test",
+        enable_http_server=False,
+    )
+    d = _Dumper(**{**defaults, **overrides})
+    d.on_forward_pass_start()
+    return d
+
+
+def _get_filenames(tmpdir):
+    return {f.name for f in Path(tmpdir).glob("sglang_dump_*/*.pt")}
+
+
+def _assert_files(filenames, *, exist=(), not_exist=()):
+    for p in exist:
+        assert any(p in f for f in filenames), f"{p} not found in {filenames}"
+    for p in not_exist:
+        assert not any(
+            p in f for f in filenames
+        ), f"{p} should not exist in {filenames}"
+
+
+def _find_dump_file(tmpdir, *, rank: int = 0, name: str) -> Path:
+    matches = [
+        f
+        for f in Path(tmpdir).glob("sglang_dump_*/*.pt")
+        if f"rank={rank}" in f.name and name in f.name
+    ]
+    assert (
+        len(matches) == 1
+    ), f"Expected 1 file matching rank={rank} name={name}, got {matches}"
+    return matches[0]
+
+
+def _load_dump(path: Path) -> dict:
+    return torch.load(path, weights_only=False, map_location="cpu")
 
 
 if __name__ == "__main__":
