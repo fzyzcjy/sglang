@@ -114,9 +114,6 @@ class _Dumper:
             self.dump(f"{name_prefix}_{name}", value, save=save, **kwargs)
 
     def dump(self, name: str, value, save: bool = True, **kwargs) -> None:
-        self._ensure_http_server()
-        if not self._is_active:
-            return
         self._dump_core(
             name,
             value,
@@ -134,10 +131,6 @@ class _Dumper:
         save: bool = True,
         **kwargs,
     ) -> None:
-        self._ensure_http_server()
-        if not self._is_active:
-            return
-
         for param_name, param in model.named_parameters():
             self._dump_core(
                 f"{name_prefix}__{param_name}",
@@ -166,6 +159,10 @@ class _Dumper:
         grad_tag: str = "Dumper.Grad",
         **log_extra,
     ) -> None:
+        self._ensure_http_server()
+
+        if not self._is_active:
+            return
         if self._is_filtered_out(name):
             return
         if not (enable_value or enable_curr_grad or enable_future_grad):
