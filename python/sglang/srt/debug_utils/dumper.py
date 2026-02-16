@@ -164,7 +164,11 @@ class _Dumper:
 
         if self._enable_write_file and save:
             path.parent.mkdir(parents=True, exist_ok=True)
-            _torch_save(value, str(path))
+            output_data = {
+                "value": value,
+                "meta": dict(**full_kwargs),
+            }
+            _torch_save(output_data, str(path))
 
 
 def _torch_save(value, path: str):
