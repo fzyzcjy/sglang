@@ -1074,10 +1074,10 @@ class TestEntrypointAlignment:
         baseline_path, target_path = _create_dumps(tmp_path, ["tensor_a"], num_steps=2)
         args = _make_args(baseline_path, target_path, grouping="logical")
 
-        captured = capsys.readouterr()
         records = _run_and_parse(args, capsys)
+        stderr = capsys.readouterr().err
+        assert "falling back" in stderr
 
-        output = capsys.readouterr().out
         summary = records[-1]
         assert isinstance(summary, SummaryRecord)
         assert summary.total >= 1

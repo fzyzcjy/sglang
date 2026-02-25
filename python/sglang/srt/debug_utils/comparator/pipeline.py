@@ -146,7 +146,7 @@ def _execute_plan(
         raise NotImplementedError(f"Unknown {plan=}")
 
 
-def load_and_unshard_for_step(
+def _load_and_unshard_for_step(
     *, name: str, step: int, df: pl.DataFrame, dump_path: Path
 ) -> tuple[Optional[torch.Tensor], list[AlignWarning]]:
     """Load all rank files for (name, step), unshard into a single tensor."""
@@ -177,7 +177,7 @@ def load_and_unshard_all_steps(
     all_warnings: list[AlignWarning] = []
 
     for step in step_values:
-        tensor, warnings = load_and_unshard_for_step(
+        tensor, warnings = _load_and_unshard_for_step(
             name=name, step=step, df=df, dump_path=dump_path
         )
         all_warnings.extend(warnings)

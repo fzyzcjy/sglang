@@ -68,20 +68,17 @@ def run(args: argparse.Namespace) -> None:
 
     grouping: str = args.grouping
 
-    if (
-        grouping == "logical"
-        and _has_aux_tensors(df_baseline)
-        and _has_aux_tensors(df_target)
-    ):
+    baseline_has_aux: bool = _has_aux_tensors(df_baseline)
+    target_has_aux: bool = _has_aux_tensors(df_target)
+
+    if grouping == "logical" and baseline_has_aux and target_has_aux:
         _run_with_alignment(
             args=args,
             df_baseline=df_baseline,
             df_target=df_target,
         )
     else:
-        if grouping == "logical" and not (
-            _has_aux_tensors(df_baseline) and _has_aux_tensors(df_target)
-        ):
+        if grouping == "logical" and not (baseline_has_aux and target_has_aux):
             print(
                 "Warning: aux tensors missing, falling back to per-step comparison",
                 file=sys.stderr,
