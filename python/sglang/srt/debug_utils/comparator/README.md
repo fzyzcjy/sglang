@@ -17,17 +17,17 @@
 dump files (baseline + target)
         │
         ▼
-   read_meta()  →  df_baseline, df_target             ← entrypoint.py
+   read_meta()  →  df_baseline, df_target
         │
         ▼
-   match_rows()  →  list[MatchResult]                  ← row_matcher.py
+   match_rows()  →  list[MatchResult]
         │
         ▼
-   for each match:                                     ← entrypoint.py
+   for each match:
         │
         │  ┌───────────────────────────────────────┐
         └─▶│  compare_tensor_group()                │
-           │                                        │  ← tensor_group_comparator.py
+           │                                        │
            │  1. load files & unshard (per step)    │
            │  2. align tokens  ─or─  concat steps   │
            │  3. compare_tensors()                  │
@@ -37,5 +37,5 @@ dump files (baseline + target)
            └──────────────┬────────────────────────┘
                           │
                           ▼
-                  print + summary                      ← entrypoint.py
+                  print + summary
 ```
