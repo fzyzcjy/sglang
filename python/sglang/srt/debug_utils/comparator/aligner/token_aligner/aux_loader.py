@@ -231,40 +231,27 @@ def load_and_normalize_aux(
 
     available_names: set[str] = set(df["name"].unique().to_list()) & plugin.all_names
     steps: list[int] = sorted(df["step"].unique().to_list())
+    tensor_names: set[str] = available_names & plugin.tensor_names
+    non_tensor_names: set[str] = available_names & plugin.non_tensor_names
 
-    available_tensor_names: set[str] = available_names & plugin.tensor_names
-    available_non_tensor_names: set[str] = available_names & plugin.non_tensor_names
-
-    raw: dict[int, dict[str, object]] = {}
+    steps_data: dict[int, dict[str, object]] = {}
     for step in steps:
-        step_data: dict[str, object] = {}
-
-        for name in available_non_tensor_names:
-            value = _load_non_tensor_aux(
-                name=name, step=step, df=df, dump_path=dump_path
-            )
-            if value is not None:
-                step_data[name] = value
-
-        for name in available_tensor_names:
-            tensor = _load_and_align_aux_tensor(
-                name=name,
-                step=step,
-                df=df,
-                dump_path=dump_path,
-                plugin=plugin,
-            )
-            if tensor is not None:
-                step_data[name] = tensor
-
+        step_data = dict(_load_step_data(
+            step=step,
+            tensor_names=tensor_names,
+            non_tensor_names=non_tensor_names,
+            df=df,
+            dump_path=dump_path,
+            plugin=plugin,
+        ))
         if step_data:
-            raw[step] = step_data
+            steps_data[step] = step_data
 
-    layout: str = plugin.detect_layout(raw)
+    layout: str = plugin.detect_layout(steps_data)
 
     step_auxs: dict[int, TokenAlignerStepAux] = {
         step: plugin.compute_step_aux(step_data, layout=layout, step=step)
-        for step, step_data in raw.items()
+        for step, step_data in steps_data.items()
     }
 
     return TokenAlignerGlobalAux(
@@ -300,6 +287,29 @@ def _detect_plugin(df: pl.DataFrame, dump_path: Path) -> Optional[_AuxPlugin]:
             return plugin
 
     return None
+
+
+def _load_step_data(
+    *,
+    step: int,
+    tensor_names: set[str],
+    non_tensor_names: set[str],
+    df: pl.DataFrame,
+    dump_path: Path,
+    plugin: _AuxPlugin,
+) -> dict[str, object]:
+    """Load all tensor and non-tensor aux values for a single step."""
+    for name in non_tensor_names:
+        value = _load_non_tensor_aux(name=name, step=step, df=df, dump_path=dump_path)
+        if value is not None:
+            yield name, value
+
+    for name in tensor_names:
+        tensor = _load_and_align_aux_tensor(
+            name=name, step=step, df=df, dump_path=dump_path, plugin=plugin
+        )
+        if tensor is not None:
+            yield name, tensor
 
 
 def _load_non_tensor_aux(
