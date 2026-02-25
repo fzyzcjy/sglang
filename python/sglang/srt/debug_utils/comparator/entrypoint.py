@@ -3,14 +3,14 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Iterator, Optional, Union
+from typing import Any, Iterator, Optional, Union
 
 import polars as pl
 import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
+    AUX_NAMES,
     SideAux,
-    get_comparable_names,
     has_aux_tensors,
     load_and_normalize_aux,
 )
@@ -35,14 +35,14 @@ from sglang.srt.debug_utils.comparator.output_types import (
 )
 from sglang.srt.debug_utils.comparator.pipeline import (
     concat_steps,
-    load_and_unshard_all_steps,
     load_and_unshard_files,
 )
+from sglang.srt.debug_utils.comparator.row_matcher import MatchResult, match_rows
 from sglang.srt.debug_utils.comparator.tensor_comparison.compare import compare_tensors
 from sglang.srt.debug_utils.comparator.utils import Pair
-from sglang.srt.debug_utils.dump_loader import filter_rows, read_meta
+from sglang.srt.debug_utils.dump_loader import read_meta
 
-_NON_KEY_COLS = {"dump_index", "filename"}
+_BASE_SKIP_KEYS: set[str] = {"dump_index", "filename"}
 
 
 def main() -> None:
@@ -72,21 +72,12 @@ def run(args: argparse.Namespace) -> None:
         output_format=args.output_format,
     )
 
-    grouping: str = args.grouping
-
-    if grouping == "raw":
-        records = _iter_raw_records(
-            args=args,
-            df_baseline=df_baseline,
-            df_target=df_target,
-        )
-    else:
-        plan: Optional[AlignmentPlan] = None
+    # --- alignment plan (logical mode only) ---
+    plan: Optional[AlignmentPlan] = None
+    if args.grouping == "logical":
         if has_aux_tensors(df_baseline) and has_aux_tensors(df_target):
             plan = _build_alignment_plan(
-                args=args,
-                df_baseline=df_baseline,
-                df_target=df_target,
+                args=args, df_baseline=df_baseline, df_target=df_target
             )
         else:
             print(
@@ -94,13 +85,27 @@ def run(args: argparse.Namespace) -> None:
                 file=sys.stderr,
             )
 
-        records = _iter_logical_records(
-            args=args,
-            df_baseline=df_baseline,
-            df_target=df_target,
-            plan=plan,
-        )
+    # --- skip_keys control grouping granularity ---
+    skip_keys: set[str] = set(_BASE_SKIP_KEYS)
+    if args.grouping == "logical":
+        skip_keys |= {"rank", "step"}
 
+    # --- unified match + iterate ---
+    matches: list[MatchResult] = match_rows(
+        df_baseline=df_baseline, df_target=df_target, skip_keys=skip_keys
+    )
+
+    # When alignment is active, exclude aux tensors from comparison
+    if plan is not None:
+        matches = [m for m in matches if m.match_key.get("name") not in AUX_NAMES]
+
+    records = _iter_records(
+        matches=matches,
+        baseline_path=Path(args.baseline_path),
+        target_path=Path(args.target_path),
+        plan=plan,
+        diff_threshold=args.diff_threshold,
+    )
     _run_comparison(records=records, output_format=args.output_format)
 
 
@@ -149,87 +154,60 @@ def _run_comparison(
     )
 
 
-def _iter_raw_records(
+def _iter_records(
     *,
-    args: argparse.Namespace,
-    df_baseline: pl.DataFrame,
-    df_target: pl.DataFrame,
+    matches: list[MatchResult],
+    baseline_path: Path,
+    target_path: Path,
+    plan: Optional[AlignmentPlan],
+    diff_threshold: float,
 ) -> Iterator[Union[ComparisonRecord, SkipRecord]]:
-    """Yield comparison records for raw mode: rank-by-rank, no cross-rank unshard."""
-    baseline_path: Path = Path(args.baseline_path)
-    target_path: Path = Path(args.target_path)
-
-    key_cols: list[str] = [c for c in df_target.columns if c not in _NON_KEY_COLS]
-    tensor_group_keys: pl.DataFrame = df_target.unique(subset=key_cols)
-
-    for tensor_group_key in tensor_group_keys.iter_rows(named=True):
-        conditions: dict[str, object] = {k: tensor_group_key[k] for k in key_cols}
-        baseline_rows: list[dict] = filter_rows(df_baseline, conditions=conditions)
-        target_rows: list[dict] = filter_rows(df_target, conditions=conditions)
-
-        tensor_name: str = tensor_group_key["name"]
-        b_tensor, b_warns = load_and_unshard_files(
-            filenames=[r["filename"] for r in baseline_rows],
-            base_path=baseline_path,
-        )
-        t_tensor, t_warns = load_and_unshard_files(
-            filenames=[r["filename"] for r in target_rows],
-            base_path=target_path,
-        )
-        all_warnings: list[AlignWarning] = b_warns + t_warns
-
-        if b_tensor is None or t_tensor is None:
-            reason = (
-                "baseline_load_failed" if b_tensor is None else "target_load_failed"
-            )
-            yield SkipRecord(
-                name=tensor_name, reason=reason, align_warnings=all_warnings
-            )
+    """Yield comparison records for all matches (unified raw/logical pipeline)."""
+    for match in matches:
+        if not match.rows_target:
             continue
 
-        info = compare_tensors(
-            x_baseline=b_tensor,
-            x_target=t_tensor,
-            name=tensor_name,
-            diff_threshold=args.diff_threshold,
+        name: str = match.rows_target[0]["name"]
+
+        tensors_b, b_warns = _load_and_unshard_by_step(
+            rows=match.rows_baseline, base_path=baseline_path
         )
-        yield ComparisonRecord(**info.model_dump(), align_warnings=all_warnings)
-
-
-def _iter_logical_records(
-    *,
-    args: argparse.Namespace,
-    df_baseline: pl.DataFrame,
-    df_target: pl.DataFrame,
-    plan: Optional[AlignmentPlan],
-) -> Iterator[Union[ComparisonRecord, SkipRecord]]:
-    """Yield comparison records for logical mode: concat all steps per name, optionally alignment-aware."""
-    baseline_path: Path = Path(args.baseline_path)
-    target_path: Path = Path(args.target_path)
-
-    comparable_names: list[str] = get_comparable_names(
-        df_baseline=df_baseline,
-        df_target=df_target,
-        exclude_aux=(plan is not None),
-    )
-
-    for tensor_name in comparable_names:
-        tensors_b, b_warns = load_and_unshard_all_steps(
-            name=tensor_name, df=df_baseline, dump_path=baseline_path
-        )
-        tensors_t, t_warns = load_and_unshard_all_steps(
-            name=tensor_name, df=df_target, dump_path=target_path
+        tensors_t, t_warns = _load_and_unshard_by_step(
+            rows=match.rows_target, base_path=target_path
         )
         all_warnings: list[AlignWarning] = b_warns + t_warns
 
         yield _compare_tensor(
-            name=tensor_name,
+            name=name,
             tensors_b=tensors_b,
             tensors_t=tensors_t,
             warnings=all_warnings,
             plan=plan,
-            diff_threshold=args.diff_threshold,
+            diff_threshold=diff_threshold,
         )
+
+
+def _load_and_unshard_by_step(
+    *, rows: list[dict[str, Any]], base_path: Path
+) -> tuple[dict[int, torch.Tensor], list[AlignWarning]]:
+    """Group rows by step, unshard within each step, return step->tensor mapping."""
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(row["step"], []).append(row)
+
+    result: dict[int, torch.Tensor] = {}
+    all_warnings: list[AlignWarning] = []
+
+    for step in sorted(grouped):
+        filenames: list[str] = [r["filename"] for r in grouped[step]]
+        tensor, warnings = load_and_unshard_files(
+            filenames=filenames, base_path=base_path
+        )
+        all_warnings.extend(warnings)
+        if tensor is not None:
+            result[step] = tensor
+
+    return result, all_warnings
 
 
 def _compare_tensor(
