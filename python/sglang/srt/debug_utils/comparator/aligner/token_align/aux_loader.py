@@ -93,6 +93,12 @@ def has_aux_tensors(df: pl.DataFrame) -> bool:
 
 def _detect_framework(df: pl.DataFrame, dump_path: Path) -> str:
     """Detect framework from tensor names or embedded metadata."""
+    names: set[str] = set(df["name"].unique().to_list())
+
+    if names & {"req_pool_indices", "rids"}:
+        return "sglang"
+    if names & {"cu_seqlens_q", "qkv_format", "position_ids"}:
+        return "megatron"
 
     first_row: dict = df.row(0, named=True)
     vwm: ValueWithMeta = ValueWithMeta.load(dump_path / first_row["filename"])
