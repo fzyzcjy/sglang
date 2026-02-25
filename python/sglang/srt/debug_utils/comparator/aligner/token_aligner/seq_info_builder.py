@@ -8,9 +8,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignerStepAux,
 )
 
-_EMPTY_SEQ_INFO = TokenAlignerSeqInfo(
-    input_ids=[], positions=[], steps=[], indices=[]
-)
+_EMPTY_SEQ_INFO = TokenAlignerSeqInfo(input_ids=[], positions=[], steps=[], indices=[])
 
 
 def build_seqs_info(global_aux: TokenAlignerGlobalAux) -> TokenAlignerSeqsInfo:

@@ -63,7 +63,10 @@ def load_and_normalize_aux(
         step_data: dict[str, object] = {}
         for name in available_names:
             tensor = _load_and_align_aux_tensor(
-                name=name, step=step, df=df, dump_path=dump_path,
+                name=name,
+                step=step,
+                df=df,
+                dump_path=dump_path,
                 framework=framework,
             )
             if tensor is not None:
@@ -177,9 +180,7 @@ def _load_and_align_aux_tensor(
     return tensors[0]
 
 
-def _infer_aux_dims(
-    *, name: str, framework: str, metas: list[dict]
-) -> Optional[str]:
+def _infer_aux_dims(*, name: str, framework: str, metas: list[dict]) -> Optional[str]:
     """Infer dims for aux tensors lacking explicit dims metadata."""
     parallel_infos = [normalize_parallel_info(m) for m in metas]
     has_cp: bool = any(ParallelAxis.CP in info for info in parallel_infos)

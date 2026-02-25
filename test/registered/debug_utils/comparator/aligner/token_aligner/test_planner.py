@@ -3,12 +3,12 @@ import sys
 import pytest
 import torch
 
-from sglang.srt.debug_utils.comparator.aligner.token_aligner.seq_info_builder import (
-    build_seqs_info,
-)
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.planner import (
     _match_sequences,
     compute_token_aligner_plan,
+)
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.seq_info_builder import (
+    build_seqs_info,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     MegatronSeqId,

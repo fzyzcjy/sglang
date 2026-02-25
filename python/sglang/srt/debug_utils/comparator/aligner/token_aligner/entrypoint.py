@@ -11,11 +11,11 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.aux_loader import (
     has_aux_tensors,
     load_and_normalize_aux,
 )
-from sglang.srt.debug_utils.comparator.aligner.token_aligner.seq_info_builder import (
-    build_seqs_info,
-)
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.planner import (
     compute_token_aligner_plan,
+)
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.seq_info_builder import (
+    build_seqs_info,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignerGlobalAux,
