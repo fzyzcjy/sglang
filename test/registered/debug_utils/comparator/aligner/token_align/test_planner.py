@@ -147,6 +147,74 @@ class TestBuildTokenIndexSGLangThd:
         assert (100, 200, 300) in all_input_ids.values()
 
 
+class TestBuildTokenIndexMegatronThd:
+    """Tests for Megatron thd token index building."""
+
+    def test_single_step_two_sequences(self):
+        """Single step with two sequences in thd layout."""
+        side_aux = SideAux(
+            steps={
+                0: AuxTensorsForStep(
+                    input_ids=torch.tensor([10, 20, 30, 40, 50]),
+                    positions=torch.tensor([0, 1, 2, 0, 1]),
+                    seq_lens=torch.tensor([3, 2]),
+                    req_pool_indices=None,
+                    rids=None,
+                ),
+            },
+            framework="megatron",
+            layout="thd",
+        )
+
+        index = build_token_index(side_aux)
+        assert len(index.sequences) == 2
+
+        seq0 = index.sequences[0]
+        assert seq0.input_ids == (10, 20, 30)
+        assert seq0.positions == (0, 1, 2)
+        assert seq0.steps == (0, 0, 0)
+        assert seq0.indices == (0, 1, 2)
+
+        seq1 = index.sequences[1]
+        assert seq1.input_ids == (40, 50)
+        assert seq1.positions == (0, 1)
+        assert seq1.indices == (3, 4)
+
+    def test_multi_step_accumulation(self):
+        """Two steps with the same batch size accumulate tokens per sequence."""
+        side_aux = SideAux(
+            steps={
+                0: AuxTensorsForStep(
+                    input_ids=torch.tensor([10, 20, 30, 40]),
+                    positions=torch.tensor([0, 1, 0, 1]),
+                    seq_lens=torch.tensor([2, 2]),
+                    req_pool_indices=None,
+                    rids=None,
+                ),
+                1: AuxTensorsForStep(
+                    input_ids=torch.tensor([50, 60, 70, 80]),
+                    positions=torch.tensor([0, 1, 0, 1]),
+                    seq_lens=torch.tensor([2, 2]),
+                    req_pool_indices=None,
+                    rids=None,
+                ),
+            },
+            framework="megatron",
+            layout="thd",
+        )
+
+        index = build_token_index(side_aux)
+        assert len(index.sequences) == 4
+
+        seq0 = index.sequences[0]
+        assert seq0.input_ids == (10, 20)
+        assert seq0.steps == (0, 0)
+
+        seq2 = index.sequences[2]
+        assert seq2.input_ids == (50, 60)
+        assert seq2.steps == (1, 1)
+
+
 class TestBuildTokenIndexMegatronBshd:
     """Tests for Megatron bshd token index building."""
 
@@ -390,7 +458,7 @@ def _make_index(
         records[seq_id] = SequenceRecord(
             input_ids=input_ids,
             positions=tuple(range(num_tokens)),
-            steps=tuple([0] * num_tokens),
+            steps=(0,) * num_tokens,
             indices=tuple(range(num_tokens)),
         )
     return SideTokenIndex(sequences=records, framework=framework, layout=layout)
