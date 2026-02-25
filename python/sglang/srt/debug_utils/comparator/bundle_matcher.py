@@ -15,19 +15,6 @@ class TensorInfo:
     filename: str
     name: str
     step: int
-    rank: int
-    dump_index: int
-    duplicate_index: int
-
-
-_TENSOR_INFO_FIELDS: set[str] = {f.name for f in dataclasses.fields(TensorInfo)}
-
-
-def _rows_to_tensor_infos(rows: list[dict[str, Any]]) -> list[TensorInfo]:
-    return [
-        TensorInfo(**{k: v for k, v in row.items() if k in _TENSOR_INFO_FIELDS})
-        for row in rows
-    ]
 
 
 TensorInfoBundle = list[TensorInfo]
@@ -55,3 +42,11 @@ def match_bundles(
         results.append(Pair(x=rows_baseline, y=rows_target))
 
     return results
+
+
+def _rows_to_tensor_infos(rows: list[dict[str, Any]]) -> list[TensorInfo]:
+    tensor_info_fields: set[str] = {f.name for f in dataclasses.fields(TensorInfo)}
+    return [
+        TensorInfo(**{k: v for k, v in row.items() if k in tensor_info_fields})
+        for row in rows
+    ]

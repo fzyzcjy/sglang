@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_align.executor import (
-    execute_alignment,
+    execute_token_align,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.indexer import (
     build_seqs_info,
@@ -57,7 +57,7 @@ class TestExecuteAlignment:
         plan = compute_alignment_plan(seqs_info_pair=Pair(x=index, y=index))
 
         tensors = {0: hidden_step0, 1: hidden_step1}
-        aligned: Pair[torch.Tensor] = execute_alignment(
+        aligned: Pair[torch.Tensor] = execute_token_align(
             plan=plan, tensors=Pair(x=tensors, y=tensors)
         )
 
@@ -74,7 +74,7 @@ class TestExecuteAlignment:
         )
 
         tensors = {0: torch.randn(5, 8)}
-        aligned: Pair[torch.Tensor] = execute_alignment(
+        aligned: Pair[torch.Tensor] = execute_token_align(
             plan=plan, tensors=Pair(x=tensors, y=tensors)
         )
 
