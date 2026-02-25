@@ -18,7 +18,7 @@ class TokenAlignerStepAux:
     input_ids: torch.Tensor  # [num_tokens] (1D flat)
     positions: torch.Tensor  # [num_tokens] (1D flat)
     seq_lens: torch.Tensor  # [num_seqs]
-    seq_ids: tuple[ExternalSeqId, ...]  # [num_seqs] — sequence identity
+    seq_ids: list[ExternalSeqId]  # [num_seqs] — sequence identity
 
 
 @dataclass(frozen=True)
