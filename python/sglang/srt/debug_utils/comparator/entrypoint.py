@@ -119,15 +119,15 @@ def _build_alignment_plan(
     baseline_path: Path = Path(args.baseline_path)
     target_path: Path = Path(args.target_path)
 
-    side_aux_baseline: TokenAlignGlobalAux = load_and_normalize_aux(
+    global_aux_baseline: TokenAlignGlobalAux = load_and_normalize_aux(
         dump_path=baseline_path, df=df_baseline
     )
-    side_aux_target: TokenAlignGlobalAux = load_and_normalize_aux(
+    global_aux_target: TokenAlignGlobalAux = load_and_normalize_aux(
         dump_path=target_path, df=df_target
     )
 
-    index_baseline: SeqsInfo = build_seqs_info(side_aux_baseline)
-    index_target: SeqsInfo = build_seqs_info(side_aux_target)
+    index_baseline: SeqsInfo = build_seqs_info(global_aux_baseline)
+    index_target: SeqsInfo = build_seqs_info(global_aux_target)
 
     plan: AlignmentPlan = compute_alignment_plan(
         indices=Pair(x=index_baseline, y=index_target)
