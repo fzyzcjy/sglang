@@ -55,7 +55,7 @@ def run(args: argparse.Namespace) -> None:
         ),
     )
 
-    comparison_records = _execute_compare_bundle_pair(
+    comparison_records = _compare_bundle_pairs(
         bundle_info_pairs=bundle_info_pairs,
         baseline_path=Path(args.baseline_path),
         target_path=Path(args.target_path),
@@ -90,7 +90,7 @@ def _compute_skip_keys(args, *, has_token_aligner_plan: bool):
     return skip_keys
 
 
-def _execute_compare_bundle_pair(
+def _compare_bundle_pairs(
     *,
     bundle_info_pairs: list[Pair[TensorBundleInfo]],
     baseline_path: Path,

@@ -125,7 +125,9 @@ def _find_matching_x_prefix(
     """Find the x sequence with the longest prefix relationship to y."""
     ids_y: list[int] = seq_y.input_ids
     candidates: list[_PrefixCandidate] = [
-        _PrefixCandidate(seq_id_x=seq_id_x, overlap_len=min(len(seq_x.input_ids), len(ids_y)))
+        _PrefixCandidate(
+            seq_id_x=seq_id_x, overlap_len=min(len(seq_x.input_ids), len(ids_y))
+        )
         for seq_id_x, seq_x in x_seqs.items()
         if seq_id_x not in claimed_x_ids and _is_prefix_pair(seq_x.input_ids, ids_y)
     ]

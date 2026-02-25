@@ -26,13 +26,13 @@ def match_bundles(
     skip_keys: set[str],
 ) -> list[Pair[TensorBundleInfo]]:
     match_key_cols: list[str] = [c for c in dfs.y.columns if c not in skip_keys]
-    unique_keys: pl.DataFrame = dfs.y.select(match_key_cols).unique(
-        maintain_order=True
-    )
+    unique_keys: pl.DataFrame = dfs.y.select(match_key_cols).unique(maintain_order=True)
 
     results: list[Pair[TensorBundleInfo]] = []
     for key_values in unique_keys.iter_rows(named=True):
-        result = dfs.map(lambda df: _rows_to_tensor_infos(filter_rows(df, conditions=key_values)))
+        result = dfs.map(
+            lambda df: _rows_to_tensor_infos(filter_rows(df, conditions=key_values))
+        )
         results.append(result)
 
     return results
