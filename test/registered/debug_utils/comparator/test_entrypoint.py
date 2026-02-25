@@ -1,4 +1,5 @@
 import sys
+import warnings
 from argparse import Namespace
 from pathlib import Path
 
@@ -1172,7 +1173,15 @@ class TestEntrypointAlignment:
             megatron_dir / _FIXED_EXP_NAME,
             grouping="logical",
         )
-        records = _run_and_parse(args, capsys)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            records = _run_and_parse(args, capsys)
+
+        layout_warnings = [
+            w for w in caught if "falling back to thd" in str(w.message)
+        ]
+        assert len(layout_warnings) == 1
 
         comparisons = _get_comparisons(records)
         # AUX_NAMES filtered out → only hidden_states remains
