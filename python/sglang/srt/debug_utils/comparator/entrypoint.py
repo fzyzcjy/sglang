@@ -73,7 +73,7 @@ def run(args: argparse.Namespace) -> None:
     )
 
     # --- alignment plan (logical mode only) ---
-    alignment_plan = _maybe_build_alignment_plan(args, df_baseline, df_target)
+    alignment_plan = _compute_maybe_alignment_plan(args, df_baseline, df_target)
 
     # --- unified match + iterate ---
     matches: list[MatchResult] = match_rows(
@@ -92,7 +92,7 @@ def run(args: argparse.Namespace) -> None:
     )
 
 
-def _maybe_build_alignment_plan(args, df_baseline, df_target):
+def _compute_maybe_alignment_plan(args, df_baseline, df_target):
     if args.grouping == "logical":
         if not (has_aux_tensors(df_baseline) and has_aux_tensors(df_target)):
             print(
