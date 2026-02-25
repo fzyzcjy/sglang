@@ -49,8 +49,7 @@ def run(args: argparse.Namespace) -> None:
     dfs = dfs.map(lambda df: df.filter(~pl.col("name").is_in(AUX_NAMES)))
 
     bundle_info_pairs: list[Pair[TensorBundleInfo]] = match_bundles(
-        df_baseline=df_baseline,
-        df_target=df_target,
+        dfs=dfs,
         skip_keys=_compute_skip_keys(
             args, has_token_aligner_plan=token_aligner_plan is not None
         ),
