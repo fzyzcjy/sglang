@@ -11,8 +11,8 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     ExternalSeqId,
     MegatronSeqId,
     SGLangSeqId,
-    TokenAlignerStepAux,
     TokenAlignerGlobalAux,
+    TokenAlignerStepAux,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.executor import (
     execute_unsharder_plan,
@@ -72,7 +72,9 @@ def load_and_normalize_aux(
             step_data=step_data, framework=framework, layout=layout, step=step
         )
 
-    return TokenAlignerGlobalAux(step_auxs=step_auxs, framework=framework, layout=layout)
+    return TokenAlignerGlobalAux(
+        step_auxs=step_auxs, framework=framework, layout=layout
+    )
 
 
 def has_aux_tensors(df: pl.DataFrame) -> bool:
@@ -186,7 +188,9 @@ def _normalize_step(
 # ── sglang ──────────────────────────────────────────────────────────
 
 
-def _normalize_step_sglang(step_data: dict[str, object], *, step: int) -> TokenAlignerStepAux:
+def _normalize_step_sglang(
+    step_data: dict[str, object], *, step: int
+) -> TokenAlignerStepAux:
     input_ids = step_data["input_ids"]
     positions = step_data["positions"]
     seq_lens = step_data["seq_lens"]

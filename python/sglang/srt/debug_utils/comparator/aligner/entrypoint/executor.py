@@ -5,17 +5,17 @@ from typing import Optional
 
 import torch
 
+from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
+    AlignerPerStepPlan,
+    AlignerPerStepSubPlan,
+    AlignerPlan,
+)
 from sglang.srt.debug_utils.comparator.aligner.reorderer.executor import (
     execute_reorderer_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.reorderer.types import ReordererPlan
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.executor import (
     execute_token_aligner,
-)
-from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
-    AlignerPlan,
-    AlignerPerStepPlan,
-    AlignerPerStepSubPlan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.executor import (
     execute_unsharder_plan,
@@ -67,9 +67,7 @@ def execute_aligner_plan(
             y=list(step_tensors_y.values())[0],
         )
 
-    return AlignerResult(
-        tensors=combined, warnings=all_warnings, failed_side_xy=None
-    )
+    return AlignerResult(tensors=combined, warnings=all_warnings, failed_side_xy=None)
 
 
 def _execute_step_plans(
@@ -80,7 +78,9 @@ def _execute_step_plans(
     all_warnings: list[AlignWarning] = []
 
     for step_plan in step_plans:
-        step_tensors: list[torch.Tensor] = [tensors[i] for i in step_plan.input_object_indices]
+        step_tensors: list[torch.Tensor] = [
+            tensors[i] for i in step_plan.input_object_indices
+        ]
         tensor, warnings = _execute_sub_plans(
             tensors=step_tensors, plans=step_plan.sub_plans
         )

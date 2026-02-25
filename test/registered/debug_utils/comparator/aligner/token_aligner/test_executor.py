@@ -16,9 +16,9 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.planner import (
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     SGLangSeqId,
-    TokenAlignerStepAux,
-    TokenAlignerPlan,
     TokenAlignerGlobalAux,
+    TokenAlignerPlan,
+    TokenAlignerStepAux,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci

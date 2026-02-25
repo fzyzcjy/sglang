@@ -2032,9 +2032,9 @@ class TestDumperE2E:
                 rids_value, list
             ), f"rids should be a list, got {type(rids_value)}"
             assert len(rids_value) > 0, "rids should be non-empty"
-            assert all(isinstance(r, str) for r in rids_value), (
-                f"each rid should be a str, got {[type(r) for r in rids_value]}"
-            )
+            assert all(
+                isinstance(r, str) for r in rids_value
+            ), f"each rid should be a str, got {[type(r) for r in rids_value]}"
         finally:
             kill_process_tree(proc.pid)
 

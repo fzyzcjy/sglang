@@ -3,9 +3,9 @@ from __future__ import annotations
 from collections import defaultdict
 
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
+    TokenAlignerPlan,
     TokenAlignerSeqInfo,
     TokenAlignerSeqsInfo,
-    TokenAlignerPlan,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 

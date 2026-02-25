@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
+    AlignerPerStepPlan,
+    AlignerPerStepSubPlan,
+    AlignerPlan,
+)
 from sglang.srt.debug_utils.comparator.aligner.reorderer.planner import (
     compute_reorderer_plans,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignerPlan,
-)
-from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
-    AlignerPlan,
-    AlignerPerStepPlan,
-    AlignerPerStepSubPlan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.parallel_info import (
     normalize_parallel_info,
@@ -29,7 +29,9 @@ def compute_aligner_plan(
     token_aligner_plan: Optional[TokenAlignerPlan],
 ) -> AlignerPlan:
     return AlignerPlan(
-        per_step_plans=metas_pair.map(lambda metas: _compute_per_step_plans(metas=metas)),
+        per_step_plans=metas_pair.map(
+            lambda metas: _compute_per_step_plans(metas=metas)
+        ),
         token_aligner_plan=token_aligner_plan,
     )
 
@@ -44,15 +46,21 @@ def _compute_per_step_plans(metas: list[dict[str, Any]]) -> list[AlignerPerStepP
     for step in sorted(step_to_input_indices):
         input_indices: list[int] = step_to_input_indices[step]
         step_metas: list[dict[str, Any]] = [metas[idx] for idx in input_indices]
-        plans: list[AlignerPerStepSubPlan] = _compute_per_step_sub_plans(metas=step_metas)
+        plans: list[AlignerPerStepSubPlan] = _compute_per_step_sub_plans(
+            metas=step_metas
+        )
         result.append(
-            AlignerPerStepPlan(step=step, input_object_indices=input_indices, sub_plans=plans)
+            AlignerPerStepPlan(
+                step=step, input_object_indices=input_indices, sub_plans=plans
+            )
         )
 
     return result
 
 
-def _compute_per_step_sub_plans(metas: list[dict[str, Any]]) -> list[AlignerPerStepSubPlan]:
+def _compute_per_step_sub_plans(
+    metas: list[dict[str, Any]],
+) -> list[AlignerPerStepSubPlan]:
     if not metas or len(metas) == 1:
         return []
 

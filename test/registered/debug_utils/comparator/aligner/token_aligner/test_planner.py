@@ -12,10 +12,10 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.planner import (
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     MegatronSeqId,
     SGLangSeqId,
+    TokenAlignerGlobalAux,
     TokenAlignerSeqInfo,
     TokenAlignerSeqsInfo,
     TokenAlignerStepAux,
-    TokenAlignerGlobalAux,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -154,7 +154,10 @@ class TestBuildTokenIndexMegatronThd:
                     input_ids=torch.tensor([10, 20, 30, 40, 50]),
                     positions=torch.tensor([0, 1, 2, 0, 1]),
                     seq_lens=torch.tensor([3, 2]),
-                    seq_ids=(MegatronSeqId(step=0, seq_index=0), MegatronSeqId(step=0, seq_index=1)),
+                    seq_ids=(
+                        MegatronSeqId(step=0, seq_index=0),
+                        MegatronSeqId(step=0, seq_index=1),
+                    ),
                 ),
             },
             framework="megatron",
@@ -183,13 +186,19 @@ class TestBuildTokenIndexMegatronThd:
                     input_ids=torch.tensor([10, 20, 30, 40]),
                     positions=torch.tensor([0, 1, 0, 1]),
                     seq_lens=torch.tensor([2, 2]),
-                    seq_ids=(MegatronSeqId(step=0, seq_index=0), MegatronSeqId(step=0, seq_index=1)),
+                    seq_ids=(
+                        MegatronSeqId(step=0, seq_index=0),
+                        MegatronSeqId(step=0, seq_index=1),
+                    ),
                 ),
                 1: TokenAlignerStepAux(
                     input_ids=torch.tensor([50, 60, 70, 80]),
                     positions=torch.tensor([0, 1, 0, 1]),
                     seq_lens=torch.tensor([2, 2]),
-                    seq_ids=(MegatronSeqId(step=1, seq_index=0), MegatronSeqId(step=1, seq_index=1)),
+                    seq_ids=(
+                        MegatronSeqId(step=1, seq_index=0),
+                        MegatronSeqId(step=1, seq_index=1),
+                    ),
                 ),
             },
             framework="megatron",
@@ -340,7 +349,10 @@ class TestComputeAlignmentPlanCrossLayout:
                     input_ids=torch.tensor([10, 20, 30, 31, 40, 50, 51]),
                     positions=torch.tensor([0, 1, 2, 3, 0, 1, 2]),
                     seq_lens=torch.tensor([4, 3]),
-                    seq_ids=(MegatronSeqId(step=0, seq_index=0), MegatronSeqId(step=0, seq_index=1)),
+                    seq_ids=(
+                        MegatronSeqId(step=0, seq_index=0),
+                        MegatronSeqId(step=0, seq_index=1),
+                    ),
                 ),
             },
             framework="megatron",

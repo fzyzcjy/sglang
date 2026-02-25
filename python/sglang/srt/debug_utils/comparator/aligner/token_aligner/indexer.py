@@ -29,7 +29,9 @@ class _SeqAccumulator:
         self.indices: list[int] = []
 
 
-def _build_token_index(global_aux: TokenAlignerGlobalAux) -> dict[int, TokenAlignerSeqInfo]:
+def _build_token_index(
+    global_aux: TokenAlignerGlobalAux,
+) -> dict[int, TokenAlignerSeqInfo]:
     """Build token index for any framework/layout using seq_ids for identity tracking."""
     external_to_internal: dict[ExternalSeqId, int] = {}
     next_internal_id: int = 0
