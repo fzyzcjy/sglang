@@ -128,6 +128,27 @@ def _build_alignment_plan(
     return compute_alignment_plan(seqs_info_pair=seqs_info)
 
 
+def _execute_comparisons(
+    *,
+    bundle_pairs: list[Pair[TensorBundle]],
+    baseline_path: Path,
+    target_path: Path,
+    alignment_plan: Optional[TokenAlignPlan],
+    diff_threshold: float,
+) -> Iterator[Union[ComparisonRecord, SkipRecord]]:
+    for pair in bundle_pairs:
+        if not pair.y:
+            continue
+
+        yield compare_bundles(
+            bundles=pair,
+            baseline_path=baseline_path,
+            target_path=target_path,
+            alignment_plan=alignment_plan,
+            diff_threshold=diff_threshold,
+        )
+
+
 def _consume_comparison_records(
     *,
     comparison_records: Iterator[Union[ComparisonRecord, SkipRecord]],
@@ -144,28 +165,6 @@ def _consume_comparison_records(
         SummaryRecord(total=sum(counts.values()), **counts),
         output_format=output_format,
     )
-
-
-def _execute_comparisons(
-    *,
-    bundle_pairs: list[Pair[TensorBundle]],
-    baseline_path: Path,
-    target_path: Path,
-    alignment_plan: Optional[TokenAlignPlan],
-    diff_threshold: float,
-) -> Iterator[Union[ComparisonRecord, SkipRecord]]:
-    """Yield comparison records for all bundle pairs (unified raw/logical pipeline)."""
-    for pair in bundle_pairs:
-        if not pair.y:
-            continue
-
-        yield compare_bundles(
-            bundles=pair,
-            baseline_path=baseline_path,
-            target_path=target_path,
-            alignment_plan=alignment_plan,
-            diff_threshold=diff_threshold,
-        )
 
 
 def _parse_args() -> argparse.Namespace:
