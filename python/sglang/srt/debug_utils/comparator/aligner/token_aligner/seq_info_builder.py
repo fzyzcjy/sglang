@@ -8,6 +8,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignerSeqInfo,
     TokenAlignerSeqsInfo,
     TokenAlignerStepAux,
+    TokenLocator,
 )
 
 
@@ -18,7 +19,7 @@ class _SeqInfoAccumulator:
     input_ids: list[int] = field(default_factory=list)
     positions: list[int] = field(default_factory=list)
     steps: list[int] = field(default_factory=list)
-    indices: list[int] = field(default_factory=list)
+    token_index_in_step: list[int] = field(default_factory=list)
 
     def extend(
         self,
@@ -26,19 +27,21 @@ class _SeqInfoAccumulator:
         input_ids: list[int],
         positions: list[int],
         steps: list[int],
-        indices: list[int],
+        token_index_in_step: list[int],
     ) -> None:
         self.input_ids.extend(input_ids)
         self.positions.extend(positions)
         self.steps.extend(steps)
-        self.indices.extend(indices)
+        self.token_index_in_step.extend(token_index_in_step)
 
     def build(self) -> TokenAlignerSeqInfo:
         return TokenAlignerSeqInfo(
             input_ids=self.input_ids,
             positions=self.positions,
-            steps=self.steps,
-            indices=self.indices,
+            locator=TokenLocator(
+                steps=self.steps,
+                token_index_in_step=self.token_index_in_step,
+            ),
         )
 
 
@@ -76,7 +79,7 @@ def _build_token_aligner_seq_infos(
                 input_ids=aux.input_ids[offset : offset + seq_len],
                 positions=aux.positions[offset : offset + seq_len],
                 steps=[step] * seq_len,
-                indices=list(range(offset, offset + seq_len)),
+                token_index_in_step=list(range(offset, offset + seq_len)),
             )
 
             offset += seq_len

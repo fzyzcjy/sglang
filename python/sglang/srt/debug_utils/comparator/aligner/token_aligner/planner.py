@@ -7,6 +7,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignerPlan,
     TokenAlignerSeqInfo,
     TokenAlignerSeqsInfo,
+    TokenLocator,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 
@@ -19,8 +20,10 @@ def compute_token_aligner_plan(
         seqs=Pair(x=seqs_info_pair.x.sequences, y=seqs_info_pair.y.sequences)
     )
 
-    match_steps: Pair[list[int]] = Pair(x=[], y=[])
-    match_indices: Pair[list[int]] = Pair(x=[], y=[])
+    steps_x: list[int] = []
+    steps_y: list[int] = []
+    token_index_in_step_x: list[int] = []
+    token_index_in_step_y: list[int] = []
 
     for seq_id_x, seq_id_y in matched_pairs:
         rec: Pair[TokenAlignerSeqInfo] = Pair(
@@ -42,14 +45,16 @@ def compute_token_aligner_plan(
                     )
 
         for i in range(common_len):
-            match_steps.x.append(rec.x.steps[i])
-            match_indices.x.append(rec.x.indices[i])
-            match_steps.y.append(rec.y.steps[i])
-            match_indices.y.append(rec.y.indices[i])
+            steps_x.append(rec.x.locator.steps[i])
+            token_index_in_step_x.append(rec.x.locator.token_index_in_step[i])
+            steps_y.append(rec.y.locator.steps[i])
+            token_index_in_step_y.append(rec.y.locator.token_index_in_step[i])
 
     return TokenAlignerPlan(
-        match_steps=match_steps,
-        match_indices=match_indices,
+        locators=Pair(
+            x=TokenLocator(steps=steps_x, token_index_in_step=token_index_in_step_x),
+            y=TokenLocator(steps=steps_y, token_index_in_step=token_index_in_step_y),
+        ),
     )
 
 

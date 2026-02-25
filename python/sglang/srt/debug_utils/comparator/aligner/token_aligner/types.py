@@ -5,7 +5,11 @@ from typing import NamedTuple, Union
 
 from pydantic import model_validator
 
-from sglang.srt.debug_utils.comparator.utils import Pair, _FrozenBase
+from sglang.srt.debug_utils.comparator.utils import (
+    Pair,
+    _FrozenBase,
+    _check_equal_lengths,
+)
 
 
 class SGLangSeqId(NamedTuple):
@@ -29,6 +33,16 @@ class TokenAlignerStepAux:
     seq_lens: list[int]  # [num_seqs]
     seq_ids: list[ExternalSeqId]  # [num_seqs] — sequence identity
 
+    def __post_init__(self) -> None:
+        _check_equal_lengths(input_ids=self.input_ids, positions=self.positions)
+        _check_equal_lengths(seq_lens=self.seq_lens, seq_ids=self.seq_ids)
+
+        token_count: int = sum(self.seq_lens)
+        if token_count != len(self.input_ids):
+            raise ValueError(
+                f"sum(seq_lens)={token_count} != len(input_ids)={len(self.input_ids)}"
+            )
+
 
 @dataclass(frozen=True)
 class TokenAlignerGlobalAux:
@@ -39,27 +53,50 @@ class TokenAlignerGlobalAux:
     layout: str  # "thd"
 
 
+class TokenLocator(_FrozenBase):
+    """Locates tokens within a multi-step tensor store.
+
+    token i is at tensor_of_step[steps[i]][token_index_in_step[i]].
+    """
+
+    steps: list[int]
+    token_index_in_step: list[int]
+
+
 class TokenAlignerSeqInfo(_FrozenBase):
     """Information for a sequence, containing information to locate all the tokens inside the sequence."""
 
     # All these fields are of shape (num_tokens_in_seq,)
     input_ids: list[int]
     positions: list[int]
-    steps: list[int]
-    indices: list[int]
+    locator: TokenLocator
 
     @model_validator(mode="after")
     def _validate_fields(self) -> TokenAlignerSeqInfo:
         n: int = len(self.input_ids)
-        assert (
-            len(self.positions) == n
-        ), f"positions length {len(self.positions)} != {n}"
-        assert len(self.steps) == n, f"steps length {len(self.steps)} != {n}"
-        assert len(self.indices) == n, f"indices length {len(self.indices)} != {n}"
-        assert self.positions == list(
-            range(n)
-        ), f"positions must be [0, 1, ..., {n - 1}], got {self.positions}"
+        _check_equal_lengths(
+            input_ids=self.input_ids,
+            positions=self.positions,
+            locator_steps=self.locator.steps,
+            locator_token_index_in_step=self.locator.token_index_in_step,
+        )
+
+        if self.positions != list(range(n)):
+            raise ValueError(
+                f"positions must be [0, 1, ..., {n - 1}], got {self.positions}"
+            )
+
         return self
+
+    def __add__(self, other: TokenAlignerSeqInfo) -> TokenAlignerSeqInfo:
+        return TokenAlignerSeqInfo(
+            input_ids=self.input_ids + other.input_ids,
+            positions=self.positions + other.positions,
+            locator=TokenLocator(
+                steps=self.locator.steps + other.locator.steps,
+                token_index_in_step=self.locator.token_index_in_step + other.locator.token_index_in_step,
+            ),
+        )
 
 
 class TokenAlignerSeqsInfo(_FrozenBase):
@@ -70,11 +107,16 @@ class TokenAlignerSeqsInfo(_FrozenBase):
 
 
 class TokenAlignerPlan(_FrozenBase):
-    """Token alignment plan.
+    """Token alignment plan. locators.x[i] and locators.y[i] correspond to the same logical token."""
 
-    (match_steps.x[i], match_indices.x[i]) and (match_steps.y[i], match_indices.y[i])
-    correspond to the same logical token.
-    """
+    locators: Pair[TokenLocator]
 
-    match_steps: Pair[list[int]]
-    match_indices: Pair[list[int]]
+    @model_validator(mode="after")
+    def _validate_fields(self) -> TokenAlignerPlan:
+        _check_equal_lengths(
+            locators_x_steps=self.locators.x.steps,
+            locators_x_token_index_in_step=self.locators.x.token_index_in_step,
+            locators_y_steps=self.locators.y.steps,
+            locators_y_token_index_in_step=self.locators.y.token_index_in_step,
+        )
+        return self

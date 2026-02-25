@@ -19,6 +19,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignerGlobalAux,
     TokenAlignerPlan,
     TokenAlignerStepAux,
+    TokenLocator,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -63,15 +64,17 @@ class TestExecuteAlignment:
         )
 
         assert torch.equal(aligned.x, aligned.y)
-        assert aligned.x.shape[0] == len(plan.match_steps.x)
+        assert aligned.x.shape[0] == len(plan.locators.x.steps)
 
     def test_zero_matched_tokens(self):
         """Empty TokenAlignerPlan (no matched tokens) returns shape[0]==0 without crash."""
         torch.manual_seed(42)
 
         plan = TokenAlignerPlan(
-            match_steps=Pair(x=[], y=[]),
-            match_indices=Pair(x=[], y=[]),
+            locators=Pair(
+                x=TokenLocator(steps=[], token_index_in_step=[]),
+                y=TokenLocator(steps=[], token_index_in_step=[]),
+            ),
         )
 
         tensors = {0: torch.randn(5, 8)}

@@ -16,6 +16,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignerSeqInfo,
     TokenAlignerSeqsInfo,
     TokenAlignerStepAux,
+    TokenLocator,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -47,13 +48,13 @@ class TestBuildTokenIndexSGLangThd:
         seq0 = index.sequences[0]
         assert seq0.input_ids == [10, 20, 30]
         assert seq0.positions == [0, 1, 2]
-        assert seq0.steps == [0, 0, 0]
-        assert seq0.indices == [0, 1, 2]
+        assert seq0.locator.steps == [0, 0, 0]
+        assert seq0.locator.token_index_in_step == [0, 1, 2]
 
         seq1 = index.sequences[1]
         assert seq1.input_ids == [40, 50]
         assert seq1.positions == [0, 1]
-        assert seq1.indices == [3, 4]
+        assert seq1.locator.token_index_in_step == [3, 4]
 
     def test_multi_step_prefill_decode(self):
         """Prefill step followed by decode steps, sequences accumulate tokens."""
@@ -82,7 +83,7 @@ class TestBuildTokenIndexSGLangThd:
         seq0 = index.sequences[0]
         assert seq0.input_ids == [10, 20, 30, 31]
         assert seq0.positions == [0, 1, 2, 3]
-        assert seq0.steps == [0, 0, 0, 1]
+        assert seq0.locator.steps == [0, 0, 0, 1]
 
         seq1 = index.sequences[1]
         assert seq1.input_ids == [40, 50, 51]
@@ -170,13 +171,13 @@ class TestBuildTokenIndexMegatronThd:
         seq0 = index.sequences[0]
         assert seq0.input_ids == [10, 20, 30]
         assert seq0.positions == [0, 1, 2]
-        assert seq0.steps == [0, 0, 0]
-        assert seq0.indices == [0, 1, 2]
+        assert seq0.locator.steps == [0, 0, 0]
+        assert seq0.locator.token_index_in_step == [0, 1, 2]
 
         seq1 = index.sequences[1]
         assert seq1.input_ids == [40, 50]
         assert seq1.positions == [0, 1]
-        assert seq1.indices == [3, 4]
+        assert seq1.locator.token_index_in_step == [3, 4]
 
     def test_multi_step_accumulation(self):
         """Two steps with different seq_ids produce separate sequences."""
@@ -210,11 +211,11 @@ class TestBuildTokenIndexMegatronThd:
 
         seq0 = index.sequences[0]
         assert seq0.input_ids == [10, 20]
-        assert seq0.steps == [0, 0]
+        assert seq0.locator.steps == [0, 0]
 
         seq2 = index.sequences[2]
         assert seq2.input_ids == [50, 60]
-        assert seq2.steps == [1, 1]
+        assert seq2.locator.steps == [1, 1]
 
 
 class TestMatchSequences:
@@ -394,7 +395,7 @@ class TestComputeAlignmentPlanCrossLayout:
         index_b = build_seqs_info(side_aux_b)
 
         plan = compute_token_aligner_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
-        assert len(plan.match_steps.x) == 3
+        assert len(plan.locators.x.steps) == 3
 
     def test_sglang_vs_megatron_thd(self):
         """SGLang multi-step thd aligned with Megatron single-step thd."""
@@ -437,7 +438,7 @@ class TestComputeAlignmentPlanCrossLayout:
 
         plan = compute_token_aligner_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
 
-        assert len(plan.match_steps.x) == 7
+        assert len(plan.locators.x.steps) == 7
 
 
 # ---------------------------------------------------------------------------
@@ -457,8 +458,10 @@ def _make_index(
         records[seq_id] = TokenAlignerSeqInfo(
             input_ids=list(input_ids),
             positions=list(range(num_tokens)),
-            steps=[0] * num_tokens,
-            indices=list(range(num_tokens)),
+            locator=TokenLocator(
+                steps=[0] * num_tokens,
+                token_index_in_step=list(range(num_tokens)),
+            ),
         )
     return TokenAlignerSeqsInfo(sequences=records, layout=layout)
 
@@ -473,8 +476,10 @@ def _make_seq_info_dict(
         result[seq_id] = TokenAlignerSeqInfo(
             input_ids=list(input_ids),
             positions=list(range(num_tokens)),
-            steps=[0] * num_tokens,
-            indices=list(range(num_tokens)),
+            locator=TokenLocator(
+                steps=[0] * num_tokens,
+                token_index_in_step=list(range(num_tokens)),
+            ),
         )
     return result
 
