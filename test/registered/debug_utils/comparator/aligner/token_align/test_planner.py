@@ -3,10 +3,6 @@ import sys
 import pytest
 import torch
 
-from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
-    StepAux,
-    TokenAlignGlobalAux,
-)
 from sglang.srt.debug_utils.comparator.aligner.token_align.indexer import (
     build_seqs_info,
 )
@@ -16,6 +12,8 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
     SeqInfo,
     SeqsInfo,
+    StepAux,
+    TokenAlignGlobalAux,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci

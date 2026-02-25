@@ -8,8 +8,8 @@ import polars as pl
 import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
-    StepAux,
     ExternalSeqId,
+    StepAux,
     TokenAlignGlobalAux,
 )
 from sglang.srt.debug_utils.comparator.aligner.unshard.executor import (

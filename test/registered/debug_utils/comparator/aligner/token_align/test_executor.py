@@ -5,10 +5,6 @@ import sys
 import pytest
 import torch
 
-from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
-    StepAux,
-    TokenAlignGlobalAux,
-)
 from sglang.srt.debug_utils.comparator.aligner.token_align.executor import (
     execute_alignment,
 )
@@ -19,6 +15,8 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
     compute_alignment_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
+    StepAux,
+    TokenAlignGlobalAux,
     TokenAlignPlan,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair

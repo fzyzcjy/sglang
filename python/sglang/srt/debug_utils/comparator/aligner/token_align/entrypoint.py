@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Iterator, Optional, Union
 
 from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
     has_aux_tensors,
@@ -15,21 +14,11 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
     compute_alignment_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
-    TokenAlignPlan,
     SeqsInfo,
     TokenAlignGlobalAux,
-)
-from sglang.srt.debug_utils.comparator.bundle_comparator import compare_bundle_pair
-from sglang.srt.debug_utils.comparator.bundle_matcher import TensorBundle, match_bundles
-from sglang.srt.debug_utils.comparator.output_types import (
-    ComparisonRecord,
-    ConfigRecord,
-    SkipRecord,
-    SummaryRecord,
-    print_record,
+    TokenAlignPlan,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
-from sglang.srt.debug_utils.dump_loader import read_meta
 
 
 def _compute_maybe_alignment_plan(args, df_baseline, df_target):

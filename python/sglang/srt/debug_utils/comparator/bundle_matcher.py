@@ -28,12 +28,8 @@ def match_bundles(
 
     results: list[Pair[TensorBundle]] = []
     for key_values in unique_keys.iter_rows(named=True):
-        rows_baseline: TensorBundle = filter_rows(
-            df_baseline, conditions=key_values
-        )
-        rows_target: TensorBundle = filter_rows(
-            df_target, conditions=key_values
-        )
+        rows_baseline: TensorBundle = filter_rows(df_baseline, conditions=key_values)
+        rows_target: TensorBundle = filter_rows(df_target, conditions=key_values)
         results.append(Pair(x=rows_baseline, y=rows_target))
 
     return results
