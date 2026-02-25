@@ -18,8 +18,8 @@ class _FrozenBase(BaseModel):
 
 
 class Pair(_FrozenBase, Generic[_T]):
-    a: _T
-    b: _T
+    x: _T
+    y: _T
 
 
 def argmax_coord(x: torch.Tensor) -> Tuple[int, ...]:
@@ -34,7 +34,7 @@ def compute_smaller_dtype(
         (torch.float32, torch.bfloat16): torch.bfloat16,
         # ... add more ...
     }
-    return info_dict.get((dtypes.a, dtypes.b)) or info_dict.get((dtypes.b, dtypes.a))
+    return info_dict.get((dtypes.x, dtypes.y)) or info_dict.get((dtypes.y, dtypes.x))
 
 
 def try_unify_shape(x: torch.Tensor, target_shape: torch.Size) -> torch.Tensor:

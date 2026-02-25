@@ -46,7 +46,7 @@ class AlignmentSummary(_FrozenBase):
 class AlignmentPlan(_FrozenBase):
     """Token alignment plan.
 
-    match_steps.a[i] + match_indices.a[i] and match_steps.b[i] + match_indices.b[i]
+    match_steps.x[i] + match_indices.x[i] and match_steps.y[i] + match_indices.y[i]
     correspond to the same logical token.
     """
 
@@ -61,21 +61,21 @@ class AlignmentPlan(_FrozenBase):
 def format_alignment_summary(summary: AlignmentSummary) -> str:
     lines: list[str] = [
         "Alignment Summary:",
-        f"  Side A: {summary.sides.a.framework} ({summary.sides.a.layout}), "
-        f"{summary.sides.a.num_sequences} sequences, "
-        f"{summary.sides.a.num_tokens} tokens, "
-        f"{summary.sides.a.num_steps} steps",
-        f"  Side B: {summary.sides.b.framework} ({summary.sides.b.layout}), "
-        f"{summary.sides.b.num_sequences} sequences, "
-        f"{summary.sides.b.num_tokens} tokens, "
-        f"{summary.sides.b.num_steps} steps",
+        f"  Side A: {summary.sides.x.framework} ({summary.sides.x.layout}), "
+        f"{summary.sides.x.num_sequences} sequences, "
+        f"{summary.sides.x.num_tokens} tokens, "
+        f"{summary.sides.x.num_steps} steps",
+        f"  Side B: {summary.sides.y.framework} ({summary.sides.y.layout}), "
+        f"{summary.sides.y.num_sequences} sequences, "
+        f"{summary.sides.y.num_tokens} tokens, "
+        f"{summary.sides.y.num_steps} steps",
         f"  Matched: {len(summary.sequence_matches)} sequence pairs, "
         f"{summary.num_matched_tokens} tokens",
     ]
 
-    if summary.unmatched_seq_ids.a:
-        lines.append(f"  Unmatched A: {summary.unmatched_seq_ids.a}")
-    if summary.unmatched_seq_ids.b:
-        lines.append(f"  Unmatched B: {summary.unmatched_seq_ids.b}")
+    if summary.unmatched_seq_ids.x:
+        lines.append(f"  Unmatched A: {summary.unmatched_seq_ids.x}")
+    if summary.unmatched_seq_ids.y:
+        lines.append(f"  Unmatched B: {summary.unmatched_seq_ids.y}")
 
     return "\n".join(lines)

@@ -45,7 +45,7 @@ def compute_alignment_plan(
 ) -> AlignmentPlan:
     """Compute a token alignment plan from two side token indices."""
     matched_pairs: list[tuple[int, int]] = _match_sequences(
-        seqs=Pair(a=indices.a.sequences, b=indices.b.sequences)
+        seqs=Pair(x=indices.x.sequences, y=indices.y.sequences)
     )
 
     steps_a: list[int] = []
@@ -61,8 +61,8 @@ def compute_alignment_plan(
         matched_a_ids.add(seq_id_a)
         matched_b_ids.add(seq_id_b)
 
-        rec_a: SequenceRecord = indices.a.sequences[seq_id_a]
-        rec_b: SequenceRecord = indices.b.sequences[seq_id_b]
+        rec_a: SequenceRecord = indices.x.sequences[seq_id_a]
+        rec_b: SequenceRecord = indices.y.sequences[seq_id_b]
 
         pos_to_a: dict[int, int] = {pos: idx for idx, pos in enumerate(rec_a.positions)}
         pos_to_b: dict[int, int] = {pos: idx for idx, pos in enumerate(rec_b.positions)}
@@ -93,30 +93,30 @@ def compute_alignment_plan(
 
         match_infos.append(
             SeqMatchInfo(
-                seq_ids=Pair(a=seq_id_a, b=seq_id_b),
-                num_tokens=Pair(a=len(rec_a.positions), b=len(rec_b.positions)),
+                seq_ids=Pair(x=seq_id_a, y=seq_id_b),
+                num_tokens=Pair(x=len(rec_a.positions), y=len(rec_b.positions)),
                 num_matched=num_matched,
             )
         )
 
     unmatched_a: tuple[int, ...] = tuple(
-        sorted(set(indices.a.sequences.keys()) - matched_a_ids)
+        sorted(set(indices.x.sequences.keys()) - matched_a_ids)
     )
     unmatched_b: tuple[int, ...] = tuple(
-        sorted(set(indices.b.sequences.keys()) - matched_b_ids)
+        sorted(set(indices.y.sequences.keys()) - matched_b_ids)
     )
 
     summary = AlignmentSummary(
-        sides=Pair(a=_make_side_info(indices.a), b=_make_side_info(indices.b)),
+        sides=Pair(x=_make_side_info(indices.x), y=_make_side_info(indices.y)),
         sequence_matches=tuple(match_infos),
-        unmatched_seq_ids=Pair(a=unmatched_a, b=unmatched_b),
+        unmatched_seq_ids=Pair(x=unmatched_a, y=unmatched_b),
         num_matched_tokens=len(steps_a),
     )
 
     return AlignmentPlan(
-        match_steps=Pair(a=tuple(steps_a), b=tuple(steps_b)),
-        match_indices=Pair(a=tuple(indices_a), b=tuple(indices_b)),
-        layouts=Pair(a=indices.a.layout, b=indices.b.layout),
+        match_steps=Pair(x=tuple(steps_a), y=tuple(steps_b)),
+        match_indices=Pair(x=tuple(indices_a), y=tuple(indices_b)),
+        layouts=Pair(x=indices.x.layout, y=indices.y.layout),
         summary=summary,
     )
 
@@ -296,17 +296,17 @@ def _match_sequences(
 ) -> list[tuple[int, int]]:
     """Two-pass sequence matching: exact then prefix."""
     matched: list[tuple[int, int]] = []
-    unmatched_a: set[int] = set(seqs.a.keys())
-    unmatched_b: set[int] = set(seqs.b.keys())
+    unmatched_a: set[int] = set(seqs.x.keys())
+    unmatched_b: set[int] = set(seqs.y.keys())
 
     b_lookup: dict[tuple[int, ...], list[int]] = defaultdict(list)
-    for seq_id, rec in seqs.b.items():
+    for seq_id, rec in seqs.y.items():
         b_lookup[rec.input_ids].append(seq_id)
 
-    for seq_id_a in sorted(seqs.a.keys()):
+    for seq_id_a in sorted(seqs.x.keys()):
         if seq_id_a not in unmatched_a:
             continue
-        ids_a: tuple[int, ...] = seqs.a[seq_id_a].input_ids
+        ids_a: tuple[int, ...] = seqs.x[seq_id_a].input_ids
         candidates: list[int] = b_lookup.get(ids_a, [])
         for candidate in candidates:
             if candidate in unmatched_b:
@@ -316,16 +316,16 @@ def _match_sequences(
                 break
 
     remaining_a: list[int] = sorted(
-        unmatched_a, key=lambda s: len(seqs.a[s].input_ids), reverse=True
+        unmatched_a, key=lambda s: len(seqs.x[s].input_ids), reverse=True
     )
     remaining_b_by_len: list[tuple[int, tuple[int, ...]]] = sorted(
-        [(s, seqs.b[s].input_ids) for s in unmatched_b],
+        [(s, seqs.y[s].input_ids) for s in unmatched_b],
         key=lambda x: len(x[1]),
         reverse=True,
     )
 
     for seq_id_a in remaining_a:
-        ids_a = seqs.a[seq_id_a].input_ids
+        ids_a = seqs.x[seq_id_a].input_ids
         best_match: int | None = None
         best_len: int = 0
 

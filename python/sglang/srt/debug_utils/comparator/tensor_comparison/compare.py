@@ -67,7 +67,7 @@ def compare_tensors(
 
         if baseline_original_dtype != target_original_dtype:
             downcast_dtype = compute_smaller_dtype(
-                Pair(a=baseline_original_dtype, b=target_original_dtype)
+                Pair(x=baseline_original_dtype, y=target_original_dtype)
             )
             if downcast_dtype is not None:
                 diff_downcast = _compute_diff(

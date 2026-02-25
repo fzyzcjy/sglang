@@ -126,7 +126,7 @@ def _build_alignment_plan(
     index_target: SideTokenIndex = build_token_index(side_aux_target)
 
     plan: AlignmentPlan = compute_alignment_plan(
-        indices=Pair(a=index_baseline, b=index_target)
+        indices=Pair(x=index_baseline, y=index_target)
     )
     print(format_alignment_summary(plan.summary), file=sys.stderr)
 
@@ -250,9 +250,9 @@ def _compare_tensor(
 
     if plan is not None:
         aligned: Pair[torch.Tensor] = execute_alignment(
-            plan=plan, tensors=Pair(a=tensors_b, b=tensors_t)
+            plan=plan, tensors=Pair(x=tensors_b, y=tensors_t)
         )
-        combined_b, combined_t = aligned.a, aligned.b
+        combined_b, combined_t = aligned.x, aligned.y
     else:
         combined_b = concat_steps(tensors_b)
         combined_t = concat_steps(tensors_t)

@@ -15,25 +15,25 @@ def execute_alignment(
     Returns two tensors of shape [num_matched_tokens, ...] with matching tokens
     at corresponding indices.
     """
-    tensors_a: dict[int, torch.Tensor] = tensors.a
-    tensors_b: dict[int, torch.Tensor] = tensors.b
+    tensors_a: dict[int, torch.Tensor] = tensors.x
+    tensors_b: dict[int, torch.Tensor] = tensors.y
 
-    if plan.layouts.a == "bshd":
+    if plan.layouts.x == "bshd":
         tensors_a = {s: t.flatten(0, 1) for s, t in tensors_a.items()}
-    if plan.layouts.b == "bshd":
+    if plan.layouts.y == "bshd":
         tensors_b = {s: t.flatten(0, 1) for s, t in tensors_b.items()}
 
-    if not plan.match_steps.a:
+    if not plan.match_steps.x:
         dummy: torch.Tensor = next(iter(tensors_a.values()))
         empty_shape: list[int] = [0] + list(dummy.shape[1:])
         empty: torch.Tensor = torch.empty(empty_shape, dtype=dummy.dtype)
-        return Pair(a=empty, b=empty.clone())
+        return Pair(x=empty, y=empty.clone())
 
     tokens_a: list[torch.Tensor] = [
-        tensors_a[s][i] for s, i in zip(plan.match_steps.a, plan.match_indices.a)
+        tensors_a[s][i] for s, i in zip(plan.match_steps.x, plan.match_indices.x)
     ]
     tokens_b: list[torch.Tensor] = [
-        tensors_b[s][i] for s, i in zip(plan.match_steps.b, plan.match_indices.b)
+        tensors_b[s][i] for s, i in zip(plan.match_steps.y, plan.match_indices.y)
     ]
 
-    return Pair(a=torch.stack(tokens_a), b=torch.stack(tokens_b))
+    return Pair(x=torch.stack(tokens_a), y=torch.stack(tokens_b))

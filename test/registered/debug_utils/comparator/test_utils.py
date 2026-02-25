@@ -80,21 +80,21 @@ class TestTryUnifyShape:
 class TestComputeSmallerDtype:
     def test_float32_bfloat16(self):
         assert (
-            compute_smaller_dtype(Pair(a=torch.float32, b=torch.bfloat16))
+            compute_smaller_dtype(Pair(x=torch.float32, y=torch.bfloat16))
             == torch.bfloat16
         )
 
     def test_reverse_order(self):
         assert (
-            compute_smaller_dtype(Pair(a=torch.bfloat16, b=torch.float32))
+            compute_smaller_dtype(Pair(x=torch.bfloat16, y=torch.float32))
             == torch.bfloat16
         )
 
     def test_same_dtype_returns_none(self):
-        assert compute_smaller_dtype(Pair(a=torch.float32, b=torch.float32)) is None
+        assert compute_smaller_dtype(Pair(x=torch.float32, y=torch.float32)) is None
 
     def test_unknown_pair_returns_none(self):
-        assert compute_smaller_dtype(Pair(a=torch.int32, b=torch.int64)) is None
+        assert compute_smaller_dtype(Pair(x=torch.int32, y=torch.int64)) is None
 
 
 if __name__ == "__main__":

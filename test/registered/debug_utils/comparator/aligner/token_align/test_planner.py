@@ -286,7 +286,7 @@ class TestMatchSequences:
             framework="megatron",
         )
 
-        plan = compute_alignment_plan(indices=Pair(a=index_a, b=index_b))
+        plan = compute_alignment_plan(indices=Pair(x=index_a, y=index_b))
         assert plan.summary.num_matched_tokens == 5
         assert len(plan.summary.sequence_matches) == 2
 
@@ -301,7 +301,7 @@ class TestMatchSequences:
             framework="megatron",
         )
 
-        plan = compute_alignment_plan(indices=Pair(a=index_a, b=index_b))
+        plan = compute_alignment_plan(indices=Pair(x=index_a, y=index_b))
         assert plan.summary.num_matched_tokens == 5
 
     def test_prefix_match(self):
@@ -315,7 +315,7 @@ class TestMatchSequences:
             framework="megatron",
         )
 
-        plan = compute_alignment_plan(indices=Pair(a=index_a, b=index_b))
+        plan = compute_alignment_plan(indices=Pair(x=index_a, y=index_b))
         assert plan.summary.num_matched_tokens == 2
         assert plan.summary.sequence_matches[0].num_matched == 2
 
@@ -330,10 +330,10 @@ class TestMatchSequences:
             framework="megatron",
         )
 
-        plan = compute_alignment_plan(indices=Pair(a=index_a, b=index_b))
+        plan = compute_alignment_plan(indices=Pair(x=index_a, y=index_b))
         assert plan.summary.num_matched_tokens == 0
-        assert len(plan.summary.unmatched_seq_ids.a) == 1
-        assert len(plan.summary.unmatched_seq_ids.b) == 1
+        assert len(plan.summary.unmatched_seq_ids.x) == 1
+        assert len(plan.summary.unmatched_seq_ids.y) == 1
 
     def test_ambiguous_same_input_ids(self):
         """Two sequences with identical input_ids: greedy match, no error."""
@@ -346,7 +346,7 @@ class TestMatchSequences:
             framework="megatron",
         )
 
-        plan = compute_alignment_plan(indices=Pair(a=index_a, b=index_b))
+        plan = compute_alignment_plan(indices=Pair(x=index_a, y=index_b))
         assert plan.summary.num_matched_tokens == 4
         assert len(plan.summary.sequence_matches) == 2
 
@@ -393,7 +393,7 @@ class TestComputeAlignmentPlanCrossLayout:
         index_a = build_token_index(side_aux_a)
         index_b = build_token_index(side_aux_b)
 
-        plan = compute_alignment_plan(indices=Pair(a=index_a, b=index_b))
+        plan = compute_alignment_plan(indices=Pair(x=index_a, y=index_b))
 
         assert plan.summary.num_matched_tokens == 7
         assert len(plan.summary.sequence_matches) == 2
@@ -437,7 +437,7 @@ class TestComputeAlignmentPlanCrossLayout:
         index_a = build_token_index(side_aux_a)
         index_b = build_token_index(side_aux_b)
 
-        plan = compute_alignment_plan(indices=Pair(a=index_a, b=index_b))
+        plan = compute_alignment_plan(indices=Pair(x=index_a, y=index_b))
         assert plan.summary.num_matched_tokens == 3
 
 
