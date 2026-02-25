@@ -1071,7 +1071,7 @@ class TestEntrypointAlignment:
         assert summary.failed == 0
 
     def test_alignment_fallback_when_no_aux(self, tmp_path, capsys):
-        """Without aux tensors, logical grouping falls back to per-step comparison."""
+        """Without aux tensors, logical grouping skips alignment and concats steps."""
         baseline_path, target_path = _create_dumps(tmp_path, ["tensor_a"], num_steps=2)
         args = _make_args(baseline_path, target_path, grouping="logical")
 
@@ -1079,7 +1079,7 @@ class TestEntrypointAlignment:
         run(args)
         captured = capsys.readouterr()
         records = _parse_jsonl(captured.out)
-        assert "falling back" in captured.err
+        assert "skipping token alignment" in captured.err
 
         summary = records[-1]
         assert isinstance(summary, SummaryRecord)
