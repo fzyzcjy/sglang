@@ -3,12 +3,36 @@ from pathlib import Path
 
 import polars as pl
 
+from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
+    AUX_NAMES,
+    SideAux,
+    load_and_normalize_aux,
+)
+from sglang.srt.debug_utils.comparator.aligner.token_align.executor import (
+    execute_alignment,
+)
+from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
+    build_token_index,
+    compute_alignment_plan,
+)
+from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
+    AlignmentPlan,
+    AlignmentSummary,
+    SideTokenIndex,
+)
 from sglang.srt.debug_utils.comparator.output_types import (
+    AlignWarning,
+    ComparisonRecord,
     ConfigRecord,
+    SkipRecord,
     SummaryRecord,
     print_record,
 )
-from sglang.srt.debug_utils.comparator.pipeline import process_tensor_group
+from sglang.srt.debug_utils.comparator.pipeline import (
+    load_and_unshard_all_steps,
+    process_tensor_group,
+)
+from sglang.srt.debug_utils.comparator.tensor_comparison.compare import compare_tensors
 from sglang.srt.debug_utils.dump_loader import filter_rows, read_meta
 
 _NON_KEY_COLS = {"dump_index", "filename"}
@@ -41,8 +65,34 @@ def run(args: argparse.Namespace) -> None:
         output_format=args.output_format,
     )
 
-    counts: dict[str, int] = {"passed": 0, "failed": 0, "skipped": 0}
     grouping: str = args.grouping
+
+    if grouping == "logical" and _has_aux_tensors(df_baseline) and _has_aux_tensors(df_target):
+        _run_with_alignment(
+            args=args,
+            df_baseline=df_baseline,
+            df_target=df_target,
+        )
+    else:
+        if grouping == "logical" and not (_has_aux_tensors(df_baseline) and _has_aux_tensors(df_target)):
+            print("Warning: aux tensors missing, falling back to per-step comparison")
+        _run_per_step(
+            args=args,
+            df_baseline=df_baseline,
+            df_target=df_target,
+            grouping=grouping,
+        )
+
+
+def _run_per_step(
+    *,
+    args: argparse.Namespace,
+    df_baseline: pl.DataFrame,
+    df_target: pl.DataFrame,
+    grouping: str,
+) -> None:
+    """Original per-step comparison path."""
+    counts: dict[str, int] = {"passed": 0, "failed": 0, "skipped": 0}
 
     non_key_cols = _NON_KEY_COLS | ({"rank"} if grouping == "logical" else set())
     key_cols = [c for c in df_target.columns if c not in non_key_cols]
@@ -68,6 +118,120 @@ def run(args: argparse.Namespace) -> None:
         SummaryRecord(total=sum(counts.values()), **counts),
         output_format=args.output_format,
     )
+
+
+def _run_with_alignment(
+    *,
+    args: argparse.Namespace,
+    df_baseline: pl.DataFrame,
+    df_target: pl.DataFrame,
+) -> None:
+    """Alignment-aware comparison: bootstrap aux, build index, align, compare."""
+    baseline_path: Path = Path(args.baseline_path)
+    target_path: Path = Path(args.target_path)
+
+    side_aux_baseline: SideAux = load_and_normalize_aux(
+        dump_path=baseline_path, df=df_baseline
+    )
+    side_aux_target: SideAux = load_and_normalize_aux(
+        dump_path=target_path, df=df_target
+    )
+
+    index_baseline: SideTokenIndex = build_token_index(side_aux_baseline)
+    index_target: SideTokenIndex = build_token_index(side_aux_target)
+
+    plan: AlignmentPlan = compute_alignment_plan(
+        index_a=index_baseline, index_b=index_target
+    )
+    print(_format_alignment_summary(plan.summary))
+
+    comparable_names: list[str] = _get_comparable_names(
+        df_baseline=df_baseline, df_target=df_target
+    )
+
+    counts: dict[str, int] = {"passed": 0, "failed": 0, "skipped": 0}
+
+    for tensor_name in comparable_names:
+        tensors_b, b_warns = load_and_unshard_all_steps(
+            name=tensor_name, df=df_baseline, dump_path=baseline_path
+        )
+        tensors_t, t_warns = load_and_unshard_all_steps(
+            name=tensor_name, df=df_target, dump_path=target_path
+        )
+        all_warnings: list[AlignWarning] = b_warns + t_warns
+
+        if not tensors_b or not tensors_t:
+            reason = "baseline_load_failed" if not tensors_b else "target_load_failed"
+            record = SkipRecord(
+                name=tensor_name, reason=reason, align_warnings=all_warnings
+            )
+        else:
+            aligned_b, aligned_t = execute_alignment(
+                plan=plan, tensors_a=tensors_b, tensors_b=tensors_t
+            )
+            info = compare_tensors(
+                x_baseline=aligned_b,
+                x_target=aligned_t,
+                name=tensor_name,
+                diff_threshold=args.diff_threshold,
+            )
+            record = ComparisonRecord(
+                **info.model_dump(), align_warnings=all_warnings
+            )
+
+        counts[record.category] += 1
+        print_record(record, output_format=args.output_format)
+
+    print_record(
+        SummaryRecord(total=sum(counts.values()), **counts),
+        output_format=args.output_format,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _has_aux_tensors(df: pl.DataFrame) -> bool:
+    """Check if the DataFrame contains the minimum auxiliary tensors for alignment."""
+    names: set[str] = set(df["name"].unique().to_list())
+    has_input_ids: bool = "input_ids" in names
+    has_seq_info: bool = ("seq_lens" in names) or ("cu_seqlens_q" in names)
+    return has_input_ids and has_seq_info
+
+
+def _get_comparable_names(
+    *, df_baseline: pl.DataFrame, df_target: pl.DataFrame
+) -> list[str]:
+    """Get tensor names present in both sides, excluding auxiliary tensors."""
+    baseline_names: set[str] = set(df_baseline["name"].unique().to_list())
+    target_names: set[str] = set(df_target["name"].unique().to_list())
+    common: set[str] = (baseline_names & target_names) - AUX_NAMES
+    return sorted(common)
+
+
+def _format_alignment_summary(summary: AlignmentSummary) -> str:
+    lines: list[str] = [
+        "Alignment Summary:",
+        f"  Side A: {summary.side_a.framework} ({summary.side_a.layout}), "
+        f"{summary.side_a.num_sequences} sequences, "
+        f"{summary.side_a.num_tokens} tokens, "
+        f"{summary.side_a.num_steps} steps",
+        f"  Side B: {summary.side_b.framework} ({summary.side_b.layout}), "
+        f"{summary.side_b.num_sequences} sequences, "
+        f"{summary.side_b.num_tokens} tokens, "
+        f"{summary.side_b.num_steps} steps",
+        f"  Matched: {len(summary.sequence_matches)} sequence pairs, "
+        f"{summary.num_matched_tokens} tokens",
+    ]
+
+    if summary.unmatched_seq_ids_a:
+        lines.append(f"  Unmatched A: {summary.unmatched_seq_ids_a}")
+    if summary.unmatched_seq_ids_b:
+        lines.append(f"  Unmatched B: {summary.unmatched_seq_ids_b}")
+
+    return "\n".join(lines)
 
 
 def _parse_args() -> argparse.Namespace:

@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any, Optional, Union
 
+import polars as pl
 import torch
 
 from sglang.srt.debug_utils.comparator.aligner.reorder import (
@@ -25,7 +26,7 @@ from sglang.srt.debug_utils.comparator.output_types import (
     SkipRecord,
 )
 from sglang.srt.debug_utils.comparator.tensor_comparison.compare import compare_tensors
-from sglang.srt.debug_utils.dump_loader import ValueWithMeta
+from sglang.srt.debug_utils.dump_loader import ValueWithMeta, filter_rows
 
 Plan = Union[UnshardPlan, ReorderPlan]
 
@@ -143,3 +144,42 @@ def _execute_plan(
         return execute_reorder_plan(plan, tensors), []
     else:
         raise NotImplementedError(f"Unknown {plan=}")
+
+
+def load_and_unshard_for_step(
+    *, name: str, step: int, df: pl.DataFrame, dump_path: Path
+) -> tuple[Optional[torch.Tensor], list[AlignWarning]]:
+    """Load all rank files for (name, step), unshard into a single tensor."""
+    rows: list[dict] = filter_rows(df, conditions={"name": name, "step": step})
+    if not rows:
+        return None, []
+
+    filenames: list[str] = [r["filename"] for r in rows]
+    loaded: list[ValueWithMeta] = _load_tensors(filenames, dump_path)
+
+    plans: list[Plan] = _compute_plans_for_group([item.meta for item in loaded])
+    tensors: Optional[list[torch.Tensor]] = _extract_tensors(loaded)
+    if tensors is None:
+        return None, []
+
+    return _execute_plans(tensors, plans)
+
+
+def load_and_unshard_all_steps(
+    *, name: str, df: pl.DataFrame, dump_path: Path
+) -> tuple[dict[int, torch.Tensor], list[AlignWarning]]:
+    """Load and unshard a tensor across all steps, returning step→tensor mapping."""
+    step_values: list[int] = sorted(df.filter(pl.col("name") == name)["step"].unique().to_list())
+
+    result: dict[int, torch.Tensor] = {}
+    all_warnings: list[AlignWarning] = []
+
+    for step in step_values:
+        tensor, warnings = load_and_unshard_for_step(
+            name=name, step=step, df=df, dump_path=dump_path
+        )
+        all_warnings.extend(warnings)
+        if tensor is not None:
+            result[step] = tensor
+
+    return result, all_warnings
