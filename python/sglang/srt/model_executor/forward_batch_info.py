@@ -420,7 +420,7 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             tbo_split_seq_index=batch.tbo_split_seq_index,
             dimensions=batch.dimensions,
             return_hidden_states_before_norm=batch.return_hidden_states_before_norm,
-            rids=batch.rids,
+            rids=[req.rid for req in batch.reqs],
         )
         device = model_runner.device
 
