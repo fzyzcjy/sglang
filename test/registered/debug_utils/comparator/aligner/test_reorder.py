@@ -19,6 +19,7 @@ from sglang.srt.debug_utils.comparator.aligner.unsharder.planner import (
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.types import AxisInfo
 from sglang.srt.debug_utils.comparator.dims import ParallelAxis, parse_dims
+from sglang.srt.debug_utils.comparator.warning_sink import warning_sink
 from sglang.test.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=10, suite="default", nightly=True)
@@ -146,11 +147,12 @@ class TestCpZigzagTpE2E:
         assert len(reorderer_plans) == 1
 
         current: list[torch.Tensor] = tensors
-        for plan in all_plans:
-            if isinstance(plan, ReordererPlan):
-                current = execute_reorderer_plan(plan, current)
-            else:
-                current, _ = execute_unsharder_plan(plan, current)
+        with warning_sink.context():
+            for plan in all_plans:
+                if isinstance(plan, ReordererPlan):
+                    current = execute_reorderer_plan(plan, current)
+                else:
+                    current = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
         assert torch.allclose(current[0], full_tensor)
