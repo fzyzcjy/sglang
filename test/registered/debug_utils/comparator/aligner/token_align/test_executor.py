@@ -56,7 +56,7 @@ class TestExecuteAlignment:
         )
 
         index = build_seqs_info(side_aux)
-        plan = compute_alignment_plan(indices=Pair(x=index, y=index))
+        plan = compute_alignment_plan(seqs_info_pair=Pair(x=index, y=index))
 
         tensors = {0: hidden_step0, 1: hidden_step1}
         aligned: Pair[torch.Tensor] = execute_alignment(
