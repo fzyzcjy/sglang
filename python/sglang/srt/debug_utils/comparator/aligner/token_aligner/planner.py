@@ -21,17 +21,17 @@ def compute_token_aligner_plan(
     steps: Pair[list[int]] = Pair(x=[], y=[])
     indices: Pair[list[int]] = Pair(x=[], y=[])
 
-    for seq_id_a, seq_id_b in matched_pairs:
+    for seq_id_x, seq_id_y in matched_pairs:
         rec: Pair[TokenAlignerSeqInfo] = Pair(
-            x=seqs_info_pair.x.sequences[seq_id_a],
-            y=seqs_info_pair.y.sequences[seq_id_b],
+            x=seqs_info_pair.x.sequences[seq_id_x],
+            y=seqs_info_pair.y.sequences[seq_id_y],
         )
 
         pos_to: Pair[dict[int, int]] = rec.map(
             lambda r: {pos: idx for idx, pos in enumerate(r.positions)}
         )
-        assert len(pos_to.x) == len(rec.x.positions), "duplicate positions in side A"
-        assert len(pos_to.y) == len(rec.y.positions), "duplicate positions in side B"
+        assert len(pos_to.x) == len(rec.x.positions), "duplicate positions in side X"
+        assert len(pos_to.y) == len(rec.y.positions), "duplicate positions in side Y"
 
         common_positions: set[int] = set(pos_to.x.keys()) & set(pos_to.y.keys())
 
@@ -45,7 +45,7 @@ def compute_token_aligner_plan(
             if input_id.x != input_id.y:
                 raise ValueError(
                     f"Sanity check failed: input_id mismatch at position {pos} "
-                    f"for seq_id_a={seq_id_a}, seq_id_b={seq_id_b}: "
+                    f"for seq_id_x={seq_id_x}, seq_id_y={seq_id_y}: "
                     f"{input_id.x} != {input_id.y}"
                 )
 
@@ -70,53 +70,53 @@ def _match_sequences(
 ) -> list[tuple[int, int]]:
     """Two-pass sequence matching: exact then prefix."""
     matched: list[tuple[int, int]] = []
-    unmatched_a: set[int] = set(seqs.x.keys())
-    unmatched_b: set[int] = set(seqs.y.keys())
+    unmatched_x: set[int] = set(seqs.x.keys())
+    unmatched_y: set[int] = set(seqs.y.keys())
 
-    b_lookup: dict[tuple[int, ...], list[int]] = defaultdict(list)
+    y_lookup: dict[tuple[int, ...], list[int]] = defaultdict(list)
     for seq_id, rec in seqs.y.items():
-        b_lookup[tuple(rec.input_ids)].append(seq_id)
+        y_lookup[tuple(rec.input_ids)].append(seq_id)
 
-    for seq_id_a in sorted(seqs.x.keys()):
-        if seq_id_a not in unmatched_a:
+    for seq_id_x in sorted(seqs.x.keys()):
+        if seq_id_x not in unmatched_x:
             continue
-        ids_a_key: tuple[int, ...] = tuple(seqs.x[seq_id_a].input_ids)
-        candidates: list[int] = b_lookup.get(ids_a_key, [])
+        ids_x_key: tuple[int, ...] = tuple(seqs.x[seq_id_x].input_ids)
+        candidates: list[int] = y_lookup.get(ids_x_key, [])
         for candidate in candidates:
-            if candidate in unmatched_b:
-                matched.append((seq_id_a, candidate))
-                unmatched_a.discard(seq_id_a)
-                unmatched_b.discard(candidate)
+            if candidate in unmatched_y:
+                matched.append((seq_id_x, candidate))
+                unmatched_x.discard(seq_id_x)
+                unmatched_y.discard(candidate)
                 break
 
-    remaining_a: list[int] = sorted(
-        unmatched_a, key=lambda s: len(seqs.x[s].input_ids), reverse=True
+    remaining_x: list[int] = sorted(
+        unmatched_x, key=lambda s: len(seqs.x[s].input_ids), reverse=True
     )
-    remaining_b_by_len: list[tuple[int, list[int]]] = sorted(
-        [(s, seqs.y[s].input_ids) for s in unmatched_b],
+    remaining_y_by_len: list[tuple[int, list[int]]] = sorted(
+        [(s, seqs.y[s].input_ids) for s in unmatched_y],
         key=lambda x: len(x[1]),
         reverse=True,
     )
 
-    for seq_id_a in remaining_a:
-        ids_a: list[int] = seqs.x[seq_id_a].input_ids
+    for seq_id_x in remaining_x:
+        ids_x: list[int] = seqs.x[seq_id_x].input_ids
         best_match: int | None = None
         best_len: int = 0
 
-        for seq_id_b, ids_b in remaining_b_by_len:
-            if seq_id_b not in unmatched_b:
+        for seq_id_y, ids_y in remaining_y_by_len:
+            if seq_id_y not in unmatched_y:
                 continue
 
-            shorter: list[int] = ids_a if len(ids_a) <= len(ids_b) else ids_b
-            longer: list[int] = ids_b if len(ids_a) <= len(ids_b) else ids_a
+            shorter: list[int] = ids_x if len(ids_x) <= len(ids_y) else ids_y
+            longer: list[int] = ids_y if len(ids_x) <= len(ids_y) else ids_x
 
             if longer[: len(shorter)] == shorter and len(shorter) > best_len:
-                best_match = seq_id_b
+                best_match = seq_id_y
                 best_len = len(shorter)
 
         if best_match is not None:
-            matched.append((seq_id_a, best_match))
-            unmatched_a.discard(seq_id_a)
-            unmatched_b.discard(best_match)
+            matched.append((seq_id_x, best_match))
+            unmatched_x.discard(seq_id_x)
+            unmatched_y.discard(best_match)
 
     return matched
