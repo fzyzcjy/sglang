@@ -12,12 +12,12 @@ class SGLangSeqId(NamedTuple):
     rid: str
 
 
-class MegatronSeqId(NamedTuple):
+class PositionalSeqId(NamedTuple):
     step: int
     seq_index: int
 
 
-ExternalSeqId = Union[SGLangSeqId, MegatronSeqId]
+ExternalSeqId = Union[SGLangSeqId, PositionalSeqId]
 
 
 @dataclass(frozen=True)

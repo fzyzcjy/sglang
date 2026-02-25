@@ -10,7 +10,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.aux_loader import (
     _normalize_step_sglang,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
-    MegatronSeqId,
+    PositionalSeqId,
     SGLangSeqId,
     TokenAlignerStepAux,
 )
@@ -51,7 +51,7 @@ class TestNormalizeSGLang:
         result: TokenAlignerStepAux = _normalize_step_sglang(
             step_data, layout="thd", step=3
         )
-        assert result.seq_ids == [MegatronSeqId(step=3, seq_index=0)]
+        assert result.seq_ids == [PositionalSeqId(step=3, seq_index=0)]
 
     def test_multiple_seqs_with_rids(self):
         """Multiple sequences with rids."""
@@ -122,8 +122,8 @@ class TestNormalizeMegatron:
             step_data, layout="thd", step=5
         )
         assert result.seq_ids == [
-            MegatronSeqId(step=5, seq_index=0),
-            MegatronSeqId(step=5, seq_index=1),
+            PositionalSeqId(step=5, seq_index=0),
+            PositionalSeqId(step=5, seq_index=1),
         ]
 
 

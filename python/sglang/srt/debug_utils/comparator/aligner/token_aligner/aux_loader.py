@@ -14,7 +14,7 @@ from sglang.srt.debug_utils.comparator.aligner.entrypoint.planner import (
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     ExternalSeqId,
-    MegatronSeqId,
+    PositionalSeqId,
     SGLangSeqId,
     TokenAlignerGlobalAux,
     TokenAlignerStepAux,
@@ -23,11 +23,7 @@ from sglang.srt.debug_utils.comparator.aligner.unsharder.parallel_info import (
     normalize_parallel_info,
 )
 from sglang.srt.debug_utils.comparator.dims import ParallelAxis
-from sglang.srt.debug_utils.comparator.output_types import (
-    AuxNoDimsWarning,
-    LayoutDetectionFallbackWarning,
-    RidsMismatchWarning,
-)
+from sglang.srt.debug_utils.comparator.output_types import GeneralWarning
 from sglang.srt.debug_utils.comparator.warning_sink import warning_sink
 from sglang.srt.debug_utils.dump_loader import ValueWithMeta, filter_rows
 
@@ -166,10 +162,12 @@ def _load_rids(*, step: int, df: pl.DataFrame, dump_path: Path) -> Optional[obje
         for i, item in enumerate(loaded[1:], start=1):
             if item.value != first_value:
                 warning_sink.add(
-                    RidsMismatchWarning(
-                        rank_index=i,
-                        rank_0_value=str(first_value),
-                        mismatching_value=str(item.value),
+                    GeneralWarning(
+                        category="rids_mismatch",
+                        message=(
+                            f"rids mismatch across ranks: rank 0 has {first_value}, "
+                            f"rank {i} has {item.value}"
+                        ),
                     )
                 )
                 break
@@ -210,7 +208,15 @@ def _load_and_align_aux_tensor(
         assert result is not None
         return result
 
-    warning_sink.add(AuxNoDimsWarning(tensor_name=name, num_ranks=len(tensors)))
+    warning_sink.add(
+        GeneralWarning(
+            category="aux_no_dims",
+            message=(
+                f"aux tensor '{name}' has {len(tensors)} ranks "
+                f"but no dims metadata, using rank 0 only"
+            ),
+        )
+    )
     return tensors[0]
 
 
@@ -259,7 +265,7 @@ def _normalize_step_sglang(
     if rids_raw is not None and isinstance(rids_raw, (list, tuple)):
         seq_ids = [SGLangSeqId(rid=str(r)) for r in rids_raw]
     else:
-        seq_ids = [MegatronSeqId(step=step, seq_index=i) for i in range(num_seqs)]
+        seq_ids = [PositionalSeqId(step=step, seq_index=i) for i in range(num_seqs)]
 
     return TokenAlignerStepAux(
         input_ids=input_ids.tolist(),
@@ -286,7 +292,15 @@ def _detect_layout_megatron(raw: dict[int, dict[str, object]]) -> str:
         if isinstance(input_ids, torch.Tensor) and input_ids.ndim == 2:
             raise NotImplementedError(_BSHD_NOT_SUPPORTED_MSG)
 
-    warning_sink.add(LayoutDetectionFallbackWarning())
+    warning_sink.add(
+        GeneralWarning(
+            category="layout_detection_fallback",
+            message=(
+                "Megatron layout detection: no qkv_format or 2D input_ids found, "
+                "falling back to thd"
+            ),
+        )
+    )
     return "thd"
 
 
@@ -310,7 +324,7 @@ def _normalize_step_megatron(
     seq_lens_list: list[int] = seq_lens.tolist()
     num_seqs: int = len(seq_lens_list)
     seq_ids: list[ExternalSeqId] = [
-        MegatronSeqId(step=step, seq_index=seq_index) for seq_index in range(num_seqs)
+        PositionalSeqId(step=step, seq_index=seq_index) for seq_index in range(num_seqs)
     ]
 
     return TokenAlignerStepAux(

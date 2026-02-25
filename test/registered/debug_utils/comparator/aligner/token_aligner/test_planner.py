@@ -10,7 +10,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.seq_info_builder im
     build_seqs_info,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
-    MegatronSeqId,
+    PositionalSeqId,
     SGLangSeqId,
     TokenAlignerGlobalAux,
     TokenAlignerSeqInfo,
@@ -155,8 +155,8 @@ class TestBuildTokenIndexMegatronThd:
                     positions=[0, 1, 2, 0, 1],
                     seq_lens=[3, 2],
                     seq_ids=[
-                        MegatronSeqId(step=0, seq_index=0),
-                        MegatronSeqId(step=0, seq_index=1),
+                        PositionalSeqId(step=0, seq_index=0),
+                        PositionalSeqId(step=0, seq_index=1),
                     ],
                 ),
             },
@@ -187,8 +187,8 @@ class TestBuildTokenIndexMegatronThd:
                     positions=[0, 1, 0, 1],
                     seq_lens=[2, 2],
                     seq_ids=[
-                        MegatronSeqId(step=0, seq_index=0),
-                        MegatronSeqId(step=0, seq_index=1),
+                        PositionalSeqId(step=0, seq_index=0),
+                        PositionalSeqId(step=0, seq_index=1),
                     ],
                 ),
                 1: TokenAlignerStepAux(
@@ -196,8 +196,8 @@ class TestBuildTokenIndexMegatronThd:
                     positions=[0, 1, 0, 1],
                     seq_lens=[2, 2],
                     seq_ids=[
-                        MegatronSeqId(step=1, seq_index=0),
-                        MegatronSeqId(step=1, seq_index=1),
+                        PositionalSeqId(step=1, seq_index=0),
+                        PositionalSeqId(step=1, seq_index=1),
                     ],
                 ),
             },
@@ -423,8 +423,8 @@ class TestComputeAlignmentPlanCrossLayout:
                     positions=[0, 1, 2, 3, 0, 1, 2],
                     seq_lens=[4, 3],
                     seq_ids=[
-                        MegatronSeqId(step=0, seq_index=0),
-                        MegatronSeqId(step=0, seq_index=1),
+                        PositionalSeqId(step=0, seq_index=0),
+                        PositionalSeqId(step=0, seq_index=1),
                     ],
                 ),
             },
