@@ -3,18 +3,13 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Any, Iterator, Optional, Union
+from typing import Iterator, Optional, Union
 
 import polars as pl
-import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
-    AUX_NAMES,
     has_aux_tensors,
     load_and_normalize_aux,
-)
-from sglang.srt.debug_utils.comparator.aligner.token_align.executor import (
-    execute_alignment,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.indexer import (
     build_seqs_info,
@@ -28,19 +23,16 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
     TokenAlignGlobalAux,
 )
 from sglang.srt.debug_utils.comparator.output_types import (
-    AlignWarning,
     ComparisonRecord,
     ConfigRecord,
     SkipRecord,
     SummaryRecord,
     print_record,
 )
-from sglang.srt.debug_utils.comparator.pipeline import (
-    concat_steps,
-    load_and_unshard_files,
-)
 from sglang.srt.debug_utils.comparator.row_matcher import MatchResult, match_rows
-from sglang.srt.debug_utils.comparator.tensor_comparison.compare import compare_tensors
+from sglang.srt.debug_utils.comparator.tensor_group_comparator import (
+    compare_tensor_group,
+)
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.srt.debug_utils.dump_loader import read_meta
 
@@ -169,79 +161,13 @@ def _execute_comparisons(
         if not match.rows_target:
             continue
 
-        name: str = match.rows_target[0]["name"]
-
-        tensors_b, b_warns = _load_and_unshard_by_step(
-            rows=match.rows_baseline, base_path=baseline_path
-        )
-        tensors_t, t_warns = _load_and_unshard_by_step(
-            rows=match.rows_target, base_path=target_path
-        )
-        all_warnings: list[AlignWarning] = b_warns + t_warns
-
-        yield _compare_tensor(
-            name=name,
-            tensors_b=tensors_b,
-            tensors_t=tensors_t,
-            warnings=all_warnings,
+        yield compare_tensor_group(
+            match=match,
+            baseline_path=baseline_path,
+            target_path=target_path,
             alignment_plan=alignment_plan,
             diff_threshold=diff_threshold,
         )
-
-
-def _load_and_unshard_by_step(
-    *, rows: list[dict[str, Any]], base_path: Path
-) -> tuple[dict[int, torch.Tensor], list[AlignWarning]]:
-    """Group rows by step, unshard within each step, return step->tensor mapping."""
-    grouped: dict[int, list[dict[str, Any]]] = {}
-    for row in rows:
-        grouped.setdefault(row["step"], []).append(row)
-
-    result: dict[int, torch.Tensor] = {}
-    all_warnings: list[AlignWarning] = []
-
-    for step in sorted(grouped):
-        filenames: list[str] = [r["filename"] for r in grouped[step]]
-        tensor, warnings = load_and_unshard_files(
-            filenames=filenames, base_path=base_path
-        )
-        all_warnings.extend(warnings)
-        if tensor is not None:
-            result[step] = tensor
-
-    return result, all_warnings
-
-
-def _compare_tensor(
-    *,
-    name: str,
-    tensors_b: dict[int, torch.Tensor],
-    tensors_t: dict[int, torch.Tensor],
-    warnings: list[AlignWarning],
-    alignment_plan: Optional[AlignmentPlan],
-    diff_threshold: float,
-) -> Union[ComparisonRecord, SkipRecord]:
-    """Compare a single tensor name by concatenating all steps into one pair."""
-    if not tensors_b or not tensors_t:
-        reason = "baseline_load_failed" if not tensors_b else "target_load_failed"
-        return SkipRecord(name=name, reason=reason, align_warnings=warnings)
-
-    if alignment_plan is not None and name not in AUX_NAMES:
-        aligned: Pair[torch.Tensor] = execute_alignment(
-            plan=alignment_plan, tensors=Pair(x=tensors_b, y=tensors_t)
-        )
-        combined_b, combined_t = aligned.x, aligned.y
-    else:
-        combined_b = concat_steps(tensors_b)
-        combined_t = concat_steps(tensors_t)
-
-    info = compare_tensors(
-        x_baseline=combined_b,
-        x_target=combined_t,
-        name=name,
-        diff_threshold=diff_threshold,
-    )
-    return ComparisonRecord(**info.model_dump(), align_warnings=warnings)
 
 
 def _parse_args() -> argparse.Namespace:
