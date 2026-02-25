@@ -178,8 +178,12 @@ def _iter_raw_records(
         all_warnings: list[AlignWarning] = b_warns + t_warns
 
         if b_tensor is None or t_tensor is None:
-            reason = "baseline_load_failed" if b_tensor is None else "target_load_failed"
-            yield SkipRecord(name=tensor_name, reason=reason, align_warnings=all_warnings)
+            reason = (
+                "baseline_load_failed" if b_tensor is None else "target_load_failed"
+            )
+            yield SkipRecord(
+                name=tensor_name, reason=reason, align_warnings=all_warnings
+            )
             continue
 
         info = compare_tensors(
