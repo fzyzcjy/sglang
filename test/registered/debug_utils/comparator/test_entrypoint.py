@@ -9,10 +9,9 @@ import sglang.srt.debug_utils.dumper as _dumper_module
 from sglang.srt.debug_utils.comparator.entrypoint import run
 from sglang.srt.debug_utils.comparator.output_types import (
     AnyRecord,
-    AuxTensorsMissingWarning,
     ComparisonRecord,
     ConfigRecord,
-    LayoutDetectionFallbackWarning,
+    GeneralWarning,
     SkipRecord,
     SummaryRecord,
     WarningRecord,
@@ -1183,7 +1182,8 @@ class TestEntrypointAlignment:
             w
             for wr in warning_records
             for w in wr.warnings
-            if isinstance(w, LayoutDetectionFallbackWarning)
+            if isinstance(w, GeneralWarning)
+            and w.category == "layout_detection_fallback"
         ]
         assert len(layout_warnings) == 1
 
@@ -1216,7 +1216,7 @@ class TestEntrypointAlignment:
             w
             for wr in warning_records
             for w in wr.warnings
-            if isinstance(w, AuxTensorsMissingWarning)
+            if isinstance(w, GeneralWarning) and w.category == "aux_tensors_missing"
         ]
         assert len(aux_missing_warnings) == 1
 

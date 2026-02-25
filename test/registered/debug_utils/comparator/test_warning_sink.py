@@ -2,10 +2,7 @@ import sys
 
 import pytest
 
-from sglang.srt.debug_utils.comparator.output_types import (
-    AnyWarning,
-    ReplicatedMismatchWarning,
-)
+from sglang.srt.debug_utils.comparator.output_types import ReplicatedMismatchWarning
 from sglang.srt.debug_utils.comparator.warning_sink import WarningSink
 from sglang.test.ci.ci_register import register_cpu_ci
 
@@ -50,39 +47,31 @@ class TestWarningSink:
         assert len(outer) == 1
         assert outer[0] is outer_warning
 
-    def test_add_outside_context_no_fallback_raises(self) -> None:
-        sink = WarningSink()
-        with pytest.raises(RuntimeError, match="outside a warning_sink.context"):
-            sink.add(_make_warning())
-
     def test_empty_context(self) -> None:
         sink = WarningSink()
         with sink.context() as collected:
             pass
         assert collected == []
 
-    def test_fallback_called_outside_context(self) -> None:
+    def test_add_outside_context_prints(self, capsys) -> None:
         sink = WarningSink()
-        received: list[AnyWarning] = []
-        sink.set_fallback(lambda w: received.append(w))
+        sink.set_output_format("text")
 
-        warning = _make_warning()
-        sink.add(warning)
+        sink.add(_make_warning())
 
-        assert len(received) == 1
-        assert received[0] is warning
+        captured = capsys.readouterr()
+        assert "Replicated along tp" in captured.out
 
-    def test_fallback_not_called_inside_context(self) -> None:
+    def test_context_captures_instead_of_printing(self, capsys) -> None:
         sink = WarningSink()
-        fallback_called: list[bool] = []
-        sink.set_fallback(lambda w: fallback_called.append(True))
+        sink.set_output_format("text")
 
-        warning = _make_warning()
         with sink.context() as collected:
-            sink.add(warning)
+            sink.add(_make_warning())
 
         assert len(collected) == 1
-        assert fallback_called == []
+        captured = capsys.readouterr()
+        assert captured.out == ""
 
 
 if __name__ == "__main__":

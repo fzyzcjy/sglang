@@ -4,14 +4,10 @@ import sys
 import pytest
 
 from sglang.srt.debug_utils.comparator.output_types import (
-    AuxNoDimsWarning,
-    AuxTensorsMissingWarning,
     ComparisonRecord,
     ConfigRecord,
-    FrameworkDetectionFailedWarning,
-    LayoutDetectionFallbackWarning,
+    GeneralWarning,
     ReplicatedMismatchWarning,
-    RidsMismatchWarning,
     SkipRecord,
     SummaryRecord,
     WarningRecord,
@@ -122,7 +118,7 @@ class TestRecordTypes:
             ),
             SummaryRecord(total=10, passed=8, failed=1, skipped=1),
             WarningRecord(
-                warnings=[AuxTensorsMissingWarning()],
+                warnings=[GeneralWarning(category="test", message="test warning")],
             ),
         ]:
             restored = parse_record_json(record.model_dump_json())
@@ -205,15 +201,15 @@ class TestWarnings:
                 baseline_index=0,
                 max_abs_diff=0.1,
             ),
-            AuxTensorsMissingWarning(),
-            FrameworkDetectionFailedWarning(),
-            RidsMismatchWarning(
-                rank_index=1,
-                rank_0_value="[1,2,3]",
-                mismatching_value="[4,5,6]",
+            GeneralWarning(
+                category="aux_tensors_missing",
+                message="Aux tensors missing, skipping token alignment",
             ),
-            AuxNoDimsWarning(tensor_name="positions", num_ranks=4),
-            LayoutDetectionFallbackWarning(),
+            GeneralWarning(
+                category="rids_mismatch",
+                message="rids mismatch across ranks: rank 0 has [1,2,3], "
+                "rank 1 has [4,5,6]",
+            ),
         ]
 
         record = WarningRecord(warnings=all_warnings)

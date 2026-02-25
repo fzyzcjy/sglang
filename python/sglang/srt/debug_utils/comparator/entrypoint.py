@@ -21,12 +21,10 @@ from sglang.srt.debug_utils.comparator.bundle_matcher import (
     match_bundles,
 )
 from sglang.srt.debug_utils.comparator.output_types import (
-    AnyWarning,
     ComparisonRecord,
     ConfigRecord,
     SkipRecord,
     SummaryRecord,
-    WarningRecord,
     print_record,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
@@ -45,13 +43,7 @@ def run(args: argparse.Namespace) -> None:
         output_format=args.output_format,
     )
 
-    def _print_warning(warning: AnyWarning) -> None:
-        print_record(
-            WarningRecord(warnings=[warning]),
-            output_format=args.output_format,
-        )
-
-    warning_sink.set_fallback(_print_warning)
+    warning_sink.set_output_format(args.output_format)
 
     dfs: Pair[pl.DataFrame] = _read_df(args)
     token_aligner_plan = compute_maybe_token_aligner_plan(args, dfs)

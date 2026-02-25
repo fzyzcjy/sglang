@@ -21,10 +21,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignerPlan,
     TokenAlignerSeqsInfo,
 )
-from sglang.srt.debug_utils.comparator.output_types import (
-    AuxTensorsMissingWarning,
-    FrameworkDetectionFailedWarning,
-)
+from sglang.srt.debug_utils.comparator.output_types import GeneralWarning
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.srt.debug_utils.comparator.warning_sink import warning_sink
 
@@ -35,7 +32,12 @@ def compute_maybe_token_aligner_plan(
 ) -> Optional[TokenAlignerPlan]:
     if args.grouping == "logical":
         if not (has_aux_tensors(dfs.x) and has_aux_tensors(dfs.y)):
-            warning_sink.add(AuxTensorsMissingWarning())
+            warning_sink.add(
+                GeneralWarning(
+                    category="aux_tensors_missing",
+                    message="Aux tensors missing, skipping token alignment",
+                )
+            )
             return None
 
         return _build_token_aligner_plan(args=args, dfs=dfs)
@@ -55,7 +57,12 @@ def _build_token_aligner_plan(
     target_aux = load_and_normalize_aux(dump_path=dump_paths.y, df=dfs.y)
 
     if baseline_aux is None or target_aux is None:
-        warning_sink.add(FrameworkDetectionFailedWarning())
+        warning_sink.add(
+            GeneralWarning(
+                category="framework_detection_failed",
+                message="Framework detection failed, skipping token alignment",
+            )
+        )
         return None
 
     global_aux: Pair[TokenAlignerGlobalAux] = Pair(

@@ -28,64 +28,17 @@ class ReplicatedMismatchWarning(_StrictBase):
         )
 
 
-class AuxTensorsMissingWarning(_StrictBase):
-    kind: Literal["aux_tensors_missing"] = "aux_tensors_missing"
+class GeneralWarning(_StrictBase):
+    kind: Literal["general"] = "general"
+    category: str
+    message: str
 
     def to_text(self) -> str:
-        return "Aux tensors missing, skipping token alignment"
-
-
-class FrameworkDetectionFailedWarning(_StrictBase):
-    kind: Literal["framework_detection_failed"] = "framework_detection_failed"
-
-    def to_text(self) -> str:
-        return "Framework detection failed, skipping token alignment"
-
-
-class RidsMismatchWarning(_StrictBase):
-    kind: Literal["rids_mismatch"] = "rids_mismatch"
-    rank_index: int
-    rank_0_value: str
-    mismatching_value: str
-
-    def to_text(self) -> str:
-        return (
-            f"rids mismatch across ranks: rank 0 has {self.rank_0_value}, "
-            f"rank {self.rank_index} has {self.mismatching_value}"
-        )
-
-
-class AuxNoDimsWarning(_StrictBase):
-    kind: Literal["aux_no_dims"] = "aux_no_dims"
-    tensor_name: str
-    num_ranks: int
-
-    def to_text(self) -> str:
-        return (
-            f"aux tensor '{self.tensor_name}' has {self.num_ranks} ranks "
-            f"but no dims metadata, using rank 0 only"
-        )
-
-
-class LayoutDetectionFallbackWarning(_StrictBase):
-    kind: Literal["layout_detection_fallback"] = "layout_detection_fallback"
-
-    def to_text(self) -> str:
-        return (
-            "Megatron layout detection: no qkv_format or 2D input_ids found, "
-            "falling back to thd"
-        )
+        return self.message
 
 
 AnyWarning = Annotated[
-    Union[
-        ReplicatedMismatchWarning,
-        AuxTensorsMissingWarning,
-        FrameworkDetectionFailedWarning,
-        RidsMismatchWarning,
-        AuxNoDimsWarning,
-        LayoutDetectionFallbackWarning,
-    ],
+    Union[ReplicatedMismatchWarning, GeneralWarning],
     Discriminator("kind"),
 ]
 
