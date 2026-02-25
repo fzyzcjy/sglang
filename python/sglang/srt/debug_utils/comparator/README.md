@@ -20,13 +20,13 @@ dump files (baseline + target)
    read_meta()  →  df_baseline, df_target
         │
         ▼
-   match_rows()  →  list[MatchResult]
+   match_bundles()  →  list[Pair[TensorBundle]]
         │
         ▼
-   for each match:
+   for each bundle pair:
         │
         │  ┌───────────────────────────────────────┐
-        └─▶│  compare_tensor_bundle()                │
+        └─▶│  compare_bundles()                      │
            │                                        │
            │  1. load files & unshard (per step)    │
            │  2. align tokens  ─or─  concat steps   │

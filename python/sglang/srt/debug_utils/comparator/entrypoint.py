@@ -29,10 +29,8 @@ from sglang.srt.debug_utils.comparator.output_types import (
     SummaryRecord,
     print_record,
 )
-from sglang.srt.debug_utils.comparator.row_matcher import MatchResult, match_rows
-from sglang.srt.debug_utils.comparator.tensor_bundle_comparator import (
-    compare_tensor_bundle,
-)
+from sglang.srt.debug_utils.comparator.bundle_comparator import compare_bundles
+from sglang.srt.debug_utils.comparator.bundle_matcher import TensorBundle, match_bundles
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.srt.debug_utils.dump_loader import read_meta
 
@@ -66,12 +64,12 @@ def run(args: argparse.Namespace) -> None:
 
     alignment_plan = _compute_maybe_alignment_plan(args, df_baseline, df_target)
 
-    matches: list[MatchResult] = match_rows(
+    bundle_pairs: list[Pair[TensorBundle]] = match_bundles(
         df_baseline=df_baseline, df_target=df_target, skip_keys=_compute_skip_keys(args)
     )
 
     comparison_records = _execute_comparisons(
-        matches=matches,
+        bundle_pairs=bundle_pairs,
         baseline_path=Path(args.baseline_path),
         target_path=Path(args.target_path),
         alignment_plan=alignment_plan,
@@ -150,19 +148,19 @@ def _consume_comparison_records(
 
 def _execute_comparisons(
     *,
-    matches: list[MatchResult],
+    bundle_pairs: list[Pair[TensorBundle]],
     baseline_path: Path,
     target_path: Path,
     alignment_plan: Optional[AlignmentPlan],
     diff_threshold: float,
 ) -> Iterator[Union[ComparisonRecord, SkipRecord]]:
-    """Yield comparison records for all matches (unified raw/logical pipeline)."""
-    for match in matches:
-        if not match.rows_target:
+    """Yield comparison records for all bundle pairs (unified raw/logical pipeline)."""
+    for pair in bundle_pairs:
+        if not pair.y:
             continue
 
-        yield compare_tensor_bundle(
-            match=match,
+        yield compare_bundles(
+            bundles=pair,
             baseline_path=baseline_path,
             target_path=target_path,
             alignment_plan=alignment_plan,

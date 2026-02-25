@@ -33,7 +33,7 @@ from sglang.srt.debug_utils.comparator.output_types import (
     ComparisonRecord,
     SkipRecord,
 )
-from sglang.srt.debug_utils.comparator.row_matcher import MatchResult
+from sglang.srt.debug_utils.comparator.bundle_matcher import TensorBundle
 from sglang.srt.debug_utils.comparator.tensor_comparison.compare import compare_tensors
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.srt.debug_utils.dump_loader import ValueWithMeta
@@ -41,22 +41,22 @@ from sglang.srt.debug_utils.dump_loader import ValueWithMeta
 _Plan = Union[UnshardPlan, ReorderPlan]
 
 
-def compare_tensor_bundle(
+def compare_bundles(
     *,
-    match: MatchResult,
+    bundles: Pair[TensorBundle],
     baseline_path: Path,
     target_path: Path,
     alignment_plan: Optional[AlignmentPlan],
     diff_threshold: float,
 ) -> Union[ComparisonRecord, SkipRecord]:
     """Compare a matched pair of tensor bundles across all steps."""
-    name: str = match.rows_target[0]["name"]
+    name: str = bundles.y[0]["name"]
 
     tensors_b, b_warns = _load_and_unshard_by_step(
-        rows=match.rows_baseline, base_path=baseline_path
+        rows=bundles.x, base_path=baseline_path
     )
     tensors_t, t_warns = _load_and_unshard_by_step(
-        rows=match.rows_target, base_path=target_path
+        rows=bundles.y, base_path=target_path
     )
     all_warnings: list[AlignWarning] = b_warns + t_warns
 
