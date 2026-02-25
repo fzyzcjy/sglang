@@ -37,7 +37,6 @@ def _extract_and_stack_tokens(
     locator: TokenLocator,
 ) -> torch.Tensor:
     tokens: list[torch.Tensor] = [
-        tensor_of_step[s][i]
-        for s, i in zip(locator.steps, locator.token_index_in_step)
+        tensor_of_step[s][i] for s, i in zip(locator.steps, locator.token_index_in_step)
     ]
     return torch.stack(tokens)

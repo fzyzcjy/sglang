@@ -7,8 +7,8 @@ from pydantic import model_validator
 
 from sglang.srt.debug_utils.comparator.utils import (
     Pair,
-    _FrozenBase,
     _check_equal_lengths,
+    _FrozenBase,
 )
 
 
@@ -94,7 +94,8 @@ class TokenAlignerSeqInfo(_FrozenBase):
             positions=self.positions + other.positions,
             locator=TokenLocator(
                 steps=self.locator.steps + other.locator.steps,
-                token_index_in_step=self.locator.token_index_in_step + other.locator.token_index_in_step,
+                token_index_in_step=self.locator.token_index_in_step
+                + other.locator.token_index_in_step,
             ),
         )
 
