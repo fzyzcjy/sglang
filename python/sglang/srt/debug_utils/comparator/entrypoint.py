@@ -127,7 +127,7 @@ def _build_alignment_plan(
         y=build_seqs_info(global_aux_target),
     )
 
-    return compute_alignment_plan(seqs_info=seqs_info)
+    return compute_alignment_plan(seqs_info_pair=seqs_info)
 
 
 def _consume_comparison_records(
