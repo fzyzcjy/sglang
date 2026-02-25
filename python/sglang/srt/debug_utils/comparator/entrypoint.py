@@ -6,6 +6,9 @@ from typing import Iterator, Optional, Union
 
 import polars as pl
 
+from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
+    AUX_NAMES,
+)
 from sglang.srt.debug_utils.comparator.aligner.token_align.entrypoint import (
     compute_maybe_token_align_plan,
 )
