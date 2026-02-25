@@ -1160,9 +1160,7 @@ class TestEntrypointAlignment:
         )
         megatron_cu_seqlens: torch.Tensor = torch.tensor([0, 6, 11])
 
-        megatron_hidden: torch.Tensor = torch.cat(
-            [seq_a_hiddens, seq_b_hiddens], dim=0
-        )
+        megatron_hidden: torch.Tensor = torch.cat([seq_a_hiddens, seq_b_hiddens], dim=0)
 
         megatron_dumper.dump("input_ids", megatron_input_ids)
         megatron_dumper.dump("cu_seqlens_q", megatron_cu_seqlens)
