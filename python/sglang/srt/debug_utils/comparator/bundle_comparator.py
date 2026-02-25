@@ -1,4 +1,4 @@
-"""Compare two tensor bundles which will be unified and then aligned."""
+"""Compare two tensor bundles."""
 
 from __future__ import annotations
 
@@ -51,7 +51,6 @@ def compare_bundle_pair(
     alignment_plan: Optional[TokenAlignPlan],
     diff_threshold: float,
 ) -> Union[ComparisonRecord, SkipRecord]:
-    """Compare a matched pair of tensor bundles across all steps."""
     name: str = bundles.y[0]["name"]
 
     tensors_b, b_warns = _load_and_unshard_by_step(
