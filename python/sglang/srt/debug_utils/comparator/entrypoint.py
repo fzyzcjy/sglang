@@ -43,8 +43,13 @@ def run(args: argparse.Namespace) -> None:
 
     token_align_plan = compute_maybe_token_align_plan(args, df_baseline, df_target)
 
+    df_baseline = df_baseline.filter(~pl.col("name").is_in(AUX_NAMES))
+    df_target = df_target.filter(~pl.col("name").is_in(AUX_NAMES))
+
     bundle_info_pairs: list[Pair[TensorBundleInfo]] = match_bundles(
-        df_baseline=df_baseline, df_target=df_target, skip_keys=_compute_skip_keys(args)
+        df_baseline=df_baseline,
+        df_target=df_target,
+        skip_keys=_compute_skip_keys(args, has_token_align_plan=token_align_plan is not None),
     )
 
     comparison_records = _execute_compare_bundle_pair(
@@ -73,10 +78,12 @@ def _read_df(args):
     return df_baseline, df_target
 
 
-def _compute_skip_keys(args):
+def _compute_skip_keys(args, *, has_token_align_plan: bool):
     skip_keys: set[str] = {"dump_index", "filename"}
     if args.grouping == "logical":
-        skip_keys |= {"rank", "step"}
+        skip_keys |= {"rank"}
+        if has_token_align_plan:
+            skip_keys |= {"step"}
     return skip_keys
 
 
