@@ -41,16 +41,6 @@ def main() -> None:
 
 
 def run(args: argparse.Namespace) -> None:
-    df_baseline = read_meta(args.baseline_path)
-
-    df_target = read_meta(args.target_path)
-    df_target = df_target.filter(
-        (pl.col("step") >= args.start_step) & (pl.col("step") <= args.end_step)
-    )
-    if args.filter:
-        df_target = df_target.filter(pl.col("filename").str.contains(args.filter))
-    assert all(c in df_target.columns for c in ["rank", "step", "dump_index", "name"])
-
     print_record(
         ConfigRecord(
             baseline_path=args.baseline_path,
@@ -61,6 +51,8 @@ def run(args: argparse.Namespace) -> None:
         ),
         output_format=args.output_format,
     )
+
+    df_baseline, df_target = _read_df(args)
 
     alignment_plan = _compute_maybe_alignment_plan(args, df_baseline, df_target)
 
@@ -78,6 +70,20 @@ def run(args: argparse.Namespace) -> None:
     _consume_comparison_records(
         comparison_records=comparison_records, output_format=args.output_format
     )
+
+
+def _read_df(args):
+    df_baseline = read_meta(args.baseline_path)
+
+    df_target = read_meta(args.target_path)
+    df_target = df_target.filter(
+        (pl.col("step") >= args.start_step) & (pl.col("step") <= args.end_step)
+    )
+    if args.filter:
+        df_target = df_target.filter(pl.col("filename").str.contains(args.filter))
+    assert all(c in df_target.columns for c in ["rank", "step", "dump_index", "name"])
+
+    return df_baseline, df_target
 
 
 def _compute_maybe_alignment_plan(args, df_baseline, df_target):
