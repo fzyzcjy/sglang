@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     ExternalSeqId,
     TokenAlignerGlobalAux,
     TokenAlignerSeqInfo,
     TokenAlignerSeqsInfo,
     TokenAlignerStepAux,
+)
+
+_EMPTY_SEQ_INFO = TokenAlignerSeqInfo(
+    input_ids=[], positions=[], steps=[], indices=[]
 )
 
 
@@ -19,36 +21,13 @@ def build_seqs_info(global_aux: TokenAlignerGlobalAux) -> TokenAlignerSeqsInfo:
     )
 
 
-@dataclass
-class _SeqAccumulator:
-    """Mutable accumulator for building SeqInfo incrementally."""
-
-    input_ids: list[int] = field(default_factory=list)
-    positions: list[int] = field(default_factory=list)
-    steps: list[int] = field(default_factory=list)
-    indices: list[int] = field(default_factory=list)
-
-    def append(
-        self,
-        *,
-        input_id: int,
-        position: int,
-        step: int,
-        index: int,
-    ) -> None:
-        self.input_ids.append(input_id)
-        self.positions.append(position)
-        self.steps.append(step)
-        self.indices.append(index)
-
-
 def _build_token_index(
     global_aux: TokenAlignerGlobalAux,
 ) -> dict[int, TokenAlignerSeqInfo]:
     """Build token index for any framework/layout using seq_ids for identity tracking."""
     external_to_internal: dict[ExternalSeqId, int] = {}
     next_internal_id: int = 0
-    accum: dict[int, _SeqAccumulator] = {}
+    accum: dict[int, TokenAlignerSeqInfo] = {}
 
     for step in sorted(global_aux.step_auxs.keys()):
         aux: TokenAlignerStepAux = global_aux.step_auxs[step]
@@ -63,28 +42,18 @@ def _build_token_index(
 
             if ext_seq_id not in external_to_internal:
                 external_to_internal[ext_seq_id] = next_internal_id
-                accum[next_internal_id] = _SeqAccumulator()
+                accum[next_internal_id] = _EMPTY_SEQ_INFO
                 next_internal_id += 1
 
             internal_id: int = external_to_internal[ext_seq_id]
-            acc: _SeqAccumulator = accum[internal_id]
 
-            for j in range(slen):
-                acc.append(
-                    input_id=input_ids_flat[offset + j],
-                    position=positions_flat[offset + j],
-                    step=step,
-                    index=offset + j,
-                )
+            accum[internal_id] = accum[internal_id] + TokenAlignerSeqInfo(
+                input_ids=input_ids_flat[offset : offset + slen],
+                positions=positions_flat[offset : offset + slen],
+                steps=[step] * slen,
+                indices=list(range(offset, offset + slen)),
+            )
 
             offset += slen
 
-    return {
-        sid: TokenAlignerSeqInfo(
-            input_ids=acc.input_ids,
-            positions=acc.positions,
-            steps=acc.steps,
-            indices=acc.indices,
-        )
-        for sid, acc in accum.items()
-    }
+    return accum

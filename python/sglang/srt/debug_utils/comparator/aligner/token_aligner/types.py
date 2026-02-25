@@ -47,6 +47,14 @@ class TokenAlignerSeqInfo(_FrozenBase):
     steps: list[int]
     indices: list[int]
 
+    def __add__(self, other: TokenAlignerSeqInfo) -> TokenAlignerSeqInfo:
+        return TokenAlignerSeqInfo(
+            input_ids=self.input_ids + other.input_ids,
+            positions=self.positions + other.positions,
+            steps=self.steps + other.steps,
+            indices=self.indices + other.indices,
+        )
+
 
 class TokenAlignerSeqsInfo(_FrozenBase):
     """All sequences for one side across all steps."""
