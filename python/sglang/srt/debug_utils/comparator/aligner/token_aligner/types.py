@@ -65,7 +65,7 @@ class TokenAlignerSeqsInfo(_FrozenBase):
 class TokenAlignerPlan(_FrozenBase):
     """Token alignment plan.
 
-    match_steps.x[i] + match_indices.x[i] and match_steps.y[i] + match_indices.y[i]
+    (match_steps.x[i], match_indices.x[i]) and (match_steps.y[i], match_indices.y[i])
     correspond to the same logical token.
     """
 
