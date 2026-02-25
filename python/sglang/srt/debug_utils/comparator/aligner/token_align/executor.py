@@ -20,6 +20,12 @@ def execute_alignment(
     if plan.layout_b == "bshd":
         tensors_b = {s: t.flatten(0, 1) for s, t in tensors_b.items()}
 
+    if not plan.match_steps_a:
+        dummy: torch.Tensor = next(iter(tensors_a.values()))
+        empty_shape: list[int] = [0] + list(dummy.shape[1:])
+        empty: torch.Tensor = torch.empty(empty_shape, dtype=dummy.dtype)
+        return empty, empty.clone()
+
     tokens_a: list[torch.Tensor] = [
         tensors_a[s][i] for s, i in zip(plan.match_steps_a, plan.match_indices_a)
     ]

@@ -14,6 +14,11 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
     build_token_index,
     compute_alignment_plan,
 )
+from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
+    AlignmentPlan,
+    AlignmentSummary,
+    SideInfo,
+)
 from sglang.test.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=15, suite="default", nightly=True)
@@ -109,6 +114,44 @@ class TestExecuteAlignment:
         assert aligned_a.shape == aligned_b.shape
         assert aligned_a.shape[0] == 3
         assert torch.allclose(aligned_a, aligned_b)
+
+    def test_zero_matched_tokens(self):
+        """Empty AlignmentPlan (no matched tokens) returns shape[0]==0 without crash."""
+        torch.manual_seed(42)
+
+        _dummy_side = SideInfo(
+            framework="sglang",
+            layout="thd",
+            num_sequences=0,
+            num_tokens=0,
+            num_steps=0,
+        )
+        plan = AlignmentPlan(
+            match_steps_a=(),
+            match_indices_a=(),
+            match_steps_b=(),
+            match_indices_b=(),
+            layout_a="thd",
+            layout_b="thd",
+            summary=AlignmentSummary(
+                side_a=_dummy_side,
+                side_b=_dummy_side,
+                sequence_matches=(),
+                unmatched_seq_ids_a=(),
+                unmatched_seq_ids_b=(),
+                num_matched_tokens=0,
+            ),
+        )
+
+        tensors = {0: torch.randn(5, 8)}
+        aligned_a, aligned_b = execute_alignment(
+            plan=plan, tensors_a=tensors, tensors_b=tensors
+        )
+
+        assert aligned_a.shape[0] == 0
+        assert aligned_b.shape[0] == 0
+        assert aligned_a.shape[1:] == (8,)
+        assert aligned_b.shape[1:] == (8,)
 
 
 if __name__ == "__main__":
