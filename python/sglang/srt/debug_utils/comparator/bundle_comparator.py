@@ -100,7 +100,7 @@ def _load_and_unshard_by_step(
 
     for step in sorted(grouped):
         filenames: list[str] = [r.filename for r in grouped[step]]
-        tensor, warnings = _load_and_unshard_files(
+        tensor, warnings = _load_and_unshard_into_one(
             filenames=filenames, base_path=base_path
         )
         all_warnings.extend(warnings)
@@ -110,7 +110,7 @@ def _load_and_unshard_by_step(
     return result, all_warnings
 
 
-def _load_and_unshard_files(
+def _load_and_unshard_into_one(
     *, filenames: list[str], base_path: Path
 ) -> tuple[Optional[torch.Tensor], list[AlignWarning]]:
     """Load tensor files and unshard them into a single tensor."""
