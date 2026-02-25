@@ -41,6 +41,11 @@ _CP_SHARDED_AUX_NAMES: dict[str, frozenset[str]] = {
     "megatron": frozenset({"input_ids", "position_ids"}),
 }
 
+_BSHD_NOT_SUPPORTED_MSG: str = (
+    "BSHD layout is not currently supported. "
+    "Use aux_loader BSHD→THD conversion (planned)."
+)
+
 
 # ── framework-agnostic ──────────────────────────────────────────────
 
@@ -58,10 +63,19 @@ def load_and_normalize_aux(
     available_names: set[str] = set(df["name"].unique().to_list()) & aux_names
     step_values: list[int] = sorted(df["step"].unique().to_list())
 
+    has_rids: bool = "rids" in available_names
+    tensor_names: set[str] = available_names - {"rids"}
+
     raw: dict[int, dict[str, object]] = {}
     for step in step_values:
         step_data: dict[str, object] = {}
-        for name in available_names:
+
+        if has_rids:
+            rids_value = _load_rids(step=step, df=df, dump_path=dump_path)
+            if rids_value is not None:
+                step_data["rids"] = rids_value
+
+        for name in tensor_names:
             tensor = _load_and_align_aux_tensor(
                 name=name,
                 step=step,
@@ -71,15 +85,19 @@ def load_and_normalize_aux(
             )
             if tensor is not None:
                 step_data[name] = tensor
+
         if step_data:
             raw[step] = step_data
 
     layout: str = _detect_layout(raw, framework)
-    step_auxs: dict[int, TokenAlignerStepAux] = {}
-    for step, step_data in raw.items():
-        step_auxs[step] = _normalize_step(
-            step_data=step_data, framework=framework, layout=layout, step=step
-        )
+
+    normalize_fn = (
+        _normalize_step_sglang if framework == "sglang" else _normalize_step_megatron
+    )
+    step_auxs: dict[int, TokenAlignerStepAux] = {
+        step: normalize_fn(step_data, layout=layout, step=step)
+        for step, step_data in raw.items()
+    }
 
     return TokenAlignerGlobalAux(
         step_auxs=step_auxs, framework=framework, layout=layout
@@ -128,9 +146,34 @@ def _detect_layout(raw: dict[int, dict[str, object]], framework: str) -> str:
     return "thd"
 
 
+def _load_rids(
+    *, step: int, df: pl.DataFrame, dump_path: Path
+) -> Optional[object]:
+    """Load rids for a step, validating consistency across ranks."""
+    rows = filter_rows(df, conditions={"name": "rids", "step": step})
+    if not rows:
+        return None
+
+    loaded: list[ValueWithMeta] = [
+        ValueWithMeta.load(dump_path / r["filename"]) for r in rows
+    ]
+
+    if len(loaded) > 1:
+        first_value = loaded[0].value
+        for i, item in enumerate(loaded[1:], start=1):
+            if item.value != first_value:
+                warnings.warn(
+                    f"rids mismatch across ranks: rank 0 has {first_value}, "
+                    f"rank {i} has {item.value}"
+                )
+                break
+
+    return loaded[0].value
+
+
 def _load_and_align_aux_tensor(
     *, name: str, step: int, df: pl.DataFrame, dump_path: Path, framework: str
-) -> Optional[object]:
+) -> Optional[torch.Tensor]:
     """Load an auxiliary tensor for (name, step), align if needed."""
     rows = filter_rows(df, conditions={"name": name, "step": step})
     if not rows:
@@ -139,18 +182,6 @@ def _load_and_align_aux_tensor(
     loaded: list[ValueWithMeta] = [
         ValueWithMeta.load(dump_path / r["filename"]) for r in rows
     ]
-
-    if name == "rids":
-        if len(loaded) > 1:
-            first_value = loaded[0].value
-            for i, item in enumerate(loaded[1:], start=1):
-                if item.value != first_value:
-                    warnings.warn(
-                        f"rids mismatch across ranks: rank 0 has {first_value}, "
-                        f"rank {i} has {item.value}"
-                    )
-                    break
-        return loaded[0].value
 
     tensors: list[torch.Tensor] = [
         item.value for item in loaded if isinstance(item.value, torch.Tensor)
@@ -197,21 +228,11 @@ def _infer_aux_dims(*, name: str, framework: str, metas: list[dict]) -> Optional
     return None
 
 
-def _normalize_step(
-    *, step_data: dict[str, object], framework: str, layout: str, step: int
-) -> TokenAlignerStepAux:
-    """Normalize raw loaded data into StepAux."""
-    if framework == "sglang":
-        return _normalize_step_sglang(step_data, step=step)
-    else:
-        return _normalize_step_megatron(step_data, layout=layout, step=step)
-
-
 # ── sglang ──────────────────────────────────────────────────────────
 
 
 def _normalize_step_sglang(
-    step_data: dict[str, object], *, step: int
+    step_data: dict[str, object], *, layout: str, step: int
 ) -> TokenAlignerStepAux:
     input_ids = step_data["input_ids"]
     positions = step_data["positions"]
@@ -228,7 +249,8 @@ def _normalize_step_sglang(
         seq_lens, torch.Tensor
     ), f"seq_lens: expected Tensor, got {type(seq_lens)}"
 
-    num_seqs: int = int(seq_lens.shape[0])
+    seq_lens_list: list[int] = seq_lens.tolist()
+    num_seqs: int = len(seq_lens_list)
 
     seq_ids: list[ExternalSeqId]
     if rids_raw is not None and isinstance(rids_raw, (list, tuple)):
@@ -237,9 +259,9 @@ def _normalize_step_sglang(
         seq_ids = [MegatronSeqId(step=step, seq_index=i) for i in range(num_seqs)]
 
     return TokenAlignerStepAux(
-        input_ids=input_ids,
-        positions=positions,
-        seq_lens=seq_lens,
+        input_ids=input_ids.tolist(),
+        positions=positions.tolist(),
+        seq_lens=seq_lens_list,
         seq_ids=seq_ids,
     )
 
@@ -254,18 +276,12 @@ def _detect_layout_megatron(raw: dict[int, dict[str, object]]) -> str:
         if qkv_format is not None:
             fmt = qkv_format if isinstance(qkv_format, str) else str(qkv_format)
             if "bshd" in fmt.lower():
-                raise NotImplementedError(
-                    "BSHD layout is not currently supported. "
-                    "Use aux_loader BSHD→THD conversion (planned)."
-                )
+                raise NotImplementedError(_BSHD_NOT_SUPPORTED_MSG)
             return "thd"
 
         input_ids = step_data.get("input_ids")
         if isinstance(input_ids, torch.Tensor) and input_ids.ndim == 2:
-            raise NotImplementedError(
-                "BSHD layout is not currently supported. "
-                "Use aux_loader BSHD→THD conversion (planned)."
-            )
+            raise NotImplementedError(_BSHD_NOT_SUPPORTED_MSG)
 
     warnings.warn(
         "Megatron layout detection: no qkv_format or 2D input_ids found, "
@@ -291,15 +307,16 @@ def _normalize_step_megatron(
     else:
         positions = _infer_positions(seq_lens=seq_lens)
 
-    num_seqs: int = int(seq_lens.shape[0])
+    seq_lens_list: list[int] = seq_lens.tolist()
+    num_seqs: int = len(seq_lens_list)
     seq_ids: list[ExternalSeqId] = [
         MegatronSeqId(step=step, seq_index=seq_index) for seq_index in range(num_seqs)
     ]
 
     return TokenAlignerStepAux(
-        input_ids=input_ids,
-        positions=positions,
-        seq_lens=seq_lens,
+        input_ids=input_ids.tolist(),
+        positions=positions.tolist(),
+        seq_lens=seq_lens_list,
         seq_ids=seq_ids,
     )
 
