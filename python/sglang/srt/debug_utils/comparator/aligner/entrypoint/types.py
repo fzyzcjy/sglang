@@ -27,4 +27,4 @@ class AlignerPlan:
     """Unified plan: per-step unshard/reorder for both sides + cross-side token alignment."""
 
     side_plans: Pair[list[StepGroupPlan]]
-    token_align: Optional[TokenAlignerPlan]
+    token_aligner_plan: Optional[TokenAlignerPlan]

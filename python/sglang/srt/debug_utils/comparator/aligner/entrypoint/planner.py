@@ -30,7 +30,7 @@ def compute_aligner_plan(
 ) -> AlignerPlan:
     return AlignerPlan(
         side_plans=metas_pair.map(lambda metas: _compute_side_plans(metas=metas)),
-        token_align=token_aligner_plan,
+        token_aligner_plan=token_aligner_plan,
     )
 
 
