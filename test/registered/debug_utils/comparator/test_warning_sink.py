@@ -1,3 +1,4 @@
+import json
 import sys
 
 import pytest
@@ -72,6 +73,32 @@ class TestWarningSink:
         assert len(collected) == 1
         captured = capsys.readouterr()
         assert captured.out == ""
+
+    def test_json_output_outside_context(self, capsys) -> None:
+        sink = WarningSink()
+        sink.set_output_format("json")
+
+        sink.add(_make_warning())
+
+        captured = capsys.readouterr()
+        parsed: dict = json.loads(captured.out.strip())
+        assert "warnings" in parsed
+        assert len(parsed["warnings"]) == 1
+
+    def test_exception_in_context_cleans_stack(self, capsys) -> None:
+        sink = WarningSink()
+        sink.set_output_format("text")
+
+        with pytest.raises(RuntimeError):
+            with sink.context() as collected:
+                sink.add(_make_warning())
+                raise RuntimeError("boom")
+
+        assert len(collected) == 1
+
+        sink.add(_make_warning(group_index=99))
+        captured = capsys.readouterr()
+        assert "Replicated along tp" in captured.out
 
 
 if __name__ == "__main__":

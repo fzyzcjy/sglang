@@ -11,7 +11,17 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenLocator,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.types import AxisInfo
-from sglang.srt.debug_utils.comparator.output_types import SummaryRecord
+from sglang.srt.debug_utils.comparator.output_types import (
+    ComparisonRecord,
+    GeneralWarning,
+    SkipRecord,
+    SummaryRecord,
+)
+from sglang.srt.debug_utils.comparator.tensor_comparator.types import (
+    DiffInfo,
+    TensorInfo,
+    TensorStats,
+)
 from sglang.srt.debug_utils.comparator.utils import Pair, _check_equal_lengths
 from sglang.test.ci.ci_register import register_cpu_ci
 
@@ -157,6 +167,74 @@ class TestAxisInfo:
     def test_axis_rank_equals_size_minus_one(self):
         info = AxisInfo(axis_rank=3, axis_size=4)
         assert info.axis_rank == 3
+
+
+def _make_tensor_info() -> TensorInfo:
+    return TensorInfo(
+        shape=[4, 4],
+        dtype="float32",
+        stats=TensorStats(mean=0.0, std=1.0, min=-2.0, max=2.0),
+    )
+
+
+def _make_diff_info(*, passed: bool) -> DiffInfo:
+    return DiffInfo(
+        rel_diff=0.001,
+        max_abs_diff=0.01,
+        mean_abs_diff=0.005,
+        max_diff_coord=[0, 0],
+        baseline_at_max=1.0,
+        target_at_max=1.01,
+        passed=passed,
+    )
+
+
+def _make_comparison_record(
+    *,
+    diff: DiffInfo | None,
+    warnings: list | None = None,
+) -> ComparisonRecord:
+    ti: TensorInfo = _make_tensor_info()
+    return ComparisonRecord(
+        name="t",
+        baseline=ti,
+        target=ti,
+        unified_shape=[4, 4],
+        shape_mismatch=False,
+        diff=diff,
+        warnings=warnings or [],
+    )
+
+
+class TestOutputRecordCategories:
+    def test_skip_record_with_warnings_is_failed(self) -> None:
+        record = SkipRecord(
+            name="t",
+            reason="test",
+            warnings=[GeneralWarning(category="c", message="m")],
+        )
+        assert record.category == "failed"
+
+    def test_skip_record_no_warnings_is_skipped(self) -> None:
+        record = SkipRecord(name="t", reason="test")
+        assert record.category == "skipped"
+
+    def test_comparison_record_diff_none_is_failed(self) -> None:
+        record: ComparisonRecord = _make_comparison_record(diff=None)
+        assert record.category == "failed"
+
+    def test_comparison_record_passed_with_warnings_is_failed(self) -> None:
+        record: ComparisonRecord = _make_comparison_record(
+            diff=_make_diff_info(passed=True),
+            warnings=[GeneralWarning(category="c", message="m")],
+        )
+        assert record.category == "failed"
+
+    def test_comparison_record_passed_no_warnings_is_passed(self) -> None:
+        record: ComparisonRecord = _make_comparison_record(
+            diff=_make_diff_info(passed=True),
+        )
+        assert record.category == "passed"
 
 
 if __name__ == "__main__":

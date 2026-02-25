@@ -150,7 +150,12 @@ def _load_non_tensor_aux(
 
 
 def _load_and_align_aux_tensor(
-    *, name: str, step: int, df: pl.DataFrame, dump_path: Path, plugin: _AuxFrameworkPlugin
+    *,
+    name: str,
+    step: int,
+    df: pl.DataFrame,
+    dump_path: Path,
+    plugin: _AuxFrameworkPlugin,
 ) -> Optional[torch.Tensor]:
     """Load an auxiliary tensor for (name, step), align if needed."""
     rows = filter_rows(df, conditions={"name": name, "step": step})
