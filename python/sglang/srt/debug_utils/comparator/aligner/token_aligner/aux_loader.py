@@ -82,14 +82,28 @@ def has_aux_tensors(df: pl.DataFrame) -> bool:
 
 
 def _detect_framework(df: pl.DataFrame, dump_path: Path) -> Optional[str]:
-    """Detect framework from embedded metadata."""
+    """Detect framework from aux tensor names, with parallel_info as fallback.
+
+    Primary: tensor names present in the data (cu_seqlens_q → megatron, seq_lens → sglang).
+    Fallback: parallel_info key embedded in dump metadata.
+    """
+    names: set[str] = set(df["name"].unique().to_list())
+
+    # Megatron-only aux names (not shared with sglang)
+    if names & {"cu_seqlens_q", "cu_seqlens_kv", "qkv_format"}:
+        return "megatron"
+    # SGLang-only aux names (not shared with megatron)
+    if names & {"seq_lens", "positions", "req_pool_indices", "rids"}:
+        return "sglang"
+
+    # Fallback: check parallel_info in metadata
     first_row: dict = df.row(0, named=True)
     value: ValueWithMeta = ValueWithMeta.load(dump_path / first_row["filename"])
 
-    if "sglang_parallel_info" in value.meta:
-        return "sglang"
     if "megatron_parallel_info" in value.meta:
         return "megatron"
+    if "sglang_parallel_info" in value.meta:
+        return "sglang"
 
     return None
 
