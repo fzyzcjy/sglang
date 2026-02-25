@@ -62,6 +62,12 @@ class TokenLocator(_FrozenBase):
     steps: list[int]
     token_index_in_step: list[int]
 
+    def __add__(self, other: TokenLocator) -> TokenLocator:
+        return TokenLocator(
+            steps=self.steps + other.steps,
+            token_index_in_step=self.token_index_in_step + other.token_index_in_step,
+        )
+
 
 class TokenAlignerSeqInfo(_FrozenBase):
     """Information for a sequence, containing information to locate all the tokens inside the sequence."""
@@ -92,11 +98,7 @@ class TokenAlignerSeqInfo(_FrozenBase):
         return TokenAlignerSeqInfo(
             input_ids=self.input_ids + other.input_ids,
             positions=self.positions + other.positions,
-            locator=TokenLocator(
-                steps=self.locator.steps + other.locator.steps,
-                token_index_in_step=self.locator.token_index_in_step
-                + other.locator.token_index_in_step,
-            ),
+            locator=self.locator + other.locator,
         )
 
 

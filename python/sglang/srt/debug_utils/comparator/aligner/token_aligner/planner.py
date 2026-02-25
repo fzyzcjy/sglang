@@ -21,10 +21,9 @@ def compute_token_aligner_plan(
         seqs=Pair(x=seqs_info_pair.x.sequences, y=seqs_info_pair.y.sequences)
     )
 
-    steps_x: list[int] = []
-    steps_y: list[int] = []
-    token_index_in_step_x: list[int] = []
-    token_index_in_step_y: list[int] = []
+    _empty = TokenLocator(steps=[], token_index_in_step=[])
+    locator_x: TokenLocator = _empty
+    locator_y: TokenLocator = _empty
 
     for seq_id_x, seq_id_y in matched_pairs:
         rec: Pair[TokenAlignerSeqInfo] = Pair(
@@ -40,18 +39,16 @@ def compute_token_aligner_plan(
         y_ids = rec.y.input_ids[:common_len]
         assert x_ids == y_ids, f"{seq_id_x=} {seq_id_y=} {x_ids=} {y_ids=}"
 
-        for i in range(common_len):
-            steps_x.append(rec.x.locator.steps[i])
-            token_index_in_step_x.append(rec.x.locator.token_index_in_step[i])
-            steps_y.append(rec.y.locator.steps[i])
-            token_index_in_step_y.append(rec.y.locator.token_index_in_step[i])
+        locator_x = locator_x + TokenLocator(
+            steps=rec.x.locator.steps[:common_len],
+            token_index_in_step=rec.x.locator.token_index_in_step[:common_len],
+        )
+        locator_y = locator_y + TokenLocator(
+            steps=rec.y.locator.steps[:common_len],
+            token_index_in_step=rec.y.locator.token_index_in_step[:common_len],
+        )
 
-    return TokenAlignerPlan(
-        locators=Pair(
-            x=TokenLocator(steps=steps_x, token_index_in_step=token_index_in_step_x),
-            y=TokenLocator(steps=steps_y, token_index_in_step=token_index_in_step_y),
-        ),
-    )
+    return TokenAlignerPlan(locators=Pair(x=locator_x, y=locator_y))
 
 
 # -------------------- Sequence matcher --------------------
