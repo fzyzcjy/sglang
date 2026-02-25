@@ -61,9 +61,7 @@ def compute_token_aligner_plan(
     )
 
 
-# ---------------------------------------------------------------------------
-# Sequence matching: for each y sequence, find a matching x sequence.
-# ---------------------------------------------------------------------------
+# -------------------- Sequence matcher --------------------
 
 
 def _match_sequences(
