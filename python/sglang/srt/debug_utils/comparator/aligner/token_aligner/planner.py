@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignerPlan,
@@ -111,6 +111,11 @@ def _find_matching_x_exact(
     return None
 
 
+class _PrefixCandidate(NamedTuple):
+    seq_id_x: int
+    overlap_len: int
+
+
 def _find_matching_x_prefix(
     *,
     seq_y: TokenAlignerSeqInfo,
@@ -119,14 +124,14 @@ def _find_matching_x_prefix(
 ) -> Optional[int]:
     """Find the x sequence with the longest prefix relationship to y."""
     ids_y: list[int] = seq_y.input_ids
-    candidates: list[tuple[int, int]] = [
-        (seq_id_x, min(len(seq_x.input_ids), len(ids_y)))
+    candidates: list[_PrefixCandidate] = [
+        _PrefixCandidate(seq_id_x=seq_id_x, overlap_len=min(len(seq_x.input_ids), len(ids_y)))
         for seq_id_x, seq_x in x_seqs.items()
         if seq_id_x not in claimed_x_ids and _is_prefix_pair(seq_x.input_ids, ids_y)
     ]
     if not candidates:
         return None
-    return max(candidates, key=lambda t: t[1])[0]
+    return max(candidates, key=lambda c: c.overlap_len).seq_id_x
 
 
 def _is_prefix_pair(a: list[int], b: list[int]) -> bool:
