@@ -1060,15 +1060,19 @@ class TestEntrypointAlignment:
         records = _run_and_parse(args, capsys)
 
         comparisons = _get_comparisons(records)
-        assert len(comparisons) == 1
-        assert comparisons[0].name == "hidden_states"
-        assert comparisons[0].diff is not None
-        assert comparisons[0].diff.passed
+        # hidden_states + 4 aux tensors (input_ids, positions, seq_lens, req_pool_indices)
+        # rids is a non-tensor → SkipRecord
+        assert len(comparisons) == 5
+        hidden_comp = [c for c in comparisons if c.name == "hidden_states"]
+        assert len(hidden_comp) == 1
+        assert hidden_comp[0].diff is not None
+        assert hidden_comp[0].diff.passed
 
         summary = records[-1]
         assert isinstance(summary, SummaryRecord)
-        assert summary.passed == 1
+        assert summary.passed == 5
         assert summary.failed == 0
+        assert summary.skipped == 1
 
     def test_sglang_vs_megatron_cross_framework(self, tmp_path, capsys):
         """SGLang 4-step thd baseline vs Megatron 1-step bshd target align correctly."""
@@ -1177,27 +1181,23 @@ class TestEntrypointAlignment:
         records = _run_and_parse(args, capsys)
 
         comparisons = _get_comparisons(records)
-        assert len(comparisons) == 1
-        assert comparisons[0].name == "hidden_states"
-        assert comparisons[0].diff is not None
-        assert comparisons[0].diff.passed
+        hidden_comp = [c for c in comparisons if c.name == "hidden_states"]
+        assert len(hidden_comp) == 1
+        assert hidden_comp[0].diff is not None
+        assert hidden_comp[0].diff.passed
+
+        # input_ids exists on both sides but different layouts → shape mismatch
+        input_ids_comp = [c for c in comparisons if c.name == "input_ids"]
+        assert len(input_ids_comp) == 1
+        assert input_ids_comp[0].shape_mismatch is True
+
+        # cu_seqlens_q only in target → skipped
+        skips = [r for r in records if isinstance(r, SkipRecord)]
+        assert any(s.name == "cu_seqlens_q" for s in skips)
 
         summary = records[-1]
         assert isinstance(summary, SummaryRecord)
         assert summary.passed == 1
-        assert summary.failed == 0
-
-        comparison_names: set[str] = {c.name for c in comparisons}
-        assert comparison_names.isdisjoint(
-            {
-                "input_ids",
-                "positions",
-                "seq_lens",
-                "req_pool_indices",
-                "rids",
-                "cu_seqlens_q",
-            }
-        )
 
     def test_alignment_fallback_when_no_aux(self, tmp_path, capsys):
         """Without aux tensors, logical grouping skips alignment and concats steps."""

@@ -102,7 +102,9 @@ def run(args: argparse.Namespace) -> None:
         plan=plan,
         diff_threshold=args.diff_threshold,
     )
-    _consume_comparison_records(comparison_records=comparison_records, output_format=args.output_format)
+    _consume_comparison_records(
+        comparison_records=comparison_records, output_format=args.output_format
+    )
 
 
 def _build_alignment_plan(

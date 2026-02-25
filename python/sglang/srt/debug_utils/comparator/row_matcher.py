@@ -26,9 +26,7 @@ def match_rows(
     Key columns are all columns in df_target except those in skip_keys.
     For each unique key combination in df_target, find matching rows in both sides.
     """
-    match_key_cols: list[str] = [
-        c for c in df_target.columns if c not in skip_keys
-    ]
+    match_key_cols: list[str] = [c for c in df_target.columns if c not in skip_keys]
     unique_keys: pl.DataFrame = df_target.select(match_key_cols).unique(
         maintain_order=True
     )
