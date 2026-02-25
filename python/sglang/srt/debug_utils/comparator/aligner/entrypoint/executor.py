@@ -39,7 +39,6 @@ def execute_aligner_plan(
 ) -> AlignerResult:
     """Execute unified unshard/reorder + token-align."""
 
-    # Per-side: unshard + reorder -> dict[step, tensor]
     step_tensors_x, x_warns = _execute_step_plans(
         tensors=tensors_pair.x, step_plans=plan.per_step_plans.x
     )
@@ -76,7 +75,6 @@ def _execute_step_plans(
     tensors: list[torch.Tensor],
     step_plans: list[AlignerPerStepPlan],
 ) -> tuple[dict[int, torch.Tensor], list[AlignWarning]]:
-    """Execute per-step unshard + reorder for one side."""
     result: dict[int, torch.Tensor] = {}
     all_warnings: list[AlignWarning] = []
 
