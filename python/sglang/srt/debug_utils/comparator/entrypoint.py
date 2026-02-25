@@ -93,7 +93,7 @@ def _execute_compare_bundle_pair(
             bundles=pair,
             baseline_path=baseline_path,
             target_path=target_path,
-            alignment_plan=alignment_plan,
+            token_align_plan=alignment_plan,
             diff_threshold=diff_threshold,
         )
 
