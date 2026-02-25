@@ -1070,6 +1070,122 @@ class TestEntrypointAlignment:
         assert summary.passed == 1
         assert summary.failed == 0
 
+    def test_sglang_vs_megatron_cross_framework(self, tmp_path, capsys):
+        """SGLang 4-step thd baseline vs Megatron 1-step bshd target align correctly."""
+        torch.manual_seed(42)
+        hidden_dim: int = 8
+
+        all_hiddens: torch.Tensor = torch.randn(11, hidden_dim)
+        seq_a_hiddens: torch.Tensor = all_hiddens[:6]
+        seq_b_hiddens: torch.Tensor = all_hiddens[6:]
+
+        # --- SGLang baseline: 1 prefill + 3 decode ---
+        sglang_dir: Path = tmp_path / "baseline"
+        sglang_dir.mkdir()
+        sglang_dumper = _Dumper(
+            config=DumperConfig(
+                enable=True,
+                dir=str(sglang_dir),
+                exp_name=_FIXED_EXP_NAME,
+                enable_http_server=False,
+            )
+        )
+
+        # Step 0: prefill — seq A (3 tokens) + seq B (2 tokens)
+        sglang_dumper.dump("input_ids", torch.tensor([10, 20, 30, 40, 50]))
+        sglang_dumper.dump("positions", torch.tensor([0, 1, 2, 0, 1]))
+        sglang_dumper.dump("seq_lens", torch.tensor([3, 2]))
+        sglang_dumper.dump("req_pool_indices", torch.tensor([7, 3]))
+        sglang_dumper.dump("rids", ["A", "B"])
+        sglang_dumper.dump(
+            "hidden_states",
+            torch.stack([
+                seq_a_hiddens[0], seq_a_hiddens[1], seq_a_hiddens[2],
+                seq_b_hiddens[0], seq_b_hiddens[1],
+            ]),
+        )
+        sglang_dumper.step()
+
+        # Steps 1-3: decode — 1 token per sequence
+        decode_data: list[dict[str, object]] = [
+            {
+                "input_ids": torch.tensor([31, 51]),
+                "positions": torch.tensor([3, 2]),
+                "hidden": torch.stack([seq_a_hiddens[3], seq_b_hiddens[2]]),
+            },
+            {
+                "input_ids": torch.tensor([32, 52]),
+                "positions": torch.tensor([4, 3]),
+                "hidden": torch.stack([seq_a_hiddens[4], seq_b_hiddens[3]]),
+            },
+            {
+                "input_ids": torch.tensor([33, 53]),
+                "positions": torch.tensor([5, 4]),
+                "hidden": torch.stack([seq_a_hiddens[5], seq_b_hiddens[4]]),
+            },
+        ]
+        for step_data in decode_data:
+            sglang_dumper.dump("input_ids", step_data["input_ids"])
+            sglang_dumper.dump("positions", step_data["positions"])
+            sglang_dumper.dump("seq_lens", torch.tensor([1, 1]))
+            sglang_dumper.dump("req_pool_indices", torch.tensor([7, 3]))
+            sglang_dumper.dump("rids", ["A", "B"])
+            sglang_dumper.dump("hidden_states", step_data["hidden"])
+            sglang_dumper.step()
+
+        # --- Megatron target: 1 step, bshd [2, 6, H] ---
+        megatron_dir: Path = tmp_path / "target"
+        megatron_dir.mkdir()
+        megatron_dumper = _Dumper(
+            config=DumperConfig(
+                enable=True,
+                dir=str(megatron_dir),
+                exp_name=_FIXED_EXP_NAME,
+                enable_http_server=False,
+            )
+        )
+
+        megatron_input_ids: torch.Tensor = torch.tensor([
+            [10, 20, 30, 31, 32, 33],
+            [40, 50, 51, 52, 53, 0],
+        ])
+        megatron_cu_seqlens: torch.Tensor = torch.tensor([0, 6, 11])
+
+        megatron_hidden: torch.Tensor = torch.zeros(2, 6, hidden_dim)
+        megatron_hidden[0, :, :] = seq_a_hiddens
+        megatron_hidden[1, :5, :] = seq_b_hiddens
+        megatron_hidden[1, 5, :] = torch.randn(hidden_dim)
+
+        megatron_dumper.dump("input_ids", megatron_input_ids)
+        megatron_dumper.dump("cu_seqlens_q", megatron_cu_seqlens)
+        megatron_dumper.dump("hidden_states", megatron_hidden)
+        megatron_dumper.step()
+
+        # --- Run comparison ---
+        args = _make_args(
+            sglang_dir / _FIXED_EXP_NAME,
+            megatron_dir / _FIXED_EXP_NAME,
+            grouping="logical",
+        )
+        records = _run_and_parse(args, capsys)
+
+        comparisons = _get_comparisons(records)
+        assert len(comparisons) == 1
+        assert comparisons[0].name == "hidden_states"
+        assert comparisons[0].diff is not None
+        assert comparisons[0].diff.passed
+
+        summary = records[-1]
+        assert isinstance(summary, SummaryRecord)
+        assert summary.passed == 1
+        assert summary.failed == 0
+
+        comparison_names: set[str] = {c.name for c in comparisons}
+        assert comparison_names.isdisjoint(
+            {"input_ids", "positions", "seq_lens", "req_pool_indices",
+             "rids", "cu_seqlens_q"}
+        )
+
     def test_alignment_fallback_when_no_aux(self, tmp_path, capsys):
         """Without aux tensors, logical grouping skips alignment and concats steps."""
         baseline_path, target_path = _create_dumps(tmp_path, ["tensor_a"], num_steps=2)
