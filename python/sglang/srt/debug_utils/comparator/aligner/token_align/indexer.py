@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
+from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
     AuxTensorsForStep,
     ExternalSeqId,
-    SideAux,
-)
-from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
     SeqInfo,
     SeqsInfo,
+    SideAux,
 )
 
 

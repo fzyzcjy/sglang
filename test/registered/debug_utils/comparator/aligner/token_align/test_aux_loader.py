@@ -6,11 +6,13 @@ import pytest
 import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
-    AuxTensorsForStep,
     _detect_framework,
     _infer_positions,
     _normalize_megatron,
     _normalize_sglang,
+)
+from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
+    AuxTensorsForStep,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
 

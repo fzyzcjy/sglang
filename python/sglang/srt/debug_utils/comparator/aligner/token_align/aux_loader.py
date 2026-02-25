@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional
 
 import polars as pl
 import torch
 
+from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
+    AuxTensorsForStep,
+    ExternalSeqId,
+    SideAux,
+)
 from sglang.srt.debug_utils.comparator.aligner.unshard.executor import (
     execute_unshard_plan,
 )
@@ -20,9 +24,6 @@ from sglang.srt.debug_utils.comparator.aligner.unshard.planner import (
 from sglang.srt.debug_utils.comparator.dims import parse_dims
 from sglang.srt.debug_utils.dump_loader import ValueWithMeta, filter_rows
 
-# seq_id type: str (SGLang rid) or tuple[int, int] (Megatron (step, seq_index))
-ExternalSeqId = Union[str, tuple[int, int]]
-
 _SGLANG_AUX_NAMES = frozenset(
     {"input_ids", "positions", "seq_lens", "req_pool_indices", "rids"}
 )
@@ -30,25 +31,6 @@ _MEGATRON_AUX_NAMES = frozenset(
     {"input_ids", "position_ids", "cu_seqlens_q", "cu_seqlens_kv", "qkv_format"}
 )
 AUX_NAMES: frozenset[str] = _SGLANG_AUX_NAMES | _MEGATRON_AUX_NAMES
-
-
-@dataclass(frozen=True)
-class AuxTensorsForStep:
-    """Normalized auxiliary tensors for a single step (framework-agnostic)."""
-
-    input_ids: torch.Tensor  # [T] (1D flat)
-    positions: torch.Tensor  # [T] (1D flat)
-    seq_lens: torch.Tensor  # [num_seqs]
-    seq_ids: tuple[ExternalSeqId, ...]  # [num_seqs] — sequence identity
-
-
-@dataclass(frozen=True)
-class SideAux:
-    """Auxiliary tensors for one side across all steps + side-level metadata."""
-
-    steps: dict[int, AuxTensorsForStep]
-    framework: str  # "sglang" | "megatron"
-    layout: str  # "thd"
 
 
 def load_and_normalize_aux(dump_path: Path, df: pl.DataFrame) -> SideAux:

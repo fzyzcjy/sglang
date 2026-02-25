@@ -10,7 +10,6 @@ import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
     AUX_NAMES,
-    SideAux,
     has_aux_tensors,
     load_and_normalize_aux,
 )
@@ -26,6 +25,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
     AlignmentPlan,
     SeqsInfo,
+    SideAux,
 )
 from sglang.srt.debug_utils.comparator.output_types import (
     AlignWarning,
