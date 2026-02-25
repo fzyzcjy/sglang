@@ -23,7 +23,7 @@ def _build_token_aligner_seq_infos(
     global_aux: TokenAlignerGlobalAux,
 ) -> dict[int, TokenAlignerSeqInfo]:
     """Build token index for any framework/layout using seq_ids for identity tracking."""
-    external_to_internal: dict[ExternalSeqId, int] = {}
+    external_to_internal_seq_id: dict[ExternalSeqId, int] = {}
     next_internal_id: int = 0
     accum: dict[int, TokenAlignerSeqInfo] = {}
 
@@ -36,14 +36,14 @@ def _build_token_aligner_seq_infos(
 
         offset: int = 0
         for seq_index, slen in enumerate(seq_lens_list):
-            ext_seq_id: ExternalSeqId = aux.seq_ids[seq_index]
+            external_seq_id: ExternalSeqId = aux.seq_ids[seq_index]
 
-            if ext_seq_id not in external_to_internal:
-                external_to_internal[ext_seq_id] = next_internal_id
+            if external_seq_id not in external_to_internal_seq_id:
+                external_to_internal_seq_id[external_seq_id] = next_internal_id
                 accum[next_internal_id] = _EMPTY_SEQ_INFO
                 next_internal_id += 1
 
-            internal_id: int = external_to_internal[ext_seq_id]
+            internal_id: int = external_to_internal_seq_id[external_seq_id]
 
             accum[internal_id] = accum[internal_id] + TokenAlignerSeqInfo(
                 input_ids=input_ids_flat[offset : offset + slen],
