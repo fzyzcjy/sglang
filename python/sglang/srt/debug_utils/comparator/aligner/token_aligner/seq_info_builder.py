@@ -14,12 +14,12 @@ _EMPTY_SEQ_INFO = TokenAlignerSeqInfo(input_ids=[], positions=[], steps=[], indi
 def build_seqs_info(global_aux: TokenAlignerGlobalAux) -> TokenAlignerSeqsInfo:
     """Build sequence info for one side from its auxiliary tensors."""
     return TokenAlignerSeqsInfo(
-        sequences=_build_token_index(global_aux),
+        sequences=_build_token_aligner_seq_infos(global_aux),
         layout=global_aux.layout,
     )
 
 
-def _build_token_index(
+def _build_token_aligner_seq_infos(
     global_aux: TokenAlignerGlobalAux,
 ) -> dict[int, TokenAlignerSeqInfo]:
     """Build token index for any framework/layout using seq_ids for identity tracking."""
