@@ -1185,7 +1185,9 @@ class _SGLangPlugin(_FrameworkPlugin):
         return None
 
     def core_fields(self) -> frozenset[str]:
-        return frozenset({"input_ids", "positions", "seq_lens", "req_pool_indices", "rids"})
+        return frozenset(
+            {"input_ids", "positions", "seq_lens", "req_pool_indices", "rids"}
+        )
 
 
 class _MegatronPlugin(_FrameworkPlugin):

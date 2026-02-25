@@ -18,7 +18,6 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
     SideTokenIndex,
 )
 
-
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -65,12 +64,8 @@ def compute_alignment_plan(
         rec_a: SequenceRecord = index_a.sequences[seq_id_a]
         rec_b: SequenceRecord = index_b.sequences[seq_id_b]
 
-        pos_to_a: dict[int, int] = {
-            pos: idx for idx, pos in enumerate(rec_a.positions)
-        }
-        pos_to_b: dict[int, int] = {
-            pos: idx for idx, pos in enumerate(rec_b.positions)
-        }
+        pos_to_a: dict[int, int] = {pos: idx for idx, pos in enumerate(rec_a.positions)}
+        pos_to_b: dict[int, int] = {pos: idx for idx, pos in enumerate(rec_b.positions)}
 
         common_positions: set[int] = set(pos_to_a.keys()) & set(pos_to_b.keys())
         num_matched: int = 0
@@ -159,9 +154,9 @@ def _build_sglang_thd_index(
         positions_flat: list[int] = aux.positions.flatten().tolist()
         seq_lens_list: list[int] = aux.seq_lens.tolist()
         rpi_list: list[int] = aux.req_pool_indices.tolist()
-        rids_list: list[str] = list(aux.rids) if aux.rids is not None else [
-            str(rpi) for rpi in rpi_list
-        ]
+        rids_list: list[str] = (
+            list(aux.rids) if aux.rids is not None else [str(rpi) for rpi in rpi_list]
+        )
 
         offset: int = 0
         for seg_idx, slen in enumerate(seq_lens_list):
@@ -315,7 +310,9 @@ def _match_sequences(
                 unmatched_b.discard(candidate)
                 break
 
-    remaining_a: list[int] = sorted(unmatched_a, key=lambda s: len(seqs_a[s].input_ids), reverse=True)
+    remaining_a: list[int] = sorted(
+        unmatched_a, key=lambda s: len(seqs_a[s].input_ids), reverse=True
+    )
     remaining_b_by_len: list[tuple[int, tuple[int, ...]]] = sorted(
         [(s, seqs_b[s].input_ids) for s in unmatched_b],
         key=lambda x: len(x[1]),
@@ -334,7 +331,7 @@ def _match_sequences(
             shorter: tuple[int, ...] = ids_a if len(ids_a) <= len(ids_b) else ids_b
             longer: tuple[int, ...] = ids_b if len(ids_a) <= len(ids_b) else ids_a
 
-            if longer[:len(shorter)] == shorter and len(shorter) > best_len:
+            if longer[: len(shorter)] == shorter and len(shorter) > best_len:
                 best_match = seq_id_b
                 best_len = len(shorter)
 
@@ -344,7 +341,9 @@ def _match_sequences(
             unmatched_b.discard(best_match)
 
     if len(matched) > len(set(m[0] for m in matched)):
-        warnings.warn("Ambiguous sequence matching: some sequences matched multiple times")
+        warnings.warn(
+            "Ambiguous sequence matching: some sequences matched multiple times"
+        )
 
     return matched
 

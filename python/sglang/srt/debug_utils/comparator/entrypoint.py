@@ -68,15 +68,24 @@ def run(args: argparse.Namespace) -> None:
 
     grouping: str = args.grouping
 
-    if grouping == "logical" and _has_aux_tensors(df_baseline) and _has_aux_tensors(df_target):
+    if (
+        grouping == "logical"
+        and _has_aux_tensors(df_baseline)
+        and _has_aux_tensors(df_target)
+    ):
         _run_with_alignment(
             args=args,
             df_baseline=df_baseline,
             df_target=df_target,
         )
     else:
-        if grouping == "logical" and not (_has_aux_tensors(df_baseline) and _has_aux_tensors(df_target)):
-            print("Warning: aux tensors missing, falling back to per-step comparison", file=sys.stderr)
+        if grouping == "logical" and not (
+            _has_aux_tensors(df_baseline) and _has_aux_tensors(df_target)
+        ):
+            print(
+                "Warning: aux tensors missing, falling back to per-step comparison",
+                file=sys.stderr,
+            )
         _run_per_step(
             args=args,
             df_baseline=df_baseline,
@@ -176,9 +185,7 @@ def _run_with_alignment(
                 name=tensor_name,
                 diff_threshold=args.diff_threshold,
             )
-            record = ComparisonRecord(
-                **info.model_dump(), align_warnings=all_warnings
-            )
+            record = ComparisonRecord(**info.model_dump(), align_warnings=all_warnings)
 
         counts[record.category] += 1
         print_record(record, output_format=args.output_format)

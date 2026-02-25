@@ -21,12 +21,10 @@ def execute_alignment(
         tensors_b = {s: t.flatten(0, 1) for s, t in tensors_b.items()}
 
     tokens_a: list[torch.Tensor] = [
-        tensors_a[s][i]
-        for s, i in zip(plan.match_steps_a, plan.match_indices_a)
+        tensors_a[s][i] for s, i in zip(plan.match_steps_a, plan.match_indices_a)
     ]
     tokens_b: list[torch.Tensor] = [
-        tensors_b[s][i]
-        for s, i in zip(plan.match_steps_b, plan.match_indices_b)
+        tensors_b[s][i] for s, i in zip(plan.match_steps_b, plan.match_indices_b)
     ]
 
     return torch.stack(tokens_a), torch.stack(tokens_b)

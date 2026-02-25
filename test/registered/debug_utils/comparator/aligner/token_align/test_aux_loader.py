@@ -1,12 +1,10 @@
 import sys
-from pathlib import Path
 
 import pytest
 import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
     AuxTensorsForStep,
-    SideAux,
     _infer_positions,
     _normalize_megatron,
     _normalize_sglang,

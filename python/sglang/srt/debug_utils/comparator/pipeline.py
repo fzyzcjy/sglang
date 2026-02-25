@@ -169,7 +169,9 @@ def load_and_unshard_all_steps(
     *, name: str, df: pl.DataFrame, dump_path: Path
 ) -> tuple[dict[int, torch.Tensor], list[AlignWarning]]:
     """Load and unshard a tensor across all steps, returning step→tensor mapping."""
-    step_values: list[int] = sorted(df.filter(pl.col("name") == name)["step"].unique().to_list())
+    step_values: list[int] = sorted(
+        df.filter(pl.col("name") == name)["step"].unique().to_list()
+    )
 
     result: dict[int, torch.Tensor] = {}
     all_warnings: list[AlignWarning] = []

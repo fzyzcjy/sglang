@@ -19,7 +19,6 @@ from sglang.srt.debug_utils.comparator.aligner.unshard.planner import (
 from sglang.srt.debug_utils.comparator.dims import parse_dims
 from sglang.srt.debug_utils.dump_loader import ValueWithMeta, filter_rows
 
-
 _SGLANG_AUX_NAMES = frozenset(
     {"input_ids", "positions", "seq_lens", "req_pool_indices", "rids"}
 )
@@ -52,12 +51,12 @@ class SideAux:
     layout: str  # "thd" | "bshd"
 
 
-def load_and_normalize_aux(
-    dump_path: Path, df: pl.DataFrame
-) -> SideAux:
+def load_and_normalize_aux(dump_path: Path, df: pl.DataFrame) -> SideAux:
     """Bootstrap: load, unshard, and normalize auxiliary tensors for one side."""
     framework: str = _detect_framework(df, dump_path=dump_path)
-    aux_names: frozenset[str] = _SGLANG_AUX_NAMES if framework == "sglang" else _MEGATRON_AUX_NAMES
+    aux_names: frozenset[str] = (
+        _SGLANG_AUX_NAMES if framework == "sglang" else _MEGATRON_AUX_NAMES
+    )
 
     available_names: set[str] = set(df["name"].unique().to_list()) & aux_names
     step_values: list[int] = sorted(df["step"].unique().to_list())
@@ -103,9 +102,7 @@ def _detect_framework(df: pl.DataFrame, dump_path: Path) -> str:
     return "sglang"
 
 
-def _detect_layout(
-    raw: dict[int, dict[str, object]], framework: str
-) -> str:
+def _detect_layout(raw: dict[int, dict[str, object]], framework: str) -> str:
     """Detect layout from loaded auxiliary tensors."""
     if framework == "megatron":
         for step_data in raw.values():
@@ -206,7 +203,9 @@ def _normalize_megatron(
         seq_lens: torch.Tensor = cu_seqlens_q[1:] - cu_seqlens_q[:-1]
     else:
         if layout == "bshd":
-            seq_lens = torch.full((input_ids.shape[0],), input_ids.shape[1], dtype=torch.long)
+            seq_lens = torch.full(
+                (input_ids.shape[0],), input_ids.shape[1], dtype=torch.long
+            )
         else:
             seq_lens = torch.tensor([input_ids.shape[0]], dtype=torch.long)
 
@@ -214,7 +213,9 @@ def _normalize_megatron(
     if position_ids is not None:
         positions: torch.Tensor = position_ids
     else:
-        positions = _infer_positions(seq_lens=seq_lens, input_ids=input_ids, layout=layout)
+        positions = _infer_positions(
+            seq_lens=seq_lens, input_ids=input_ids, layout=layout
+        )
 
     return AuxTensorsForStep(
         input_ids=input_ids,

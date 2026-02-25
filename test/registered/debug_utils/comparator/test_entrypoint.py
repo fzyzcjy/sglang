@@ -1071,9 +1071,7 @@ class TestEntrypointAlignment:
 
     def test_alignment_fallback_when_no_aux(self, tmp_path, capsys):
         """Without aux tensors, logical grouping falls back to per-step comparison."""
-        baseline_path, target_path = _create_dumps(
-            tmp_path, ["tensor_a"], num_steps=2
-        )
+        baseline_path, target_path = _create_dumps(tmp_path, ["tensor_a"], num_steps=2)
         args = _make_args(baseline_path, target_path, grouping="logical")
 
         captured = capsys.readouterr()

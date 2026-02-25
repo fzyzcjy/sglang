@@ -12,7 +12,6 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
     compute_alignment_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
-    AlignmentPlan,
     SequenceRecord,
     SideTokenIndex,
 )
