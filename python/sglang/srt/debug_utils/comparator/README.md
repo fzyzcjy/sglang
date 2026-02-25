@@ -1,70 +1,77 @@
 # comparator — Internal Architecture
 
-> **This document describes internal implementation details for developers.**
+> **Note**: This document describes internal implementation details for developers.
 > It is NOT user-facing documentation.
-> For user-facing usage, see the project's main docs.
 
 ## Glossary
 
 | Term | Definition |
 |------|-----------|
-| **dump** | A directory of tensor files produced by `dumper`. Each file contains one tensor value plus metadata (name, step, rank, dims, parallel info, etc.). |
-| **step** | A logical time step within a dump. The dumper calls `step()` to advance; each tensor belongs to exactly one step. |
-| **tensor group** | All tensor files that share the same match key (typically `name`). In `logical` grouping mode a group spans all ranks and steps; in `raw` mode it is per-rank. |
-| **match / MatchResult** | A pairing of one tensor group from the baseline dump with the corresponding group from the target dump, produced by `row_matcher`. |
-| **unshard** | Reassembling a tensor that was sharded across parallel ranks (TP, CP, EP) back into a single logical tensor, guided by `dims` annotations. |
-| **dims / DimSpec** | A per-tensor annotation string (e.g. `"seq:cp:zigzag, hidden:tp"`) that describes how each dimension is partitioned across parallel axes, including ordering and reduction. |
-| **alignment plan** | A plan computed from aux tensors (input_ids, positions, seq_lens, …) that describes how to reorder/slice tokens so that two dumps with different batch compositions become element-wise comparable. |
-| **aux tensors** | Auxiliary metadata tensors dumped alongside model tensors (input_ids, positions, seq_lens, req_pool_indices, rids). Used to build the alignment plan. |
-| **Pair** | A generic container holding an `x` (baseline) and `y` (target) value. Used throughout to keep the two sides together. |
-| **ComparisonRecord / SkipRecord** | Output records: `ComparisonRecord` holds diff metrics for a successfully compared tensor group; `SkipRecord` records why a group was skipped (e.g. load failure). |
+| **Tensor group** | The set of all dump files sharing the same logical tensor name across all ranks and steps. E.g. `hidden_states` with TP=2 and 2 steps produces 4 files, which form one tensor group. |
+| **Match / MatchResult** | A pairing of one tensor group from the baseline dump with the corresponding group from the target dump, matched by key columns (typically `name`). Contains `rows_baseline` and `rows_target`. |
+| **Step** | A logical time step within a dump, delimited by the dumper's `step()` call. Files within a tensor group are first grouped by step; each step is unsharded independently, then steps are concatenated. |
+| **Unshard** | Reassembling a tensor that was sharded across parallel ranks back into a single logical tensor. E.g. with TP=4, four shards are concatenated into one complete tensor. |
+| **Reorder** | A permutation applied after unshard, e.g. converting CP zigzag ordering to natural ordering. |
+| **DimSpec** | Per-dimension metadata annotation describing how that dimension is partitioned across parallel axes (TP/CP/EP/SP), its ordering (zigzag/natural), and reduction (partial). Written by the dumper in the `dims` metadata field, e.g. `"s:cp:zigzag,h"`. |
+| **Alignment plan** | When the two dumps have different batch compositions (different sequence ordering, token counts), aux tensors are used to build a token-level mapping. The plan records `(step, index)` correspondences between the two sides. |
+| **Aux tensors** | Auxiliary metadata tensors dumped alongside model tensors: `input_ids`, `positions`, `seq_lens`, `req_pool_indices`, `rids`, etc. Not compared numerically; only used to build the alignment plan. |
+| **Grouping mode** | `logical`: unshard across ranks then compare the complete tensor. `raw`: compare per-rank shards individually. |
+| **Pair** | Generic container `Pair[T]` holding `.x` (baseline) and `.y` (target). Used throughout to keep the two sides together. |
 
 ## Module Responsibilities
 
 ```
-entrypoint.py                  Top-level CLI + orchestration
-  │                            Parses args, loads metadata, builds alignment plan,
-  │                            iterates over matches, emits records.
-  │
-  ├─ row_matcher.py            Pairs tensor groups between baseline and target
-  │
-  ├─ tensor_group_comparator.py   Processes one MatchResult end-to-end:
-  │   │                           load → unshard → align → compare → record
-  │   │
-  │   ├─ aligner/unshard/      Computes and executes unshard plans
-  │   ├─ aligner/reorder.py    Reorders tensors (e.g. zigzag → natural)
-  │   └─ tensor_comparison/    Element-wise comparison, stats, formatting
-  │
-  ├─ aligner/token_align/      Token-level alignment (cross-step, cross-framework)
-  │   ├─ aux_loader.py         Loads and normalizes aux tensors
-  │   ├─ indexer.py            Builds per-sequence token indices
-  │   ├─ planner.py            Computes alignment plan from indices
-  │   └─ executor.py           Executes alignment plan on step→tensor dicts
-  │
-  ├─ dims.py                   Parses dims annotation strings into DimSpec
-  ├─ output_types.py           Pydantic record types (Config, Comparison, Skip, Summary)
-  └─ utils.py                  Shared utilities (Pair, StrictBase, shape unification, rel_diff)
+comparator/
+├── entrypoint.py              — CLI entry point + top-level orchestration (arg parsing, alignment plan, match iteration, summary output)
+├── tensor_group_comparator.py — End-to-end processing of a single tensor group (load → unshard → align → compare)
+├── row_matcher.py             — Match baseline/target metadata rows into MatchResult list by key columns
+├── dims.py                    — Parse dims annotation strings into DimSpec lists
+├── output_types.py            — Output record types (ConfigRecord, ComparisonRecord, SkipRecord, SummaryRecord) and formatting
+├── utils.py                   — Shared utilities (Pair, _StrictBase, shape unification, rel_diff)
+│
+├── tensor_comparison/         — Pure tensor numerical comparison (no dump file loading or unshard)
+│   ├── compare.py             — compare_tensors(): compute diff stats, shape unify, downcast
+│   ├── types.py               — TensorComparisonInfo, DiffInfo, TensorStats data types
+│   ├── formatter.py           — Comparison result → human-readable text
+│   └── printer.py             — Print formatted text
+│
+└── aligner/                   — Reassemble multi-rank shards into complete tensors + token-level alignment
+    ├── unshard/               — Concat/pick operations along parallel axes
+    │   ├── planner.py         — Generate UnshardPlan from DimSpec + parallel_info
+    │   ├── executor.py        — Execute UnshardPlan (concat shards, verify replicated consistency)
+    │   ├── parallel_info.py   — Extract and normalize parallel info from dump metadata
+    │   └── types.py           — UnshardPlan, ConcatParams, PickParams, AxisInfo
+    ├── reorder.py             — Permutation transforms (e.g. zigzag → natural)
+    └── token_align/           — Cross-batch token-level alignment
+        ├── aux_loader.py      — Load aux tensors and normalize into framework-agnostic StepAux
+        ├── indexer.py         — Build SeqsInfo (per-sequence token position indices) from StepAux
+        ├── planner.py         — Compute AlignmentPlan from two-sided SeqsInfo
+        ├── executor.py        — Execute AlignmentPlan: extract aligned tensors from step→tensor maps
+        └── types.py           — StepAux, TokenAlignGlobalAux, SeqsInfo, AlignmentPlan
 ```
 
 ## Data Flow
 
 ```
-  baseline dump          target dump
-       │                      │
-       └──── row_matcher ─────┘
-                  │
-          list[MatchResult]
-                  │
-       ┌──── for each match ────┐
-       │                        │
-       │  tensor_group_comparator.compare_tensor_group()
-       │    1. Group rows by step
-       │    2. For each step: load files → unshard → single tensor
-       │    3. If alignment plan exists: execute_alignment()
-       │       else: concat steps
-       │    4. compare_tensors() → ComparisonRecord
-       │                        │
-       └────────────────────────┘
-                  │
-       ComparisonRecord / SkipRecord  →  print_record()
+dump files (baseline + target)
+        │
+        ▼
+   read_meta()  →  df_baseline, df_target        ← entrypoint.py
+        │
+        ▼
+   match_rows()  →  list[MatchResult]             ← row_matcher.py
+        │
+        ▼                    ┌──────────────────────────────────────────┐
+   for each match:           │  tensor_group_comparator.py              │
+        │                    │                                          │
+        ├─ load files        │  _load_and_unshard_by_step()             │
+        ├─ unshard per step  │    └─ _load_and_unshard_files()          │
+        ├─ align / concat    │  _compare_tensor()                      │
+        ├─ compare           │    ├─ execute_alignment() or concat     │
+        │                    │    └─ compare_tensors()                  │
+        └─ yield record      │                                          │
+                             └──────────────────────────────────────────┘
+        │
+        ▼
+   print + summary                                ← entrypoint.py
 ```
