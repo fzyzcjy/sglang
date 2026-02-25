@@ -63,7 +63,7 @@ class _AuxPlugin(ABC):
     def detect_layout(self, raw: dict[int, dict[str, object]]) -> str: ...
 
     @abstractmethod
-    def normalize_step_data(
+    def compute_step_aux(
         self, step_data: dict[str, object], *, layout: str, step: int
     ) -> TokenAlignerStepAux: ...
 
@@ -99,7 +99,7 @@ class _SGLangPlugin(_AuxPlugin):
     def detect_layout(self, raw: dict[int, dict[str, object]]) -> str:
         return "thd"
 
-    def normalize_step_data(
+    def compute_step_aux(
         self, step_data: dict[str, object], *, layout: str, step: int
     ) -> TokenAlignerStepAux:
         input_ids = step_data["input_ids"]
@@ -183,7 +183,7 @@ class _MegatronPlugin(_AuxPlugin):
         )
         return "thd"
 
-    def normalize_step_data(
+    def compute_step_aux(
         self, step_data: dict[str, object], *, layout: str, step: int
     ) -> TokenAlignerStepAux:
         input_ids: torch.Tensor = step_data["input_ids"]
@@ -267,7 +267,7 @@ def load_and_normalize_aux(
     layout: str = plugin.detect_layout(raw)
 
     step_auxs: dict[int, TokenAlignerStepAux] = {
-        step: plugin.normalize_step_data(step_data, layout=layout, step=step)
+        step: plugin.compute_step_aux(step_data, layout=layout, step=step)
         for step, step_data in raw.items()
     }
 

@@ -34,7 +34,7 @@ class TestNormalizeSGLang:
             "rids": ["A"],
         }
 
-        result: TokenAlignerStepAux = _sglang_plugin.normalize_step_data(
+        result: TokenAlignerStepAux = _sglang_plugin.compute_step_aux(
             step_data, layout="thd", step=0
         )
 
@@ -51,7 +51,7 @@ class TestNormalizeSGLang:
             "seq_lens": torch.tensor([2]),
         }
 
-        result: TokenAlignerStepAux = _sglang_plugin.normalize_step_data(
+        result: TokenAlignerStepAux = _sglang_plugin.compute_step_aux(
             step_data, layout="thd", step=3
         )
         assert result.seq_ids == [PositionalSeqId(step=3, seq_index=0)]
@@ -65,7 +65,7 @@ class TestNormalizeSGLang:
             "rids": ["A", "B"],
         }
 
-        result: TokenAlignerStepAux = _sglang_plugin.normalize_step_data(
+        result: TokenAlignerStepAux = _sglang_plugin.compute_step_aux(
             step_data, layout="thd", step=0
         )
         assert result.seq_ids == [SGLangSeqId(rid="A"), SGLangSeqId(rid="B")]
@@ -81,7 +81,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 3, 5]),
         }
 
-        result: TokenAlignerStepAux = _megatron_plugin.normalize_step_data(
+        result: TokenAlignerStepAux = _megatron_plugin.compute_step_aux(
             step_data, layout="thd", step=0
         )
 
@@ -94,7 +94,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 3, 5]),
         }
 
-        result: TokenAlignerStepAux = _megatron_plugin.normalize_step_data(
+        result: TokenAlignerStepAux = _megatron_plugin.compute_step_aux(
             step_data, layout="thd", step=0
         )
 
@@ -108,7 +108,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 5]),
         }
 
-        result: TokenAlignerStepAux = _megatron_plugin.normalize_step_data(
+        result: TokenAlignerStepAux = _megatron_plugin.compute_step_aux(
             step_data, layout="thd", step=0
         )
 
@@ -121,7 +121,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 3, 5]),
         }
 
-        result: TokenAlignerStepAux = _megatron_plugin.normalize_step_data(
+        result: TokenAlignerStepAux = _megatron_plugin.compute_step_aux(
             step_data, layout="thd", step=5
         )
         assert result.seq_ids == [
