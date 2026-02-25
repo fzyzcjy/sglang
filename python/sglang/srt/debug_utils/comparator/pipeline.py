@@ -108,7 +108,7 @@ def _compute_plans_for_group(metas: list[dict[str, Any]]) -> list[Plan]:
 
 def _extract_tensors(
     loaded: list[ValueWithMeta],
-) -> Optional[list[torch.Tensor]]:
+) -> list[torch.Tensor]:
     return [value for item in loaded if isinstance(value := item.value, torch.Tensor)]
 
 
@@ -158,8 +158,8 @@ def load_and_unshard_for_step(
     loaded: list[ValueWithMeta] = _load_tensors(filenames, dump_path)
 
     plans: list[Plan] = _compute_plans_for_group([item.meta for item in loaded])
-    tensors: Optional[list[torch.Tensor]] = _extract_tensors(loaded)
-    if tensors is None:
+    tensors: list[torch.Tensor] = _extract_tensors(loaded)
+    if not tensors:
         return None, []
 
     return _execute_plans(tensors, plans)
