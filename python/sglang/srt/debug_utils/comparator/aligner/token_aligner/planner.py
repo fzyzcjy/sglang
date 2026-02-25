@@ -19,8 +19,8 @@ def compute_token_aligner_plan(
         seqs=Pair(x=seqs_info_pair.x.sequences, y=seqs_info_pair.y.sequences)
     )
 
-    steps: Pair[list[int]] = Pair(x=[], y=[])
-    indices: Pair[list[int]] = Pair(x=[], y=[])
+    match_steps: Pair[list[int]] = Pair(x=[], y=[])
+    match_indices: Pair[list[int]] = Pair(x=[], y=[])
 
     for seq_id_x, seq_id_y in matched_pairs:
         rec: Pair[TokenAlignerSeqInfo] = Pair(
@@ -50,14 +50,14 @@ def compute_token_aligner_plan(
                     f"{input_id.x} != {input_id.y}"
                 )
 
-            steps.x.append(rec.x.steps[idx.x])
-            indices.x.append(rec.x.indices[idx.x])
-            steps.y.append(rec.y.steps[idx.y])
-            indices.y.append(rec.y.indices[idx.y])
+            match_steps.x.append(rec.x.steps[idx.x])
+            match_indices.x.append(rec.x.indices[idx.x])
+            match_steps.y.append(rec.y.steps[idx.y])
+            match_indices.y.append(rec.y.indices[idx.y])
 
     return TokenAlignerPlan(
-        match_steps=steps.map(tuple),
-        match_indices=indices.map(tuple),
+        match_steps=match_steps.map(tuple),
+        match_indices=match_indices.map(tuple),
     )
 
 
