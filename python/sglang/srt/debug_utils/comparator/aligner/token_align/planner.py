@@ -66,6 +66,8 @@ def compute_alignment_plan(
 
         pos_to_a: dict[int, int] = {pos: idx for idx, pos in enumerate(rec_a.positions)}
         pos_to_b: dict[int, int] = {pos: idx for idx, pos in enumerate(rec_b.positions)}
+        assert len(pos_to_a) == len(rec_a.positions), "duplicate positions in side A"
+        assert len(pos_to_b) == len(rec_b.positions), "duplicate positions in side B"
 
         common_positions: set[int] = set(pos_to_a.keys()) & set(pos_to_b.keys())
         num_matched: int = 0
@@ -131,6 +133,18 @@ def compute_alignment_plan(
 # ---------------------------------------------------------------------------
 
 
+class _SeqAccumulator:
+    """Mutable accumulator for building SequenceRecord incrementally."""
+
+    __slots__ = ("input_ids", "positions", "steps", "indices")
+
+    def __init__(self) -> None:
+        self.input_ids: list[int] = []
+        self.positions: list[int] = []
+        self.steps: list[int] = []
+        self.indices: list[int] = []
+
+
 def _build_sglang_thd_index(
     side_aux: SideAux,
 ) -> dict[int, SequenceRecord]:
@@ -164,7 +178,7 @@ def _build_sglang_thd_index(
             rid: str = rids_list[seg_idx]
 
             if rpi in rpi_to_rid and rpi_to_rid[rpi] != rid:
-                old_seq_id: int = rpi_to_seq_id.pop(rpi)
+                rpi_to_seq_id.pop(rpi)
                 del rpi_to_rid[rpi]
 
             if rpi not in rpi_to_seq_id:
@@ -340,29 +354,12 @@ def _match_sequences(
             unmatched_a.discard(seq_id_a)
             unmatched_b.discard(best_match)
 
-    if len(matched) > len(set(m[0] for m in matched)):
-        warnings.warn(
-            "Ambiguous sequence matching: some sequences matched multiple times"
-        )
-
     return matched
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-class _SeqAccumulator:
-    """Mutable accumulator for building SequenceRecord incrementally."""
-
-    __slots__ = ("input_ids", "positions", "steps", "indices")
-
-    def __init__(self) -> None:
-        self.input_ids: list[int] = []
-        self.positions: list[int] = []
-        self.steps: list[int] = []
-        self.indices: list[int] = []
 
 
 def _make_side_info(index: SideTokenIndex) -> SideInfo:
