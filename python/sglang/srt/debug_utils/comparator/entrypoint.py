@@ -42,12 +42,11 @@ def run(args: argparse.Namespace) -> None:
         output_format=args.output_format,
     )
 
-    df_baseline, df_target = _read_df(args)
+    dfs: Pair[pl.DataFrame] = _read_df(args)
 
-    token_aligner_plan = compute_maybe_token_aligner_plan(args, df_baseline, df_target)
+    token_aligner_plan = compute_maybe_token_aligner_plan(args, dfs)
 
-    df_baseline = df_baseline.filter(~pl.col("name").is_in(AUX_NAMES))
-    df_target = df_target.filter(~pl.col("name").is_in(AUX_NAMES))
+    dfs = dfs.map(lambda df: df.filter(~pl.col("name").is_in(AUX_NAMES)))
 
     bundle_info_pairs: list[Pair[TensorBundleInfo]] = match_bundles(
         df_baseline=df_baseline,
@@ -69,7 +68,7 @@ def run(args: argparse.Namespace) -> None:
     )
 
 
-def _read_df(args: argparse.Namespace) -> tuple[pl.DataFrame, pl.DataFrame]:
+def _read_df(args: argparse.Namespace) -> Pair[pl.DataFrame]:
     df_baseline = read_meta(args.baseline_path)
 
     df_target = read_meta(args.target_path)
@@ -80,7 +79,7 @@ def _read_df(args: argparse.Namespace) -> tuple[pl.DataFrame, pl.DataFrame]:
         df_target = df_target.filter(pl.col("filename").str.contains(args.filter))
     assert all(c in df_target.columns for c in ["rank", "step", "dump_index", "name"])
 
-    return df_baseline, df_target
+    return Pair(x=df_baseline, y=df_target)
 
 
 def _compute_skip_keys(args, *, has_token_aligner_plan: bool):

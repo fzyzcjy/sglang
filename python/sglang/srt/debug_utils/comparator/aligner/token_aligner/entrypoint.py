@@ -27,20 +27,17 @@ from sglang.srt.debug_utils.comparator.utils import Pair
 
 def compute_maybe_token_aligner_plan(
     args: argparse.Namespace,
-    df_baseline: pl.DataFrame,
-    df_target: pl.DataFrame,
+    dfs: Pair[pl.DataFrame],
 ) -> Optional[TokenAlignerPlan]:
     if args.grouping == "logical":
-        if not (has_aux_tensors(df_baseline) and has_aux_tensors(df_target)):
+        if not (has_aux_tensors(dfs.x) and has_aux_tensors(dfs.y)):
             print(
                 "Warning: aux tensors missing, skipping token alignment",
                 file=sys.stderr,
             )
             return None
 
-        return _build_token_aligner_plan(
-            args=args, df_baseline=df_baseline, df_target=df_target
-        )
+        return _build_token_aligner_plan(args=args, dfs=dfs)
 
     return None
 
@@ -48,12 +45,10 @@ def compute_maybe_token_aligner_plan(
 def _build_token_aligner_plan(
     *,
     args: argparse.Namespace,
-    df_baseline: pl.DataFrame,
-    df_target: pl.DataFrame,
+    dfs: Pair[pl.DataFrame],
 ) -> Optional[TokenAlignerPlan]:
     """Load aux tensors, build token indices, and compute the alignment plan."""
     dump_paths: Pair[Path] = Pair(x=Path(args.baseline_path), y=Path(args.target_path))
-    dfs: Pair[pl.DataFrame] = Pair(x=df_baseline, y=df_target)
 
     baseline_aux = load_and_normalize_aux(dump_path=dump_paths.x, df=dfs.x)
     target_aux = load_and_normalize_aux(dump_path=dump_paths.y, df=dfs.y)
