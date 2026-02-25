@@ -1,5 +1,4 @@
 import sys
-import warnings
 from argparse import Namespace
 from pathlib import Path
 
@@ -10,10 +9,13 @@ import sglang.srt.debug_utils.dumper as _dumper_module
 from sglang.srt.debug_utils.comparator.entrypoint import run
 from sglang.srt.debug_utils.comparator.output_types import (
     AnyRecord,
+    AuxTensorsMissingWarning,
     ComparisonRecord,
     ConfigRecord,
+    LayoutDetectionFallbackWarning,
     SkipRecord,
     SummaryRecord,
+    WarningRecord,
     _OutputRecord,
     parse_record_json,
 )
@@ -885,7 +887,7 @@ class TestEntrypointReplicatedAxis:
     """Test replicated-axis scenarios through the full entrypoint pipeline."""
 
     def test_replicated_axis_identical_replicas_passed(self, tmp_path, capsys):
-        """CP2 TP2, TP replicated and identical → passed, no align_warnings."""
+        """CP2 TP2, TP replicated and identical → passed, no warnings."""
         torch.manual_seed(42)
         full_baseline = torch.randn(4, 8, 6)
         full_target = full_baseline + torch.randn(4, 8, 6) * 0.0001
@@ -915,14 +917,14 @@ class TestEntrypointReplicatedAxis:
 
         records = _run_and_parse(args, capsys)
         comp = _assert_single_comparison_passed(records)
-        assert comp.align_warnings == []
+        assert comp.warnings == []
 
         summary = records[-1]
         assert isinstance(summary, SummaryRecord)
         assert summary.passed == 1
 
     def test_replicated_mismatch_fails(self, tmp_path, capsys):
-        """CP2 TP2, TP replicas differ (> atol) → failed with align_warnings."""
+        """CP2 TP2, TP replicas differ (> atol) → failed with warnings."""
         torch.manual_seed(42)
         full_baseline = torch.randn(4, 8, 6)
         full_target = full_baseline + torch.randn(4, 8, 6) * 0.0001
@@ -955,14 +957,14 @@ class TestEntrypointReplicatedAxis:
         comparisons = _get_comparisons(records)
         assert len(comparisons) == 1
         assert comparisons[0].category == "failed"
-        assert len(comparisons[0].align_warnings) > 0
+        assert len(comparisons[0].warnings) > 0
 
         summary = records[-1]
         assert isinstance(summary, SummaryRecord)
         assert summary.failed == 1
 
-    def test_summary_counts_failed_from_align_warnings_only(self, tmp_path, capsys):
-        """Diff itself passes but TP replicas differ → summary.failed=1 from align_warnings."""
+    def test_summary_counts_failed_from_warnings_only(self, tmp_path, capsys):
+        """Diff itself passes but TP replicas differ → summary.failed=1 from warnings."""
         torch.manual_seed(42)
         full_baseline = torch.randn(4, 8, 6)
         full_target = full_baseline + torch.randn(4, 8, 6) * 0.0001
@@ -1004,7 +1006,7 @@ class TestEntrypointReplicatedAxis:
         comp = comparisons[0]
         assert comp.diff is not None
         assert comp.diff.passed
-        assert len(comp.align_warnings) > 0
+        assert len(comp.warnings) > 0
         assert comp.category == "failed"
 
         summary = records[-1]
@@ -1174,12 +1176,14 @@ class TestEntrypointAlignment:
             grouping="logical",
         )
 
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            records = _run_and_parse(args, capsys)
+        records = _run_and_parse(args, capsys)
 
+        warning_records = [r for r in records if isinstance(r, WarningRecord)]
         layout_warnings = [
-            w for w in caught if "falling back to thd" in str(w.message)
+            w
+            for wr in warning_records
+            for w in wr.warnings
+            if isinstance(w, LayoutDetectionFallbackWarning)
         ]
         assert len(layout_warnings) == 1
 
@@ -1207,7 +1211,14 @@ class TestEntrypointAlignment:
         run(args)
         captured = capsys.readouterr()
         records = _parse_jsonl(captured.out)
-        assert "skipping token alignment" in captured.err
+        warning_records = [r for r in records if isinstance(r, WarningRecord)]
+        aux_missing_warnings = [
+            w
+            for wr in warning_records
+            for w in wr.warnings
+            if isinstance(w, AuxTensorsMissingWarning)
+        ]
+        assert len(aux_missing_warnings) == 1
 
         comparisons = _get_comparisons(records)
         assert len(comparisons) == 2

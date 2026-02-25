@@ -7,31 +7,27 @@ from sglang.srt.debug_utils.comparator.aligner.unsharder.types import (
     UnsharderPlan,
 )
 from sglang.srt.debug_utils.comparator.dims import ParallelAxis
-from sglang.srt.debug_utils.comparator.output_types import (
-    AlignWarning,
-    ReplicatedMismatchWarning,
-)
+from sglang.srt.debug_utils.comparator.output_types import ReplicatedMismatchWarning
+from sglang.srt.debug_utils.comparator.warning_sink import warning_sink
 
 
 def execute_unsharder_plan(
     plan: UnsharderPlan,
     tensors: list[torch.Tensor],
-) -> tuple[list[torch.Tensor], list[AlignWarning]]:
-    all_warnings: list[AlignWarning] = []
+) -> list[torch.Tensor]:
     result: list[torch.Tensor] = []
 
     for group_idx, group in enumerate(plan.groups):
         group_tensors = [tensors[i] for i in group]
-        tensor, warnings = _apply_unshard(
+        tensor = _apply_unshard(
             plan.params,
             group_tensors,
             axis=plan.axis,
             group_index=group_idx,
         )
         result.append(tensor)
-        all_warnings.extend(warnings)
 
-    return result, all_warnings
+    return result
 
 
 def _apply_unshard(
@@ -40,17 +36,17 @@ def _apply_unshard(
     *,
     axis: ParallelAxis,
     group_index: int,
-) -> tuple[torch.Tensor, list[AlignWarning]]:
+) -> torch.Tensor:
     if isinstance(params, PickParams):
-        warnings = _verify_replicated_group(
+        _verify_replicated_group(
             ordered_tensors,
             axis=axis,
             group_index=group_index,
         )
-        return ordered_tensors[0], warnings
+        return ordered_tensors[0]
 
     if isinstance(params, ConcatParams):
-        return torch.cat(ordered_tensors, dim=params.dim), []
+        return torch.cat(ordered_tensors, dim=params.dim)
 
     # Phase 2: ReduceSumParams, CpZigzagParams
     raise ValueError(f"Unsupported unshard operation: {type(params).__name__}")
@@ -61,14 +57,13 @@ def _verify_replicated_group(
     *,
     axis: ParallelAxis,
     group_index: int,
-) -> list[ReplicatedMismatchWarning]:
-    warnings: list[ReplicatedMismatchWarning] = []
+) -> None:
     baseline = ordered_tensors[0]
 
     for i in range(1, len(ordered_tensors)):
         other = ordered_tensors[i]
         if not torch.allclose(baseline, other, atol=1e-6):
-            warnings.append(
+            warning_sink.add(
                 ReplicatedMismatchWarning(
                     axis=axis.value,
                     group_index=group_index,
@@ -77,5 +72,3 @@ def _verify_replicated_group(
                     max_abs_diff=(baseline - other).abs().max().item(),
                 )
             )
-
-    return warnings

@@ -21,14 +21,12 @@ from sglang.srt.debug_utils.comparator.aligner.unsharder.executor import (
     execute_unsharder_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.types import UnsharderPlan
-from sglang.srt.debug_utils.comparator.output_types import AlignWarning
 from sglang.srt.debug_utils.comparator.utils import Pair
 
 
 @dataclass(frozen=True)
 class AlignerResult:
     tensors: Optional[Pair[torch.Tensor]]
-    warnings: list[AlignWarning]
     failed_side_xy: Optional[str]  # "x" or "y"; None if success
 
 
@@ -40,19 +38,16 @@ def execute_aligner_plan(
     """Execute unified unshard/reorder + token-align."""
 
     # Per-side: unshard + reorder -> dict[step, tensor]
-    step_tensors_x, x_warns = _execute_step_plans(
+    step_tensors_x: dict[int, torch.Tensor] = _execute_step_plans(
         tensors=tensors_pair.x, step_plans=plan.per_step_plans.x
     )
-    step_tensors_y, y_warns = _execute_step_plans(
+    step_tensors_y: dict[int, torch.Tensor] = _execute_step_plans(
         tensors=tensors_pair.y, step_plans=plan.per_step_plans.y
     )
-    all_warnings: list[AlignWarning] = x_warns + y_warns
 
     if not step_tensors_x or not step_tensors_y:
         failed_side_xy: str = "x" if not step_tensors_x else "y"
-        return AlignerResult(
-            tensors=None, warnings=all_warnings, failed_side_xy=failed_side_xy
-        )
+        return AlignerResult(tensors=None, failed_side_xy=failed_side_xy)
 
     # Cross-side: token alignment (or direct extraction for single-step)
     if plan.token_aligner_plan is not None:
@@ -67,59 +62,55 @@ def execute_aligner_plan(
             y=list(step_tensors_y.values())[0],
         )
 
-    return AlignerResult(tensors=combined, warnings=all_warnings, failed_side_xy=None)
+    return AlignerResult(tensors=combined, failed_side_xy=None)
 
 
 def _execute_step_plans(
     tensors: list[torch.Tensor],
     step_plans: list[AlignerPerStepPlan],
-) -> tuple[dict[int, torch.Tensor], list[AlignWarning]]:
+) -> dict[int, torch.Tensor]:
     result: dict[int, torch.Tensor] = {}
-    all_warnings: list[AlignWarning] = []
 
     for step_plan in step_plans:
         step_tensors: list[torch.Tensor] = [
             tensors[i] for i in step_plan.input_object_indices
         ]
-        tensor, warnings = execute_sub_plans(
+        tensor: Optional[torch.Tensor] = execute_sub_plans(
             tensors=step_tensors, plans=step_plan.sub_plans
         )
-        all_warnings.extend(warnings)
         if tensor is not None:
             result[step_plan.step] = tensor
 
-    return result, all_warnings
+    return result
 
 
 def execute_sub_plans(
     tensors: list[torch.Tensor],
     plans: list[AlignerPerStepSubPlan],
-) -> tuple[Optional[torch.Tensor], list[AlignWarning]]:
+) -> Optional[torch.Tensor]:
     if not tensors:
-        return None, []
+        return None
 
     if not plans:
         if len(tensors) != 1:
-            return None, []
-        return tensors[0], []
+            return None
+        return tensors[0]
 
-    warnings: list[AlignWarning] = []
     current = tensors
     for plan in plans:
-        current, new_warnings = execute_sub_plan(tensors=current, plan=plan)
-        warnings.extend(new_warnings)
+        current = execute_sub_plan(tensors=current, plan=plan)
 
     assert len(current) == 1
-    return current[0], warnings
+    return current[0]
 
 
 def execute_sub_plan(
     tensors: list[torch.Tensor],
     plan: AlignerPerStepSubPlan,
-) -> tuple[list[torch.Tensor], list[AlignWarning]]:
+) -> list[torch.Tensor]:
     if isinstance(plan, UnsharderPlan):
         return execute_unsharder_plan(plan, tensors)
     elif isinstance(plan, ReordererPlan):
-        return execute_reorderer_plan(plan, tensors), []
+        return execute_reorderer_plan(plan, tensors)
     else:
         raise NotImplementedError(f"Unknown {plan=}")

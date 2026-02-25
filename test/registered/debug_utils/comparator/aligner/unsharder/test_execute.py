@@ -16,6 +16,7 @@ from sglang.srt.debug_utils.comparator.aligner.unsharder.types import (
     PickParams,
 )
 from sglang.srt.debug_utils.comparator.dims import ParallelAxis, parse_dims
+from sglang.srt.debug_utils.comparator.warning_sink import warning_sink
 from sglang.test.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=10, suite="default", nightly=True)
@@ -33,7 +34,8 @@ class TestExecuteUnsharderPlan:
         plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 1
 
-        result, warnings = execute_unsharder_plan(plans[0], shards)
+        with warning_sink.context() as warnings:
+            result = execute_unsharder_plan(plans[0], shards)
         assert len(result) == 1
         assert torch.allclose(result[0], full_tensor)
         assert warnings == []
@@ -59,9 +61,8 @@ class TestExecuteUnsharderPlan:
             shards[1],  # world_rank=3, axis_rank=1
         ]
 
-        result, warnings = execute_unsharder_plan(
-            plans[0], tensors_ordered_by_world_rank
-        )
+        with warning_sink.context() as warnings:
+            result = execute_unsharder_plan(plans[0], tensors_ordered_by_world_rank)
         assert len(result) == 1
         assert torch.allclose(result[0], full_tensor)
         assert warnings == []
@@ -93,10 +94,12 @@ class TestExecuteUnsharderPlan:
             for tp_rank in range(4):
                 tensors.append(source[tp_rank])
 
-        intermediate, _ = execute_unsharder_plan(plans[0], tensors)
+        with warning_sink.context():
+            intermediate = execute_unsharder_plan(plans[0], tensors)
         assert len(intermediate) == 4
 
-        final, _ = execute_unsharder_plan(plans[1], intermediate)
+        with warning_sink.context():
+            final = execute_unsharder_plan(plans[1], intermediate)
         assert len(final) == 1
 
     def test_cp_tp_concat(self) -> None:
@@ -123,8 +126,9 @@ class TestExecuteUnsharderPlan:
         assert len(plans) == 2
 
         current = tensors
-        for plan in plans:
-            current, _ = execute_unsharder_plan(plan, current)
+        with warning_sink.context():
+            for plan in plans:
+                current = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
         assert torch.allclose(current[0], full_tensor)
@@ -164,8 +168,9 @@ class TestExecuteUnsharderPlan:
         assert len(plans) == 2
 
         current = tensors
-        for plan in plans:
-            current, _ = execute_unsharder_plan(plan, current)
+        with warning_sink.context():
+            for plan in plans:
+                current = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
         assert torch.allclose(current[0], full_tensor)
@@ -176,13 +181,14 @@ class TestExecuteUnsharderPlan:
         class _FakeParams:
             pass
 
-        with pytest.raises(ValueError, match="Unsupported unshard"):
-            _apply_unshard(
-                _FakeParams(),
-                [torch.randn(2, 2)],
-                axis=ParallelAxis.TP,
-                group_index=0,
-            )
+        with warning_sink.context():
+            with pytest.raises(ValueError, match="Unsupported unshard"):
+                _apply_unshard(
+                    _FakeParams(),
+                    [torch.randn(2, 2)],
+                    axis=ParallelAxis.TP,
+                    group_index=0,
+                )
 
     def test_cp_tp_ep_three_axis_concat(self) -> None:
         """CP=2 + TP=2 + EP=2: three-step unshard reconstructs original tensor."""
@@ -217,8 +223,9 @@ class TestExecuteUnsharderPlan:
         assert len(plans) == 3
 
         current = tensors
-        for plan in plans:
-            current, _ = execute_unsharder_plan(plan, current)
+        with warning_sink.context():
+            for plan in plans:
+                current = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
         assert torch.allclose(current[0], full_tensor)
@@ -265,8 +272,9 @@ class TestExecuteUnsharderPlan:
         assert len(plans) == 3
 
         current = tensors
-        for plan in plans:
-            current, _ = execute_unsharder_plan(plan, current)
+        with warning_sink.context():
+            for plan in plans:
+                current = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
         assert torch.allclose(current[0], full_tensor)
@@ -286,7 +294,8 @@ class TestPickOperation:
         assert len(plans) == 1
         assert isinstance(plans[0].params, PickParams)
 
-        result, warnings = execute_unsharder_plan(plans[0], [tensor, tensor.clone()])
+        with warning_sink.context() as warnings:
+            result = execute_unsharder_plan(plans[0], [tensor, tensor.clone()])
         assert len(result) == 1
         assert torch.allclose(result[0], tensor)
         assert warnings == []
@@ -321,7 +330,8 @@ class TestPickOperation:
         tensor = torch.randn(4)
         tensors = [tensor.clone() for _ in range(4)]
 
-        result, warnings = execute_unsharder_plan(pick_plans[0], tensors)
+        with warning_sink.context() as warnings:
+            result = execute_unsharder_plan(pick_plans[0], tensors)
         assert len(result) == 2
         assert warnings == []
 
@@ -348,8 +358,9 @@ class TestPickOperation:
         assert len(plans) == 2
 
         current = tensors
-        for plan in plans:
-            current, _ = execute_unsharder_plan(plan, current)
+        with warning_sink.context():
+            for plan in plans:
+                current = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
         assert torch.allclose(current[0], full_tensor)
@@ -377,8 +388,9 @@ class TestPickOperation:
         assert all(isinstance(p.params, PickParams) for p in plans)
 
         current = tensors
-        for plan in plans:
-            current, _ = execute_unsharder_plan(plan, current)
+        with warning_sink.context():
+            for plan in plans:
+                current = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
         assert torch.allclose(current[0], full_tensor)
@@ -390,11 +402,12 @@ class TestVerifyReplicatedGroup:
         tensor_a = torch.ones(4)
         tensor_b = torch.ones(4) + 0.1
 
-        warnings = _verify_replicated_group(
-            [tensor_a, tensor_b],
-            axis=ParallelAxis.TP,
-            group_index=0,
-        )
+        with warning_sink.context() as warnings:
+            _verify_replicated_group(
+                [tensor_a, tensor_b],
+                axis=ParallelAxis.TP,
+                group_index=0,
+            )
         assert len(warnings) == 1
         assert warnings[0].axis == "tp"
         assert warnings[0].group_index == 0
@@ -406,11 +419,12 @@ class TestVerifyReplicatedGroup:
         """_verify_replicated_group produces no warning for identical replicas."""
         tensor = torch.randn(4, 8)
 
-        warnings = _verify_replicated_group(
-            [tensor, tensor.clone()],
-            axis=ParallelAxis.TP,
-            group_index=0,
-        )
+        with warning_sink.context() as warnings:
+            _verify_replicated_group(
+                [tensor, tensor.clone()],
+                axis=ParallelAxis.TP,
+                group_index=0,
+            )
         assert warnings == []
 
     def test_multiple_mismatches(self) -> None:
@@ -419,18 +433,19 @@ class TestVerifyReplicatedGroup:
         other_a = torch.ones(4)
         other_b = torch.ones(4) * 2
 
-        warnings = _verify_replicated_group(
-            [baseline, other_a, other_b],
-            axis=ParallelAxis.CP,
-            group_index=1,
-        )
+        with warning_sink.context() as warnings:
+            _verify_replicated_group(
+                [baseline, other_a, other_b],
+                axis=ParallelAxis.CP,
+                group_index=1,
+            )
         assert len(warnings) == 2
         assert warnings[0].differing_index == 1
         assert warnings[1].differing_index == 2
         assert warnings[1].max_abs_diff == pytest.approx(2.0, abs=1e-5)
 
     def test_execute_returns_warnings(self) -> None:
-        """execute_unsharder_plan returns warnings for replicated mismatch."""
+        """execute_unsharder_plan emits warnings for replicated mismatch."""
         dim_specs = parse_dims("h d")
         parallel_infos = [
             {ParallelAxis.TP: AxisInfo(axis_rank=0, axis_size=2)},
@@ -441,7 +456,8 @@ class TestVerifyReplicatedGroup:
         tensor_a = torch.zeros(4)
         tensor_b = torch.ones(4)
 
-        result, warnings = execute_unsharder_plan(plans[0], [tensor_a, tensor_b])
+        with warning_sink.context() as warnings:
+            result = execute_unsharder_plan(plans[0], [tensor_a, tensor_b])
         assert len(result) == 1
         assert len(warnings) == 1
         assert torch.allclose(result[0], tensor_a)
@@ -451,11 +467,12 @@ class TestVerifyReplicatedGroup:
         baseline = torch.zeros(4)
         other = torch.full((4,), 1e-6)
 
-        warnings = _verify_replicated_group(
-            [baseline, other],
-            axis=ParallelAxis.TP,
-            group_index=0,
-        )
+        with warning_sink.context() as warnings:
+            _verify_replicated_group(
+                [baseline, other],
+                axis=ParallelAxis.TP,
+                group_index=0,
+            )
         assert warnings == []
 
     def test_atol_boundary_exceeded(self) -> None:
@@ -463,11 +480,12 @@ class TestVerifyReplicatedGroup:
         baseline = torch.zeros(4)
         other = torch.full((4,), 1e-6 + 1e-9)
 
-        warnings = _verify_replicated_group(
-            [baseline, other],
-            axis=ParallelAxis.TP,
-            group_index=0,
-        )
+        with warning_sink.context() as warnings:
+            _verify_replicated_group(
+                [baseline, other],
+                axis=ParallelAxis.TP,
+                group_index=0,
+            )
         assert len(warnings) == 1
         assert warnings[0].differing_index == 1
 

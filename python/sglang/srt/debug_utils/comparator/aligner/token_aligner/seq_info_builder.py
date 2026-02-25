@@ -42,8 +42,8 @@ def _build_token_aligner_seq_infos(
             internal_id: int = external_to_internal_seq_id[external_seq_id]
 
             accum[internal_id] = accum[internal_id] + TokenAlignerSeqInfo(
-                input_ids=aux.input_ids[offset: offset + seq_len],
-                positions=aux.positions[offset: offset + seq_len],
+                input_ids=aux.input_ids[offset : offset + seq_len],
+                positions=aux.positions[offset : offset + seq_len],
                 steps=[step] * seq_len,
                 indices=list(range(offset, offset + seq_len)),
             )

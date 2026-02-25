@@ -4,11 +4,17 @@ import sys
 import pytest
 
 from sglang.srt.debug_utils.comparator.output_types import (
+    AuxNoDimsWarning,
+    AuxTensorsMissingWarning,
     ComparisonRecord,
     ConfigRecord,
+    FrameworkDetectionFailedWarning,
+    LayoutDetectionFallbackWarning,
     ReplicatedMismatchWarning,
+    RidsMismatchWarning,
     SkipRecord,
     SummaryRecord,
+    WarningRecord,
     parse_record_json,
 )
 from sglang.srt.debug_utils.comparator.tensor_comparator.types import (
@@ -115,6 +121,9 @@ class TestRecordTypes:
                 shape_mismatch=False,
             ),
             SummaryRecord(total=10, passed=8, failed=1, skipped=1),
+            WarningRecord(
+                warnings=[AuxTensorsMissingWarning()],
+            ),
         ]:
             restored = parse_record_json(record.model_dump_json())
             assert type(restored) is type(record)
@@ -133,9 +142,9 @@ def _make_warning(**overrides) -> ReplicatedMismatchWarning:
     return ReplicatedMismatchWarning(**defaults)
 
 
-class TestAlignWarnings:
+class TestWarnings:
     def test_comparison_record_failed_when_diff_passed_but_warnings(self):
-        """ComparisonRecord with diff.passed=True but align_warnings → category=='failed'."""
+        """ComparisonRecord with diff.passed=True but warnings → category=='failed'."""
         record = ComparisonRecord(
             name="hidden",
             baseline=_make_tensor_info(),
@@ -143,21 +152,21 @@ class TestAlignWarnings:
             unified_shape=[4, 8],
             shape_mismatch=False,
             diff=_make_diff(passed=True),
-            align_warnings=[_make_warning()],
+            warnings=[_make_warning()],
         )
         assert record.category == "failed"
 
     def test_skip_record_failed_when_warnings(self):
-        """SkipRecord with align_warnings → category=='failed' instead of 'skipped'."""
+        """SkipRecord with warnings → category=='failed' instead of 'skipped'."""
         record = SkipRecord(
             name="x",
             reason="no_baseline",
-            align_warnings=[_make_warning()],
+            warnings=[_make_warning()],
         )
         assert record.category == "failed"
 
-    def test_align_warnings_json_round_trip(self):
-        """align_warnings survive model_dump_json → parse_record_json round-trip."""
+    def test_warnings_json_round_trip(self):
+        """warnings survive model_dump_json → parse_record_json round-trip."""
         warning = _make_warning(
             axis="cp",
             group_index=2,
@@ -172,19 +181,49 @@ class TestAlignWarnings:
             unified_shape=[4, 8],
             shape_mismatch=False,
             diff=_make_diff(),
-            align_warnings=[warning],
+            warnings=[warning],
         )
 
         restored = parse_record_json(record.model_dump_json())
         assert isinstance(restored, ComparisonRecord)
-        assert len(restored.align_warnings) == 1
+        assert len(restored.warnings) == 1
 
-        restored_warning = restored.align_warnings[0]
+        restored_warning = restored.warnings[0]
         assert restored_warning.axis == "cp"
         assert restored_warning.group_index == 2
         assert restored_warning.differing_index == 3
         assert restored_warning.baseline_index == 0
         assert restored_warning.max_abs_diff == pytest.approx(0.42)
+
+    def test_any_warning_discriminated_union_round_trip(self):
+        """All AnyWarning variants survive JSON round-trip via a WarningRecord."""
+        all_warnings = [
+            ReplicatedMismatchWarning(
+                axis="tp",
+                group_index=0,
+                differing_index=1,
+                baseline_index=0,
+                max_abs_diff=0.1,
+            ),
+            AuxTensorsMissingWarning(),
+            FrameworkDetectionFailedWarning(),
+            RidsMismatchWarning(
+                rank_index=1,
+                rank_0_value="[1,2,3]",
+                mismatching_value="[4,5,6]",
+            ),
+            AuxNoDimsWarning(tensor_name="positions", num_ranks=4),
+            LayoutDetectionFallbackWarning(),
+        ]
+
+        record = WarningRecord(warnings=all_warnings)
+        restored = parse_record_json(record.model_dump_json())
+        assert isinstance(restored, WarningRecord)
+        assert len(restored.warnings) == len(all_warnings)
+
+        for original, parsed in zip(all_warnings, restored.warnings):
+            assert type(parsed) is type(original)
+            assert parsed == original
 
 
 if __name__ == "__main__":

@@ -28,21 +28,78 @@ class ReplicatedMismatchWarning(_StrictBase):
         )
 
 
-AlignWarning = (
-    ReplicatedMismatchWarning  # future: Annotated[Union[...], Discriminator("kind")]
-)
+class AuxTensorsMissingWarning(_StrictBase):
+    kind: Literal["aux_tensors_missing"] = "aux_tensors_missing"
+
+    def to_text(self) -> str:
+        return "Aux tensors missing, skipping token alignment"
+
+
+class FrameworkDetectionFailedWarning(_StrictBase):
+    kind: Literal["framework_detection_failed"] = "framework_detection_failed"
+
+    def to_text(self) -> str:
+        return "Framework detection failed, skipping token alignment"
+
+
+class RidsMismatchWarning(_StrictBase):
+    kind: Literal["rids_mismatch"] = "rids_mismatch"
+    rank_index: int
+    rank_0_value: str
+    mismatching_value: str
+
+    def to_text(self) -> str:
+        return (
+            f"rids mismatch across ranks: rank 0 has {self.rank_0_value}, "
+            f"rank {self.rank_index} has {self.mismatching_value}"
+        )
+
+
+class AuxNoDimsWarning(_StrictBase):
+    kind: Literal["aux_no_dims"] = "aux_no_dims"
+    tensor_name: str
+    num_ranks: int
+
+    def to_text(self) -> str:
+        return (
+            f"aux tensor '{self.tensor_name}' has {self.num_ranks} ranks "
+            f"but no dims metadata, using rank 0 only"
+        )
+
+
+class LayoutDetectionFallbackWarning(_StrictBase):
+    kind: Literal["layout_detection_fallback"] = "layout_detection_fallback"
+
+    def to_text(self) -> str:
+        return (
+            "Megatron layout detection: no qkv_format or 2D input_ids found, "
+            "falling back to thd"
+        )
+
+
+AnyWarning = Annotated[
+    Union[
+        ReplicatedMismatchWarning,
+        AuxTensorsMissingWarning,
+        FrameworkDetectionFailedWarning,
+        RidsMismatchWarning,
+        AuxNoDimsWarning,
+        LayoutDetectionFallbackWarning,
+    ],
+    Discriminator("kind"),
+]
 
 
 class _OutputRecord(_StrictBase):
-    align_warnings: list[AlignWarning] = Field(default_factory=list)
+    warnings: list[AnyWarning] = Field(default_factory=list)
 
     @abstractmethod
     def _format_body(self) -> str: ...
 
     def to_text(self) -> str:
         body = self._format_body()
-        if self.align_warnings:
-            body += "\n" + "\n".join(f"  ⚠ {w.to_text()}" for w in self.align_warnings)
+        if self.warnings:
+            body += "\n" + "\n".join(f"  ⚠ {w.to_text()}" for w in self.warnings)
         return body
 
 
@@ -66,7 +123,7 @@ class SkipRecord(_OutputRecord):
 
     @property
     def category(self) -> str:
-        if self.align_warnings:
+        if self.warnings:
             return "failed"
         return "skipped"
 
@@ -79,7 +136,7 @@ class ComparisonRecord(TensorComparisonInfo, _OutputRecord):
 
     @property
     def category(self) -> str:
-        if self.align_warnings:
+        if self.warnings:
             return "failed"
         return "passed" if self.diff is not None and self.diff.passed else "failed"
 
@@ -101,8 +158,15 @@ class SummaryRecord(_OutputRecord):
         )
 
 
+class WarningRecord(_OutputRecord):
+    type: Literal["warning"] = "warning"
+
+    def _format_body(self) -> str:
+        return ""
+
+
 AnyRecord = Annotated[
-    Union[ConfigRecord, SkipRecord, ComparisonRecord, SummaryRecord],
+    Union[ConfigRecord, SkipRecord, ComparisonRecord, SummaryRecord, WarningRecord],
     Discriminator("type"),
 ]
 

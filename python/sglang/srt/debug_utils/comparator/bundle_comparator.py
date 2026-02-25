@@ -26,12 +26,35 @@ from sglang.srt.debug_utils.comparator.tensor_comparator.comparator import (
     compare_tensor_pair,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
+from sglang.srt.debug_utils.comparator.warning_sink import warning_sink
 from sglang.srt.debug_utils.dump_loader import ValueWithMeta
 
 _FAILED_SIDE_MAP: dict[str, str] = {"x": "baseline", "y": "target"}
 
 
 def compare_bundle_pair(
+    *,
+    name: str,
+    filenames_pair: Pair[list[str]],
+    baseline_path: Path,
+    target_path: Path,
+    token_aligner_plan: Optional[TokenAlignerPlan],
+    diff_threshold: float,
+) -> Union[ComparisonRecord, SkipRecord]:
+    with warning_sink.context() as collected_warnings:
+        result = _compare_bundle_pair_raw(
+            name=name,
+            filenames_pair=filenames_pair,
+            baseline_path=baseline_path,
+            target_path=target_path,
+            token_aligner_plan=token_aligner_plan,
+            diff_threshold=diff_threshold,
+        )
+
+    return result.model_copy(update={"warnings": collected_warnings})
+
+
+def _compare_bundle_pair_raw(
     *,
     name: str,
     filenames_pair: Pair[list[str]],
@@ -48,7 +71,7 @@ def compare_bundle_pair(
 
     if not valid_pair.x or not valid_pair.y:
         reason = "baseline_load_failed" if not valid_pair.x else "target_load_failed"
-        return SkipRecord(name=name, reason=reason, align_warnings=[])
+        return SkipRecord(name=name, reason=reason)
 
     # 2. Plan (meta only, no tensor)
     metas_pair: Pair[list[dict[str, Any]]] = valid_pair.map(
@@ -70,9 +93,7 @@ def compare_bundle_pair(
         assert aligner_result.failed_side_xy is not None
         side_name: str = _FAILED_SIDE_MAP[aligner_result.failed_side_xy]
         reason = f"{side_name}_load_failed"
-        return SkipRecord(
-            name=name, reason=reason, align_warnings=aligner_result.warnings
-        )
+        return SkipRecord(name=name, reason=reason)
 
     # 4. Compare
     info = compare_tensor_pair(
@@ -81,7 +102,7 @@ def compare_bundle_pair(
         name=name,
         diff_threshold=diff_threshold,
     )
-    return ComparisonRecord(**info.model_dump(), align_warnings=aligner_result.warnings)
+    return ComparisonRecord(**info.model_dump())
 
 
 def _load_valid_tensors(filenames: list[str], base_path: Path) -> list[ValueWithMeta]:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
 from typing import Optional
 
@@ -24,6 +23,12 @@ from sglang.srt.debug_utils.comparator.aligner.unsharder.parallel_info import (
     normalize_parallel_info,
 )
 from sglang.srt.debug_utils.comparator.dims import ParallelAxis
+from sglang.srt.debug_utils.comparator.output_types import (
+    AuxNoDimsWarning,
+    LayoutDetectionFallbackWarning,
+    RidsMismatchWarning,
+)
+from sglang.srt.debug_utils.comparator.warning_sink import warning_sink
 from sglang.srt.debug_utils.dump_loader import ValueWithMeta, filter_rows
 
 _AUX_NAMES_BY_FRAMEWORK: dict[str, frozenset[str]] = {
@@ -146,9 +151,7 @@ def _detect_layout(raw: dict[int, dict[str, object]], framework: str) -> str:
     return "thd"
 
 
-def _load_rids(
-    *, step: int, df: pl.DataFrame, dump_path: Path
-) -> Optional[object]:
+def _load_rids(*, step: int, df: pl.DataFrame, dump_path: Path) -> Optional[object]:
     """Load rids for a step, validating consistency across ranks."""
     rows = filter_rows(df, conditions={"name": "rids", "step": step})
     if not rows:
@@ -162,9 +165,12 @@ def _load_rids(
         first_value = loaded[0].value
         for i, item in enumerate(loaded[1:], start=1):
             if item.value != first_value:
-                warnings.warn(
-                    f"rids mismatch across ranks: rank 0 has {first_value}, "
-                    f"rank {i} has {item.value}"
+                warning_sink.add(
+                    RidsMismatchWarning(
+                        rank_index=i,
+                        rank_0_value=str(first_value),
+                        mismatching_value=str(item.value),
+                    )
                 )
                 break
 
@@ -200,14 +206,11 @@ def _load_and_align_aux_tensor(
     if dims_str is not None:
         effective_metas: list[dict] = [{**m, "dims": dims_str} for m in metas]
         sub_plans = compute_per_step_sub_plans(metas=effective_metas)
-        result, _ = execute_sub_plans(tensors=tensors, plans=sub_plans)
+        result = execute_sub_plans(tensors=tensors, plans=sub_plans)
         assert result is not None
         return result
 
-    warnings.warn(
-        f"aux tensor '{name}' has {len(tensors)} ranks but no dims metadata, "
-        f"using rank 0 only"
-    )
+    warning_sink.add(AuxNoDimsWarning(tensor_name=name, num_ranks=len(tensors)))
     return tensors[0]
 
 
@@ -283,10 +286,7 @@ def _detect_layout_megatron(raw: dict[int, dict[str, object]]) -> str:
         if isinstance(input_ids, torch.Tensor) and input_ids.ndim == 2:
             raise NotImplementedError(_BSHD_NOT_SUPPORTED_MSG)
 
-    warnings.warn(
-        "Megatron layout detection: no qkv_format or 2D input_ids found, "
-        "falling back to thd"
-    )
+    warning_sink.add(LayoutDetectionFallbackWarning())
     return "thd"
 
 

@@ -21,13 +21,16 @@ from sglang.srt.debug_utils.comparator.bundle_matcher import (
     match_bundles,
 )
 from sglang.srt.debug_utils.comparator.output_types import (
+    AnyWarning,
     ComparisonRecord,
     ConfigRecord,
     SkipRecord,
     SummaryRecord,
+    WarningRecord,
     print_record,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
+from sglang.srt.debug_utils.comparator.warning_sink import warning_sink
 from sglang.srt.debug_utils.dump_loader import read_meta
 
 
@@ -42,8 +45,15 @@ def run(args: argparse.Namespace) -> None:
         output_format=args.output_format,
     )
 
-    dfs: Pair[pl.DataFrame] = _read_df(args)
+    def _print_warning(warning: AnyWarning) -> None:
+        print_record(
+            WarningRecord(warnings=[warning]),
+            output_format=args.output_format,
+        )
 
+    warning_sink.set_fallback(_print_warning)
+
+    dfs: Pair[pl.DataFrame] = _read_df(args)
     token_aligner_plan = compute_maybe_token_aligner_plan(args, dfs)
 
     dfs = dfs.map(lambda df: df.filter(~pl.col("name").is_in(AUX_NAMES)))
