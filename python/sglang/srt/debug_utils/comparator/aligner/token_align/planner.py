@@ -10,7 +10,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
 from sglang.srt.debug_utils.comparator.utils import Pair
 
 
-def compute_alignment_plan(
+def compute_token_align_plan(
     seqs_info_pair: Pair[SeqsInfo],
 ) -> TokenAlignPlan:
     """Compute a token alignment plan from two side token seqs_info_pair."""

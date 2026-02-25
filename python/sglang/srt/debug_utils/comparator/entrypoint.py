@@ -7,7 +7,7 @@ from typing import Iterator, Optional, Union
 import polars as pl
 
 from sglang.srt.debug_utils.comparator.aligner.token_align.entrypoint import (
-    compute_maybe_alignment_plan,
+    compute_maybe_token_align_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
     TokenAlignPlan,
@@ -38,7 +38,7 @@ def run(args: argparse.Namespace) -> None:
 
     df_baseline, df_target = _read_df(args)
 
-    alignment_plan = compute_maybe_alignment_plan(args, df_baseline, df_target)
+    token_align_plan = compute_maybe_token_align_plan(args, df_baseline, df_target)
 
     bundle_pairs: list[Pair[TensorBundleInfo]] = match_bundles(
         df_baseline=df_baseline, df_target=df_target, skip_keys=_compute_skip_keys(args)
@@ -48,7 +48,7 @@ def run(args: argparse.Namespace) -> None:
         bundle_pairs=bundle_pairs,
         baseline_path=Path(args.baseline_path),
         target_path=Path(args.target_path),
-        alignment_plan=alignment_plan,
+        token_align_plan=token_align_plan,
         diff_threshold=args.diff_threshold,
     )
     _consume_comparison_records(
@@ -82,7 +82,7 @@ def _execute_compare_bundle_pair(
     bundle_pairs: list[Pair[TensorBundleInfo]],
     baseline_path: Path,
     target_path: Path,
-    alignment_plan: Optional[TokenAlignPlan],
+    token_align_plan: Optional[TokenAlignPlan],
     diff_threshold: float,
 ) -> Iterator[Union[ComparisonRecord, SkipRecord]]:
     for pair in bundle_pairs:
@@ -93,7 +93,7 @@ def _execute_compare_bundle_pair(
             bundles=pair,
             baseline_path=baseline_path,
             target_path=target_path,
-            token_align_plan=alignment_plan,
+            token_align_plan=token_align_plan,
             diff_threshold=diff_threshold,
         )
 
