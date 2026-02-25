@@ -7,6 +7,12 @@ from typing import Optional
 import polars as pl
 import torch
 
+from sglang.srt.debug_utils.comparator.aligner.entrypoint.executor import (
+    execute_sub_plans,
+)
+from sglang.srt.debug_utils.comparator.aligner.entrypoint.planner import (
+    compute_per_step_sub_plans,
+)
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     ExternalSeqId,
     MegatronSeqId,
@@ -14,16 +20,10 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignerGlobalAux,
     TokenAlignerStepAux,
 )
-from sglang.srt.debug_utils.comparator.aligner.unsharder.executor import (
-    execute_unsharder_plan,
-)
 from sglang.srt.debug_utils.comparator.aligner.unsharder.parallel_info import (
     normalize_parallel_info,
 )
-from sglang.srt.debug_utils.comparator.aligner.unsharder.planner import (
-    compute_unsharder_plan,
-)
-from sglang.srt.debug_utils.comparator.dims import parse_dims
+from sglang.srt.debug_utils.comparator.dims import ParallelAxis
 from sglang.srt.debug_utils.dump_loader import ValueWithMeta, filter_rows
 
 _AUX_NAMES_BY_FRAMEWORK: dict[str, frozenset[str]] = {
@@ -35,6 +35,11 @@ _AUX_NAMES_BY_FRAMEWORK: dict[str, frozenset[str]] = {
     ),
 }
 AUX_NAMES: frozenset[str] = frozenset().union(*_AUX_NAMES_BY_FRAMEWORK.values())
+
+_CP_SHARDED_AUX_NAMES: dict[str, frozenset[str]] = {
+    "sglang": frozenset({"input_ids", "positions"}),
+    "megatron": frozenset({"input_ids", "position_ids"}),
+}
 
 
 # ── framework-agnostic ──────────────────────────────────────────────
@@ -58,7 +63,8 @@ def load_and_normalize_aux(
         step_data: dict[str, object] = {}
         for name in available_names:
             tensor = _load_and_unshard_aux_tensor(
-                name=name, step=step, df=df, dump_path=dump_path
+                name=name, step=step, df=df, dump_path=dump_path,
+                framework=framework,
             )
             if tensor is not None:
                 step_data[name] = tensor
@@ -120,9 +126,9 @@ def _detect_layout(raw: dict[int, dict[str, object]], framework: str) -> str:
 
 
 def _load_and_unshard_aux_tensor(
-    *, name: str, step: int, df: pl.DataFrame, dump_path: Path
+    *, name: str, step: int, df: pl.DataFrame, dump_path: Path, framework: str
 ) -> Optional[object]:
-    """Load an auxiliary tensor for (name, step), unshard if needed."""
+    """Load an auxiliary tensor for (name, step), unshard+reorder if needed."""
     rows = filter_rows(df, conditions={"name": name, "step": step})
     if not rows:
         return None
@@ -153,26 +159,41 @@ def _load_and_unshard_aux_tensor(
         return tensors[0]
 
     metas: list[dict] = [item.meta for item in loaded]
-    dims_str = metas[0].get("dims")
+    dims_str: Optional[str] = metas[0].get("dims") or _infer_aux_dims(
+        name=name, framework=framework, metas=metas
+    )
+
     if dims_str is not None:
-        dim_specs = parse_dims(dims_str)
-        parallel_infos = [normalize_parallel_info(m) for m in metas]
-        plans = compute_unsharder_plan(
-            dim_specs=dim_specs, parallel_infos=parallel_infos
-        )
-
-        current = tensors
-        for plan in plans:
-            current, _ = execute_unsharder_plan(plan, current)
-
-        assert len(current) == 1
-        return current[0]
+        effective_metas: list[dict] = [{**m, "dims": dims_str} for m in metas]
+        sub_plans = compute_per_step_sub_plans(metas=effective_metas)
+        result, _ = execute_sub_plans(tensors=tensors, plans=sub_plans)
+        assert result is not None
+        return result
 
     warnings.warn(
         f"aux tensor '{name}' has {len(tensors)} ranks but no dims metadata, "
         f"using rank 0 only"
     )
     return tensors[0]
+
+
+def _infer_aux_dims(
+    *, name: str, framework: str, metas: list[dict]
+) -> Optional[str]:
+    """Infer dims for aux tensors lacking explicit dims metadata."""
+    parallel_infos = [normalize_parallel_info(m) for m in metas]
+    has_cp: bool = any(ParallelAxis.CP in info for info in parallel_infos)
+    if not has_cp:
+        return None
+
+    if name in _CP_SHARDED_AUX_NAMES.get(framework, frozenset()):
+        raise NotImplementedError(
+            f"Aux tensor '{name}' is CP-sharded but reorderer does not yet support "
+            f"zigzag reordering on the 't' dimension. "
+            f"Pass explicit dims= at dump time or wait for t-dim zigzag support."
+        )
+
+    return None
 
 
 def _normalize_step(
