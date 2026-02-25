@@ -84,8 +84,8 @@ def compare_bundle_pair(
         )
 
     info = compare_tensor_pair(
-        x_baseline=combined_b,
-        x_target=combined_t,
+        x_baseline=combined.x,
+        x_target=combined.y,
         name=name,
         diff_threshold=diff_threshold,
     )
