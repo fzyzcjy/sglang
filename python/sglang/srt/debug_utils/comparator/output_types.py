@@ -56,11 +56,7 @@ class ConfigRecord(_OutputRecord):
         return cls(config=vars(args))
 
     def _format_body(self) -> str:
-        return (
-            f"Config: baseline={self.config.get('baseline_path')} target={self.config.get('target_path')}\n"
-            f"diff_threshold={self.config.get('diff_threshold')} "
-            f"steps=[{self.config.get('start_step')}, {self.config.get('end_step')}]"
-        )
+        return f"Config: {self.config}"
 
 
 class SkipRecord(_OutputRecord):
