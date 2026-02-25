@@ -29,13 +29,12 @@ def compute_aligner_plan(
     token_aligner_plan: Optional[TokenAlignerPlan],
 ) -> AlignerPlan:
     return AlignerPlan(
-        per_step_plans=metas_pair.map(lambda metas: _compute_side_plans(metas=metas)),
+        per_step_plans=metas_pair.map(lambda metas: _compute_per_step_plans(metas=metas)),
         token_aligner_plan=token_aligner_plan,
     )
 
 
-def _compute_side_plans(metas: list[dict[str, Any]]) -> list[AlignerPerStepPlan]:
-    """Group by step, compute unshard + reorder plans for each group."""
+def _compute_per_step_plans(metas: list[dict[str, Any]]) -> list[AlignerPerStepPlan]:
     step_to_indices: dict[int, list[int]] = {}
     for i, meta in enumerate(metas):
         step: int = int(meta["step"])
