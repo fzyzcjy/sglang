@@ -62,7 +62,7 @@ def load_and_normalize_aux(
     for step in step_values:
         step_data: dict[str, object] = {}
         for name in available_names:
-            tensor = _load_and_unshard_aux_tensor(
+            tensor = _load_and_align_aux_tensor(
                 name=name, step=step, df=df, dump_path=dump_path,
                 framework=framework,
             )
@@ -125,10 +125,10 @@ def _detect_layout(raw: dict[int, dict[str, object]], framework: str) -> str:
     return "thd"
 
 
-def _load_and_unshard_aux_tensor(
+def _load_and_align_aux_tensor(
     *, name: str, step: int, df: pl.DataFrame, dump_path: Path, framework: str
 ) -> Optional[object]:
-    """Load an auxiliary tensor for (name, step), unshard+reorder if needed."""
+    """Load an auxiliary tensor for (name, step), align if needed."""
     rows = filter_rows(df, conditions={"name": name, "step": step})
     if not rows:
         return None

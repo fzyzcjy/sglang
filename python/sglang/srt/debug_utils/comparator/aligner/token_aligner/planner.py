@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import Optional
 
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignerPlan,
@@ -61,90 +62,81 @@ def compute_token_aligner_plan(
 
 
 # ---------------------------------------------------------------------------
-# Sequence matching
+# Sequence matching: for each y sequence, find a matching x sequence.
 # ---------------------------------------------------------------------------
 
 
 def _match_sequences(
     seqs: Pair[dict[int, TokenAlignerSeqInfo]],
 ) -> list[tuple[int, int]]:
-    """Two-pass sequence matching: exact then prefix."""
-    matched_seq_id_pairs: list[tuple[int, int]] = []
-    unmatched_seq_ids: Pair[set[int]] = seqs.map(lambda d: set(d.keys()))
+    """For each y (target) sequence, find a matching x (baseline) sequence.
 
-    _match_sequences_exact(
-        seqs=seqs,
-        matched_seq_id_pairs=matched_seq_id_pairs,
-        unmatched_seq_ids=unmatched_seq_ids,
-    )
-    _match_sequences_prefix(
-        seqs=seqs,
-        matched_seq_id_pairs=matched_seq_id_pairs,
-        unmatched_seq_ids=unmatched_seq_ids,
-    )
+    Two-pass: exact match first, then prefix match for remaining.
+    """
+    x_lookup: dict[tuple[int, ...], list[int]] = defaultdict(list)
+    for seq_id, rec in seqs.x.items():
+        x_lookup[tuple(rec.input_ids)].append(seq_id)
+
+    claimed_x_ids: set[int] = set()
+    matched_seq_id_pairs: list[tuple[int, int]] = []
+
+    for seq_id_y in sorted(seqs.y.keys()):
+        seq_y: TokenAlignerSeqInfo = seqs.y[seq_id_y]
+
+        matched_x: Optional[int] = _find_matching_x_exact(
+            seq_y=seq_y, x_lookup=x_lookup, claimed_x_ids=claimed_x_ids
+        )
+        if matched_x is None:
+            matched_x = _find_matching_x_prefix(
+                seq_y=seq_y, x_seqs=seqs.x, claimed_x_ids=claimed_x_ids
+            )
+
+        if matched_x is not None:
+            matched_seq_id_pairs.append((matched_x, seq_id_y))
+            claimed_x_ids.add(matched_x)
 
     return matched_seq_id_pairs
 
 
-def _match_sequences_exact(
+def _find_matching_x_exact(
     *,
-    seqs: Pair[dict[int, TokenAlignerSeqInfo]],
-    matched_seq_id_pairs: list[tuple[int, int]],
-    unmatched_seq_ids: Pair[set[int]],
-) -> None:
-    """Pass 1: match sequences with identical input_ids."""
-    y_lookup: dict[tuple[int, ...], list[int]] = defaultdict(list)
-    for seq_id, rec in seqs.y.items():
-        y_lookup[tuple(rec.input_ids)].append(seq_id)
+    seq_y: TokenAlignerSeqInfo,
+    x_lookup: dict[tuple[int, ...], list[int]],
+    claimed_x_ids: set[int],
+) -> Optional[int]:
+    """Find an x sequence with identical input_ids."""
+    ids_y_key: tuple[int, ...] = tuple(seq_y.input_ids)
+    candidates: list[int] = x_lookup.get(ids_y_key, [])
+    for candidate in candidates:
+        if candidate not in claimed_x_ids:
+            return candidate
+    return None
 
-    for seq_id_x in sorted(seqs.x.keys()):
-        if seq_id_x not in unmatched_seq_ids.x:
+
+def _find_matching_x_prefix(
+    *,
+    seq_y: TokenAlignerSeqInfo,
+    x_seqs: dict[int, TokenAlignerSeqInfo],
+    claimed_x_ids: set[int],
+) -> Optional[int]:
+    """Find the best x sequence whose input_ids form a prefix relationship with y.
+
+    Picks the candidate with the longest overlapping prefix.
+    """
+    ids_y: list[int] = seq_y.input_ids
+    best_match: Optional[int] = None
+    best_len: int = 0
+
+    for seq_id_x, seq_x in x_seqs.items():
+        if seq_id_x in claimed_x_ids:
             continue
-        ids_x_key: tuple[int, ...] = tuple(seqs.x[seq_id_x].input_ids)
-        candidates: list[int] = y_lookup.get(ids_x_key, [])
-        for candidate in candidates:
-            if candidate in unmatched_seq_ids.y:
-                matched_seq_id_pairs.append((seq_id_x, candidate))
-                unmatched_seq_ids.x.discard(seq_id_x)
-                unmatched_seq_ids.y.discard(candidate)
-                break
 
+        ids_x: list[int] = seq_x.input_ids
+        shorter: list[int] = ids_x if len(ids_x) <= len(ids_y) else ids_y
+        longer: list[int] = ids_y if len(ids_x) <= len(ids_y) else ids_x
 
-def _match_sequences_prefix(
-    *,
-    seqs: Pair[dict[int, TokenAlignerSeqInfo]],
-    matched_seq_id_pairs: list[tuple[int, int]],
-    unmatched_seq_ids: Pair[set[int]],
-) -> None:
-    """Pass 2: match remaining sequences by longest prefix (longest-first)."""
-    remaining_x: list[int] = sorted(
-        unmatched_seq_ids.x,
-        key=lambda s: len(seqs.x[s].input_ids),
-        reverse=True,
-    )
-    remaining_y_by_len: list[tuple[int, list[int]]] = sorted(
-        [(s, seqs.y[s].input_ids) for s in unmatched_seq_ids.y],
-        key=lambda t: len(t[1]),
-        reverse=True,
-    )
+        if longer[: len(shorter)] == shorter and len(shorter) > best_len:
+            best_match = seq_id_x
+            best_len = len(shorter)
 
-    for seq_id_x in remaining_x:
-        ids_x: list[int] = seqs.x[seq_id_x].input_ids
-        best_match: int | None = None
-        best_len: int = 0
-
-        for seq_id_y, ids_y in remaining_y_by_len:
-            if seq_id_y not in unmatched_seq_ids.y:
-                continue
-
-            shorter: list[int] = ids_x if len(ids_x) <= len(ids_y) else ids_y
-            longer: list[int] = ids_y if len(ids_x) <= len(ids_y) else ids_x
-
-            if longer[: len(shorter)] == shorter and len(shorter) > best_len:
-                best_match = seq_id_y
-                best_len = len(shorter)
-
-        if best_match is not None:
-            matched_seq_id_pairs.append((seq_id_x, best_match))
-            unmatched_seq_ids.x.discard(seq_id_x)
-            unmatched_seq_ids.y.discard(best_match)
+    return best_match
