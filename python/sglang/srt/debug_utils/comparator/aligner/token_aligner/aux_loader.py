@@ -67,6 +67,11 @@ class _AuxPlugin(ABC):
         self, step_data: dict[str, object], *, layout: str, step: int
     ) -> TokenAlignerStepAux: ...
 
+    @abstractmethod
+    def has_required_names(self, names: set[str]) -> bool:
+        """Whether the minimum set of aux names needed for alignment is present."""
+        ...
+
     @property
     def all_names(self) -> frozenset[str]:
         return self.tensor_names | self.non_tensor_names
@@ -95,6 +100,9 @@ class _SGLangPlugin(_AuxPlugin):
     @property
     def discriminating_names(self) -> frozenset[str]:
         return frozenset({"seq_lens", "positions", "req_pool_indices", "rids"})
+
+    def has_required_names(self, names: set[str]) -> bool:
+        return "input_ids" in names and "seq_lens" in names
 
     def detect_layout(self, raw: dict[int, dict[str, object]]) -> str:
         return "thd"
@@ -157,6 +165,9 @@ class _MegatronPlugin(_AuxPlugin):
     @property
     def discriminating_names(self) -> frozenset[str]:
         return frozenset({"cu_seqlens_q", "cu_seqlens_kv", "qkv_format"})
+
+    def has_required_names(self, names: set[str]) -> bool:
+        return "input_ids" in names and "cu_seqlens_q" in names
 
     def detect_layout(self, raw: dict[int, dict[str, object]]) -> str:
         for step_data in raw.values():
@@ -264,9 +275,7 @@ def load_and_normalize_aux(
 def has_aux_tensors(df: pl.DataFrame) -> bool:
     """Check if the DataFrame contains the minimum auxiliary tensors for alignment."""
     names: set[str] = set(df["name"].unique().to_list())
-    has_input_ids: bool = "input_ids" in names
-    has_seq_info: bool = ("seq_lens" in names) or ("cu_seqlens_q" in names)
-    return has_input_ids and has_seq_info
+    return any(plugin.has_required_names(names) for plugin in _plugins)
 
 
 def _detect_plugin(df: pl.DataFrame, dump_path: Path) -> Optional[_AuxPlugin]:
