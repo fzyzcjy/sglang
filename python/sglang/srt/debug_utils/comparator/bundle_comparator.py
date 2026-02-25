@@ -48,7 +48,7 @@ def compare_bundle_pair(
         reason = "baseline_load_failed" if not valid_pair.x else "target_load_failed"
         return SkipRecord(name=name, reason=reason, align_warnings=[])
 
-    # 2. Plan (meta only)
+    # 2. Plan (meta only, no tensor)
     metas_pair: Pair[list[dict[str, Any]]] = valid_pair.map(
         lambda items: [it.meta for it in items]
     )
@@ -56,7 +56,7 @@ def compare_bundle_pair(
         metas_pair=metas_pair, token_aligner_plan=token_aligner_plan
     )
 
-    # 3. Execute (tensor + plan only)
+    # 3. Execute (tensor + plan only, no meta)
     tensors_pair: Pair[list[torch.Tensor]] = valid_pair.map(
         lambda items: [it.value for it in items]
     )
