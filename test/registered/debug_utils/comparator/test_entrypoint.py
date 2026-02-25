@@ -738,7 +738,7 @@ class TestEntrypointGroupingLogical:
         assert comp.name == "hidden"
 
     def test_cp_tp_different_sizes(self, tmp_path, capsys):
-        """Baseline CP=2+TP=2 vs target CP=1+TP=4: both sides independently unshard."""
+        """Baseline CP=2+TP=2 vs target CP=1+TP=4: both sides independently unsharder."""
         torch.manual_seed(42)
         full_baseline = torch.randn(4, 8, 16)
         full_target = full_baseline + torch.randn(4, 8, 16) * 0.001

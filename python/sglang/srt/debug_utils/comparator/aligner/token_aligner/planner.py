@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     SeqInfo,
     SeqsInfo,
     TokenAlignPlan,

@@ -2,10 +2,10 @@ import sys
 
 import pytest
 
-from sglang.srt.debug_utils.comparator.aligner.unshard.planner import (
+from sglang.srt.debug_utils.comparator.aligner.unsharder.planner import (
     compute_unshard_plan,
 )
-from sglang.srt.debug_utils.comparator.aligner.unshard.types import (
+from sglang.srt.debug_utils.comparator.aligner.unsharder.types import (
     AxisInfo,
     ConcatParams,
     PickParams,

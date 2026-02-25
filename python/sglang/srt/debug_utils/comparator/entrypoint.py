@@ -6,13 +6,13 @@ from typing import Iterator, Optional, Union
 
 import polars as pl
 
-from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.aux_loader import (
     AUX_NAMES,
 )
-from sglang.srt.debug_utils.comparator.aligner.token_align.entrypoint import (
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.entrypoint import (
     compute_maybe_token_align_plan,
 )
-from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignPlan,
 )
 from sglang.srt.debug_utils.comparator.bundle_comparator import compare_bundle_pair

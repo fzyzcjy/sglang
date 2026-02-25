@@ -3,15 +3,15 @@ import sys
 import pytest
 import torch
 
-from sglang.srt.debug_utils.comparator.aligner.unshard.executor import (
+from sglang.srt.debug_utils.comparator.aligner.unsharder.executor import (
     _apply_unshard,
     _verify_replicated_group,
     execute_unshard_plan,
 )
-from sglang.srt.debug_utils.comparator.aligner.unshard.planner import (
+from sglang.srt.debug_utils.comparator.aligner.unsharder.planner import (
     compute_unshard_plan,
 )
-from sglang.srt.debug_utils.comparator.aligner.unshard.types import (
+from sglang.srt.debug_utils.comparator.aligner.unsharder.types import (
     AxisInfo,
     PickParams,
 )

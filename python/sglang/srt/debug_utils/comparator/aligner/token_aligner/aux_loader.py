@@ -7,18 +7,18 @@ from typing import Optional
 import polars as pl
 import torch
 
-from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     ExternalSeqId,
     StepAux,
     TokenAlignGlobalAux,
 )
-from sglang.srt.debug_utils.comparator.aligner.unshard.executor import (
+from sglang.srt.debug_utils.comparator.aligner.unsharder.executor import (
     execute_unshard_plan,
 )
-from sglang.srt.debug_utils.comparator.aligner.unshard.parallel_info import (
+from sglang.srt.debug_utils.comparator.aligner.unsharder.parallel_info import (
     normalize_parallel_info,
 )
-from sglang.srt.debug_utils.comparator.aligner.unshard.planner import (
+from sglang.srt.debug_utils.comparator.aligner.unsharder.planner import (
     compute_unshard_plan,
 )
 from sglang.srt.debug_utils.comparator.dims import parse_dims

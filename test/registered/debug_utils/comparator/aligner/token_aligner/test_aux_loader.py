@@ -3,12 +3,12 @@ import sys
 import pytest
 import torch
 
-from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.aux_loader import (
     _infer_positions,
     _normalize_megatron,
     _normalize_sglang,
 )
-from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     StepAux,
 )
 from sglang.test.ci.ci_register import register_cpu_ci

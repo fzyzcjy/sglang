@@ -2,7 +2,7 @@ from typing import Literal
 
 import torch
 
-from sglang.srt.debug_utils.comparator.aligner.unshard.types import AxisInfo
+from sglang.srt.debug_utils.comparator.aligner.unsharder.types import AxisInfo
 from sglang.srt.debug_utils.comparator.dims import DimSpec, Ordering, ParallelAxis
 from sglang.srt.debug_utils.comparator.utils import _FrozenBase
 

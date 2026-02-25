@@ -1,7 +1,7 @@
 from collections import defaultdict
 from typing import NamedTuple
 
-from sglang.srt.debug_utils.comparator.aligner.unshard.types import (
+from sglang.srt.debug_utils.comparator.aligner.unsharder.types import (
     AxisInfo,
     ConcatParams,
     PickParams,

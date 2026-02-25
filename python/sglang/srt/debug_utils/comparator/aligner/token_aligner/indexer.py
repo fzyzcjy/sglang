@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     ExternalSeqId,
     SeqInfo,
     SeqsInfo,

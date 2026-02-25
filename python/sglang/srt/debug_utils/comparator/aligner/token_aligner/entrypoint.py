@@ -7,17 +7,17 @@ from typing import Optional
 
 import polars as pl
 
-from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.aux_loader import (
     has_aux_tensors,
     load_and_normalize_aux,
 )
-from sglang.srt.debug_utils.comparator.aligner.token_align.indexer import (
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.indexer import (
     build_seqs_info,
 )
-from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.planner import (
     compute_token_align_plan,
 )
-from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     SeqsInfo,
     TokenAlignGlobalAux,
     TokenAlignPlan,
