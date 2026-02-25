@@ -16,11 +16,27 @@ def execute_token_align(
         empty: torch.Tensor = torch.empty(empty_shape, dtype=dummy.dtype)
         return Pair(x=empty, y=empty.clone())
 
-    tokens_x: list[torch.Tensor] = [
-        tensor_of_step_pair.x[s][i] for s, i in zip(plan.match_steps.x, plan.match_indices.x)
-    ]
-    tokens_y: list[torch.Tensor] = [
-        tensor_of_step_pair.y[s][i] for s, i in zip(plan.match_steps.y, plan.match_indices.y)
-    ]
+    return Pair(
+        x=_extract_and_stack_tokens(
+            tensor_of_step=tensor_of_step_pair.x,
+            match_steps=plan.match_steps.x,
+            match_indices=plan.match_indices.x,
+        ),
+        y=_extract_and_stack_tokens(
+            tensor_of_step=tensor_of_step_pair.y,
+            match_steps=plan.match_steps.y,
+            match_indices=plan.match_indices.y,
+        ),
+    )
 
-    return Pair(x=torch.stack(tokens_x), y=torch.stack(tokens_y))
+
+def _extract_and_stack_tokens(
+    *,
+    tensor_of_step: dict[int, torch.Tensor],
+    match_steps: list[int],
+    match_indices: list[int],
+) -> torch.Tensor:
+    tokens: list[torch.Tensor] = [
+        tensor_of_step[s][i] for s, i in zip(match_steps, match_indices)
+    ]
+    return torch.stack(tokens)
