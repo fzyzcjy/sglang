@@ -1,13 +1,12 @@
 # comparator — Internal Architecture
 
-> This document describes internal implementation details for developers.
-> It is NOT user-facing documentation.
+> This document describes internal implementation details for developers. It is NOT user-facing documentation.
 
 ## Key Terms
 
 | Term                     | Definition                                                                                                                                            |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Tensor bundle**   | All dump files sharing the same logical tensor name. In `logical` mode this spans all ranks and steps; in `raw` mode it is per-rank.              |
+| **Tensor bundle**  | All dump files sharing the same logical tensor name. In `logical` mode this spans all ranks and steps; in `raw` mode it is per-rank.              |
 | **Unshard**        | Reassembling a sharded tensor from multiple ranks into one complete tensor, guided by `dims` annotations.                                           |
 | **Alignment plan** | A token-level mapping between two dumps with different batch compositions, built from aux tensors (`input_ids`, `positions`, `seq_lens`, etc.). |
 
