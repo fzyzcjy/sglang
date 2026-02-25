@@ -44,14 +44,14 @@ def _build_token_index(global_aux: TokenAlignerGlobalAux) -> dict[int, TokenAlig
 
         offset: int = 0
         for seq_index, slen in enumerate(seq_lens_list):
-            ext_id: ExternalSeqId = aux.seq_ids[seq_index]
+            ext_seq_id: ExternalSeqId = aux.seq_ids[seq_index]
 
-            if ext_id not in external_to_internal:
-                external_to_internal[ext_id] = next_internal_id
+            if ext_seq_id not in external_to_internal:
+                external_to_internal[ext_seq_id] = next_internal_id
                 accum[next_internal_id] = _SeqAccumulator()
                 next_internal_id += 1
 
-            internal_id: int = external_to_internal[ext_id]
+            internal_id: int = external_to_internal[ext_seq_id]
             acc: _SeqAccumulator = accum[internal_id]
 
             for j in range(slen):
