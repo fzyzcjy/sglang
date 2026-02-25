@@ -540,7 +540,7 @@ class TestEntrypointGroupingLogical:
         assert summary.skipped == 0
 
     def test_multi_step_tp(self, tmp_path, capsys):
-        """Two steps with TP=2 shards are concatenated into one comparison."""
+        """Two steps with TP=2 shards produce two per-step comparisons (no aux → no alignment)."""
         torch.manual_seed(42)
         full_tensor = torch.randn(4, 8)
 
@@ -570,13 +570,14 @@ class TestEntrypointGroupingLogical:
 
         records = _run_and_parse(args, capsys)
         comparisons = _get_comparisons(records)
-        assert len(comparisons) == 1
-        assert comparisons[0].baseline.shape == [8, 8]
+        assert len(comparisons) == 2
+        assert comparisons[0].baseline.shape == [4, 8]
+        assert comparisons[1].baseline.shape == [4, 8]
 
         summary = records[-1]
         assert isinstance(summary, SummaryRecord)
-        assert summary.total == 1
-        assert summary.passed == 1
+        assert summary.total == 2
+        assert summary.passed == 2
 
     def test_cp_axis_unshard(self, tmp_path, capsys):
         """CP-sharded tensors are correctly concatenated along the sequence dim."""
@@ -1060,19 +1061,17 @@ class TestEntrypointAlignment:
         records = _run_and_parse(args, capsys)
 
         comparisons = _get_comparisons(records)
-        # hidden_states + 4 aux tensors (input_ids, positions, seq_lens, req_pool_indices)
-        # rids is a non-tensor → SkipRecord
-        assert len(comparisons) == 5
-        hidden_comp = [c for c in comparisons if c.name == "hidden_states"]
-        assert len(hidden_comp) == 1
-        assert hidden_comp[0].diff is not None
-        assert hidden_comp[0].diff.passed
+        # AUX_NAMES are filtered out after plan computation → only hidden_states remains
+        assert len(comparisons) == 1
+        assert comparisons[0].name == "hidden_states"
+        assert comparisons[0].diff is not None
+        assert comparisons[0].diff.passed
 
         summary = records[-1]
         assert isinstance(summary, SummaryRecord)
-        assert summary.passed == 5
+        assert summary.passed == 1
         assert summary.failed == 0
-        assert summary.skipped == 1
+        assert summary.skipped == 0
 
     def test_sglang_vs_megatron_cross_framework(self, tmp_path, capsys):
         """SGLang 4-step thd baseline vs Megatron 1-step thd target align correctly."""
@@ -1176,21 +1175,20 @@ class TestEntrypointAlignment:
         records = _run_and_parse(args, capsys)
 
         comparisons = _get_comparisons(records)
-        hidden_comp = [c for c in comparisons if c.name == "hidden_states"]
-        assert len(hidden_comp) == 1
-        assert hidden_comp[0].diff is not None
-        assert hidden_comp[0].diff.passed
-
-        # cu_seqlens_q only in target → skipped
-        skips = [r for r in records if isinstance(r, SkipRecord)]
-        assert any(s.name == "cu_seqlens_q" for s in skips)
+        # AUX_NAMES filtered out → only hidden_states remains
+        assert len(comparisons) == 1
+        assert comparisons[0].name == "hidden_states"
+        assert comparisons[0].diff is not None
+        assert comparisons[0].diff.passed
 
         summary = records[-1]
         assert isinstance(summary, SummaryRecord)
-        assert summary.passed >= 1
+        assert summary.passed == 1
+        assert summary.failed == 0
+        assert summary.skipped == 0
 
     def test_alignment_fallback_when_no_aux(self, tmp_path, capsys):
-        """Without aux tensors, logical grouping skips alignment and concats steps."""
+        """Without aux tensors, logical grouping skips alignment and compares per-step."""
         baseline_path, target_path = _create_dumps(tmp_path, ["tensor_a"], num_steps=2)
         args = _make_args(baseline_path, target_path, grouping="logical")
 
@@ -1200,9 +1198,13 @@ class TestEntrypointAlignment:
         records = _parse_jsonl(captured.out)
         assert "skipping token alignment" in captured.err
 
+        comparisons = _get_comparisons(records)
+        assert len(comparisons) == 2
+
         summary = records[-1]
         assert isinstance(summary, SummaryRecord)
-        assert summary.total >= 1
+        assert summary.total == 2
+        assert summary.passed == 2
 
 
 # --------------------------- Assertion helpers -------------------

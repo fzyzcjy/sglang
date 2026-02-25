@@ -70,7 +70,8 @@ def compare_bundle_pair(
 
     if token_align_plan is not None:
         aligned: Pair[torch.Tensor] = execute_token_align(
-            plan=token_align_plan, tensors=Pair(x=tensors_b, y=tensors_t)
+            plan=token_align_plan,
+            tensor_of_step_pair=Pair(x=tensors_b, y=tensors_t),
         )
         combined_b, combined_t = aligned.x, aligned.y
     else:
