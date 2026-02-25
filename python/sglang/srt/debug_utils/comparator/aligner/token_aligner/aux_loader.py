@@ -236,14 +236,16 @@ def load_and_normalize_aux(
 
     steps_data: dict[int, dict[str, object]] = {}
     for step in steps:
-        step_data = dict(_load_step_data(
-            step=step,
-            tensor_names=tensor_names,
-            non_tensor_names=non_tensor_names,
-            df=df,
-            dump_path=dump_path,
-            plugin=plugin,
-        ))
+        step_data = dict(
+            _load_step_data(
+                step=step,
+                tensor_names=tensor_names,
+                non_tensor_names=non_tensor_names,
+                df=df,
+                dump_path=dump_path,
+                plugin=plugin,
+            )
+        )
         if step_data:
             steps_data[step] = step_data
 
