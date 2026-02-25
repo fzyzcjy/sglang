@@ -73,15 +73,15 @@ def _match_sequences(
     unmatched_x: set[int] = set(seqs.x.keys())
     unmatched_y: set[int] = set(seqs.y.keys())
 
-    y_lookup: dict[tuple[int, ...], list[int]] = defaultdict(list)
+    y_seq_id_of_input_ids: dict[tuple[int, ...], list[int]] = defaultdict(list)
     for seq_id, rec in seqs.y.items():
-        y_lookup[tuple(rec.input_ids)].append(seq_id)
+        y_seq_id_of_input_ids[tuple(rec.input_ids)].append(seq_id)
 
     for seq_id_x in sorted(seqs.x.keys()):
         if seq_id_x not in unmatched_x:
             continue
         ids_x_key: tuple[int, ...] = tuple(seqs.x[seq_id_x].input_ids)
-        candidates: list[int] = y_lookup.get(ids_x_key, [])
+        candidates: list[int] = y_seq_id_of_input_ids.get(ids_x_key, [])
         for candidate in candidates:
             if candidate in unmatched_y:
                 matched_seq_id_pairs.append((seq_id_x, candidate))
