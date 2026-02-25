@@ -6,8 +6,8 @@ import pytest
 import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
-    AuxTensorsForStep,
-    SideAux,
+    StepAux,
+    TokenAlignGlobalAux,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.executor import (
     execute_alignment,
@@ -36,20 +36,20 @@ class TestExecuteAlignment:
         hidden_step0 = torch.randn(5, 8)  # 5 tokens, hidden_dim=8
         hidden_step1 = torch.randn(2, 8)  # 2 tokens
 
-        aux = AuxTensorsForStep(
+        aux = StepAux(
             input_ids=torch.tensor([10, 20, 30, 40, 50]),
             positions=torch.tensor([0, 1, 2, 0, 1]),
             seq_lens=torch.tensor([3, 2]),
             seq_ids=("A", "B"),
         )
-        aux_step1 = AuxTensorsForStep(
+        aux_step1 = StepAux(
             input_ids=torch.tensor([31, 51]),
             positions=torch.tensor([3, 2]),
             seq_lens=torch.tensor([1, 1]),
             seq_ids=("A", "B"),
         )
 
-        side_aux = SideAux(
+        side_aux = TokenAlignGlobalAux(
             steps={0: aux, 1: aux_step1},
             framework="sglang",
             layout="thd",

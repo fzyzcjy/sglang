@@ -25,7 +25,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
     AlignmentPlan,
     SeqsInfo,
-    SideAux,
+    TokenAlignGlobalAux,
 )
 from sglang.srt.debug_utils.comparator.output_types import (
     AlignWarning,
@@ -119,10 +119,10 @@ def _build_alignment_plan(
     baseline_path: Path = Path(args.baseline_path)
     target_path: Path = Path(args.target_path)
 
-    side_aux_baseline: SideAux = load_and_normalize_aux(
+    side_aux_baseline: TokenAlignGlobalAux = load_and_normalize_aux(
         dump_path=baseline_path, df=df_baseline
     )
-    side_aux_target: SideAux = load_and_normalize_aux(
+    side_aux_target: TokenAlignGlobalAux = load_and_normalize_aux(
         dump_path=target_path, df=df_target
     )
 

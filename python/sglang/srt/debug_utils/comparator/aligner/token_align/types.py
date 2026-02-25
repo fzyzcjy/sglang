@@ -12,7 +12,7 @@ ExternalSeqId = Union[str, tuple[int, int]]
 
 
 @dataclass(frozen=True)
-class AuxTensorsForStep:
+class StepAux:
     """Normalized auxiliary tensors for a single step (framework-agnostic)."""
 
     input_ids: torch.Tensor  # [T] (1D flat)
@@ -22,10 +22,10 @@ class AuxTensorsForStep:
 
 
 @dataclass(frozen=True)
-class SideAux:
+class TokenAlignGlobalAux:
     """Auxiliary tensors for one side across all steps + side-level metadata."""
 
-    steps: dict[int, AuxTensorsForStep]
+    steps: dict[int, StepAux]
     framework: str  # "sglang" | "megatron"
     layout: str  # "thd"
 

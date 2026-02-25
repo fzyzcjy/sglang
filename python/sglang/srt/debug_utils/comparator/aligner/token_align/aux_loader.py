@@ -8,9 +8,9 @@ import polars as pl
 import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
-    AuxTensorsForStep,
+    StepAux,
     ExternalSeqId,
-    SideAux,
+    TokenAlignGlobalAux,
 )
 from sglang.srt.debug_utils.comparator.aligner.unshard.executor import (
     execute_unshard_plan,
@@ -33,7 +33,7 @@ _MEGATRON_AUX_NAMES = frozenset(
 AUX_NAMES: frozenset[str] = _SGLANG_AUX_NAMES | _MEGATRON_AUX_NAMES
 
 
-def load_and_normalize_aux(dump_path: Path, df: pl.DataFrame) -> SideAux:
+def load_and_normalize_aux(dump_path: Path, df: pl.DataFrame) -> TokenAlignGlobalAux:
     """Bootstrap: load, unshard, and normalize auxiliary tensors for one side."""
     framework: str = _detect_framework(df, dump_path=dump_path)
     aux_names: frozenset[str] = (
@@ -56,13 +56,13 @@ def load_and_normalize_aux(dump_path: Path, df: pl.DataFrame) -> SideAux:
             raw[step] = step_data
 
     layout: str = _detect_layout(raw, framework)
-    steps: dict[int, AuxTensorsForStep] = {}
+    steps: dict[int, StepAux] = {}
     for step, step_data in raw.items():
         steps[step] = _normalize_step(
             step_data=step_data, framework=framework, layout=layout, step=step
         )
 
-    return SideAux(steps=steps, framework=framework, layout=layout)
+    return TokenAlignGlobalAux(steps=steps, framework=framework, layout=layout)
 
 
 def has_aux_tensors(df: pl.DataFrame) -> bool:
@@ -181,15 +181,15 @@ def _load_and_unshard_aux_tensor(
 
 def _normalize_step(
     *, step_data: dict[str, object], framework: str, layout: str, step: int
-) -> AuxTensorsForStep:
-    """Normalize raw loaded data into AuxTensorsForStep."""
+) -> StepAux:
+    """Normalize raw loaded data into StepAux."""
     if framework == "sglang":
         return _normalize_sglang(step_data, step=step)
     else:
         return _normalize_megatron(step_data, layout=layout, step=step)
 
 
-def _normalize_sglang(step_data: dict[str, object], *, step: int) -> AuxTensorsForStep:
+def _normalize_sglang(step_data: dict[str, object], *, step: int) -> StepAux:
     input_ids = step_data["input_ids"]
     positions = step_data["positions"]
     seq_lens = step_data["seq_lens"]
@@ -213,7 +213,7 @@ def _normalize_sglang(step_data: dict[str, object], *, step: int) -> AuxTensorsF
     else:
         seq_ids = tuple((step, i) for i in range(num_seqs))
 
-    return AuxTensorsForStep(
+    return StepAux(
         input_ids=input_ids,
         positions=positions,
         seq_lens=seq_lens,
@@ -223,7 +223,7 @@ def _normalize_sglang(step_data: dict[str, object], *, step: int) -> AuxTensorsF
 
 def _normalize_megatron(
     step_data: dict[str, object], *, layout: str, step: int
-) -> AuxTensorsForStep:
+) -> StepAux:
     input_ids: torch.Tensor = step_data["input_ids"]
 
     cu_seqlens_q = step_data.get("cu_seqlens_q")
@@ -243,7 +243,7 @@ def _normalize_megatron(
         (step, seq_index) for seq_index in range(num_seqs)
     )
 
-    return AuxTensorsForStep(
+    return StepAux(
         input_ids=input_ids,
         positions=positions,
         seq_lens=seq_lens,

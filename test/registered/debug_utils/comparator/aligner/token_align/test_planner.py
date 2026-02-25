@@ -4,8 +4,8 @@ import pytest
 import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
-    AuxTensorsForStep,
-    SideAux,
+    StepAux,
+    TokenAlignGlobalAux,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.indexer import (
     build_seqs_info,
@@ -28,9 +28,9 @@ class TestBuildTokenIndexSGLangThd:
 
     def test_single_step_prefill(self):
         """Single prefill step with two sequences."""
-        side_aux = SideAux(
+        side_aux = TokenAlignGlobalAux(
             steps={
-                0: AuxTensorsForStep(
+                0: StepAux(
                     input_ids=torch.tensor([10, 20, 30, 40, 50]),
                     positions=torch.tensor([0, 1, 2, 0, 1]),
                     seq_lens=torch.tensor([3, 2]),
@@ -57,15 +57,15 @@ class TestBuildTokenIndexSGLangThd:
 
     def test_multi_step_prefill_decode(self):
         """Prefill step followed by decode steps, sequences accumulate tokens."""
-        side_aux = SideAux(
+        side_aux = TokenAlignGlobalAux(
             steps={
-                0: AuxTensorsForStep(
+                0: StepAux(
                     input_ids=torch.tensor([10, 20, 30, 40, 50]),
                     positions=torch.tensor([0, 1, 2, 0, 1]),
                     seq_lens=torch.tensor([3, 2]),
                     seq_ids=("A", "B"),
                 ),
-                1: AuxTensorsForStep(
+                1: StepAux(
                     input_ids=torch.tensor([31, 51]),
                     positions=torch.tensor([3, 2]),
                     seq_lens=torch.tensor([1, 1]),
@@ -90,15 +90,15 @@ class TestBuildTokenIndexSGLangThd:
 
     def test_sequence_exit_and_join(self):
         """Sequence A exits, new sequence D joins with different seq_id."""
-        side_aux = SideAux(
+        side_aux = TokenAlignGlobalAux(
             steps={
-                0: AuxTensorsForStep(
+                0: StepAux(
                     input_ids=torch.tensor([10, 20, 30]),
                     positions=torch.tensor([0, 1, 2]),
                     seq_lens=torch.tensor([3]),
                     seq_ids=("A",),
                 ),
-                1: AuxTensorsForStep(
+                1: StepAux(
                     input_ids=torch.tensor([100, 200]),
                     positions=torch.tensor([0, 1]),
                     seq_lens=torch.tensor([2]),
@@ -114,15 +114,15 @@ class TestBuildTokenIndexSGLangThd:
 
     def test_different_seq_ids_produce_separate_sequences(self):
         """Different seq_ids at different steps → separate sequences."""
-        side_aux = SideAux(
+        side_aux = TokenAlignGlobalAux(
             steps={
-                0: AuxTensorsForStep(
+                0: StepAux(
                     input_ids=torch.tensor([10, 20]),
                     positions=torch.tensor([0, 1]),
                     seq_lens=torch.tensor([2]),
                     seq_ids=("A",),
                 ),
-                1: AuxTensorsForStep(
+                1: StepAux(
                     input_ids=torch.tensor([100, 200, 300]),
                     positions=torch.tensor([0, 1, 2]),
                     seq_lens=torch.tensor([3]),
@@ -148,9 +148,9 @@ class TestBuildTokenIndexMegatronThd:
 
     def test_single_step_two_sequences(self):
         """Single step with two sequences in thd layout."""
-        side_aux = SideAux(
+        side_aux = TokenAlignGlobalAux(
             steps={
-                0: AuxTensorsForStep(
+                0: StepAux(
                     input_ids=torch.tensor([10, 20, 30, 40, 50]),
                     positions=torch.tensor([0, 1, 2, 0, 1]),
                     seq_lens=torch.tensor([3, 2]),
@@ -177,15 +177,15 @@ class TestBuildTokenIndexMegatronThd:
 
     def test_multi_step_accumulation(self):
         """Two steps with different seq_ids produce separate sequences."""
-        side_aux = SideAux(
+        side_aux = TokenAlignGlobalAux(
             steps={
-                0: AuxTensorsForStep(
+                0: StepAux(
                     input_ids=torch.tensor([10, 20, 30, 40]),
                     positions=torch.tensor([0, 1, 0, 1]),
                     seq_lens=torch.tensor([2, 2]),
                     seq_ids=((0, 0), (0, 1)),
                 ),
-                1: AuxTensorsForStep(
+                1: StepAux(
                     input_ids=torch.tensor([50, 60, 70, 80]),
                     positions=torch.tensor([0, 1, 0, 1]),
                     seq_lens=torch.tensor([2, 2]),
@@ -277,15 +277,15 @@ class TestComputeAlignmentPlanCrossLayout:
 
     def test_thd_vs_thd_different_step_splits(self):
         """Two thd sides with same tokens but different step distributions."""
-        side_aux_a = SideAux(
+        side_aux_a = TokenAlignGlobalAux(
             steps={
-                0: AuxTensorsForStep(
+                0: StepAux(
                     input_ids=torch.tensor([10, 20]),
                     positions=torch.tensor([0, 1]),
                     seq_lens=torch.tensor([2]),
                     seq_ids=("X",),
                 ),
-                1: AuxTensorsForStep(
+                1: StepAux(
                     input_ids=torch.tensor([30]),
                     positions=torch.tensor([2]),
                     seq_lens=torch.tensor([1]),
@@ -295,9 +295,9 @@ class TestComputeAlignmentPlanCrossLayout:
             framework="sglang",
             layout="thd",
         )
-        side_aux_b = SideAux(
+        side_aux_b = TokenAlignGlobalAux(
             steps={
-                0: AuxTensorsForStep(
+                0: StepAux(
                     input_ids=torch.tensor([10, 20, 30]),
                     positions=torch.tensor([0, 1, 2]),
                     seq_lens=torch.tensor([3]),
@@ -316,15 +316,15 @@ class TestComputeAlignmentPlanCrossLayout:
 
     def test_sglang_vs_megatron_thd(self):
         """SGLang multi-step thd aligned with Megatron single-step thd."""
-        side_aux_a = SideAux(
+        side_aux_a = TokenAlignGlobalAux(
             steps={
-                0: AuxTensorsForStep(
+                0: StepAux(
                     input_ids=torch.tensor([10, 20, 30, 40, 50]),
                     positions=torch.tensor([0, 1, 2, 0, 1]),
                     seq_lens=torch.tensor([3, 2]),
                     seq_ids=("A", "B"),
                 ),
-                1: AuxTensorsForStep(
+                1: StepAux(
                     input_ids=torch.tensor([31, 51]),
                     positions=torch.tensor([3, 2]),
                     seq_lens=torch.tensor([1, 1]),
@@ -334,9 +334,9 @@ class TestComputeAlignmentPlanCrossLayout:
             framework="sglang",
             layout="thd",
         )
-        side_aux_b = SideAux(
+        side_aux_b = TokenAlignGlobalAux(
             steps={
-                0: AuxTensorsForStep(
+                0: StepAux(
                     input_ids=torch.tensor([10, 20, 30, 31, 40, 50, 51]),
                     positions=torch.tensor([0, 1, 2, 3, 0, 1, 2]),
                     seq_lens=torch.tensor([4, 3]),
