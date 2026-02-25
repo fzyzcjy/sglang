@@ -84,6 +84,24 @@ def load_and_normalize_aux(dump_path: Path, df: pl.DataFrame) -> SideAux:
     return SideAux(steps=steps, framework=framework, layout=layout)
 
 
+def has_aux_tensors(df: pl.DataFrame) -> bool:
+    """Check if the DataFrame contains the minimum auxiliary tensors for alignment."""
+    names: set[str] = set(df["name"].unique().to_list())
+    has_input_ids: bool = "input_ids" in names
+    has_seq_info: bool = ("seq_lens" in names) or ("cu_seqlens_q" in names)
+    return has_input_ids and has_seq_info
+
+
+def get_comparable_names(
+    *, df_baseline: pl.DataFrame, df_target: pl.DataFrame
+) -> list[str]:
+    """Get tensor names present in both sides, excluding auxiliary tensors."""
+    baseline_names: set[str] = set(df_baseline["name"].unique().to_list())
+    target_names: set[str] = set(df_target["name"].unique().to_list())
+    common: set[str] = (baseline_names & target_names) - AUX_NAMES
+    return sorted(common)
+
+
 def _detect_framework(df: pl.DataFrame, dump_path: Path) -> str:
     """Detect framework from tensor names or embedded metadata."""
     names: set[str] = set(df["name"].unique().to_list())

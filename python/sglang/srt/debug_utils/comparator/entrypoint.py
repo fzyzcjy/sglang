@@ -5,8 +5,9 @@ from pathlib import Path
 import polars as pl
 
 from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
-    AUX_NAMES,
     SideAux,
+    get_comparable_names,
+    has_aux_tensors,
     load_and_normalize_aux,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.executor import (
@@ -18,8 +19,8 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
     AlignmentPlan,
-    AlignmentSummary,
     SideTokenIndex,
+    format_alignment_summary,
 )
 from sglang.srt.debug_utils.comparator.output_types import (
     AlignWarning,
@@ -68,8 +69,8 @@ def run(args: argparse.Namespace) -> None:
 
     grouping: str = args.grouping
 
-    baseline_has_aux: bool = _has_aux_tensors(df_baseline)
-    target_has_aux: bool = _has_aux_tensors(df_target)
+    baseline_has_aux: bool = has_aux_tensors(df_baseline)
+    target_has_aux: bool = has_aux_tensors(df_target)
 
     if grouping == "logical" and baseline_has_aux and target_has_aux:
         _run_with_alignment(
@@ -150,9 +151,9 @@ def _run_with_alignment(
     plan: AlignmentPlan = compute_alignment_plan(
         index_a=index_baseline, index_b=index_target
     )
-    print(_format_alignment_summary(plan.summary), file=sys.stderr)
+    print(format_alignment_summary(plan.summary), file=sys.stderr)
 
-    comparable_names: list[str] = _get_comparable_names(
+    comparable_names: list[str] = get_comparable_names(
         df_baseline=df_baseline, df_target=df_target
     )
 
@@ -191,52 +192,6 @@ def _run_with_alignment(
         SummaryRecord(total=sum(counts.values()), **counts),
         output_format=args.output_format,
     )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _has_aux_tensors(df: pl.DataFrame) -> bool:
-    """Check if the DataFrame contains the minimum auxiliary tensors for alignment."""
-    names: set[str] = set(df["name"].unique().to_list())
-    has_input_ids: bool = "input_ids" in names
-    has_seq_info: bool = ("seq_lens" in names) or ("cu_seqlens_q" in names)
-    return has_input_ids and has_seq_info
-
-
-def _get_comparable_names(
-    *, df_baseline: pl.DataFrame, df_target: pl.DataFrame
-) -> list[str]:
-    """Get tensor names present in both sides, excluding auxiliary tensors."""
-    baseline_names: set[str] = set(df_baseline["name"].unique().to_list())
-    target_names: set[str] = set(df_target["name"].unique().to_list())
-    common: set[str] = (baseline_names & target_names) - AUX_NAMES
-    return sorted(common)
-
-
-def _format_alignment_summary(summary: AlignmentSummary) -> str:
-    lines: list[str] = [
-        "Alignment Summary:",
-        f"  Side A: {summary.side_a.framework} ({summary.side_a.layout}), "
-        f"{summary.side_a.num_sequences} sequences, "
-        f"{summary.side_a.num_tokens} tokens, "
-        f"{summary.side_a.num_steps} steps",
-        f"  Side B: {summary.side_b.framework} ({summary.side_b.layout}), "
-        f"{summary.side_b.num_sequences} sequences, "
-        f"{summary.side_b.num_tokens} tokens, "
-        f"{summary.side_b.num_steps} steps",
-        f"  Matched: {len(summary.sequence_matches)} sequence pairs, "
-        f"{summary.num_matched_tokens} tokens",
-    ]
-
-    if summary.unmatched_seq_ids_a:
-        lines.append(f"  Unmatched A: {summary.unmatched_seq_ids_a}")
-    if summary.unmatched_seq_ids_b:
-        lines.append(f"  Unmatched B: {summary.unmatched_seq_ids_b}")
-
-    return "\n".join(lines)
 
 
 def _parse_args() -> argparse.Namespace:

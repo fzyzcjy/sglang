@@ -63,3 +63,26 @@ class AlignmentPlan(_FrozenBase):
     layout_b: str
 
     summary: AlignmentSummary
+
+
+def format_alignment_summary(summary: AlignmentSummary) -> str:
+    lines: list[str] = [
+        "Alignment Summary:",
+        f"  Side A: {summary.side_a.framework} ({summary.side_a.layout}), "
+        f"{summary.side_a.num_sequences} sequences, "
+        f"{summary.side_a.num_tokens} tokens, "
+        f"{summary.side_a.num_steps} steps",
+        f"  Side B: {summary.side_b.framework} ({summary.side_b.layout}), "
+        f"{summary.side_b.num_sequences} sequences, "
+        f"{summary.side_b.num_tokens} tokens, "
+        f"{summary.side_b.num_steps} steps",
+        f"  Matched: {len(summary.sequence_matches)} sequence pairs, "
+        f"{summary.num_matched_tokens} tokens",
+    ]
+
+    if summary.unmatched_seq_ids_a:
+        lines.append(f"  Unmatched A: {summary.unmatched_seq_ids_a}")
+    if summary.unmatched_seq_ids_b:
+        lines.append(f"  Unmatched B: {summary.unmatched_seq_ids_b}")
+
+    return "\n".join(lines)
