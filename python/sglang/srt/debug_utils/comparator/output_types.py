@@ -1,7 +1,7 @@
 from abc import abstractmethod
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import Discriminator, Field, TypeAdapter
+from pydantic import Discriminator, Field, TypeAdapter, model_validator
 
 from sglang.srt.debug_utils.comparator.tensor_comparator.formatter import (
     format_comparison,
@@ -103,6 +103,15 @@ class SummaryRecord(_OutputRecord):
     passed: int
     failed: int
     skipped: int
+
+    @model_validator(mode="after")
+    def _validate_totals(self) -> "SummaryRecord":
+        expected: int = self.passed + self.failed + self.skipped
+        if self.total != expected:
+            raise ValueError(
+                f"total={self.total} != passed({self.passed}) + failed({self.failed}) + skipped({self.skipped}) = {expected}"
+            )
+        return self
 
     def _format_body(self) -> str:
         return (

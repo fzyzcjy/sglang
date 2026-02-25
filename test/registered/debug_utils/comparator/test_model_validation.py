@@ -36,7 +36,10 @@ class TestTokenAlignerStepAux:
             input_ids=[10, 20, 30],
             positions=[0, 1, 2],
             seq_lens=[2, 1],
-            seq_ids=[PositionalSeqId(step=0, seq_index=0), PositionalSeqId(step=0, seq_index=1)],
+            seq_ids=[
+                PositionalSeqId(step=0, seq_index=0),
+                PositionalSeqId(step=0, seq_index=1),
+            ],
         )
         assert len(aux.input_ids) == 3
 
@@ -46,7 +49,10 @@ class TestTokenAlignerStepAux:
                 input_ids=[10, 20, 30],
                 positions=[0, 1],
                 seq_lens=[2, 1],
-                seq_ids=[PositionalSeqId(step=0, seq_index=0), PositionalSeqId(step=0, seq_index=1)],
+                seq_ids=[
+                    PositionalSeqId(step=0, seq_index=0),
+                    PositionalSeqId(step=0, seq_index=1),
+                ],
             )
 
     def test_seq_length_mismatch(self):
@@ -64,7 +70,10 @@ class TestTokenAlignerStepAux:
                 input_ids=[10, 20, 30],
                 positions=[0, 1, 2],
                 seq_lens=[1, 1],
-                seq_ids=[PositionalSeqId(step=0, seq_index=0), PositionalSeqId(step=0, seq_index=1)],
+                seq_ids=[
+                    PositionalSeqId(step=0, seq_index=0),
+                    PositionalSeqId(step=0, seq_index=1),
+                ],
             )
 
 

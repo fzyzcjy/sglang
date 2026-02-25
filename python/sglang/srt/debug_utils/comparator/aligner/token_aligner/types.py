@@ -21,7 +21,7 @@ class PositionalSeqId(NamedTuple):
     seq_index: int
 
 
-ExternalSeqId = Union[SGLangSeqId, PositionalSeqId]
+SeqId = Union[SGLangSeqId, PositionalSeqId]
 
 
 @dataclass(frozen=True)
@@ -31,7 +31,7 @@ class TokenAlignerStepAux:
     input_ids: list[int]  # [num_tokens]
     positions: list[int]  # [num_tokens]
     seq_lens: list[int]  # [num_seqs]
-    seq_ids: list[ExternalSeqId]  # [num_seqs] — sequence identity
+    seq_ids: list[SeqId]  # [num_seqs] — sequence identity
 
     def __post_init__(self) -> None:
         _check_equal_lengths(input_ids=self.input_ids, positions=self.positions)
@@ -103,7 +103,7 @@ class TokenAlignerSeqInfo(_FrozenBase):
 class TokenAlignerSeqsInfo(_FrozenBase):
     """All sequences for one side across all steps."""
 
-    sequences: dict[int, TokenAlignerSeqInfo]
+    sequences: dict[SeqId, TokenAlignerSeqInfo]
     layout: str
 
 

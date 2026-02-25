@@ -10,6 +10,14 @@ _T = TypeVar("_T")
 _U = TypeVar("_U")
 
 
+def _check_equal_lengths(**named_lists: list) -> None:
+    lengths: dict[str, int] = {name: len(lst) for name, lst in named_lists.items()}
+    unique: set[int] = set(lengths.values())
+    if len(unique) > 1:
+        details: str = ", ".join(f"{name}={length}" for name, length in lengths.items())
+        raise ValueError(f"Length mismatch: {details}")
+
+
 class _StrictBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
