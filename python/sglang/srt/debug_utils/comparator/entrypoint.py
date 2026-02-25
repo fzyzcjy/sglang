@@ -126,14 +126,12 @@ def _build_alignment_plan(
         dump_path=target_path, df=df_target
     )
 
-    index_baseline: SeqsInfo = build_seqs_info(global_aux_baseline)
-    index_target: SeqsInfo = build_seqs_info(global_aux_target)
-
-    plan: AlignmentPlan = compute_alignment_plan(
-        indices=Pair(x=index_baseline, y=index_target)
+    seqs_info: Pair[SeqsInfo] = Pair(
+        x=build_seqs_info(global_aux_baseline),
+        y=build_seqs_info(global_aux_target),
     )
 
-    return plan
+    return compute_alignment_plan(seqs_info=seqs_info)
 
 
 def _consume_comparison_records(

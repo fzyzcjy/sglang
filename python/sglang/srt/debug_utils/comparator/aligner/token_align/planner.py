@@ -11,11 +11,11 @@ from sglang.srt.debug_utils.comparator.utils import Pair
 
 
 def compute_alignment_plan(
-    indices: Pair[SeqsInfo],
+    seqs_info_pair: Pair[SeqsInfo],
 ) -> AlignmentPlan:
-    """Compute a token alignment plan from two side token indices."""
+    """Compute a token alignment plan from two side token seqs_info_pair."""
     matched_pairs: list[tuple[int, int]] = _match_sequences(
-        seqs=Pair(x=indices.x.sequences, y=indices.y.sequences)
+        seqs=Pair(x=seqs_info_pair.x.sequences, y=seqs_info_pair.y.sequences)
     )
 
     steps_a: list[int] = []
@@ -24,8 +24,8 @@ def compute_alignment_plan(
     indices_b: list[int] = []
 
     for seq_id_a, seq_id_b in matched_pairs:
-        rec_a: SeqInfo = indices.x.sequences[seq_id_a]
-        rec_b: SeqInfo = indices.y.sequences[seq_id_b]
+        rec_a: SeqInfo = seqs_info_pair.x.sequences[seq_id_a]
+        rec_b: SeqInfo = seqs_info_pair.y.sequences[seq_id_b]
 
         pos_to_a: dict[int, int] = {pos: idx for idx, pos in enumerate(rec_a.positions)}
         pos_to_b: dict[int, int] = {pos: idx for idx, pos in enumerate(rec_b.positions)}
