@@ -14,8 +14,8 @@ from sglang.srt.debug_utils.comparator.aligner.entrypoint.planner import (
     compute_per_step_sub_plans,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
-    SeqId,
     PositionalSeqId,
+    SeqId,
     SGLangSeqId,
     TokenAlignerGlobalAux,
     TokenAlignerStepAux,
@@ -124,9 +124,7 @@ class _SGLangPlugin(_AuxPlugin):
         if rids_raw is not None and isinstance(rids_raw, (list, tuple)):
             seq_ids = [SGLangSeqId(rid=str(r)) for r in rids_raw]
         else:
-            seq_ids = [
-                PositionalSeqId(step=step, seq_index=i) for i in range(num_seqs)
-            ]
+            seq_ids = [PositionalSeqId(step=step, seq_index=i) for i in range(num_seqs)]
 
         return TokenAlignerStepAux(
             input_ids=input_ids.tolist(),
