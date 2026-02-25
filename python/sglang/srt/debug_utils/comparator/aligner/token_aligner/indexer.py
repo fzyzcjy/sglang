@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     ExternalSeqId,
     TokenAlignerGlobalAux,
@@ -17,16 +19,14 @@ def build_seqs_info(global_aux: TokenAlignerGlobalAux) -> TokenAlignerSeqsInfo:
     )
 
 
+@dataclass
 class _SeqAccumulator:
     """Mutable accumulator for building SeqInfo incrementally."""
 
-    __slots__ = ("input_ids", "positions", "steps", "indices")
-
-    def __init__(self) -> None:
-        self.input_ids: list[int] = []
-        self.positions: list[int] = []
-        self.steps: list[int] = []
-        self.indices: list[int] = []
+    input_ids: list[int] = field(default_factory=list)
+    positions: list[int] = field(default_factory=list)
+    steps: list[int] = field(default_factory=list)
+    indices: list[int] = field(default_factory=list)
 
 
 def _build_token_index(
