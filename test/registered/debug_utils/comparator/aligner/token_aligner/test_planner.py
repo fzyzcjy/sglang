@@ -7,6 +7,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.seq_info_builder im
     build_seqs_info,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.planner import (
+    _match_sequences,
     compute_token_aligner_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
@@ -218,67 +219,140 @@ class TestBuildTokenIndexMegatronThd:
 
 
 class TestMatchSequences:
-    """Tests for sequence matching logic."""
+    """Tests for _match_sequences: for each y, find matching x."""
 
-    def test_exact_match(self):
-        """Two sides with identical input_ids match exactly."""
-        index_a = _make_index(
-            sequences={0: (10, 20, 30), 1: (40, 50)},
+    def test_exact_match_simple(self):
+        """Identical input_ids on both sides → all matched."""
+        matched = _match_seqs(
+            x={0: (10, 20, 30), 1: (40, 50)},
+            y={0: (10, 20, 30), 1: (40, 50)},
         )
-        index_b = _make_index(
-            sequences={0: (10, 20, 30), 1: (40, 50)},
-        )
+        assert _matched_ids(matched) == {(0, 0), (1, 1)}
 
-        plan = compute_token_aligner_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
-        assert len(plan.match_steps.x) == 5
-
-    def test_different_order(self):
-        """Sequences in different order still match by input_ids content."""
-        index_a = _make_index(
-            sequences={0: (10, 20, 30), 1: (40, 50)},
+    def test_exact_match_different_order(self):
+        """Sequences in different order still match by content."""
+        matched = _match_seqs(
+            x={0: (10, 20), 1: (40, 50)},
+            y={0: (40, 50), 1: (10, 20)},
         )
-        index_b = _make_index(
-            sequences={0: (40, 50), 1: (10, 20, 30)},
-        )
+        assert _matched_ids(matched) == {(1, 0), (0, 1)}
 
-        plan = compute_token_aligner_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
-        assert len(plan.match_steps.x) == 5
-
-    def test_prefix_match(self):
-        """A-side has shorter sequence (prefix of B-side), still matches."""
-        index_a = _make_index(
-            sequences={0: (10, 20)},
+    def test_exact_match_different_seq_ids(self):
+        """Seq IDs don't need to correspond — matching is by content."""
+        matched = _match_seqs(
+            x={5: (10, 20), 9: (30, 40)},
+            y={2: (30, 40), 7: (10, 20)},
         )
-        index_b = _make_index(
-            sequences={0: (10, 20, 30)},
-        )
-
-        plan = compute_token_aligner_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
-        assert len(plan.match_steps.x) == 2
+        assert _matched_ids(matched) == {(9, 2), (5, 7)}
 
     def test_no_match(self):
-        """Completely different sequences produce no matches."""
-        index_a = _make_index(
-            sequences={0: (10, 20)},
+        """Completely different input_ids → no matches."""
+        matched = _match_seqs(
+            x={0: (10, 20)},
+            y={0: (99, 88)},
         )
-        index_b = _make_index(
-            sequences={0: (99, 88)},
-        )
+        assert matched == []
 
-        plan = compute_token_aligner_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
-        assert len(plan.match_steps.x) == 0
+    def test_empty_sides(self):
+        """Empty x or y → no matches."""
+        assert _match_seqs(x={}, y={0: (10,)}) == []
+        assert _match_seqs(x={0: (10,)}, y={}) == []
+        assert _match_seqs(x={}, y={}) == []
 
-    def test_ambiguous_same_input_ids(self):
-        """Two sequences with identical input_ids: greedy match, no error."""
-        index_a = _make_index(
-            sequences={0: (10, 20), 1: (10, 20)},
+    def test_x_has_more_sequences(self):
+        """Extra x sequences are ignored (no y needs them)."""
+        matched = _match_seqs(
+            x={0: (10, 20), 1: (30, 40), 2: (50, 60)},
+            y={0: (30, 40)},
         )
-        index_b = _make_index(
-            sequences={0: (10, 20), 1: (10, 20)},
-        )
+        assert _matched_ids(matched) == {(1, 0)}
 
-        plan = compute_token_aligner_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
-        assert len(plan.match_steps.x) == 4
+    def test_y_has_more_sequences(self):
+        """Extra y sequences remain unmatched."""
+        matched = _match_seqs(
+            x={0: (10, 20)},
+            y={0: (10, 20), 1: (30, 40), 2: (50, 60)},
+        )
+        assert _matched_ids(matched) == {(0, 0)}
+
+    def test_one_x_not_reused(self):
+        """Each x can only be claimed once, even if multiple y want it."""
+        matched = _match_seqs(
+            x={0: (10, 20)},
+            y={0: (10, 20), 1: (10, 20)},
+        )
+        assert len(matched) == 1
+
+    def test_ambiguous_all_matched(self):
+        """Multiple identical sequences on both sides → all paired (greedy 1:1)."""
+        matched = _match_seqs(
+            x={0: (10, 20), 1: (10, 20), 2: (10, 20)},
+            y={0: (10, 20), 1: (10, 20), 2: (10, 20)},
+        )
+        assert len(matched) == 3
+        x_ids = {m[0] for m in matched}
+        y_ids = {m[1] for m in matched}
+        assert x_ids == {0, 1, 2}
+        assert y_ids == {0, 1, 2}
+
+    def test_prefix_x_shorter(self):
+        """x has fewer tokens (prefix of y) → prefix match."""
+        matched = _match_seqs(
+            x={0: (10, 20)},
+            y={0: (10, 20, 30)},
+        )
+        assert _matched_ids(matched) == {(0, 0)}
+
+    def test_prefix_y_shorter(self):
+        """y has fewer tokens (prefix of x) → prefix match."""
+        matched = _match_seqs(
+            x={0: (10, 20, 30)},
+            y={0: (10, 20)},
+        )
+        assert _matched_ids(matched) == {(0, 0)}
+
+    def test_prefix_picks_longest(self):
+        """Among multiple prefix candidates, picks the one with longest overlap."""
+        matched = _match_seqs(
+            x={0: (10,), 1: (10, 20, 30)},
+            y={0: (10, 20, 30, 40)},
+        )
+        assert _matched_ids(matched) == {(1, 0)}
+
+    def test_exact_preferred_over_prefix(self):
+        """Exact match is tried first, even if a longer prefix candidate exists."""
+        matched = _match_seqs(
+            x={0: (10, 20), 1: (10, 20, 30)},
+            y={0: (10, 20)},
+        )
+        assert _matched_ids(matched) == {(0, 0)}
+
+    def test_prefix_fallback_after_exact(self):
+        """Exact matches consume sequences, remaining use prefix match."""
+        matched = _match_seqs(
+            x={0: (10, 20, 30), 1: (40, 50)},
+            y={0: (10, 20, 30), 1: (40, 50, 60)},
+        )
+        assert len(matched) == 2
+        matched_set = _matched_ids(matched)
+        assert (0, 0) in matched_set
+        assert (1, 1) in matched_set
+
+    def test_single_token_sequences(self):
+        """Single-token sequences can match."""
+        matched = _match_seqs(
+            x={0: (42,)},
+            y={0: (42,)},
+        )
+        assert _matched_ids(matched) == {(0, 0)}
+
+    def test_no_partial_overlap_without_prefix(self):
+        """Overlapping content that isn't a prefix → no match."""
+        matched = _match_seqs(
+            x={0: (10, 20, 30)},
+            y={0: (20, 30, 40)},
+        )
+        assert matched == []
 
 
 class TestComputeAlignmentPlanCrossLayout:
@@ -388,6 +462,38 @@ def _make_index(
             indices=list(range(num_tokens)),
         )
     return TokenAlignerSeqsInfo(sequences=records, layout=layout)
+
+
+def _make_seq_info_dict(
+    sequences: dict[int, tuple[int, ...]],
+) -> dict[int, TokenAlignerSeqInfo]:
+    """Create a dict of TokenAlignerSeqInfo from {seq_id: input_ids_tuple}."""
+    result: dict[int, TokenAlignerSeqInfo] = {}
+    for seq_id, input_ids in sequences.items():
+        num_tokens = len(input_ids)
+        result[seq_id] = TokenAlignerSeqInfo(
+            input_ids=list(input_ids),
+            positions=list(range(num_tokens)),
+            steps=[0] * num_tokens,
+            indices=list(range(num_tokens)),
+        )
+    return result
+
+
+def _match_seqs(
+    *,
+    x: dict[int, tuple[int, ...]],
+    y: dict[int, tuple[int, ...]],
+) -> list[tuple[int, int]]:
+    """Shorthand: build SeqInfo dicts and call _match_sequences."""
+    return _match_sequences(
+        seqs=Pair(x=_make_seq_info_dict(x), y=_make_seq_info_dict(y))
+    )
+
+
+def _matched_ids(matched: list[tuple[int, int]]) -> set[tuple[int, int]]:
+    """Convert matched pairs list to set for order-independent comparison."""
+    return set(matched)
 
 
 if __name__ == "__main__":
