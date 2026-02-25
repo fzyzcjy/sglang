@@ -117,24 +117,20 @@ def _find_matching_x_prefix(
     x_seqs: dict[int, TokenAlignerSeqInfo],
     claimed_x_ids: set[int],
 ) -> Optional[int]:
-    """Find the best x sequence whose input_ids form a prefix relationship with y.
-
-    Picks the candidate with the longest overlapping prefix.
-    """
+    """Find the x sequence with the longest prefix relationship to y."""
     ids_y: list[int] = seq_y.input_ids
-    best_match: Optional[int] = None
-    best_len: int = 0
+    candidates: list[tuple[int, int]] = [
+        (seq_id_x, min(len(seq_x.input_ids), len(ids_y)))
+        for seq_id_x, seq_x in x_seqs.items()
+        if seq_id_x not in claimed_x_ids and _is_prefix_pair(seq_x.input_ids, ids_y)
+    ]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda t: t[1])[0]
 
-    for seq_id_x, seq_x in x_seqs.items():
-        if seq_id_x in claimed_x_ids:
-            continue
 
-        ids_x: list[int] = seq_x.input_ids
-        shorter: list[int] = ids_x if len(ids_x) <= len(ids_y) else ids_y
-        longer: list[int] = ids_y if len(ids_x) <= len(ids_y) else ids_x
-
-        if longer[: len(shorter)] == shorter and len(shorter) > best_len:
-            best_match = seq_id_x
-            best_len = len(shorter)
-
-    return best_match
+def _is_prefix_pair(a: list[int], b: list[int]) -> bool:
+    """True if a is a prefix of b, or b is a prefix of a."""
+    shorter: list[int] = a if len(a) <= len(b) else b
+    longer: list[int] = b if len(a) <= len(b) else a
+    return longer[: len(shorter)] == shorter
