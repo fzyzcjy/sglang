@@ -5,8 +5,8 @@ import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.aux_loader import (
     _infer_positions,
-    _normalize_megatron,
-    _normalize_sglang,
+    _normalize_step_megatron,
+    _normalize_step_sglang,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     MegatronSeqId,
@@ -30,7 +30,7 @@ class TestNormalizeSGLang:
             "rids": ["A"],
         }
 
-        result: TokenAlignerStepAux = _normalize_sglang(step_data, step=0)
+        result: TokenAlignerStepAux = _normalize_step_sglang(step_data, step=0)
 
         assert torch.equal(result.input_ids, step_data["input_ids"])
         assert torch.equal(result.positions, step_data["positions"])
@@ -45,7 +45,7 @@ class TestNormalizeSGLang:
             "seq_lens": torch.tensor([2]),
         }
 
-        result: TokenAlignerStepAux = _normalize_sglang(step_data, step=3)
+        result: TokenAlignerStepAux = _normalize_step_sglang(step_data, step=3)
         assert result.seq_ids == (MegatronSeqId(step=3, seq_index=0),)
 
     def test_multiple_seqs_with_rids(self):
@@ -57,7 +57,7 @@ class TestNormalizeSGLang:
             "rids": ["A", "B"],
         }
 
-        result: TokenAlignerStepAux = _normalize_sglang(step_data, step=0)
+        result: TokenAlignerStepAux = _normalize_step_sglang(step_data, step=0)
         assert result.seq_ids == (SGLangSeqId(rid="A"), SGLangSeqId(rid="B"))
 
 
@@ -71,7 +71,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 3, 5]),
         }
 
-        result: TokenAlignerStepAux = _normalize_megatron(
+        result: TokenAlignerStepAux = _normalize_step_megatron(
             step_data, layout="thd", step=0
         )
 
@@ -84,7 +84,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 3, 5]),
         }
 
-        result: TokenAlignerStepAux = _normalize_megatron(
+        result: TokenAlignerStepAux = _normalize_step_megatron(
             step_data, layout="thd", step=0
         )
 
@@ -100,7 +100,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 5]),
         }
 
-        result: TokenAlignerStepAux = _normalize_megatron(
+        result: TokenAlignerStepAux = _normalize_step_megatron(
             step_data, layout="thd", step=0
         )
 
@@ -113,7 +113,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 3, 5]),
         }
 
-        result: TokenAlignerStepAux = _normalize_megatron(
+        result: TokenAlignerStepAux = _normalize_step_megatron(
             step_data, layout="thd", step=5
         )
         assert result.seq_ids == (
