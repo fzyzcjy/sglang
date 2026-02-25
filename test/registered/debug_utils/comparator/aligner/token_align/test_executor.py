@@ -13,7 +13,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.executor import (
     execute_alignment,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
-    build_token_index,
+    build_seqs_info,
     compute_alignment_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
@@ -57,7 +57,7 @@ class TestExecuteAlignment:
             layout="thd",
         )
 
-        index = build_token_index(side_aux)
+        index = build_seqs_info(side_aux)
         plan = compute_alignment_plan(indices=Pair(x=index, y=index))
 
         tensors = {0: hidden_step0, 1: hidden_step1}
@@ -100,8 +100,8 @@ class TestExecuteAlignment:
             layout="bshd",
         )
 
-        index_a = build_token_index(side_aux_a)
-        index_b = build_token_index(side_aux_b)
+        index_a = build_seqs_info(side_aux_a)
+        index_b = build_seqs_info(side_aux_b)
         plan = compute_alignment_plan(indices=Pair(x=index_a, y=index_b))
 
         hidden_a = torch.randn(3, 8)  # [3, hidden]

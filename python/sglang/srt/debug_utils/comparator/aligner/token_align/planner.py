@@ -12,10 +12,10 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
     AlignmentPlan,
     AlignmentSummary,
+    SeqInfo,
     SeqMatchInfo,
-    SequenceRecord,
+    SeqsInfo,
     SideInfo,
-    SideTokenIndex,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 
@@ -24,8 +24,8 @@ from sglang.srt.debug_utils.comparator.utils import Pair
 # ---------------------------------------------------------------------------
 
 
-def build_token_index(side_aux: SideAux) -> SideTokenIndex:
-    """Build a global token index for one side from its auxiliary tensors."""
+def build_seqs_info(side_aux: SideAux) -> SeqsInfo:
+    """Build sequence info for one side from its auxiliary tensors."""
     if side_aux.framework == "sglang":
         sequences = _build_sglang_thd_index(side_aux)
     elif side_aux.layout == "bshd":
@@ -33,7 +33,7 @@ def build_token_index(side_aux: SideAux) -> SideTokenIndex:
     else:
         sequences = _build_megatron_thd_index(side_aux)
 
-    return SideTokenIndex(
+    return SeqsInfo(
         sequences=sequences,
         framework=side_aux.framework,
         layout=side_aux.layout,
@@ -41,7 +41,7 @@ def build_token_index(side_aux: SideAux) -> SideTokenIndex:
 
 
 def compute_alignment_plan(
-    indices: Pair[SideTokenIndex],
+    indices: Pair[SeqsInfo],
 ) -> AlignmentPlan:
     """Compute a token alignment plan from two side token indices."""
     matched_pairs: list[tuple[int, int]] = _match_sequences(
@@ -61,8 +61,8 @@ def compute_alignment_plan(
         matched_a_ids.add(seq_id_a)
         matched_b_ids.add(seq_id_b)
 
-        rec_a: SequenceRecord = indices.x.sequences[seq_id_a]
-        rec_b: SequenceRecord = indices.y.sequences[seq_id_b]
+        rec_a: SeqInfo = indices.x.sequences[seq_id_a]
+        rec_b: SeqInfo = indices.y.sequences[seq_id_b]
 
         pos_to_a: dict[int, int] = {pos: idx for idx, pos in enumerate(rec_a.positions)}
         pos_to_b: dict[int, int] = {pos: idx for idx, pos in enumerate(rec_b.positions)}
@@ -127,7 +127,7 @@ def compute_alignment_plan(
 
 
 class _SeqAccumulator:
-    """Mutable accumulator for building SequenceRecord incrementally."""
+    """Mutable accumulator for building SeqInfo incrementally."""
 
     __slots__ = ("input_ids", "positions", "steps", "indices")
 
@@ -140,7 +140,7 @@ class _SeqAccumulator:
 
 def _build_sglang_thd_index(
     side_aux: SideAux,
-) -> dict[int, SequenceRecord]:
+) -> dict[int, SeqInfo]:
     """Build token index for SGLang thd layout using req_pool_indices + rids."""
     rpi_to_rid: dict[int, str] = {}
     rpi_to_seq_id: dict[int, int] = {}
@@ -192,11 +192,11 @@ def _build_sglang_thd_index(
             offset += slen
 
     return {
-        seq_id: SequenceRecord(
-            input_ids=tuple(acc.input_ids),
-            positions=tuple(acc.positions),
-            steps=tuple(acc.steps),
-            indices=tuple(acc.indices),
+        seq_id: SeqInfo(
+            input_ids=acc.input_ids,
+            positions=acc.positions,
+            steps=acc.steps,
+            indices=acc.indices,
         )
         for seq_id, acc in accum.items()
     }
@@ -204,7 +204,7 @@ def _build_sglang_thd_index(
 
 def _build_megatron_bshd_index(
     side_aux: SideAux,
-) -> dict[int, SequenceRecord]:
+) -> dict[int, SeqInfo]:
     """Build token index for Megatron bshd layout."""
     accum: dict[int, _SeqAccumulator] = {}
     next_seq_id: int = 0
@@ -234,11 +234,11 @@ def _build_megatron_bshd_index(
         next_seq_id += batch_size
 
     return {
-        seq_id: SequenceRecord(
-            input_ids=tuple(acc.input_ids),
-            positions=tuple(acc.positions),
-            steps=tuple(acc.steps),
-            indices=tuple(acc.indices),
+        seq_id: SeqInfo(
+            input_ids=acc.input_ids,
+            positions=acc.positions,
+            steps=acc.steps,
+            indices=acc.indices,
         )
         for seq_id, acc in accum.items()
     }
@@ -246,7 +246,7 @@ def _build_megatron_bshd_index(
 
 def _build_megatron_thd_index(
     side_aux: SideAux,
-) -> dict[int, SequenceRecord]:
+) -> dict[int, SeqInfo]:
     """Build token index for Megatron thd layout (static batching, segment-based)."""
     accum: dict[int, _SeqAccumulator] = {}
     next_seq_id: int = 0
@@ -276,11 +276,11 @@ def _build_megatron_thd_index(
         next_seq_id += len(seq_lens_list)
 
     return {
-        seq_id: SequenceRecord(
-            input_ids=tuple(acc.input_ids),
-            positions=tuple(acc.positions),
-            steps=tuple(acc.steps),
-            indices=tuple(acc.indices),
+        seq_id: SeqInfo(
+            input_ids=acc.input_ids,
+            positions=acc.positions,
+            steps=acc.steps,
+            indices=acc.indices,
         )
         for seq_id, acc in accum.items()
     }
@@ -292,7 +292,7 @@ def _build_megatron_thd_index(
 
 
 def _match_sequences(
-    seqs: Pair[dict[int, SequenceRecord]],
+    seqs: Pair[dict[int, SeqInfo]],
 ) -> list[tuple[int, int]]:
     """Two-pass sequence matching: exact then prefix."""
     matched: list[tuple[int, int]] = []
@@ -301,13 +301,13 @@ def _match_sequences(
 
     b_lookup: dict[tuple[int, ...], list[int]] = defaultdict(list)
     for seq_id, rec in seqs.y.items():
-        b_lookup[rec.input_ids].append(seq_id)
+        b_lookup[tuple(rec.input_ids)].append(seq_id)
 
     for seq_id_a in sorted(seqs.x.keys()):
         if seq_id_a not in unmatched_a:
             continue
-        ids_a: tuple[int, ...] = seqs.x[seq_id_a].input_ids
-        candidates: list[int] = b_lookup.get(ids_a, [])
+        ids_a_key: tuple[int, ...] = tuple(seqs.x[seq_id_a].input_ids)
+        candidates: list[int] = b_lookup.get(ids_a_key, [])
         for candidate in candidates:
             if candidate in unmatched_b:
                 matched.append((seq_id_a, candidate))
@@ -318,14 +318,14 @@ def _match_sequences(
     remaining_a: list[int] = sorted(
         unmatched_a, key=lambda s: len(seqs.x[s].input_ids), reverse=True
     )
-    remaining_b_by_len: list[tuple[int, tuple[int, ...]]] = sorted(
+    remaining_b_by_len: list[tuple[int, list[int]]] = sorted(
         [(s, seqs.y[s].input_ids) for s in unmatched_b],
         key=lambda x: len(x[1]),
         reverse=True,
     )
 
     for seq_id_a in remaining_a:
-        ids_a = seqs.x[seq_id_a].input_ids
+        ids_a: list[int] = seqs.x[seq_id_a].input_ids
         best_match: int | None = None
         best_len: int = 0
 
@@ -333,8 +333,8 @@ def _match_sequences(
             if seq_id_b not in unmatched_b:
                 continue
 
-            shorter: tuple[int, ...] = ids_a if len(ids_a) <= len(ids_b) else ids_b
-            longer: tuple[int, ...] = ids_b if len(ids_a) <= len(ids_b) else ids_a
+            shorter: list[int] = ids_a if len(ids_a) <= len(ids_b) else ids_b
+            longer: list[int] = ids_b if len(ids_a) <= len(ids_b) else ids_a
 
             if longer[: len(shorter)] == shorter and len(shorter) > best_len:
                 best_match = seq_id_b
@@ -353,7 +353,7 @@ def _match_sequences(
 # ---------------------------------------------------------------------------
 
 
-def _make_side_info(index: SideTokenIndex) -> SideInfo:
+def _make_side_info(index: SeqsInfo) -> SideInfo:
     all_steps: set[int] = set()
     total_tokens: int = 0
     for rec in index.sequences.values():

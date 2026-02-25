@@ -8,12 +8,12 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
     SideAux,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
-    build_token_index,
+    build_seqs_info,
     compute_alignment_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
-    SequenceRecord,
-    SideTokenIndex,
+    SeqInfo,
+    SeqsInfo,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -40,19 +40,19 @@ class TestBuildTokenIndexSGLangThd:
             layout="thd",
         )
 
-        index = build_token_index(side_aux)
+        index = build_seqs_info(side_aux)
         assert len(index.sequences) == 2
 
         seq0 = index.sequences[0]
-        assert seq0.input_ids == (10, 20, 30)
-        assert seq0.positions == (0, 1, 2)
-        assert seq0.steps == (0, 0, 0)
-        assert seq0.indices == (0, 1, 2)
+        assert seq0.input_ids == [10, 20, 30]
+        assert seq0.positions == [0, 1, 2]
+        assert seq0.steps == [0, 0, 0]
+        assert seq0.indices == [0, 1, 2]
 
         seq1 = index.sequences[1]
-        assert seq1.input_ids == (40, 50)
-        assert seq1.positions == (0, 1)
-        assert seq1.indices == (3, 4)
+        assert seq1.input_ids == [40, 50]
+        assert seq1.positions == [0, 1]
+        assert seq1.indices == [3, 4]
 
     def test_multi_step_prefill_decode(self):
         """Prefill step followed by decode steps, sequences accumulate tokens."""
@@ -77,17 +77,17 @@ class TestBuildTokenIndexSGLangThd:
             layout="thd",
         )
 
-        index = build_token_index(side_aux)
+        index = build_seqs_info(side_aux)
         assert len(index.sequences) == 2
 
         seq0 = index.sequences[0]
-        assert seq0.input_ids == (10, 20, 30, 31)
-        assert seq0.positions == (0, 1, 2, 3)
-        assert seq0.steps == (0, 0, 0, 1)
+        assert seq0.input_ids == [10, 20, 30, 31]
+        assert seq0.positions == [0, 1, 2, 3]
+        assert seq0.steps == [0, 0, 0, 1]
 
         seq1 = index.sequences[1]
-        assert seq1.input_ids == (40, 50, 51)
-        assert seq1.positions == (0, 1, 2)
+        assert seq1.input_ids == [40, 50, 51]
+        assert seq1.positions == [0, 1, 2]
 
     def test_sequence_exit_and_join(self):
         """Sequence A exits, new sequence D joins with different rpi."""
@@ -112,7 +112,7 @@ class TestBuildTokenIndexSGLangThd:
             layout="thd",
         )
 
-        index = build_token_index(side_aux)
+        index = build_seqs_info(side_aux)
         assert len(index.sequences) == 2
 
     def test_slot_reuse_detection(self):
@@ -138,14 +138,14 @@ class TestBuildTokenIndexSGLangThd:
             layout="thd",
         )
 
-        index = build_token_index(side_aux)
+        index = build_seqs_info(side_aux)
         assert len(index.sequences) == 2
 
         all_input_ids = {
             seq_id: rec.input_ids for seq_id, rec in index.sequences.items()
         }
-        assert (10, 20) in all_input_ids.values()
-        assert (100, 200, 300) in all_input_ids.values()
+        assert [10, 20] in all_input_ids.values()
+        assert [100, 200, 300] in all_input_ids.values()
 
 
 class TestBuildTokenIndexMegatronThd:
@@ -167,19 +167,19 @@ class TestBuildTokenIndexMegatronThd:
             layout="thd",
         )
 
-        index = build_token_index(side_aux)
+        index = build_seqs_info(side_aux)
         assert len(index.sequences) == 2
 
         seq0 = index.sequences[0]
-        assert seq0.input_ids == (10, 20, 30)
-        assert seq0.positions == (0, 1, 2)
-        assert seq0.steps == (0, 0, 0)
-        assert seq0.indices == (0, 1, 2)
+        assert seq0.input_ids == [10, 20, 30]
+        assert seq0.positions == [0, 1, 2]
+        assert seq0.steps == [0, 0, 0]
+        assert seq0.indices == [0, 1, 2]
 
         seq1 = index.sequences[1]
-        assert seq1.input_ids == (40, 50)
-        assert seq1.positions == (0, 1)
-        assert seq1.indices == (3, 4)
+        assert seq1.input_ids == [40, 50]
+        assert seq1.positions == [0, 1]
+        assert seq1.indices == [3, 4]
 
     def test_multi_step_accumulation(self):
         """Two steps with the same batch size accumulate tokens per sequence."""
@@ -204,16 +204,16 @@ class TestBuildTokenIndexMegatronThd:
             layout="thd",
         )
 
-        index = build_token_index(side_aux)
+        index = build_seqs_info(side_aux)
         assert len(index.sequences) == 4
 
         seq0 = index.sequences[0]
-        assert seq0.input_ids == (10, 20)
-        assert seq0.steps == (0, 0)
+        assert seq0.input_ids == [10, 20]
+        assert seq0.steps == [0, 0]
 
         seq2 = index.sequences[2]
-        assert seq2.input_ids == (50, 60)
-        assert seq2.steps == (1, 1)
+        assert seq2.input_ids == [50, 60]
+        assert seq2.steps == [1, 1]
 
 
 class TestBuildTokenIndexMegatronBshd:
@@ -235,16 +235,16 @@ class TestBuildTokenIndexMegatronBshd:
             layout="bshd",
         )
 
-        index = build_token_index(side_aux)
+        index = build_seqs_info(side_aux)
         assert len(index.sequences) == 2
 
         seq0 = index.sequences[0]
-        assert seq0.input_ids == (10, 20, 30)
-        assert seq0.indices == (0, 1, 2)
+        assert seq0.input_ids == [10, 20, 30]
+        assert seq0.indices == [0, 1, 2]
 
         seq1 = index.sequences[1]
-        assert seq1.input_ids == (40, 50, 60)
-        assert seq1.indices == (3, 4, 5)
+        assert seq1.input_ids == [40, 50, 60]
+        assert seq1.indices == [3, 4, 5]
 
     def test_single_step_with_padding(self):
         """Padding tokens excluded: seq_lens=[2,1] but S=3."""
@@ -262,7 +262,7 @@ class TestBuildTokenIndexMegatronBshd:
             layout="bshd",
         )
 
-        index = build_token_index(side_aux)
+        index = build_seqs_info(side_aux)
         assert len(index.sequences) == 2
 
         seq0 = index.sequences[0]
@@ -390,8 +390,8 @@ class TestComputeAlignmentPlanCrossLayout:
             layout="bshd",
         )
 
-        index_a = build_token_index(side_aux_a)
-        index_b = build_token_index(side_aux_b)
+        index_a = build_seqs_info(side_aux_a)
+        index_b = build_seqs_info(side_aux_b)
 
         plan = compute_alignment_plan(indices=Pair(x=index_a, y=index_b))
 
@@ -434,8 +434,8 @@ class TestComputeAlignmentPlanCrossLayout:
             layout="thd",
         )
 
-        index_a = build_token_index(side_aux_a)
-        index_b = build_token_index(side_aux_b)
+        index_a = build_seqs_info(side_aux_a)
+        index_b = build_seqs_info(side_aux_b)
 
         plan = compute_alignment_plan(indices=Pair(x=index_a, y=index_b))
         assert plan.summary.num_matched_tokens == 3
@@ -451,18 +451,18 @@ def _make_index(
     sequences: dict[int, tuple[int, ...]],
     framework: str = "sglang",
     layout: str = "thd",
-) -> SideTokenIndex:
-    """Create a SideTokenIndex from simplified input_ids-only specification."""
-    records: dict[int, SequenceRecord] = {}
+) -> SeqsInfo:
+    """Create a SeqsInfo from simplified input_ids-only specification."""
+    records: dict[int, SeqInfo] = {}
     for seq_id, input_ids in sequences.items():
         num_tokens = len(input_ids)
-        records[seq_id] = SequenceRecord(
-            input_ids=input_ids,
-            positions=tuple(range(num_tokens)),
-            steps=(0,) * num_tokens,
-            indices=tuple(range(num_tokens)),
+        records[seq_id] = SeqInfo(
+            input_ids=list(input_ids),
+            positions=list(range(num_tokens)),
+            steps=[0] * num_tokens,
+            indices=list(range(num_tokens)),
         )
-    return SideTokenIndex(sequences=records, framework=framework, layout=layout)
+    return SeqsInfo(sequences=records, framework=framework, layout=layout)
 
 
 if __name__ == "__main__":

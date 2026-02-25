@@ -18,12 +18,12 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.executor import (
     execute_alignment,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
-    build_token_index,
+    build_seqs_info,
     compute_alignment_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
     AlignmentPlan,
-    SideTokenIndex,
+    SeqsInfo,
     format_alignment_summary,
 )
 from sglang.srt.debug_utils.comparator.output_types import (
@@ -122,8 +122,8 @@ def _build_alignment_plan(
         dump_path=target_path, df=df_target
     )
 
-    index_baseline: SideTokenIndex = build_token_index(side_aux_baseline)
-    index_target: SideTokenIndex = build_token_index(side_aux_target)
+    index_baseline: SeqsInfo = build_seqs_info(side_aux_baseline)
+    index_target: SeqsInfo = build_seqs_info(side_aux_target)
 
     plan: AlignmentPlan = compute_alignment_plan(
         indices=Pair(x=index_baseline, y=index_target)

@@ -3,19 +3,19 @@ from __future__ import annotations
 from sglang.srt.debug_utils.comparator.utils import Pair, _FrozenBase
 
 
-class SequenceRecord(_FrozenBase):
-    """All tokens of a single sequence across all steps."""
+class SeqInfo(_FrozenBase):
+    """Information for a sequence, containing information to locate all the tokens inside the sequence."""
 
-    input_ids: tuple[int, ...]
-    positions: tuple[int, ...]
-    steps: tuple[int, ...]
-    indices: tuple[int, ...]
+    input_ids: list[int]
+    positions: list[int]
+    steps: list[int]
+    indices: list[int]
 
 
-class SideTokenIndex(_FrozenBase):
-    """Global token index for one side across all steps."""
+class SeqsInfo(_FrozenBase):
+    """All sequences for one side across all steps."""
 
-    sequences: dict[int, SequenceRecord]
+    sequences: dict[int, SeqInfo]
     framework: str
     layout: str
 
