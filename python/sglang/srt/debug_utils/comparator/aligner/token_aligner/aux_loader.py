@@ -270,11 +270,6 @@ def has_aux_tensors(df: pl.DataFrame) -> bool:
 
 
 def _detect_plugin(df: pl.DataFrame, dump_path: Path) -> Optional[_AuxPlugin]:
-    """Detect framework plugin from aux tensor names, with parallel_info as fallback.
-
-    Primary: tensor names present in the data (cu_seqlens_q → megatron, seq_lens → sglang).
-    Fallback: parallel_info key embedded in dump metadata.
-    """
     names: set[str] = set(df["name"].unique().to_list())
 
     for plugin in _plugins:
