@@ -2239,6 +2239,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             mamba_track_indices=self.mamba_track_indices,
             mamba_track_mask=self.mamba_track_mask,
             mamba_track_seqlens=self.mamba_track_seqlens,
+            rids=[req.rid for req in self.reqs],
         )
 
     def copy(self):
@@ -2421,6 +2422,9 @@ class ModelWorkerBatch:
 
     # For hidden states before normal
     return_hidden_states_before_norm: bool = False
+
+    # For dumper: request IDs for cross-step sequence tracking
+    rids: Optional[List[str]] = None
 
     # For mamba state tracking
     mamba_track_indices: Optional[torch.Tensor] = None  # shape: [b], int64
