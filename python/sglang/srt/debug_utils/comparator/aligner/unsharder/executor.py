@@ -3,8 +3,8 @@ import torch
 from sglang.srt.debug_utils.comparator.aligner.unsharder.types import (
     ConcatParams,
     PickParams,
-    UnshardParams,
-    UnshardPlan,
+    UnsharderParams,
+    UnsharderPlan,
 )
 from sglang.srt.debug_utils.comparator.dims import ParallelAxis
 from sglang.srt.debug_utils.comparator.output_types import (
@@ -14,7 +14,7 @@ from sglang.srt.debug_utils.comparator.output_types import (
 
 
 def execute_unshard_plan(
-    plan: UnshardPlan,
+    plan: UnsharderPlan,
     tensors: list[torch.Tensor],
 ) -> tuple[list[torch.Tensor], list[AlignWarning]]:
     all_warnings: list[AlignWarning] = []
@@ -35,7 +35,7 @@ def execute_unshard_plan(
 
 
 def _apply_unshard(
-    params: UnshardParams,
+    params: UnsharderParams,
     ordered_tensors: list[torch.Tensor],
     *,
     axis: ParallelAxis,

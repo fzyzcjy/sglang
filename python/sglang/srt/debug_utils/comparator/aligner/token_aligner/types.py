@@ -46,7 +46,7 @@ class SeqsInfo(_FrozenBase):
     layout: str
 
 
-class TokenAlignPlan(_FrozenBase):
+class TokenAlignerPlan(_FrozenBase):
     """Token alignment plan.
 
     match_steps.x[i] + match_indices.x[i] and match_steps.y[i] + match_indices.y[i]

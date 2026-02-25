@@ -9,14 +9,14 @@ from typing import Any, Optional, Union
 import torch
 
 from sglang.srt.debug_utils.comparator.aligner.reorder import (
-    ReorderPlan,
+    ReordererPlan,
     compute_reorder_plans,
     execute_reorder_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.executor import (
     execute_token_align,
 )
-from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import TokenAlignPlan
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import TokenAlignerPlan
 from sglang.srt.debug_utils.comparator.aligner.unsharder.executor import (
     execute_unshard_plan,
 )
@@ -26,7 +26,7 @@ from sglang.srt.debug_utils.comparator.aligner.unsharder.parallel_info import (
 from sglang.srt.debug_utils.comparator.aligner.unsharder.planner import (
     compute_unshard_plan,
 )
-from sglang.srt.debug_utils.comparator.aligner.unsharder.types import UnshardPlan
+from sglang.srt.debug_utils.comparator.aligner.unsharder.types import UnsharderPlan
 from sglang.srt.debug_utils.comparator.dims import parse_dims
 from sglang.srt.debug_utils.comparator.output_types import (
     AlignWarning,
@@ -39,7 +39,7 @@ from sglang.srt.debug_utils.comparator.tensor_comparator.comparator import (
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.srt.debug_utils.dump_loader import ValueWithMeta
 
-_Plan = Union[UnshardPlan, ReorderPlan]
+_Plan = Union[UnsharderPlan, ReordererPlan]
 
 
 @dataclass(frozen=True)
@@ -56,7 +56,7 @@ class _AlignPlan:
     """Unified plan: per-step unshard/reorder for both sides + cross-side token alignment."""
 
     side_plans: Pair[list[_StepGroupPlan]]
-    token_align: Optional[TokenAlignPlan]
+    token_align: Optional[TokenAlignerPlan]
 
 
 def compare_bundle_pair(
@@ -65,7 +65,7 @@ def compare_bundle_pair(
     filenames_pair: Pair[list[str]],
     baseline_path: Path,
     target_path: Path,
-    token_align_plan: Optional[TokenAlignPlan],
+    token_align_plan: Optional[TokenAlignerPlan],
     diff_threshold: float,
 ) -> Union[ComparisonRecord, SkipRecord]:
     # 1. Load (tensor + meta, ungrouped)
@@ -127,7 +127,7 @@ def _load_tensors(filenames: list[str], base_path: Path) -> list[ValueWithMeta]:
 def _compute_plans(
     *,
     metas_pair: Pair[list[dict[str, Any]]],
-    token_align_plan: Optional[TokenAlignPlan],
+    token_align_plan: Optional[TokenAlignerPlan],
 ) -> _AlignPlan:
     return _AlignPlan(
         side_plans=Pair(
@@ -265,9 +265,9 @@ def _execute_single_plan(
     tensors: list[torch.Tensor],
     plan: _Plan,
 ) -> tuple[list[torch.Tensor], list[AlignWarning]]:
-    if isinstance(plan, UnshardPlan):
+    if isinstance(plan, UnsharderPlan):
         return execute_unshard_plan(plan, tensors)
-    elif isinstance(plan, ReorderPlan):
+    elif isinstance(plan, ReordererPlan):
         return execute_reorder_plan(plan, tensors), []
     else:
         raise NotImplementedError(f"Unknown {plan=}")

@@ -21,7 +21,7 @@ from sglang.test.ci.ci_register import register_cpu_ci
 register_cpu_ci(est_time=10, suite="default", nightly=True)
 
 
-class TestExecuteUnshardPlan:
+class TestExecuteUnsharderPlan:
     def test_tp4_concat(self) -> None:
         full_tensor = torch.randn(2, 8, 16)
         shards = list(full_tensor.chunk(4, dim=1))

@@ -13,7 +13,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.entrypoint import (
     compute_maybe_token_align_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
-    TokenAlignPlan,
+    TokenAlignerPlan,
 )
 from sglang.srt.debug_utils.comparator.bundle_comparator import compare_bundle_pair
 from sglang.srt.debug_utils.comparator.bundle_matcher import (
@@ -97,7 +97,7 @@ def _execute_compare_bundle_pair(
     bundle_info_pairs: list[Pair[TensorBundleInfo]],
     baseline_path: Path,
     target_path: Path,
-    token_align_plan: Optional[TokenAlignPlan],
+    token_align_plan: Optional[TokenAlignerPlan],
     diff_threshold: float,
 ) -> Iterator[Union[ComparisonRecord, SkipRecord]]:
     for bundle_info_pair in bundle_info_pairs:

@@ -5,14 +5,14 @@ from collections import defaultdict
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     SeqInfo,
     SeqsInfo,
-    TokenAlignPlan,
+    TokenAlignerPlan,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 
 
 def compute_token_align_plan(
     seqs_info_pair: Pair[SeqsInfo],
-) -> TokenAlignPlan:
+) -> TokenAlignerPlan:
     """Compute a token alignment plan from two side token seqs_info_pair."""
     matched_pairs: list[tuple[int, int]] = _match_sequences(
         seqs=Pair(x=seqs_info_pair.x.sequences, y=seqs_info_pair.y.sequences)
@@ -55,7 +55,7 @@ def compute_token_align_plan(
             steps.y.append(rec.y.steps[idx.y])
             indices.y.append(rec.y.indices[idx.y])
 
-    return TokenAlignPlan(
+    return TokenAlignerPlan(
         match_steps=Pair(x=tuple(steps.x), y=tuple(steps.y)),
         match_indices=Pair(x=tuple(indices.x), y=tuple(indices.y)),
     )

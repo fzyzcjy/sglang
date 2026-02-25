@@ -13,11 +13,11 @@ class ZigzagToNaturalParams(_FrozenBase):
     cp_size: int
 
 
-ReorderParams = ZigzagToNaturalParams
+ReordererParams = ZigzagToNaturalParams
 
 
-class ReorderPlan(_FrozenBase):
-    params: ReorderParams
+class ReordererPlan(_FrozenBase):
+    params: ReordererParams
 
 
 _ALLOWED_ZIGZAG_DIM_NAMES: set[str] = {"s"}
@@ -26,8 +26,8 @@ _ALLOWED_ZIGZAG_DIM_NAMES: set[str] = {"s"}
 def compute_reorder_plans(
     dim_specs: list[DimSpec],
     parallel_infos: list[dict[ParallelAxis, AxisInfo]],
-) -> list[ReorderPlan]:
-    plans: list[ReorderPlan] = []
+) -> list[ReordererPlan]:
+    plans: list[ReordererPlan] = []
 
     for dim_index, spec in enumerate(dim_specs):
         if (
@@ -46,7 +46,7 @@ def compute_reorder_plans(
             assert spec.ordering == Ordering.ZIGZAG
             axis_size: int = parallel_infos[0][spec.parallel].axis_size
             plans.append(
-                ReorderPlan(
+                ReordererPlan(
                     params=ZigzagToNaturalParams(dim=dim_index, cp_size=axis_size),
                 )
             )
@@ -55,7 +55,7 @@ def compute_reorder_plans(
 
 
 def execute_reorder_plan(
-    plan: ReorderPlan,
+    plan: ReordererPlan,
     tensors: list[torch.Tensor],
 ) -> list[torch.Tensor]:
     return [

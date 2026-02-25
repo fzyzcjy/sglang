@@ -20,7 +20,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.planner import (
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     SeqsInfo,
     TokenAlignGlobalAux,
-    TokenAlignPlan,
+    TokenAlignerPlan,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 
@@ -46,7 +46,7 @@ def _build_token_align_plan(
     args: argparse.Namespace,
     df_baseline: pl.DataFrame,
     df_target: pl.DataFrame,
-) -> Optional[TokenAlignPlan]:
+) -> Optional[TokenAlignerPlan]:
     """Load aux tensors, build token indices, and compute the alignment plan."""
     dump_paths: Pair[Path] = Pair(x=Path(args.baseline_path), y=Path(args.target_path))
     dfs: Pair[pl.DataFrame] = Pair(x=df_baseline, y=df_target)

@@ -4,7 +4,7 @@ import pytest
 import torch
 
 from sglang.srt.debug_utils.comparator.aligner.reorder import (
-    ReorderPlan,
+    ReordererPlan,
     _reorder_zigzag_to_natural,
     compute_reorder_plans,
     execute_reorder_plan,
@@ -57,9 +57,9 @@ class TestZigzagToNatural:
         assert torch.equal(result, natural)
 
 
-class TestComputeReorderPlans:
+class TestComputeReordererPlans:
     def test_compute_reorder_plans_zigzag(self) -> None:
-        """s(cp,zigzag) produces a ReorderPlan."""
+        """s(cp,zigzag) produces a ReordererPlan."""
         dim_specs = parse_dims("b s(cp,zigzag) h(tp)")
         parallel_infos: list[dict[ParallelAxis, AxisInfo]] = [
             {
@@ -145,7 +145,7 @@ class TestCpZigzagTpE2E:
 
         current: list[torch.Tensor] = tensors
         for plan in all_plans:
-            if isinstance(plan, ReorderPlan):
+            if isinstance(plan, ReordererPlan):
                 current = execute_reorder_plan(plan, current)
             else:
                 current, _ = execute_unshard_plan(plan, current)

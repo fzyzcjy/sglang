@@ -16,7 +16,7 @@ from sglang.test.ci.ci_register import register_cpu_ci
 register_cpu_ci(est_time=10, suite="default", nightly=True)
 
 
-class TestComputeUnshardPlan:
+class TestComputeUnsharderPlan:
     def test_tp4_plan(self) -> None:
         dim_specs = parse_dims("b s h(tp) d")
         parallel_infos = [

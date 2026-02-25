@@ -22,15 +22,15 @@ class PickParams(_FrozenBase):
     op: Literal["pick"] = "pick"
 
 
-UnshardParams = Annotated[
+UnsharderParams = Annotated[
     Union[ConcatParams, PickParams],
     Field(discriminator="op"),
 ]
 
 
-class UnshardPlan(_FrozenBase):
+class UnsharderPlan(_FrozenBase):
     axis: ParallelAxis
-    params: UnshardParams
+    params: UnsharderParams
     # groups[i] = indices in the input tensor list, which will be operated (e.g. concat) into i-th output tensor.
     #
     # Multistep example (CP=2, TP=2, 4 input tensors):
