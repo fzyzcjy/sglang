@@ -1021,11 +1021,19 @@ class TestEntrypointAlignment:
         hidden_step0 = torch.randn(5, hidden_dim)
         hidden_step1 = torch.randn(2, hidden_dim)
 
+        exp_paths: list[Path] = []
         for side_dir in ["baseline", "target"]:
             d = tmp_path / side_dir
             d.mkdir()
 
-            dumper = _make_dumper(d)
+            dumper = _Dumper(
+                config=DumperConfig(
+                    enable=True,
+                    dir=str(d),
+                    exp_name=_FIXED_EXP_NAME,
+                    enable_http_server=False,
+                )
+            )
 
             # Step 0: prefill with 2 sequences (3+2 tokens)
             dumper.dump("input_ids", torch.tensor([10, 20, 30, 40, 50]))
@@ -1045,10 +1053,9 @@ class TestEntrypointAlignment:
             dumper.dump("hidden_states", hidden_step1)
             dumper.step()
 
-        baseline_path = tmp_path / "baseline" / dumper._config.exp_name
-        target_path = tmp_path / "target" / dumper._config.exp_name
+            exp_paths.append(d / _FIXED_EXP_NAME)
 
-        args = _make_args(baseline_path, target_path, grouping="logical")
+        args = _make_args(exp_paths[0], exp_paths[1], grouping="logical")
         records = _run_and_parse(args, capsys)
 
         comparisons = _get_comparisons(records)
