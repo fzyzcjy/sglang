@@ -75,8 +75,12 @@ def compare_bundle_pair(
         )
         combined_b, combined_t = aligned.x, aligned.y
     else:
-        combined_b = _concat_steps(tensors_b)
-        combined_t = _concat_steps(tensors_t)
+        assert len(tensors_b) == 1 and len(tensors_t) == 1, (
+            f"Expected single-step bundles without alignment plan, "
+            f"got {len(tensors_b)} baseline steps and {len(tensors_t)} target steps"
+        )
+        combined_b = list(tensors_b.values())[0]
+        combined_t = list(tensors_t.values())[0]
 
     info = compare_tensor_pair(
         x_baseline=combined_b,
@@ -124,14 +128,6 @@ def _load_and_unshard_into_one(
 
     plans: list[_Plan] = _compute_plans_for_group([item.meta for item in tensors_with_meta])
     return _execute_plans(tensors, plans)
-
-
-def _concat_steps(tensors: dict[int, torch.Tensor]) -> torch.Tensor:
-    """Concat all step tensors into a single tensor (sorted by step key)."""
-    sorted_tensors: list[torch.Tensor] = [tensors[s] for s in sorted(tensors)]
-    if sorted_tensors[0].ndim == 0:
-        return torch.stack(sorted_tensors)
-    return torch.cat(sorted_tensors, dim=0)
 
 
 def _load_tensors(filenames: list[str], base_path: Path) -> list[ValueWithMeta]:
