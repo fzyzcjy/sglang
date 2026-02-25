@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import torch
 
-from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import TokenAlignerPlan
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
+    TokenAlignerPlan,
+)
 from sglang.srt.debug_utils.comparator.utils import Pair
 
 

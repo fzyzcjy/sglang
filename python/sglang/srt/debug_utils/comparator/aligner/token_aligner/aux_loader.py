@@ -141,7 +141,9 @@ def _load_and_unshard_aux_tensor(
     if dims_str is not None:
         dim_specs = parse_dims(dims_str)
         parallel_infos = [normalize_parallel_info(m) for m in metas]
-        plans = compute_unsharder_plan(dim_specs=dim_specs, parallel_infos=parallel_infos)
+        plans = compute_unsharder_plan(
+            dim_specs=dim_specs, parallel_infos=parallel_infos
+        )
 
         current = tensors
         for plan in plans:

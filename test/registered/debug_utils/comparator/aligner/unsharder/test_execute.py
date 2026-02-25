@@ -59,7 +59,9 @@ class TestExecuteUnsharderPlan:
             shards[1],  # world_rank=3, axis_rank=1
         ]
 
-        result, warnings = execute_unsharder_plan(plans[0], tensors_ordered_by_world_rank)
+        result, warnings = execute_unsharder_plan(
+            plans[0], tensors_ordered_by_world_rank
+        )
         assert len(result) == 1
         assert torch.allclose(result[0], full_tensor)
         assert warnings == []

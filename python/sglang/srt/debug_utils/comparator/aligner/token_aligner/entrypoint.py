@@ -19,8 +19,8 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.planner import (
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     SeqsInfo,
-    TokenAlignGlobalAux,
     TokenAlignerPlan,
+    TokenAlignGlobalAux,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 

@@ -16,7 +16,9 @@ from sglang.srt.debug_utils.comparator.aligner.reorder import (
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.executor import (
     execute_token_align,
 )
-from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import TokenAlignerPlan
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
+    TokenAlignerPlan,
+)
 from sglang.srt.debug_utils.comparator.aligner.unsharder.executor import (
     execute_unsharder_plan,
 )
