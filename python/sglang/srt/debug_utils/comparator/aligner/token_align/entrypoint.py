@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional
 
 import polars as pl
 
@@ -45,16 +46,26 @@ def _build_token_align_plan(
     args: argparse.Namespace,
     df_baseline: pl.DataFrame,
     df_target: pl.DataFrame,
-) -> TokenAlignPlan:
+) -> Optional[TokenAlignPlan]:
     """Load aux tensors, build token indices, and compute the alignment plan."""
     dump_paths: Pair[Path] = Pair(
         x=Path(args.baseline_path), y=Path(args.target_path)
     )
     dfs: Pair[pl.DataFrame] = Pair(x=df_baseline, y=df_target)
 
+    baseline_aux = load_and_normalize_aux(dump_path=dump_paths.x, df=dfs.x)
+    target_aux = load_and_normalize_aux(dump_path=dump_paths.y, df=dfs.y)
+
+    if baseline_aux is None or target_aux is None:
+        print(
+            "Warning: framework detection failed, skipping token alignment",
+            file=sys.stderr,
+        )
+        return None
+
     global_aux: Pair[TokenAlignGlobalAux] = Pair(
-        x=load_and_normalize_aux(dump_path=dump_paths.x, df=dfs.x),
-        y=load_and_normalize_aux(dump_path=dump_paths.y, df=dfs.y),
+        x=baseline_aux,
+        y=target_aux,
     )
 
     seqs_info: Pair[SeqsInfo] = Pair(

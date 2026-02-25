@@ -33,9 +33,14 @@ _MEGATRON_AUX_NAMES = frozenset(
 AUX_NAMES: frozenset[str] = _SGLANG_AUX_NAMES | _MEGATRON_AUX_NAMES
 
 
-def load_and_normalize_aux(dump_path: Path, df: pl.DataFrame) -> TokenAlignGlobalAux:
+def load_and_normalize_aux(
+    dump_path: Path, df: pl.DataFrame
+) -> Optional[TokenAlignGlobalAux]:
     """Bootstrap: load, unshard, and normalize auxiliary tensors for one side."""
-    framework: str = _detect_framework(df, dump_path=dump_path)
+    framework: Optional[str] = _detect_framework(df, dump_path=dump_path)
+    if framework is None:
+        return None
+
     aux_names: frozenset[str] = (
         _SGLANG_AUX_NAMES if framework == "sglang" else _MEGATRON_AUX_NAMES
     )
@@ -73,15 +78,8 @@ def has_aux_tensors(df: pl.DataFrame) -> bool:
     return has_input_ids and has_seq_info
 
 
-def _detect_framework(df: pl.DataFrame, dump_path: Path) -> str:
-    """Detect framework from tensor names or embedded metadata."""
-    names: set[str] = set(df["name"].unique().to_list())
-
-    if names & {"req_pool_indices", "rids"}:
-        return "sglang"
-    if names & {"cu_seqlens_q", "qkv_format", "position_ids"}:
-        return "megatron"
-
+def _detect_framework(df: pl.DataFrame, dump_path: Path) -> Optional[str]:
+    """Detect framework from embedded metadata."""
     first_row: dict = df.row(0, named=True)
     vwm: ValueWithMeta = ValueWithMeta.load(dump_path / first_row["filename"])
     if "sglang_parallel_info" in vwm.meta:
@@ -89,7 +87,7 @@ def _detect_framework(df: pl.DataFrame, dump_path: Path) -> str:
     if "megatron_parallel_info" in vwm.meta:
         return "megatron"
 
-    return "sglang"
+    return None
 
 
 def _detect_layout(raw: dict[int, dict[str, object]], framework: str) -> str:

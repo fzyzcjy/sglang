@@ -6,7 +6,6 @@ import pytest
 import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
-    _detect_framework,
     _infer_positions,
     _normalize_megatron,
     _normalize_sglang,
@@ -121,39 +120,6 @@ class TestInferPositions:
             seq_lens=torch.tensor([2, 3]),
         )
         assert torch.equal(result, torch.tensor([0, 1, 0, 1, 2]))
-
-
-class TestDetectFramework:
-    """Tests for name-based framework detection (no file I/O needed)."""
-
-    @staticmethod
-    def _make_df(names: list[str]) -> pl.DataFrame:
-        return pl.DataFrame({"name": names})
-
-    def test_sglang_by_req_pool_indices(self):
-        """req_pool_indices in names → sglang."""
-        df: pl.DataFrame = self._make_df(["input_ids", "req_pool_indices", "seq_lens"])
-        assert _detect_framework(df, dump_path=Path("/dummy")) == "sglang"
-
-    def test_sglang_by_rids(self):
-        """rids in names → sglang."""
-        df: pl.DataFrame = self._make_df(["input_ids", "rids", "seq_lens"])
-        assert _detect_framework(df, dump_path=Path("/dummy")) == "sglang"
-
-    def test_megatron_by_cu_seqlens_q(self):
-        """cu_seqlens_q in names → megatron."""
-        df: pl.DataFrame = self._make_df(["input_ids", "cu_seqlens_q"])
-        assert _detect_framework(df, dump_path=Path("/dummy")) == "megatron"
-
-    def test_megatron_by_qkv_format(self):
-        """qkv_format in names → megatron."""
-        df: pl.DataFrame = self._make_df(["input_ids", "qkv_format"])
-        assert _detect_framework(df, dump_path=Path("/dummy")) == "megatron"
-
-    def test_megatron_by_position_ids(self):
-        """position_ids in names → megatron."""
-        df: pl.DataFrame = self._make_df(["input_ids", "position_ids"])
-        assert _detect_framework(df, dump_path=Path("/dummy")) == "megatron"
 
 
 if __name__ == "__main__":
