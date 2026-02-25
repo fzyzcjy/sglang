@@ -104,7 +104,9 @@ def compare_bundle_pair(
 
     if result is None:
         reason = (
-            "baseline_load_failed" if failed_side == "baseline" else "target_load_failed"
+            "baseline_load_failed"
+            if failed_side == "baseline"
+            else "target_load_failed"
         )
         return SkipRecord(name=name, reason=reason, align_warnings=align_warnings)
 
@@ -149,9 +151,7 @@ def _compute_side_plans(metas: list[dict[str, Any]]) -> list[_StepGroupPlan]:
         step_metas: list[dict[str, Any]] = [metas[i] for i in indices]
         plans: list[_Plan] = _compute_step_unshard_reorder(metas=step_metas)
         result.append(
-            _StepGroupPlan(
-                step=step, input_indices=indices, unshard_reorder=plans
-            )
+            _StepGroupPlan(step=step, input_indices=indices, unshard_reorder=plans)
         )
 
     return result
@@ -228,9 +228,7 @@ def _execute_side_plans(
     all_warnings: list[AlignWarning] = []
 
     for step_plan in step_plans:
-        step_tensors: list[torch.Tensor] = [
-            tensors[i] for i in step_plan.input_indices
-        ]
+        step_tensors: list[torch.Tensor] = [tensors[i] for i in step_plan.input_indices]
         tensor, warnings = _execute_step_plans(
             tensors=step_tensors, plans=step_plan.unshard_reorder
         )

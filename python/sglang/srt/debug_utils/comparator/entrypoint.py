@@ -16,7 +16,10 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
     TokenAlignPlan,
 )
 from sglang.srt.debug_utils.comparator.bundle_comparator import compare_bundle_pair
-from sglang.srt.debug_utils.comparator.bundle_matcher import TensorBundleInfo, match_bundles
+from sglang.srt.debug_utils.comparator.bundle_matcher import (
+    TensorBundleInfo,
+    match_bundles,
+)
 from sglang.srt.debug_utils.comparator.output_types import (
     ComparisonRecord,
     ConfigRecord,
@@ -49,7 +52,9 @@ def run(args: argparse.Namespace) -> None:
     bundle_info_pairs: list[Pair[TensorBundleInfo]] = match_bundles(
         df_baseline=df_baseline,
         df_target=df_target,
-        skip_keys=_compute_skip_keys(args, has_token_align_plan=token_align_plan is not None),
+        skip_keys=_compute_skip_keys(
+            args, has_token_align_plan=token_align_plan is not None
+        ),
     )
 
     comparison_records = _execute_compare_bundle_pair(

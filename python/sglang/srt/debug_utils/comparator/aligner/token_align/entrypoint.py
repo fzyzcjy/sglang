@@ -48,9 +48,7 @@ def _build_token_align_plan(
     df_target: pl.DataFrame,
 ) -> Optional[TokenAlignPlan]:
     """Load aux tensors, build token indices, and compute the alignment plan."""
-    dump_paths: Pair[Path] = Pair(
-        x=Path(args.baseline_path), y=Path(args.target_path)
-    )
+    dump_paths: Pair[Path] = Pair(x=Path(args.baseline_path), y=Path(args.target_path))
     dfs: Pair[pl.DataFrame] = Pair(x=df_baseline, y=df_target)
 
     baseline_aux = load_and_normalize_aux(dump_path=dump_paths.x, df=dfs.x)
