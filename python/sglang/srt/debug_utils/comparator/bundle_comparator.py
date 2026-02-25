@@ -55,10 +55,10 @@ def compare_bundle_pair(
 ) -> Union[ComparisonRecord, SkipRecord]:
     name: str = bundle_info_pair.y[0].name
 
-    tensors_b, b_warns = _load_and_unshard_by_step(
+    tensors_b, b_warns = _load_and_align_by_step(
         infos=bundle_info_pair.x, base_path=baseline_path
     )
-    tensors_t, t_warns = _load_and_unshard_by_step(
+    tensors_t, t_warns = _load_and_align_by_step(
         infos=bundle_info_pair.y, base_path=target_path
     )
     align_warnings: list[AlignWarning] = b_warns + t_warns
@@ -92,7 +92,7 @@ def compare_bundle_pair(
     return ComparisonRecord(**info.model_dump(), align_warnings=align_warnings)
 
 
-def _load_and_unshard_by_step(
+def _load_and_align_by_step(
     *, infos: list[TensorInfo], base_path: Path
 ) -> tuple[dict[int, torch.Tensor], list[AlignWarning]]:
     """Group rows by step, unshard within each step, return step->tensor mapping."""
@@ -105,7 +105,7 @@ def _load_and_unshard_by_step(
 
     for step in sorted(infos_of_step):
         filenames: list[str] = [r.filename for r in infos_of_step[step]]
-        tensor, warnings = _load_and_unshard_into_one(
+        tensor, warnings = _load_and_align_one(
             filenames=filenames, base_path=base_path
         )
         all_warnings.extend(warnings)
@@ -115,7 +115,7 @@ def _load_and_unshard_by_step(
     return result, all_warnings
 
 
-def _load_and_unshard_into_one(
+def _load_and_align_one(
     *, filenames: list[str], base_path: Path
 ) -> tuple[Optional[torch.Tensor], list[AlignWarning]]:
     """Load tensor files and unshard them into a single tensor."""
