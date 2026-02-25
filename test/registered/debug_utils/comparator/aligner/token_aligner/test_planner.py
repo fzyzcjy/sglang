@@ -10,10 +10,12 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.planner import (
     compute_token_aligner_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
-    SeqInfo,
-    SeqsInfo,
-    StepAux,
-    TokenAlignGlobalAux,
+    MegatronSeqId,
+    SGLangSeqId,
+    TokenAlignerSeqInfo,
+    TokenAlignerSeqsInfo,
+    TokenAlignerStepAux,
+    TokenAlignerGlobalAux,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -26,13 +28,13 @@ class TestBuildTokenIndexSGLangThd:
 
     def test_single_step_prefill(self):
         """Single prefill step with two sequences."""
-        side_aux = TokenAlignGlobalAux(
+        side_aux = TokenAlignerGlobalAux(
             steps={
-                0: StepAux(
+                0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20, 30, 40, 50]),
                     positions=torch.tensor([0, 1, 2, 0, 1]),
                     seq_lens=torch.tensor([3, 2]),
-                    seq_ids=("A", "B"),
+                    seq_ids=(SGLangSeqId(rid="A"), SGLangSeqId(rid="B")),
                 ),
             },
             framework="sglang",
@@ -55,19 +57,19 @@ class TestBuildTokenIndexSGLangThd:
 
     def test_multi_step_prefill_decode(self):
         """Prefill step followed by decode steps, sequences accumulate tokens."""
-        side_aux = TokenAlignGlobalAux(
+        side_aux = TokenAlignerGlobalAux(
             steps={
-                0: StepAux(
+                0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20, 30, 40, 50]),
                     positions=torch.tensor([0, 1, 2, 0, 1]),
                     seq_lens=torch.tensor([3, 2]),
-                    seq_ids=("A", "B"),
+                    seq_ids=(SGLangSeqId(rid="A"), SGLangSeqId(rid="B")),
                 ),
-                1: StepAux(
+                1: TokenAlignerStepAux(
                     input_ids=torch.tensor([31, 51]),
                     positions=torch.tensor([3, 2]),
                     seq_lens=torch.tensor([1, 1]),
-                    seq_ids=("A", "B"),
+                    seq_ids=(SGLangSeqId(rid="A"), SGLangSeqId(rid="B")),
                 ),
             },
             framework="sglang",
@@ -88,19 +90,19 @@ class TestBuildTokenIndexSGLangThd:
 
     def test_sequence_exit_and_join(self):
         """Sequence A exits, new sequence D joins with different seq_id."""
-        side_aux = TokenAlignGlobalAux(
+        side_aux = TokenAlignerGlobalAux(
             steps={
-                0: StepAux(
+                0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20, 30]),
                     positions=torch.tensor([0, 1, 2]),
                     seq_lens=torch.tensor([3]),
-                    seq_ids=("A",),
+                    seq_ids=(SGLangSeqId(rid="A"),),
                 ),
-                1: StepAux(
+                1: TokenAlignerStepAux(
                     input_ids=torch.tensor([100, 200]),
                     positions=torch.tensor([0, 1]),
                     seq_lens=torch.tensor([2]),
-                    seq_ids=("D",),
+                    seq_ids=(SGLangSeqId(rid="D"),),
                 ),
             },
             framework="sglang",
@@ -112,19 +114,19 @@ class TestBuildTokenIndexSGLangThd:
 
     def test_different_seq_ids_produce_separate_sequences(self):
         """Different seq_ids at different steps → separate sequences."""
-        side_aux = TokenAlignGlobalAux(
+        side_aux = TokenAlignerGlobalAux(
             steps={
-                0: StepAux(
+                0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20]),
                     positions=torch.tensor([0, 1]),
                     seq_lens=torch.tensor([2]),
-                    seq_ids=("A",),
+                    seq_ids=(SGLangSeqId(rid="A"),),
                 ),
-                1: StepAux(
+                1: TokenAlignerStepAux(
                     input_ids=torch.tensor([100, 200, 300]),
                     positions=torch.tensor([0, 1, 2]),
                     seq_lens=torch.tensor([3]),
-                    seq_ids=("D",),
+                    seq_ids=(SGLangSeqId(rid="D"),),
                 ),
             },
             framework="sglang",
@@ -146,13 +148,13 @@ class TestBuildTokenIndexMegatronThd:
 
     def test_single_step_two_sequences(self):
         """Single step with two sequences in thd layout."""
-        side_aux = TokenAlignGlobalAux(
+        side_aux = TokenAlignerGlobalAux(
             steps={
-                0: StepAux(
+                0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20, 30, 40, 50]),
                     positions=torch.tensor([0, 1, 2, 0, 1]),
                     seq_lens=torch.tensor([3, 2]),
-                    seq_ids=((0, 0), (0, 1)),
+                    seq_ids=(MegatronSeqId(step=0, seq_index=0), MegatronSeqId(step=0, seq_index=1)),
                 ),
             },
             framework="megatron",
@@ -175,19 +177,19 @@ class TestBuildTokenIndexMegatronThd:
 
     def test_multi_step_accumulation(self):
         """Two steps with different seq_ids produce separate sequences."""
-        side_aux = TokenAlignGlobalAux(
+        side_aux = TokenAlignerGlobalAux(
             steps={
-                0: StepAux(
+                0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20, 30, 40]),
                     positions=torch.tensor([0, 1, 0, 1]),
                     seq_lens=torch.tensor([2, 2]),
-                    seq_ids=((0, 0), (0, 1)),
+                    seq_ids=(MegatronSeqId(step=0, seq_index=0), MegatronSeqId(step=0, seq_index=1)),
                 ),
-                1: StepAux(
+                1: TokenAlignerStepAux(
                     input_ids=torch.tensor([50, 60, 70, 80]),
                     positions=torch.tensor([0, 1, 0, 1]),
                     seq_lens=torch.tensor([2, 2]),
-                    seq_ids=((1, 0), (1, 1)),
+                    seq_ids=(MegatronSeqId(step=1, seq_index=0), MegatronSeqId(step=1, seq_index=1)),
                 ),
             },
             framework="megatron",
@@ -275,31 +277,31 @@ class TestComputeAlignmentPlanCrossLayout:
 
     def test_thd_vs_thd_different_step_splits(self):
         """Two thd sides with same tokens but different step distributions."""
-        side_aux_a = TokenAlignGlobalAux(
+        side_aux_a = TokenAlignerGlobalAux(
             steps={
-                0: StepAux(
+                0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20]),
                     positions=torch.tensor([0, 1]),
                     seq_lens=torch.tensor([2]),
-                    seq_ids=("X",),
+                    seq_ids=(SGLangSeqId(rid="X"),),
                 ),
-                1: StepAux(
+                1: TokenAlignerStepAux(
                     input_ids=torch.tensor([30]),
                     positions=torch.tensor([2]),
                     seq_lens=torch.tensor([1]),
-                    seq_ids=("X",),
+                    seq_ids=(SGLangSeqId(rid="X"),),
                 ),
             },
             framework="sglang",
             layout="thd",
         )
-        side_aux_b = TokenAlignGlobalAux(
+        side_aux_b = TokenAlignerGlobalAux(
             steps={
-                0: StepAux(
+                0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20, 30]),
                     positions=torch.tensor([0, 1, 2]),
                     seq_lens=torch.tensor([3]),
-                    seq_ids=("X",),
+                    seq_ids=(SGLangSeqId(rid="X"),),
                 ),
             },
             framework="sglang",
@@ -314,31 +316,31 @@ class TestComputeAlignmentPlanCrossLayout:
 
     def test_sglang_vs_megatron_thd(self):
         """SGLang multi-step thd aligned with Megatron single-step thd."""
-        side_aux_a = TokenAlignGlobalAux(
+        side_aux_a = TokenAlignerGlobalAux(
             steps={
-                0: StepAux(
+                0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20, 30, 40, 50]),
                     positions=torch.tensor([0, 1, 2, 0, 1]),
                     seq_lens=torch.tensor([3, 2]),
-                    seq_ids=("A", "B"),
+                    seq_ids=(SGLangSeqId(rid="A"), SGLangSeqId(rid="B")),
                 ),
-                1: StepAux(
+                1: TokenAlignerStepAux(
                     input_ids=torch.tensor([31, 51]),
                     positions=torch.tensor([3, 2]),
                     seq_lens=torch.tensor([1, 1]),
-                    seq_ids=("A", "B"),
+                    seq_ids=(SGLangSeqId(rid="A"), SGLangSeqId(rid="B")),
                 ),
             },
             framework="sglang",
             layout="thd",
         )
-        side_aux_b = TokenAlignGlobalAux(
+        side_aux_b = TokenAlignerGlobalAux(
             steps={
-                0: StepAux(
+                0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20, 30, 31, 40, 50, 51]),
                     positions=torch.tensor([0, 1, 2, 3, 0, 1, 2]),
                     seq_lens=torch.tensor([4, 3]),
-                    seq_ids=((0, 0), (0, 1)),
+                    seq_ids=(MegatronSeqId(step=0, seq_index=0), MegatronSeqId(step=0, seq_index=1)),
                 ),
             },
             framework="megatron",
@@ -362,18 +364,18 @@ def _make_index(
     *,
     sequences: dict[int, tuple[int, ...]],
     layout: str = "thd",
-) -> SeqsInfo:
-    """Create a SeqsInfo from simplified input_ids-only specification."""
-    records: dict[int, SeqInfo] = {}
+) -> TokenAlignerSeqsInfo:
+    """Create a TokenAlignerSeqsInfo from simplified input_ids-only specification."""
+    records: dict[int, TokenAlignerSeqInfo] = {}
     for seq_id, input_ids in sequences.items():
         num_tokens = len(input_ids)
-        records[seq_id] = SeqInfo(
+        records[seq_id] = TokenAlignerSeqInfo(
             input_ids=list(input_ids),
             positions=list(range(num_tokens)),
             steps=[0] * num_tokens,
             indices=list(range(num_tokens)),
         )
-    return SeqsInfo(sequences=records, layout=layout)
+    return TokenAlignerSeqsInfo(sequences=records, layout=layout)
 
 
 if __name__ == "__main__":

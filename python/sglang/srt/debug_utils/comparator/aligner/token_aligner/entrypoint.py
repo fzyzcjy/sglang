@@ -25,7 +25,11 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
 from sglang.srt.debug_utils.comparator.utils import Pair
 
 
-def compute_maybe_token_aligner_plan(args, df_baseline, df_target):
+def compute_maybe_token_aligner_plan(
+    args: argparse.Namespace,
+    df_baseline: pl.DataFrame,
+    df_target: pl.DataFrame,
+) -> Optional[TokenAlignerPlan]:
     if args.grouping == "logical":
         if not (has_aux_tensors(df_baseline) and has_aux_tensors(df_target)):
             print(

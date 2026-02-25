@@ -69,7 +69,7 @@ def run(args: argparse.Namespace) -> None:
     )
 
 
-def _read_df(args):
+def _read_df(args: argparse.Namespace) -> tuple[pl.DataFrame, pl.DataFrame]:
     df_baseline = read_meta(args.baseline_path)
 
     df_target = read_meta(args.target_path)

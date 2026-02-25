@@ -9,6 +9,8 @@ import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     ExternalSeqId,
+    MegatronSeqId,
+    SGLangSeqId,
     TokenAlignerStepAux,
     TokenAlignerGlobalAux,
 )
@@ -204,9 +206,9 @@ def _normalize_sglang(step_data: dict[str, object], *, step: int) -> TokenAligne
 
     seq_ids: tuple[ExternalSeqId, ...]
     if rids_raw is not None and isinstance(rids_raw, (list, tuple)):
-        seq_ids = tuple(str(r) for r in rids_raw)
+        seq_ids = tuple(SGLangSeqId(rid=str(r)) for r in rids_raw)
     else:
-        seq_ids = tuple((step, i) for i in range(num_seqs))
+        seq_ids = tuple(MegatronSeqId(step=step, seq_index=i) for i in range(num_seqs))
 
     return TokenAlignerStepAux(
         input_ids=input_ids,
@@ -265,7 +267,7 @@ def _normalize_megatron(
 
     num_seqs: int = int(seq_lens.shape[0])
     seq_ids: tuple[ExternalSeqId, ...] = tuple(
-        (step, seq_index) for seq_index in range(num_seqs)
+        MegatronSeqId(step=step, seq_index=seq_index) for seq_index in range(num_seqs)
     )
 
     return TokenAlignerStepAux(

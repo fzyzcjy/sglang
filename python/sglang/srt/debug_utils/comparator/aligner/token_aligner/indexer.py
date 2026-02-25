@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     ExternalSeqId,
+    TokenAlignerGlobalAux,
     TokenAlignerSeqInfo,
     TokenAlignerSeqsInfo,
     TokenAlignerStepAux,
-    TokenAlignerGlobalAux,
 )
 
 

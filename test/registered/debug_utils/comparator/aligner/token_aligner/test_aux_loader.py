@@ -9,7 +9,9 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.aux_loader import (
     _normalize_sglang,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
-    StepAux,
+    MegatronSeqId,
+    SGLangSeqId,
+    TokenAlignerStepAux,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
 
@@ -28,12 +30,12 @@ class TestNormalizeSGLang:
             "rids": ["A"],
         }
 
-        result: StepAux = _normalize_sglang(step_data, step=0)
+        result: TokenAlignerStepAux = _normalize_sglang(step_data, step=0)
 
         assert torch.equal(result.input_ids, step_data["input_ids"])
         assert torch.equal(result.positions, step_data["positions"])
         assert torch.equal(result.seq_lens, step_data["seq_lens"])
-        assert result.seq_ids == ("A",)
+        assert result.seq_ids == (SGLangSeqId(rid="A"),)
 
     def test_rids_none_fallback(self):
         """Missing rids results in (step, index) fallback seq_ids."""
@@ -43,8 +45,8 @@ class TestNormalizeSGLang:
             "seq_lens": torch.tensor([2]),
         }
 
-        result: StepAux = _normalize_sglang(step_data, step=3)
-        assert result.seq_ids == ((3, 0),)
+        result: TokenAlignerStepAux = _normalize_sglang(step_data, step=3)
+        assert result.seq_ids == (MegatronSeqId(step=3, seq_index=0),)
 
     def test_multiple_seqs_with_rids(self):
         """Multiple sequences with rids."""
@@ -55,8 +57,8 @@ class TestNormalizeSGLang:
             "rids": ["A", "B"],
         }
 
-        result: StepAux = _normalize_sglang(step_data, step=0)
-        assert result.seq_ids == ("A", "B")
+        result: TokenAlignerStepAux = _normalize_sglang(step_data, step=0)
+        assert result.seq_ids == (SGLangSeqId(rid="A"), SGLangSeqId(rid="B"))
 
 
 class TestNormalizeMegatron:
@@ -69,7 +71,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 3, 5]),
         }
 
-        result: StepAux = _normalize_megatron(step_data, layout="thd", step=0)
+        result: TokenAlignerStepAux = _normalize_megatron(step_data, layout="thd", step=0)
 
         assert torch.equal(result.seq_lens, torch.tensor([3, 2]))
 
@@ -80,7 +82,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 3, 5]),
         }
 
-        result: StepAux = _normalize_megatron(step_data, layout="thd", step=0)
+        result: TokenAlignerStepAux = _normalize_megatron(step_data, layout="thd", step=0)
 
         expected_positions = torch.tensor([0, 1, 2, 0, 1])
         assert torch.equal(result.positions, expected_positions)
@@ -94,7 +96,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 5]),
         }
 
-        result: StepAux = _normalize_megatron(step_data, layout="thd", step=0)
+        result: TokenAlignerStepAux = _normalize_megatron(step_data, layout="thd", step=0)
 
         assert torch.equal(result.positions, explicit_positions)
 
@@ -105,8 +107,8 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 3, 5]),
         }
 
-        result: StepAux = _normalize_megatron(step_data, layout="thd", step=5)
-        assert result.seq_ids == ((5, 0), (5, 1))
+        result: TokenAlignerStepAux = _normalize_megatron(step_data, layout="thd", step=5)
+        assert result.seq_ids == (MegatronSeqId(step=5, seq_index=0), MegatronSeqId(step=5, seq_index=1))
 
 
 class TestInferPositions:

@@ -15,9 +15,10 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.planner import (
     compute_token_aligner_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
-    StepAux,
+    SGLangSeqId,
+    TokenAlignerStepAux,
     TokenAlignerPlan,
-    TokenAlignGlobalAux,
+    TokenAlignerGlobalAux,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -34,20 +35,20 @@ class TestExecuteAlignment:
         hidden_step0 = torch.randn(5, 8)  # 5 tokens, hidden_dim=8
         hidden_step1 = torch.randn(2, 8)  # 2 tokens
 
-        aux = StepAux(
+        aux = TokenAlignerStepAux(
             input_ids=torch.tensor([10, 20, 30, 40, 50]),
             positions=torch.tensor([0, 1, 2, 0, 1]),
             seq_lens=torch.tensor([3, 2]),
-            seq_ids=("A", "B"),
+            seq_ids=(SGLangSeqId(rid="A"), SGLangSeqId(rid="B")),
         )
-        aux_step1 = StepAux(
+        aux_step1 = TokenAlignerStepAux(
             input_ids=torch.tensor([31, 51]),
             positions=torch.tensor([3, 2]),
             seq_lens=torch.tensor([1, 1]),
-            seq_ids=("A", "B"),
+            seq_ids=(SGLangSeqId(rid="A"), SGLangSeqId(rid="B")),
         )
 
-        side_aux = TokenAlignGlobalAux(
+        side_aux = TokenAlignerGlobalAux(
             steps={0: aux, 1: aux_step1},
             framework="sglang",
             layout="thd",

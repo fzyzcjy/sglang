@@ -1,14 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Union
+from typing import NamedTuple, Union
 
 import torch
 
 from sglang.srt.debug_utils.comparator.utils import Pair, _FrozenBase
 
-# seq_id type: str (SGLang rid) or tuple[int, int] (Megatron (step, seq_index))
-ExternalSeqId = Union[str, tuple[int, int]]
+
+class SGLangSeqId(NamedTuple):
+    rid: str
+
+
+class MegatronSeqId(NamedTuple):
+    step: int
+    seq_index: int
+
+
+ExternalSeqId = Union[SGLangSeqId, MegatronSeqId]
 
 
 @dataclass(frozen=True)
