@@ -12,7 +12,6 @@ from sglang.srt.debug_utils.comparator.aligner.reorder import (
     compute_reorder_plans,
     execute_reorder_plan,
 )
-from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import AUX_NAMES
 from sglang.srt.debug_utils.comparator.aligner.token_align.executor import (
     execute_token_align,
 )
@@ -69,7 +68,7 @@ def compare_bundle_pair(
         reason = "baseline_load_failed" if not tensors_b else "target_load_failed"
         return SkipRecord(name=name, reason=reason, align_warnings=align_warnings)
 
-    if token_align_plan is not None and name not in AUX_NAMES:
+    if token_align_plan is not None:
         aligned: Pair[torch.Tensor] = execute_token_align(
             plan=token_align_plan, tensors=Pair(x=tensors_b, y=tensors_t)
         )
