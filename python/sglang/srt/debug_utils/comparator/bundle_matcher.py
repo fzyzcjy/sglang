@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import dataclasses
+from dataclasses import dataclass
 from typing import Any
 
 import polars as pl
@@ -7,7 +9,28 @@ import polars as pl
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.srt.debug_utils.dump_loader import filter_rows
 
-TensorInfoBundle = list[dict[str, Any]]
+
+@dataclass(frozen=True)
+class TensorInfo:
+    filename: str
+    name: str
+    step: int
+    rank: int
+    dump_index: int
+    duplicate_index: int
+
+
+_TENSOR_INFO_FIELDS: set[str] = {f.name for f in dataclasses.fields(TensorInfo)}
+
+
+def _rows_to_tensor_infos(rows: list[dict[str, Any]]) -> list[TensorInfo]:
+    return [
+        TensorInfo(**{k: v for k, v in row.items() if k in _TENSOR_INFO_FIELDS})
+        for row in rows
+    ]
+
+
+TensorInfoBundle = list[TensorInfo]
 
 
 def match_bundles(
@@ -23,8 +46,12 @@ def match_bundles(
 
     results: list[Pair[TensorInfoBundle]] = []
     for key_values in unique_keys.iter_rows(named=True):
-        rows_baseline: TensorInfoBundle = filter_rows(df_baseline, conditions=key_values)
-        rows_target: TensorInfoBundle = filter_rows(df_target, conditions=key_values)
+        rows_baseline: TensorInfoBundle = _rows_to_tensor_infos(
+            filter_rows(df_baseline, conditions=key_values)
+        )
+        rows_target: TensorInfoBundle = _rows_to_tensor_infos(
+            filter_rows(df_target, conditions=key_values)
+        )
         results.append(Pair(x=rows_baseline, y=rows_target))
 
     return results

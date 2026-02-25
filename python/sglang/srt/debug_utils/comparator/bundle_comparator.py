@@ -27,7 +27,10 @@ from sglang.srt.debug_utils.comparator.aligner.unshard.planner import (
     compute_unshard_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unshard.types import UnshardPlan
-from sglang.srt.debug_utils.comparator.bundle_matcher import TensorInfoBundle
+from sglang.srt.debug_utils.comparator.bundle_matcher import (
+    TensorInfo,
+    TensorInfoBundle,
+)
 from sglang.srt.debug_utils.comparator.dims import parse_dims
 from sglang.srt.debug_utils.comparator.output_types import (
     AlignWarning,
@@ -51,7 +54,7 @@ def compare_bundle_pair(
     token_align_plan: Optional[TokenAlignPlan],
     diff_threshold: float,
 ) -> Union[ComparisonRecord, SkipRecord]:
-    name: str = bundles.y[0]["name"]
+    name: str = bundles.y[0].name
 
     tensors_b, b_warns = _load_and_unshard_by_step(
         rows=bundles.x, base_path=baseline_path
@@ -85,18 +88,18 @@ def compare_bundle_pair(
 
 
 def _load_and_unshard_by_step(
-    *, rows: list[dict[str, Any]], base_path: Path
+    *, rows: list[TensorInfo], base_path: Path
 ) -> tuple[dict[int, torch.Tensor], list[AlignWarning]]:
     """Group rows by step, unshard within each step, return step->tensor mapping."""
-    grouped: dict[int, list[dict[str, Any]]] = {}
+    grouped: dict[int, list[TensorInfo]] = {}
     for row in rows:
-        grouped.setdefault(row["step"], []).append(row)
+        grouped.setdefault(row.step, []).append(row)
 
     result: dict[int, torch.Tensor] = {}
     all_warnings: list[AlignWarning] = []
 
     for step in sorted(grouped):
-        filenames: list[str] = [r["filename"] for r in grouped[step]]
+        filenames: list[str] = [r.filename for r in grouped[step]]
         tensor, warnings = _load_and_unshard_files(
             filenames=filenames, base_path=base_path
         )
