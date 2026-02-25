@@ -36,15 +36,15 @@ class TestExecuteAlignment:
         hidden_step1 = torch.randn(2, 8)  # 2 tokens
 
         aux = TokenAlignerStepAux(
-            input_ids=torch.tensor([10, 20, 30, 40, 50]),
-            positions=torch.tensor([0, 1, 2, 0, 1]),
-            seq_lens=torch.tensor([3, 2]),
+            input_ids=[10, 20, 30, 40, 50],
+            positions=[0, 1, 2, 0, 1],
+            seq_lens=[3, 2],
             seq_ids=[SGLangSeqId(rid="A"), SGLangSeqId(rid="B")],
         )
         aux_step1 = TokenAlignerStepAux(
-            input_ids=torch.tensor([31, 51]),
-            positions=torch.tensor([3, 2]),
-            seq_lens=torch.tensor([1, 1]),
+            input_ids=[31, 51],
+            positions=[3, 2],
+            seq_lens=[1, 1],
             seq_ids=[SGLangSeqId(rid="A"), SGLangSeqId(rid="B")],
         )
 

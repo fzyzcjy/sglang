@@ -31,11 +31,13 @@ class TestNormalizeSGLang:
             "rids": ["A"],
         }
 
-        result: TokenAlignerStepAux = _normalize_step_sglang(step_data, step=0)
+        result: TokenAlignerStepAux = _normalize_step_sglang(
+            step_data, layout="thd", step=0
+        )
 
-        assert torch.equal(result.input_ids, step_data["input_ids"])
-        assert torch.equal(result.positions, step_data["positions"])
-        assert torch.equal(result.seq_lens, step_data["seq_lens"])
+        assert result.input_ids == [10, 20, 30]
+        assert result.positions == [0, 1, 2]
+        assert result.seq_lens == [3]
         assert result.seq_ids == [SGLangSeqId(rid="A")]
 
     def test_rids_none_fallback(self):
@@ -46,7 +48,9 @@ class TestNormalizeSGLang:
             "seq_lens": torch.tensor([2]),
         }
 
-        result: TokenAlignerStepAux = _normalize_step_sglang(step_data, step=3)
+        result: TokenAlignerStepAux = _normalize_step_sglang(
+            step_data, layout="thd", step=3
+        )
         assert result.seq_ids == [MegatronSeqId(step=3, seq_index=0)]
 
     def test_multiple_seqs_with_rids(self):
@@ -58,7 +62,9 @@ class TestNormalizeSGLang:
             "rids": ["A", "B"],
         }
 
-        result: TokenAlignerStepAux = _normalize_step_sglang(step_data, step=0)
+        result: TokenAlignerStepAux = _normalize_step_sglang(
+            step_data, layout="thd", step=0
+        )
         assert result.seq_ids == [SGLangSeqId(rid="A"), SGLangSeqId(rid="B")]
 
 
@@ -76,7 +82,7 @@ class TestNormalizeMegatron:
             step_data, layout="thd", step=0
         )
 
-        assert torch.equal(result.seq_lens, torch.tensor([3, 2]))
+        assert result.seq_lens == [3, 2]
 
     def test_positions_inferred_thd(self):
         """Positions inferred from seq_lens in thd layout."""
@@ -89,15 +95,13 @@ class TestNormalizeMegatron:
             step_data, layout="thd", step=0
         )
 
-        expected_positions = torch.tensor([0, 1, 2, 0, 1])
-        assert torch.equal(result.positions, expected_positions)
+        assert result.positions == [0, 1, 2, 0, 1]
 
     def test_position_ids_passthrough(self):
         """Explicit position_ids used directly instead of inference."""
-        explicit_positions = torch.tensor([5, 6, 7, 8, 9])
         step_data: dict = {
             "input_ids": torch.tensor([10, 20, 30, 40, 50]),
-            "position_ids": explicit_positions,
+            "position_ids": torch.tensor([5, 6, 7, 8, 9]),
             "cu_seqlens_q": torch.tensor([0, 5]),
         }
 
@@ -105,7 +109,7 @@ class TestNormalizeMegatron:
             step_data, layout="thd", step=0
         )
 
-        assert torch.equal(result.positions, explicit_positions)
+        assert result.positions == [5, 6, 7, 8, 9]
 
     def test_seq_ids_are_step_index_tuples(self):
         """Megatron seq_ids are (step, seq_index) tuples."""

@@ -1,7 +1,6 @@
 import sys
 
 import pytest
-import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.planner import (
     _match_sequences,
@@ -32,9 +31,9 @@ class TestBuildTokenIndexSGLangThd:
         side_aux = TokenAlignerGlobalAux(
             step_auxs={
                 0: TokenAlignerStepAux(
-                    input_ids=torch.tensor([10, 20, 30, 40, 50]),
-                    positions=torch.tensor([0, 1, 2, 0, 1]),
-                    seq_lens=torch.tensor([3, 2]),
+                    input_ids=[10, 20, 30, 40, 50],
+                    positions=[0, 1, 2, 0, 1],
+                    seq_lens=[3, 2],
                     seq_ids=[SGLangSeqId(rid="A"), SGLangSeqId(rid="B")],
                 ),
             },
@@ -61,15 +60,15 @@ class TestBuildTokenIndexSGLangThd:
         side_aux = TokenAlignerGlobalAux(
             step_auxs={
                 0: TokenAlignerStepAux(
-                    input_ids=torch.tensor([10, 20, 30, 40, 50]),
-                    positions=torch.tensor([0, 1, 2, 0, 1]),
-                    seq_lens=torch.tensor([3, 2]),
+                    input_ids=[10, 20, 30, 40, 50],
+                    positions=[0, 1, 2, 0, 1],
+                    seq_lens=[3, 2],
                     seq_ids=[SGLangSeqId(rid="A"), SGLangSeqId(rid="B")],
                 ),
                 1: TokenAlignerStepAux(
-                    input_ids=torch.tensor([31, 51]),
-                    positions=torch.tensor([3, 2]),
-                    seq_lens=torch.tensor([1, 1]),
+                    input_ids=[31, 51],
+                    positions=[3, 2],
+                    seq_lens=[1, 1],
                     seq_ids=[SGLangSeqId(rid="A"), SGLangSeqId(rid="B")],
                 ),
             },
@@ -94,15 +93,15 @@ class TestBuildTokenIndexSGLangThd:
         side_aux = TokenAlignerGlobalAux(
             step_auxs={
                 0: TokenAlignerStepAux(
-                    input_ids=torch.tensor([10, 20, 30]),
-                    positions=torch.tensor([0, 1, 2]),
-                    seq_lens=torch.tensor([3]),
+                    input_ids=[10, 20, 30],
+                    positions=[0, 1, 2],
+                    seq_lens=[3],
                     seq_ids=[SGLangSeqId(rid="A")],
                 ),
                 1: TokenAlignerStepAux(
-                    input_ids=torch.tensor([100, 200]),
-                    positions=torch.tensor([0, 1]),
-                    seq_lens=torch.tensor([2]),
+                    input_ids=[100, 200],
+                    positions=[0, 1],
+                    seq_lens=[2],
                     seq_ids=[SGLangSeqId(rid="D")],
                 ),
             },
@@ -118,15 +117,15 @@ class TestBuildTokenIndexSGLangThd:
         side_aux = TokenAlignerGlobalAux(
             step_auxs={
                 0: TokenAlignerStepAux(
-                    input_ids=torch.tensor([10, 20]),
-                    positions=torch.tensor([0, 1]),
-                    seq_lens=torch.tensor([2]),
+                    input_ids=[10, 20],
+                    positions=[0, 1],
+                    seq_lens=[2],
                     seq_ids=[SGLangSeqId(rid="A")],
                 ),
                 1: TokenAlignerStepAux(
-                    input_ids=torch.tensor([100, 200, 300]),
-                    positions=torch.tensor([0, 1, 2]),
-                    seq_lens=torch.tensor([3]),
+                    input_ids=[100, 200, 300],
+                    positions=[0, 1, 2],
+                    seq_lens=[3],
                     seq_ids=[SGLangSeqId(rid="D")],
                 ),
             },
@@ -152,9 +151,9 @@ class TestBuildTokenIndexMegatronThd:
         side_aux = TokenAlignerGlobalAux(
             step_auxs={
                 0: TokenAlignerStepAux(
-                    input_ids=torch.tensor([10, 20, 30, 40, 50]),
-                    positions=torch.tensor([0, 1, 2, 0, 1]),
-                    seq_lens=torch.tensor([3, 2]),
+                    input_ids=[10, 20, 30, 40, 50],
+                    positions=[0, 1, 2, 0, 1],
+                    seq_lens=[3, 2],
                     seq_ids=[
                         MegatronSeqId(step=0, seq_index=0),
                         MegatronSeqId(step=0, seq_index=1),
@@ -184,18 +183,18 @@ class TestBuildTokenIndexMegatronThd:
         side_aux = TokenAlignerGlobalAux(
             step_auxs={
                 0: TokenAlignerStepAux(
-                    input_ids=torch.tensor([10, 20, 30, 40]),
-                    positions=torch.tensor([0, 1, 0, 1]),
-                    seq_lens=torch.tensor([2, 2]),
+                    input_ids=[10, 20, 30, 40],
+                    positions=[0, 1, 0, 1],
+                    seq_lens=[2, 2],
                     seq_ids=[
                         MegatronSeqId(step=0, seq_index=0),
                         MegatronSeqId(step=0, seq_index=1),
                     ],
                 ),
                 1: TokenAlignerStepAux(
-                    input_ids=torch.tensor([50, 60, 70, 80]),
-                    positions=torch.tensor([0, 1, 0, 1]),
-                    seq_lens=torch.tensor([2, 2]),
+                    input_ids=[50, 60, 70, 80],
+                    positions=[0, 1, 0, 1],
+                    seq_lens=[2, 2],
                     seq_ids=[
                         MegatronSeqId(step=1, seq_index=0),
                         MegatronSeqId(step=1, seq_index=1),
@@ -363,15 +362,15 @@ class TestComputeAlignmentPlanCrossLayout:
         side_aux_a = TokenAlignerGlobalAux(
             step_auxs={
                 0: TokenAlignerStepAux(
-                    input_ids=torch.tensor([10, 20]),
-                    positions=torch.tensor([0, 1]),
-                    seq_lens=torch.tensor([2]),
+                    input_ids=[10, 20],
+                    positions=[0, 1],
+                    seq_lens=[2],
                     seq_ids=[SGLangSeqId(rid="X")],
                 ),
                 1: TokenAlignerStepAux(
-                    input_ids=torch.tensor([30]),
-                    positions=torch.tensor([2]),
-                    seq_lens=torch.tensor([1]),
+                    input_ids=[30],
+                    positions=[2],
+                    seq_lens=[1],
                     seq_ids=[SGLangSeqId(rid="X")],
                 ),
             },
@@ -381,9 +380,9 @@ class TestComputeAlignmentPlanCrossLayout:
         side_aux_b = TokenAlignerGlobalAux(
             step_auxs={
                 0: TokenAlignerStepAux(
-                    input_ids=torch.tensor([10, 20, 30]),
-                    positions=torch.tensor([0, 1, 2]),
-                    seq_lens=torch.tensor([3]),
+                    input_ids=[10, 20, 30],
+                    positions=[0, 1, 2],
+                    seq_lens=[3],
                     seq_ids=[SGLangSeqId(rid="X")],
                 ),
             },
@@ -402,15 +401,15 @@ class TestComputeAlignmentPlanCrossLayout:
         side_aux_a = TokenAlignerGlobalAux(
             step_auxs={
                 0: TokenAlignerStepAux(
-                    input_ids=torch.tensor([10, 20, 30, 40, 50]),
-                    positions=torch.tensor([0, 1, 2, 0, 1]),
-                    seq_lens=torch.tensor([3, 2]),
+                    input_ids=[10, 20, 30, 40, 50],
+                    positions=[0, 1, 2, 0, 1],
+                    seq_lens=[3, 2],
                     seq_ids=[SGLangSeqId(rid="A"), SGLangSeqId(rid="B")],
                 ),
                 1: TokenAlignerStepAux(
-                    input_ids=torch.tensor([31, 51]),
-                    positions=torch.tensor([3, 2]),
-                    seq_lens=torch.tensor([1, 1]),
+                    input_ids=[31, 51],
+                    positions=[3, 2],
+                    seq_lens=[1, 1],
                     seq_ids=[SGLangSeqId(rid="A"), SGLangSeqId(rid="B")],
                 ),
             },
@@ -420,9 +419,9 @@ class TestComputeAlignmentPlanCrossLayout:
         side_aux_b = TokenAlignerGlobalAux(
             step_auxs={
                 0: TokenAlignerStepAux(
-                    input_ids=torch.tensor([10, 20, 30, 31, 40, 50, 51]),
-                    positions=torch.tensor([0, 1, 2, 3, 0, 1, 2]),
-                    seq_lens=torch.tensor([4, 3]),
+                    input_ids=[10, 20, 30, 31, 40, 50, 51],
+                    positions=[0, 1, 2, 3, 0, 1, 2],
+                    seq_lens=[4, 3],
                     seq_ids=[
                         MegatronSeqId(step=0, seq_index=0),
                         MegatronSeqId(step=0, seq_index=1),
