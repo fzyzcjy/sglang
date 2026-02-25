@@ -127,7 +127,7 @@ def _load_and_align_one(
     if not tensors:
         return None, []
 
-    plans: list[_Plan] = _compute_plans_for_group([item.meta for item in tensors_with_meta])
+    plans: list[_Plan] = _compute_plans([item.meta for item in tensors_with_meta])
     return _execute_plans(tensors, plans)
 
 
@@ -135,7 +135,7 @@ def _load_tensors(filenames: list[str], base_path: Path) -> list[ValueWithMeta]:
     return [ValueWithMeta.load(base_path / f) for f in filenames]
 
 
-def _compute_plans_for_group(metas: list[dict[str, Any]]) -> list[_Plan]:
+def _compute_plans(metas: list[dict[str, Any]]) -> list[_Plan]:
     if not metas or len(metas) == 1:
         return []
 

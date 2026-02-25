@@ -1189,8 +1189,24 @@ class TestEntrypointAlignment:
 
     def test_alignment_fallback_when_no_aux(self, tmp_path, capsys):
         """Without aux tensors, logical grouping skips alignment and compares per-step."""
-        baseline_path, target_path = _create_dumps(tmp_path, ["tensor_a"], num_steps=2)
-        args = _make_args(baseline_path, target_path, grouping="logical")
+        torch.manual_seed(100)
+        tensor = torch.randn(4, 4)
+
+        baseline_dir = tmp_path / "baseline"
+        target_dir = tmp_path / "target"
+
+        baseline_path = _create_rank_dump(
+            baseline_dir, rank=0, name="hidden", tensor=tensor, num_steps=2
+        )
+        target_path = _create_rank_dump(
+            target_dir,
+            rank=0,
+            name="hidden",
+            tensor=tensor + torch.randn(4, 4) * 0.0001,
+            num_steps=2,
+        )
+
+        args = _make_args(baseline_path, target_path, grouping="logical", diff_threshold=0.01)
 
         capsys.readouterr()
         run(args)
