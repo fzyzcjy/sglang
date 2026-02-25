@@ -13,7 +13,7 @@ from sglang.srt.debug_utils.comparator.aligner.entrypoint.planner import (
     compute_per_step_sub_plans,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
-    ExternalSeqId,
+    SeqId,
     PositionalSeqId,
     SGLangSeqId,
     TokenAlignerGlobalAux,
@@ -261,7 +261,7 @@ def _normalize_step_sglang(
     seq_lens_list: list[int] = seq_lens.tolist()
     num_seqs: int = len(seq_lens_list)
 
-    seq_ids: list[ExternalSeqId]
+    seq_ids: list[SeqId]
     if rids_raw is not None and isinstance(rids_raw, (list, tuple)):
         seq_ids = [SGLangSeqId(rid=str(r)) for r in rids_raw]
     else:
@@ -323,7 +323,7 @@ def _normalize_step_megatron(
 
     seq_lens_list: list[int] = seq_lens.tolist()
     num_seqs: int = len(seq_lens_list)
-    seq_ids: list[ExternalSeqId] = [
+    seq_ids: list[SeqId] = [
         PositionalSeqId(step=step, seq_index=seq_index) for seq_index in range(num_seqs)
     ]
 

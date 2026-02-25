@@ -4,6 +4,7 @@ from collections import defaultdict
 from typing import NamedTuple, Optional
 
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
+    SeqId,
     TokenAlignerPlan,
     TokenAlignerSeqInfo,
     TokenAlignerSeqsInfo,
@@ -16,7 +17,7 @@ def compute_token_aligner_plan(
     seqs_info_pair: Pair[TokenAlignerSeqsInfo],
 ) -> TokenAlignerPlan:
     """Compute a token alignment plan from two side token seqs_info_pair."""
-    matched_pairs: list[tuple[int, int]] = _match_sequences(
+    matched_pairs: list[tuple[SeqId, SeqId]] = _match_sequences(
         seqs=Pair(x=seqs_info_pair.x.sequences, y=seqs_info_pair.y.sequences)
     )
 
@@ -62,23 +63,23 @@ def compute_token_aligner_plan(
 
 
 def _match_sequences(
-    seqs: Pair[dict[int, TokenAlignerSeqInfo]],
-) -> list[tuple[int, int]]:
+    seqs: Pair[dict[SeqId, TokenAlignerSeqInfo]],
+) -> list[tuple[SeqId, SeqId]]:
     """For each y (target) sequence, find a matching x (baseline) sequence.
 
     Two-pass: exact match first, then prefix match for remaining.
     """
-    x_lookup: dict[tuple[int, ...], list[int]] = defaultdict(list)
+    x_lookup: dict[tuple[int, ...], list[SeqId]] = defaultdict(list)
     for seq_id, rec in seqs.x.items():
         x_lookup[tuple(rec.input_ids)].append(seq_id)
 
-    claimed_x_ids: set[int] = set()
-    matched_seq_id_pairs: list[tuple[int, int]] = []
+    claimed_x_ids: set[SeqId] = set()
+    matched_seq_id_pairs: list[tuple[SeqId, SeqId]] = []
 
     for seq_id_y in sorted(seqs.y.keys()):
         seq_y: TokenAlignerSeqInfo = seqs.y[seq_id_y]
 
-        matched_x: Optional[int] = _find_matching_x_exact(
+        matched_x: Optional[SeqId] = _find_matching_x_exact(
             seq_y=seq_y, x_lookup=x_lookup, claimed_x_ids=claimed_x_ids
         )
         if matched_x is None:
@@ -96,12 +97,12 @@ def _match_sequences(
 def _find_matching_x_exact(
     *,
     seq_y: TokenAlignerSeqInfo,
-    x_lookup: dict[tuple[int, ...], list[int]],
-    claimed_x_ids: set[int],
-) -> Optional[int]:
+    x_lookup: dict[tuple[int, ...], list[SeqId]],
+    claimed_x_ids: set[SeqId],
+) -> Optional[SeqId]:
     """Find an x sequence with identical input_ids."""
     ids_y_key: tuple[int, ...] = tuple(seq_y.input_ids)
-    candidates: list[int] = x_lookup.get(ids_y_key, [])
+    candidates: list[SeqId] = x_lookup.get(ids_y_key, [])
     for candidate in candidates:
         if candidate not in claimed_x_ids:
             return candidate
@@ -109,16 +110,16 @@ def _find_matching_x_exact(
 
 
 class _PrefixCandidate(NamedTuple):
-    seq_id_x: int
+    seq_id_x: SeqId
     overlap_len: int
 
 
 def _find_matching_x_prefix(
     *,
     seq_y: TokenAlignerSeqInfo,
-    x_seqs: dict[int, TokenAlignerSeqInfo],
-    claimed_x_ids: set[int],
-) -> Optional[int]:
+    x_seqs: dict[SeqId, TokenAlignerSeqInfo],
+    claimed_x_ids: set[SeqId],
+) -> Optional[SeqId]:
     """Find the x sequence with the longest prefix relationship to y."""
     ids_y: list[int] = seq_y.input_ids
     candidates: list[_PrefixCandidate] = [

@@ -11,6 +11,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.seq_info_builder im
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     PositionalSeqId,
+    SeqId,
     SGLangSeqId,
     TokenAlignerGlobalAux,
     TokenAlignerSeqInfo,
@@ -45,16 +46,16 @@ class TestBuildTokenIndexSGLangThd:
         index = build_seqs_info(side_aux)
         assert len(index.sequences) == 2
 
-        seq0 = index.sequences[0]
-        assert seq0.input_ids == [10, 20, 30]
-        assert seq0.positions == [0, 1, 2]
-        assert seq0.locator.steps == [0, 0, 0]
-        assert seq0.locator.token_index_in_step == [0, 1, 2]
+        seq_a = index.sequences[SGLangSeqId(rid="A")]
+        assert seq_a.input_ids == [10, 20, 30]
+        assert seq_a.positions == [0, 1, 2]
+        assert seq_a.locator.steps == [0, 0, 0]
+        assert seq_a.locator.token_index_in_step == [0, 1, 2]
 
-        seq1 = index.sequences[1]
-        assert seq1.input_ids == [40, 50]
-        assert seq1.positions == [0, 1]
-        assert seq1.locator.token_index_in_step == [3, 4]
+        seq_b = index.sequences[SGLangSeqId(rid="B")]
+        assert seq_b.input_ids == [40, 50]
+        assert seq_b.positions == [0, 1]
+        assert seq_b.locator.token_index_in_step == [3, 4]
 
     def test_multi_step_prefill_decode(self):
         """Prefill step followed by decode steps, sequences accumulate tokens."""
@@ -80,14 +81,14 @@ class TestBuildTokenIndexSGLangThd:
         index = build_seqs_info(side_aux)
         assert len(index.sequences) == 2
 
-        seq0 = index.sequences[0]
-        assert seq0.input_ids == [10, 20, 30, 31]
-        assert seq0.positions == [0, 1, 2, 3]
-        assert seq0.locator.steps == [0, 0, 0, 1]
+        seq_a = index.sequences[SGLangSeqId(rid="A")]
+        assert seq_a.input_ids == [10, 20, 30, 31]
+        assert seq_a.positions == [0, 1, 2, 3]
+        assert seq_a.locator.steps == [0, 0, 0, 1]
 
-        seq1 = index.sequences[1]
-        assert seq1.input_ids == [40, 50, 51]
-        assert seq1.positions == [0, 1, 2]
+        seq_b = index.sequences[SGLangSeqId(rid="B")]
+        assert seq_b.input_ids == [40, 50, 51]
+        assert seq_b.positions == [0, 1, 2]
 
     def test_sequence_exit_and_join(self):
         """Sequence A exits, new sequence D joins with different seq_id."""
@@ -168,13 +169,13 @@ class TestBuildTokenIndexMegatronThd:
         index = build_seqs_info(side_aux)
         assert len(index.sequences) == 2
 
-        seq0 = index.sequences[0]
+        seq0 = index.sequences[PositionalSeqId(step=0, seq_index=0)]
         assert seq0.input_ids == [10, 20, 30]
         assert seq0.positions == [0, 1, 2]
         assert seq0.locator.steps == [0, 0, 0]
         assert seq0.locator.token_index_in_step == [0, 1, 2]
 
-        seq1 = index.sequences[1]
+        seq1 = index.sequences[PositionalSeqId(step=0, seq_index=1)]
         assert seq1.input_ids == [40, 50]
         assert seq1.positions == [0, 1]
         assert seq1.locator.token_index_in_step == [3, 4]
@@ -209,11 +210,11 @@ class TestBuildTokenIndexMegatronThd:
         index = build_seqs_info(side_aux)
         assert len(index.sequences) == 4
 
-        seq0 = index.sequences[0]
+        seq0 = index.sequences[PositionalSeqId(step=0, seq_index=0)]
         assert seq0.input_ids == [10, 20]
         assert seq0.locator.steps == [0, 0]
 
-        seq2 = index.sequences[2]
+        seq2 = index.sequences[PositionalSeqId(step=1, seq_index=0)]
         assert seq2.input_ids == [50, 60]
         assert seq2.locator.steps == [1, 1]
 
@@ -227,7 +228,8 @@ class TestMatchSequences:
             x={0: (10, 20, 30), 1: (40, 50)},
             y={0: (10, 20, 30), 1: (40, 50)},
         )
-        assert _matched_ids(matched) == {(0, 0), (1, 1)}
+        S = _int_to_seq_id
+        assert _matched_ids(matched) == {(S(0), S(0)), (S(1), S(1))}
 
     def test_exact_match_different_order(self):
         """Sequences in different order still match by content."""
@@ -235,7 +237,8 @@ class TestMatchSequences:
             x={0: (10, 20), 1: (40, 50)},
             y={0: (40, 50), 1: (10, 20)},
         )
-        assert _matched_ids(matched) == {(1, 0), (0, 1)}
+        S = _int_to_seq_id
+        assert _matched_ids(matched) == {(S(1), S(0)), (S(0), S(1))}
 
     def test_exact_match_different_seq_ids(self):
         """Seq IDs don't need to correspond — matching is by content."""
@@ -243,7 +246,8 @@ class TestMatchSequences:
             x={5: (10, 20), 9: (30, 40)},
             y={2: (30, 40), 7: (10, 20)},
         )
-        assert _matched_ids(matched) == {(9, 2), (5, 7)}
+        S = _int_to_seq_id
+        assert _matched_ids(matched) == {(S(9), S(2)), (S(5), S(7))}
 
     def test_no_match(self):
         """Completely different input_ids → no matches."""
@@ -265,7 +269,8 @@ class TestMatchSequences:
             x={0: (10, 20), 1: (30, 40), 2: (50, 60)},
             y={0: (30, 40)},
         )
-        assert _matched_ids(matched) == {(1, 0)}
+        S = _int_to_seq_id
+        assert _matched_ids(matched) == {(S(1), S(0))}
 
     def test_y_has_more_sequences(self):
         """Extra y sequences remain unmatched."""
@@ -273,7 +278,8 @@ class TestMatchSequences:
             x={0: (10, 20)},
             y={0: (10, 20), 1: (30, 40), 2: (50, 60)},
         )
-        assert _matched_ids(matched) == {(0, 0)}
+        S = _int_to_seq_id
+        assert _matched_ids(matched) == {(S(0), S(0))}
 
     def test_one_x_not_reused(self):
         """Each x can only be claimed once, even if multiple y want it."""
@@ -289,11 +295,12 @@ class TestMatchSequences:
             x={0: (10, 20), 1: (10, 20), 2: (10, 20)},
             y={0: (10, 20), 1: (10, 20), 2: (10, 20)},
         )
+        S = _int_to_seq_id
         assert len(matched) == 3
         x_ids = {m[0] for m in matched}
         y_ids = {m[1] for m in matched}
-        assert x_ids == {0, 1, 2}
-        assert y_ids == {0, 1, 2}
+        assert x_ids == {S(0), S(1), S(2)}
+        assert y_ids == {S(0), S(1), S(2)}
 
     def test_prefix_x_shorter(self):
         """x has fewer tokens (prefix of y) → prefix match."""
@@ -301,7 +308,8 @@ class TestMatchSequences:
             x={0: (10, 20)},
             y={0: (10, 20, 30)},
         )
-        assert _matched_ids(matched) == {(0, 0)}
+        S = _int_to_seq_id
+        assert _matched_ids(matched) == {(S(0), S(0))}
 
     def test_prefix_y_shorter(self):
         """y has fewer tokens (prefix of x) → prefix match."""
@@ -309,7 +317,8 @@ class TestMatchSequences:
             x={0: (10, 20, 30)},
             y={0: (10, 20)},
         )
-        assert _matched_ids(matched) == {(0, 0)}
+        S = _int_to_seq_id
+        assert _matched_ids(matched) == {(S(0), S(0))}
 
     def test_prefix_picks_longest(self):
         """Among multiple prefix candidates, picks the one with longest overlap."""
@@ -317,7 +326,8 @@ class TestMatchSequences:
             x={0: (10,), 1: (10, 20, 30)},
             y={0: (10, 20, 30, 40)},
         )
-        assert _matched_ids(matched) == {(1, 0)}
+        S = _int_to_seq_id
+        assert _matched_ids(matched) == {(S(1), S(0))}
 
     def test_exact_preferred_over_prefix(self):
         """Exact match is tried first, even if a longer prefix candidate exists."""
@@ -325,7 +335,8 @@ class TestMatchSequences:
             x={0: (10, 20), 1: (10, 20, 30)},
             y={0: (10, 20)},
         )
-        assert _matched_ids(matched) == {(0, 0)}
+        S = _int_to_seq_id
+        assert _matched_ids(matched) == {(S(0), S(0))}
 
     def test_prefix_fallback_after_exact(self):
         """Exact matches consume sequences, remaining use prefix match."""
@@ -333,10 +344,11 @@ class TestMatchSequences:
             x={0: (10, 20, 30), 1: (40, 50)},
             y={0: (10, 20, 30), 1: (40, 50, 60)},
         )
+        S = _int_to_seq_id
         assert len(matched) == 2
         matched_set = _matched_ids(matched)
-        assert (0, 0) in matched_set
-        assert (1, 1) in matched_set
+        assert (S(0), S(0)) in matched_set
+        assert (S(1), S(1)) in matched_set
 
     def test_single_token_sequences(self):
         """Single-token sequences can match."""
@@ -344,7 +356,8 @@ class TestMatchSequences:
             x={0: (42,)},
             y={0: (42,)},
         )
-        assert _matched_ids(matched) == {(0, 0)}
+        S = _int_to_seq_id
+        assert _matched_ids(matched) == {(S(0), S(0))}
 
     def test_no_partial_overlap_without_prefix(self):
         """Overlapping content that isn't a prefix → no match."""
@@ -446,16 +459,21 @@ class TestComputeAlignmentPlanCrossLayout:
 # ---------------------------------------------------------------------------
 
 
+def _int_to_seq_id(k: int) -> SeqId:
+    """Convert an int key to a SeqId for test convenience."""
+    return SGLangSeqId(rid=str(k))
+
+
 def _make_index(
     *,
     sequences: dict[int, tuple[int, ...]],
     layout: str = "thd",
 ) -> TokenAlignerSeqsInfo:
     """Create a TokenAlignerSeqsInfo from simplified input_ids-only specification."""
-    records: dict[int, TokenAlignerSeqInfo] = {}
-    for seq_id, input_ids in sequences.items():
+    records: dict[SeqId, TokenAlignerSeqInfo] = {}
+    for k, input_ids in sequences.items():
         num_tokens = len(input_ids)
-        records[seq_id] = TokenAlignerSeqInfo(
+        records[_int_to_seq_id(k)] = TokenAlignerSeqInfo(
             input_ids=list(input_ids),
             positions=list(range(num_tokens)),
             locator=TokenLocator(
@@ -468,12 +486,12 @@ def _make_index(
 
 def _make_seq_info_dict(
     sequences: dict[int, tuple[int, ...]],
-) -> dict[int, TokenAlignerSeqInfo]:
-    """Create a dict of TokenAlignerSeqInfo from {seq_id: input_ids_tuple}."""
-    result: dict[int, TokenAlignerSeqInfo] = {}
-    for seq_id, input_ids in sequences.items():
+) -> dict[SeqId, TokenAlignerSeqInfo]:
+    """Create a dict of TokenAlignerSeqInfo from {int_key: input_ids_tuple}."""
+    result: dict[SeqId, TokenAlignerSeqInfo] = {}
+    for k, input_ids in sequences.items():
         num_tokens = len(input_ids)
-        result[seq_id] = TokenAlignerSeqInfo(
+        result[_int_to_seq_id(k)] = TokenAlignerSeqInfo(
             input_ids=list(input_ids),
             positions=list(range(num_tokens)),
             locator=TokenLocator(
@@ -488,14 +506,14 @@ def _match_seqs(
     *,
     x: dict[int, tuple[int, ...]],
     y: dict[int, tuple[int, ...]],
-) -> list[tuple[int, int]]:
+) -> list[tuple[SeqId, SeqId]]:
     """Shorthand: build SeqInfo dicts and call _match_sequences."""
     return _match_sequences(
         seqs=Pair(x=_make_seq_info_dict(x), y=_make_seq_info_dict(y))
     )
 
 
-def _matched_ids(matched: list[tuple[int, int]]) -> set[tuple[int, int]]:
+def _matched_ids(matched: list[tuple[SeqId, SeqId]]) -> set[tuple[SeqId, SeqId]]:
     """Convert matched pairs list to set for order-independent comparison."""
     return set(matched)
 
