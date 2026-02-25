@@ -3,12 +3,14 @@ import sys
 import pytest
 import torch
 
-from sglang.srt.debug_utils.comparator.aligner.reorder import (
-    ReordererPlan,
+from sglang.srt.debug_utils.comparator.aligner.reorderer.executor import (
     _reorder_zigzag_to_natural,
-    compute_reorderer_plans,
     execute_reorderer_plan,
 )
+from sglang.srt.debug_utils.comparator.aligner.reorderer.planner import (
+    compute_reorderer_plans,
+)
+from sglang.srt.debug_utils.comparator.aligner.reorderer.types import ReordererPlan
 from sglang.srt.debug_utils.comparator.aligner.unsharder.executor import (
     execute_unsharder_plan,
 )

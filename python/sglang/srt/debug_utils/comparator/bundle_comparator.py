@@ -8,13 +8,15 @@ from typing import Any, Optional, Union
 
 import torch
 
-from sglang.srt.debug_utils.comparator.aligner.reorder import (
-    ReordererPlan,
-    compute_reorderer_plans,
+from sglang.srt.debug_utils.comparator.aligner.reorderer.executor import (
     execute_reorderer_plan,
 )
+from sglang.srt.debug_utils.comparator.aligner.reorderer.planner import (
+    compute_reorderer_plans,
+)
+from sglang.srt.debug_utils.comparator.aligner.reorderer.types import ReordererPlan
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.executor import (
-    execute_token_align,
+    execute_token_aligner,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignerPlan,
@@ -207,7 +209,7 @@ def _execute_plans(
 
     # Cross-side: token alignment (or direct extraction for single-step)
     if plan.token_align is not None:
-        combined: Pair[torch.Tensor] = execute_token_align(
+        combined: Pair[torch.Tensor] = execute_token_aligner(
             plan=plan.token_align,
             tensor_of_step_pair=Pair(x=step_tensors_b, y=step_tensors_t),
         )

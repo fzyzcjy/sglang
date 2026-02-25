@@ -8,7 +8,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
 from sglang.srt.debug_utils.comparator.utils import Pair
 
 
-def execute_token_align(
+def execute_token_aligner(
     plan: TokenAlignerPlan,
     tensor_of_step_pair: Pair[dict[int, torch.Tensor]],
 ) -> Pair[torch.Tensor]:
