@@ -3,15 +3,15 @@ from __future__ import annotations
 from collections import defaultdict
 
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
-    SeqInfo,
-    SeqsInfo,
+    TokenAlignerSeqInfo,
+    TokenAlignerSeqsInfo,
     TokenAlignerPlan,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 
 
 def compute_token_aligner_plan(
-    seqs_info_pair: Pair[SeqsInfo],
+    seqs_info_pair: Pair[TokenAlignerSeqsInfo],
 ) -> TokenAlignerPlan:
     """Compute a token alignment plan from two side token seqs_info_pair."""
     matched_pairs: list[tuple[int, int]] = _match_sequences(
@@ -22,7 +22,7 @@ def compute_token_aligner_plan(
     indices: Pair[list[int]] = Pair(x=[], y=[])
 
     for seq_id_a, seq_id_b in matched_pairs:
-        rec: Pair[SeqInfo] = Pair(
+        rec: Pair[TokenAlignerSeqInfo] = Pair(
             x=seqs_info_pair.x.sequences[seq_id_a],
             y=seqs_info_pair.y.sequences[seq_id_b],
         )
@@ -66,7 +66,7 @@ def compute_token_aligner_plan(
 
 
 def _match_sequences(
-    seqs: Pair[dict[int, SeqInfo]],
+    seqs: Pair[dict[int, TokenAlignerSeqInfo]],
 ) -> list[tuple[int, int]]:
     """Two-pass sequence matching: exact then prefix."""
     matched: list[tuple[int, int]] = []

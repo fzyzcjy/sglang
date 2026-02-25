@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     ExternalSeqId,
-    SeqInfo,
-    SeqsInfo,
-    StepAux,
-    TokenAlignGlobalAux,
+    TokenAlignerSeqInfo,
+    TokenAlignerSeqsInfo,
+    TokenAlignerStepAux,
+    TokenAlignerGlobalAux,
 )
 
 
-def build_seqs_info(global_aux: TokenAlignGlobalAux) -> SeqsInfo:
+def build_seqs_info(global_aux: TokenAlignerGlobalAux) -> TokenAlignerSeqsInfo:
     """Build sequence info for one side from its auxiliary tensors."""
-    return SeqsInfo(
+    return TokenAlignerSeqsInfo(
         sequences=_build_token_index(global_aux),
         layout=global_aux.layout,
     )
@@ -29,14 +29,14 @@ class _SeqAccumulator:
         self.indices: list[int] = []
 
 
-def _build_token_index(global_aux: TokenAlignGlobalAux) -> dict[int, SeqInfo]:
+def _build_token_index(global_aux: TokenAlignerGlobalAux) -> dict[int, TokenAlignerSeqInfo]:
     """Build token index for any framework/layout using seq_ids for identity tracking."""
     external_to_internal: dict[ExternalSeqId, int] = {}
     next_internal_id: int = 0
     accum: dict[int, _SeqAccumulator] = {}
 
     for step in sorted(global_aux.steps.keys()):
-        aux: StepAux = global_aux.steps[step]
+        aux: TokenAlignerStepAux = global_aux.steps[step]
 
         input_ids_flat: list[int] = aux.input_ids.flatten().tolist()
         positions_flat: list[int] = aux.positions.flatten().tolist()
@@ -63,7 +63,7 @@ def _build_token_index(global_aux: TokenAlignGlobalAux) -> dict[int, SeqInfo]:
             offset += slen
 
     return {
-        sid: SeqInfo(
+        sid: TokenAlignerSeqInfo(
             input_ids=acc.input_ids,
             positions=acc.positions,
             steps=acc.steps,

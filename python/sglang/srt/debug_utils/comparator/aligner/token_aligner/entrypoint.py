@@ -18,9 +18,9 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.planner import (
     compute_token_aligner_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
-    SeqsInfo,
+    TokenAlignerSeqsInfo,
     TokenAlignerPlan,
-    TokenAlignGlobalAux,
+    TokenAlignerGlobalAux,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 
@@ -61,11 +61,11 @@ def _build_token_aligner_plan(
         )
         return None
 
-    global_aux: Pair[TokenAlignGlobalAux] = Pair(
+    global_aux: Pair[TokenAlignerGlobalAux] = Pair(
         x=baseline_aux,
         y=target_aux,
     )
 
-    seqs_info: Pair[SeqsInfo] = global_aux.map(build_seqs_info)
+    seqs_info: Pair[TokenAlignerSeqsInfo] = global_aux.map(build_seqs_info)
 
     return compute_token_aligner_plan(seqs_info_pair=seqs_info)
