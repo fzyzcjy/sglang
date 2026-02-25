@@ -54,6 +54,17 @@ class ConfigRecord(_OutputRecord):
     start_step: int
     end_step: int
 
+    @classmethod
+    def from_args(cls, args) -> "ConfigRecord":
+        """Create ConfigRecord from argparse.Namespace."""
+        return cls(
+            baseline_path=args.baseline_path,
+            target_path=args.target_path,
+            diff_threshold=args.diff_threshold,
+            start_step=args.start_step,
+            end_step=args.end_step,
+        )
+
     def _format_body(self) -> str:
         return (
             f"Config: baseline={self.baseline_path} target={self.target_path}\n"

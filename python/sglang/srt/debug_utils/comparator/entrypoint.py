@@ -42,13 +42,7 @@ def main() -> None:
 
 def run(args: argparse.Namespace) -> None:
     print_record(
-        ConfigRecord(
-            baseline_path=args.baseline_path,
-            target_path=args.target_path,
-            diff_threshold=args.diff_threshold,
-            start_step=args.start_step,
-            end_step=args.end_step,
-        ),
+        ConfigRecord.from_args(args),
         output_format=args.output_format,
     )
 
