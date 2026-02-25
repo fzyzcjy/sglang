@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Iterable, Tuple
 
 import polars as pl
 import torch
@@ -299,7 +299,7 @@ def _load_step_data(
     df: pl.DataFrame,
     dump_path: Path,
     plugin: _AuxPlugin,
-) -> dict[str, object]:
+) -> Iterable[Tuple[str, object]]:
     """Load all tensor and non-tensor aux values for a single step."""
     for name in non_tensor_names:
         value = _load_non_tensor_aux(name=name, step=step, df=df, dump_path=dump_path)
