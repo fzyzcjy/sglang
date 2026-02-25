@@ -56,10 +56,10 @@ def compare_bundle_pair(
     name: str = bundle_info_pair.y[0].name
 
     tensors_b, b_warns = _load_and_unshard_by_step(
-        rows=bundle_info_pair.x, base_path=baseline_path
+        infos=bundle_info_pair.x, base_path=baseline_path
     )
     tensors_t, t_warns = _load_and_unshard_by_step(
-        rows=bundle_info_pair.y, base_path=target_path
+        infos=bundle_info_pair.y, base_path=target_path
     )
     align_warnings: list[AlignWarning] = b_warns + t_warns
     del b_warns, t_warns
