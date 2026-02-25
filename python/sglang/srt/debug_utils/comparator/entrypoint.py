@@ -103,7 +103,6 @@ def _consume_comparison_records(
     comparison_records: Iterator[Union[ComparisonRecord, SkipRecord]],
     output_format: str,
 ) -> None:
-    """Consume comparison comparison_records: count, print each, then emit summary."""
     counts: dict[str, int] = {"passed": 0, "failed": 0, "skipped": 0}
 
     for record in comparison_records:
