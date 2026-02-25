@@ -35,11 +35,11 @@ def match_rows(
 
     results: list[MatchResult] = []
     for key_values in unique_keys.iter_rows(named=True):
-        rows_target: list[dict[str, Any]] = filter_rows(
-            df_target, conditions=key_values
-        )
         rows_baseline: list[dict[str, Any]] = filter_rows(
             df_baseline, conditions=key_values
+        )
+        rows_target: list[dict[str, Any]] = filter_rows(
+            df_target, conditions=key_values
         )
         results.append(
             MatchResult(
