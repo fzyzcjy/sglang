@@ -117,12 +117,12 @@ def _load_and_unshard_into_one(
     if not filenames:
         return None, []
 
-    loaded: list[ValueWithMeta] = _load_tensors(filenames, base_path)
-    plans: list[_Plan] = _compute_plans_for_group([item.meta for item in loaded])
-    tensors: list[torch.Tensor] = _extract_tensors(loaded)
+    tensors_with_meta: list[ValueWithMeta] = _load_tensors(filenames, base_path)
+    tensors: list[torch.Tensor] = _extract_tensors(tensors_with_meta)
     if not tensors:
         return None, []
 
+    plans: list[_Plan] = _compute_plans_for_group([item.meta for item in tensors_with_meta])
     return _execute_plans(tensors, plans)
 
 
