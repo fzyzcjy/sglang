@@ -51,21 +51,15 @@ class TokenAlignerSeqInfo(_FrozenBase):
     @model_validator(mode="after")
     def _validate_fields(self) -> TokenAlignerSeqInfo:
         n: int = len(self.input_ids)
-        assert len(self.positions) == n, f"positions length {len(self.positions)} != {n}"
+        assert (
+            len(self.positions) == n
+        ), f"positions length {len(self.positions)} != {n}"
         assert len(self.steps) == n, f"steps length {len(self.steps)} != {n}"
         assert len(self.indices) == n, f"indices length {len(self.indices)} != {n}"
-        assert self.positions == list(range(n)), (
-            f"positions must be [0, 1, ..., {n - 1}], got {self.positions}"
-        )
+        assert self.positions == list(
+            range(n)
+        ), f"positions must be [0, 1, ..., {n - 1}], got {self.positions}"
         return self
-
-    def __add__(self, other: TokenAlignerSeqInfo) -> TokenAlignerSeqInfo:
-        return TokenAlignerSeqInfo(
-            input_ids=self.input_ids + other.input_ids,
-            positions=self.positions + other.positions,
-            steps=self.steps + other.steps,
-            indices=self.indices + other.indices,
-        )
 
 
 class TokenAlignerSeqsInfo(_FrozenBase):
