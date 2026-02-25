@@ -70,9 +70,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 3, 5]),
         }
 
-        result: AuxTensorsForStep = _normalize_megatron(
-            step_data, layout="thd", step=0
-        )
+        result: AuxTensorsForStep = _normalize_megatron(step_data, layout="thd", step=0)
 
         assert torch.equal(result.seq_lens, torch.tensor([3, 2]))
 
@@ -83,9 +81,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 3, 5]),
         }
 
-        result: AuxTensorsForStep = _normalize_megatron(
-            step_data, layout="thd", step=0
-        )
+        result: AuxTensorsForStep = _normalize_megatron(step_data, layout="thd", step=0)
 
         expected_positions = torch.tensor([0, 1, 2, 0, 1])
         assert torch.equal(result.positions, expected_positions)
@@ -99,9 +95,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 5]),
         }
 
-        result: AuxTensorsForStep = _normalize_megatron(
-            step_data, layout="thd", step=0
-        )
+        result: AuxTensorsForStep = _normalize_megatron(step_data, layout="thd", step=0)
 
         assert torch.equal(result.positions, explicit_positions)
 
@@ -112,9 +106,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 3, 5]),
         }
 
-        result: AuxTensorsForStep = _normalize_megatron(
-            step_data, layout="thd", step=5
-        )
+        result: AuxTensorsForStep = _normalize_megatron(step_data, layout="thd", step=5)
         assert result.seq_ids == ((5, 0), (5, 1))
 
 

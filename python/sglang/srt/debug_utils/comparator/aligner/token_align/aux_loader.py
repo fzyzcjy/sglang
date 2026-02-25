@@ -207,9 +207,7 @@ def _normalize_step(
         return _normalize_megatron(step_data, layout=layout, step=step)
 
 
-def _normalize_sglang(
-    step_data: dict[str, object], *, step: int
-) -> AuxTensorsForStep:
+def _normalize_sglang(step_data: dict[str, object], *, step: int) -> AuxTensorsForStep:
     input_ids = step_data["input_ids"]
     positions = step_data["positions"]
     seq_lens = step_data["seq_lens"]
