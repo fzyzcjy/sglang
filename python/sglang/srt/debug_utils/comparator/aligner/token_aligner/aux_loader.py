@@ -159,7 +159,6 @@ class _MegatronPlugin(_AuxPlugin):
         return frozenset({"cu_seqlens_q", "cu_seqlens_kv", "qkv_format"})
 
     def detect_layout(self, raw: dict[int, dict[str, object]]) -> str:
-        """Detect layout for Megatron framework from loaded auxiliary tensors."""
         for step_data in raw.values():
             if (qkv_format := step_data.get("qkv_format")) is not None:
                 fmt = qkv_format if isinstance(qkv_format, str) else str(qkv_format)
