@@ -18,43 +18,46 @@ def compute_token_align_plan(
         seqs=Pair(x=seqs_info_pair.x.sequences, y=seqs_info_pair.y.sequences)
     )
 
-    steps_a: list[int] = []
-    indices_a: list[int] = []
-    steps_b: list[int] = []
-    indices_b: list[int] = []
+    steps: Pair[list[int]] = Pair(x=[], y=[])
+    indices: Pair[list[int]] = Pair(x=[], y=[])
 
     for seq_id_a, seq_id_b in matched_pairs:
-        rec_a: SeqInfo = seqs_info_pair.x.sequences[seq_id_a]
-        rec_b: SeqInfo = seqs_info_pair.y.sequences[seq_id_b]
+        rec: Pair[SeqInfo] = Pair(
+            x=seqs_info_pair.x.sequences[seq_id_a],
+            y=seqs_info_pair.y.sequences[seq_id_b],
+        )
 
-        pos_to_a: dict[int, int] = {pos: idx for idx, pos in enumerate(rec_a.positions)}
-        pos_to_b: dict[int, int] = {pos: idx for idx, pos in enumerate(rec_b.positions)}
-        assert len(pos_to_a) == len(rec_a.positions), "duplicate positions in side A"
-        assert len(pos_to_b) == len(rec_b.positions), "duplicate positions in side B"
+        pos_to: Pair[dict[int, int]] = Pair(
+            x={pos: idx for idx, pos in enumerate(rec.x.positions)},
+            y={pos: idx for idx, pos in enumerate(rec.y.positions)},
+        )
+        assert len(pos_to.x) == len(rec.x.positions), "duplicate positions in side A"
+        assert len(pos_to.y) == len(rec.y.positions), "duplicate positions in side B"
 
-        common_positions: set[int] = set(pos_to_a.keys()) & set(pos_to_b.keys())
+        common_positions: set[int] = set(pos_to.x.keys()) & set(pos_to.y.keys())
 
         for pos in sorted(common_positions):
-            a_idx: int = pos_to_a[pos]
-            b_idx: int = pos_to_b[pos]
+            idx: Pair[int] = Pair(x=pos_to.x[pos], y=pos_to.y[pos])
 
-            a_input_id: int = rec_a.input_ids[a_idx]
-            b_input_id: int = rec_b.input_ids[b_idx]
-            if a_input_id != b_input_id:
+            input_id: Pair[int] = Pair(
+                x=rec.x.input_ids[idx.x],
+                y=rec.y.input_ids[idx.y],
+            )
+            if input_id.x != input_id.y:
                 raise ValueError(
                     f"Sanity check failed: input_id mismatch at position {pos} "
                     f"for seq_id_a={seq_id_a}, seq_id_b={seq_id_b}: "
-                    f"{a_input_id} != {b_input_id}"
+                    f"{input_id.x} != {input_id.y}"
                 )
 
-            steps_a.append(rec_a.steps[a_idx])
-            indices_a.append(rec_a.indices[a_idx])
-            steps_b.append(rec_b.steps[b_idx])
-            indices_b.append(rec_b.indices[b_idx])
+            steps.x.append(rec.x.steps[idx.x])
+            indices.x.append(rec.x.indices[idx.x])
+            steps.y.append(rec.y.steps[idx.y])
+            indices.y.append(rec.y.indices[idx.y])
 
     return TokenAlignPlan(
-        match_steps=Pair(x=tuple(steps_a), y=tuple(steps_b)),
-        match_indices=Pair(x=tuple(indices_a), y=tuple(indices_b)),
+        match_steps=Pair(x=tuple(steps.x), y=tuple(steps.y)),
+        match_indices=Pair(x=tuple(indices.x), y=tuple(indices.y)),
     )
 
 

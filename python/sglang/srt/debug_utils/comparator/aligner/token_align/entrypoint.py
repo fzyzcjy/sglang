@@ -47,19 +47,19 @@ def _build_token_align_plan(
     df_target: pl.DataFrame,
 ) -> TokenAlignPlan:
     """Load aux tensors, build token indices, and compute the alignment plan."""
-    baseline_path: Path = Path(args.baseline_path)
-    target_path: Path = Path(args.target_path)
-
-    global_aux_baseline: TokenAlignGlobalAux = load_and_normalize_aux(
-        dump_path=baseline_path, df=df_baseline
+    dump_paths: Pair[Path] = Pair(
+        x=Path(args.baseline_path), y=Path(args.target_path)
     )
-    global_aux_target: TokenAlignGlobalAux = load_and_normalize_aux(
-        dump_path=target_path, df=df_target
+    dfs: Pair[pl.DataFrame] = Pair(x=df_baseline, y=df_target)
+
+    global_aux: Pair[TokenAlignGlobalAux] = Pair(
+        x=load_and_normalize_aux(dump_path=dump_paths.x, df=dfs.x),
+        y=load_and_normalize_aux(dump_path=dump_paths.y, df=dfs.y),
     )
 
     seqs_info: Pair[SeqsInfo] = Pair(
-        x=build_seqs_info(global_aux_baseline),
-        y=build_seqs_info(global_aux_target),
+        x=build_seqs_info(global_aux.x),
+        y=build_seqs_info(global_aux.y),
     )
 
     return compute_token_align_plan(seqs_info_pair=seqs_info)
