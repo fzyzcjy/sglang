@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -26,10 +27,6 @@ from sglang.srt.debug_utils.comparator.aligner.unshard.planner import (
     compute_unshard_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unshard.types import UnshardPlan
-from sglang.srt.debug_utils.comparator.bundle_matcher import (
-    TensorInfo,
-    TensorBundleInfo,
-)
 from sglang.srt.debug_utils.comparator.dims import parse_dims
 from sglang.srt.debug_utils.comparator.output_types import (
     AlignWarning,
@@ -45,97 +42,122 @@ from sglang.srt.debug_utils.dump_loader import ValueWithMeta
 _Plan = Union[UnshardPlan, ReorderPlan]
 
 
+@dataclass(frozen=True)
+class _StepGroupPlan:
+    """Unshard + reorder plan for a single step."""
+
+    step: int
+    input_indices: list[int]
+    unshard_reorder: list[_Plan]
+
+
+@dataclass(frozen=True)
+class _AlignPlan:
+    """Unified plan: per-step unshard/reorder for both sides + cross-side token alignment."""
+
+    side_plans: Pair[list[_StepGroupPlan]]
+    token_align: Optional[TokenAlignPlan]
+
+
 def compare_bundle_pair(
     *,
-    bundle_info_pair: Pair[TensorBundleInfo],
+    name: str,
+    filenames_pair: Pair[list[str]],
     baseline_path: Path,
     target_path: Path,
     token_align_plan: Optional[TokenAlignPlan],
     diff_threshold: float,
 ) -> Union[ComparisonRecord, SkipRecord]:
-    name: str = bundle_info_pair.y[0].name
-
-    tensors_b, b_warns = _load_and_align_by_step(
-        infos=bundle_info_pair.x, base_path=baseline_path
+    # 1. Load (tensor + meta, ungrouped)
+    loaded_pair: Pair[list[ValueWithMeta]] = Pair(
+        x=_load_tensors(filenames=filenames_pair.x, base_path=baseline_path),
+        y=_load_tensors(filenames=filenames_pair.y, base_path=target_path),
     )
-    tensors_t, t_warns = _load_and_align_by_step(
-        infos=bundle_info_pair.y, base_path=target_path
-    )
-    align_warnings: list[AlignWarning] = b_warns + t_warns
-    del b_warns, t_warns
 
-    if not tensors_b or not tensors_t:
-        reason = "baseline_load_failed" if not tensors_b else "target_load_failed"
+    # Filter failed loads, keep meta/tensor aligned
+    valid_pair: Pair[list[ValueWithMeta]] = Pair(
+        x=[it for it in loaded_pair.x if isinstance(it.value, torch.Tensor)],
+        y=[it for it in loaded_pair.y if isinstance(it.value, torch.Tensor)],
+    )
+    if not valid_pair.x or not valid_pair.y:
+        reason = "baseline_load_failed" if not valid_pair.x else "target_load_failed"
+        return SkipRecord(name=name, reason=reason, align_warnings=[])
+
+    # 2. Plan (meta only)
+    metas_pair: Pair[list[dict[str, Any]]] = Pair(
+        x=[it.meta for it in valid_pair.x],
+        y=[it.meta for it in valid_pair.y],
+    )
+    plan: _AlignPlan = _compute_plans(
+        metas_pair=metas_pair, token_align_plan=token_align_plan
+    )
+
+    # 3. Execute (tensor + plan only)
+    tensors_pair: Pair[list[torch.Tensor]] = Pair(
+        x=[it.value for it in valid_pair.x],
+        y=[it.value for it in valid_pair.y],
+    )
+    result: Optional[Pair[torch.Tensor]]
+    result, align_warnings, failed_side = _execute_plans(
+        tensors_pair=tensors_pair, plan=plan
+    )
+
+    if result is None:
+        reason = (
+            "baseline_load_failed" if failed_side == "baseline" else "target_load_failed"
+        )
         return SkipRecord(name=name, reason=reason, align_warnings=align_warnings)
 
-    if token_align_plan is not None:
-        combined: Pair[torch.Tensor] = execute_token_align(
-            plan=token_align_plan,
-            tensor_of_step_pair=Pair(x=tensors_b, y=tensors_t),
-        )
-    else:
-        assert len(tensors_b) == 1 and len(tensors_t) == 1, (
-            f"Expected single-step bundles without alignment plan, "
-            f"got {len(tensors_b)} baseline steps and {len(tensors_t)} target steps"
-        )
-        combined = Pair(
-            x=list(tensors_b.values())[0],
-            y=list(tensors_t.values())[0],
-        )
-
+    # 4. Compare
     info = compare_tensor_pair(
-        x_baseline=combined.x,
-        x_target=combined.y,
+        x_baseline=result.x,
+        x_target=result.y,
         name=name,
         diff_threshold=diff_threshold,
     )
     return ComparisonRecord(**info.model_dump(), align_warnings=align_warnings)
 
 
-def _load_and_align_by_step(
-    *, infos: list[TensorInfo], base_path: Path
-) -> tuple[dict[int, torch.Tensor], list[AlignWarning]]:
-    """Group rows by step, unshard within each step, return step->tensor mapping."""
-    infos_of_step: dict[int, list[TensorInfo]] = {}
-    for info in infos:
-        infos_of_step.setdefault(info.step, []).append(info)
-
-    result: dict[int, torch.Tensor] = {}
-    all_warnings: list[AlignWarning] = []
-
-    for step in sorted(infos_of_step):
-        filenames: list[str] = [r.filename for r in infos_of_step[step]]
-        tensor, warnings = _load_and_align_one(
-            filenames=filenames, base_path=base_path
-        )
-        all_warnings.extend(warnings)
-        if tensor is not None:
-            result[step] = tensor
-
-    return result, all_warnings
-
-
-def _load_and_align_one(
-    *, filenames: list[str], base_path: Path
-) -> tuple[Optional[torch.Tensor], list[AlignWarning]]:
-    """Load tensor files and unshard them into a single tensor."""
-    if not filenames:
-        return None, []
-
-    tensors_with_meta: list[ValueWithMeta] = _load_tensors(filenames, base_path)
-    tensors: list[torch.Tensor] = _extract_tensors(tensors_with_meta)
-    if not tensors:
-        return None, []
-
-    plans: list[_Plan] = _compute_plans([item.meta for item in tensors_with_meta])
-    return _execute_plans(tensors, plans)
-
-
 def _load_tensors(filenames: list[str], base_path: Path) -> list[ValueWithMeta]:
     return [ValueWithMeta.load(base_path / f) for f in filenames]
 
 
-def _compute_plans(metas: list[dict[str, Any]]) -> list[_Plan]:
+def _compute_plans(
+    *,
+    metas_pair: Pair[list[dict[str, Any]]],
+    token_align_plan: Optional[TokenAlignPlan],
+) -> _AlignPlan:
+    return _AlignPlan(
+        side_plans=Pair(
+            x=_compute_side_plans(metas=metas_pair.x),
+            y=_compute_side_plans(metas=metas_pair.y),
+        ),
+        token_align=token_align_plan,
+    )
+
+
+def _compute_side_plans(metas: list[dict[str, Any]]) -> list[_StepGroupPlan]:
+    """Group by step, compute unshard + reorder plans for each group."""
+    step_to_indices: dict[int, list[int]] = {}
+    for i, meta in enumerate(metas):
+        step: int = int(meta["step"])
+        step_to_indices.setdefault(step, []).append(i)
+
+    result: list[_StepGroupPlan] = []
+    for step in sorted(step_to_indices):
+        indices: list[int] = step_to_indices[step]
+        step_metas: list[dict[str, Any]] = [metas[i] for i in indices]
+        plans: list[_Plan] = _compute_step_unshard_reorder(metas=step_metas)
+        result.append(
+            _StepGroupPlan(
+                step=step, input_indices=indices, unshard_reorder=plans
+            )
+        )
+
+    return result
+
+
+def _compute_step_unshard_reorder(metas: list[dict[str, Any]]) -> list[_Plan]:
     if not metas or len(metas) == 1:
         return []
 
@@ -155,13 +177,71 @@ def _compute_plans(metas: list[dict[str, Any]]) -> list[_Plan]:
     return [*unshard_plans, *reorder_plans]
 
 
-def _extract_tensors(
-    loaded: list[ValueWithMeta],
-) -> list[torch.Tensor]:
-    return [value for item in loaded if isinstance(value := item.value, torch.Tensor)]
-
-
 def _execute_plans(
+    *,
+    tensors_pair: Pair[list[torch.Tensor]],
+    plan: _AlignPlan,
+) -> tuple[Optional[Pair[torch.Tensor]], list[AlignWarning], Optional[str]]:
+    """Execute unified unshard/reorder + token-align.
+
+    Returns:
+        - Combined tensor pair (or None if failed)
+        - List of alignment warnings
+        - Failed side ("baseline" or "target" if failed, None if successful)
+    """
+
+    # Per-side: unshard + reorder -> dict[step, tensor]
+    step_tensors_b, b_warns = _execute_side_plans(
+        tensors=tensors_pair.x, step_plans=plan.side_plans.x
+    )
+    step_tensors_t, t_warns = _execute_side_plans(
+        tensors=tensors_pair.y, step_plans=plan.side_plans.y
+    )
+    all_warnings: list[AlignWarning] = b_warns + t_warns
+
+    if not step_tensors_b or not step_tensors_t:
+        failed_side = "baseline" if not step_tensors_b else "target"
+        return None, all_warnings, failed_side
+
+    # Cross-side: token alignment (or direct extraction for single-step)
+    if plan.token_align is not None:
+        combined: Pair[torch.Tensor] = execute_token_align(
+            plan=plan.token_align,
+            tensor_of_step_pair=Pair(x=step_tensors_b, y=step_tensors_t),
+        )
+    else:
+        assert len(step_tensors_b) == 1 and len(step_tensors_t) == 1
+        combined = Pair(
+            x=list(step_tensors_b.values())[0],
+            y=list(step_tensors_t.values())[0],
+        )
+
+    return combined, all_warnings, None
+
+
+def _execute_side_plans(
+    tensors: list[torch.Tensor],
+    step_plans: list[_StepGroupPlan],
+) -> tuple[dict[int, torch.Tensor], list[AlignWarning]]:
+    """Execute per-step unshard + reorder for one side."""
+    result: dict[int, torch.Tensor] = {}
+    all_warnings: list[AlignWarning] = []
+
+    for step_plan in step_plans:
+        step_tensors: list[torch.Tensor] = [
+            tensors[i] for i in step_plan.input_indices
+        ]
+        tensor, warnings = _execute_step_plans(
+            tensors=step_tensors, plans=step_plan.unshard_reorder
+        )
+        all_warnings.extend(warnings)
+        if tensor is not None:
+            result[step_plan.step] = tensor
+
+    return result, all_warnings
+
+
+def _execute_step_plans(
     tensors: list[torch.Tensor],
     plans: list[_Plan],
 ) -> tuple[Optional[torch.Tensor], list[AlignWarning]]:
@@ -176,14 +256,14 @@ def _execute_plans(
     warnings: list[AlignWarning] = []
     current = tensors
     for plan in plans:
-        current, new_warnings = _execute_plan(current, plan)
+        current, new_warnings = _execute_single_plan(tensors=current, plan=plan)
         warnings.extend(new_warnings)
 
     assert len(current) == 1
     return current[0], warnings
 
 
-def _execute_plan(
+def _execute_single_plan(
     tensors: list[torch.Tensor],
     plan: _Plan,
 ) -> tuple[list[torch.Tensor], list[AlignWarning]]:

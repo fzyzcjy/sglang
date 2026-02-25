@@ -99,8 +99,14 @@ def _execute_compare_bundle_pair(
         if not bundle_info_pair.y:
             continue
 
+        name: str = bundle_info_pair.y[0].name
+        filenames_pair: Pair[list[str]] = Pair(
+            x=[info.filename for info in bundle_info_pair.x],
+            y=[info.filename for info in bundle_info_pair.y],
+        )
         yield compare_bundle_pair(
-            bundle_info_pair=bundle_info_pair,
+            name=name,
+            filenames_pair=filenames_pair,
             baseline_path=baseline_path,
             target_path=target_path,
             token_align_plan=token_align_plan,
