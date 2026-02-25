@@ -58,7 +58,7 @@ class TestExecuteAlignment:
 
         tensors = {0: hidden_step0, 1: hidden_step1}
         aligned: Pair[torch.Tensor] = execute_token_align(
-            plan=plan, tensors=Pair(x=tensors, y=tensors)
+            plan=plan, tensor_of_step_pair=Pair(x=tensors, y=tensors)
         )
 
         assert torch.equal(aligned.x, aligned.y)
@@ -75,7 +75,7 @@ class TestExecuteAlignment:
 
         tensors = {0: torch.randn(5, 8)}
         aligned: Pair[torch.Tensor] = execute_token_align(
-            plan=plan, tensors=Pair(x=tensors, y=tensors)
+            plan=plan, tensor_of_step_pair=Pair(x=tensors, y=tensors)
         )
 
         assert aligned.x.shape[0] == 0
