@@ -42,6 +42,7 @@ class TokenAlignerGlobalAux:
 class TokenAlignerSeqInfo(_FrozenBase):
     """Information for a sequence, containing information to locate all the tokens inside the sequence."""
 
+    # All these fields are of shape (num_tokens_in_seq,)
     input_ids: list[int]
     positions: list[int]
     steps: list[int]
