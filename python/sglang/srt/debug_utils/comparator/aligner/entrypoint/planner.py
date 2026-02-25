@@ -10,7 +10,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
 )
 from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
     AlignerPlan,
-    StepGroupPlan,
+    AlignerPerStepPlan,
     StepPlan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.parallel_info import (
@@ -29,25 +29,25 @@ def compute_aligner_plan(
     token_aligner_plan: Optional[TokenAlignerPlan],
 ) -> AlignerPlan:
     return AlignerPlan(
-        side_plans=metas_pair.map(lambda metas: _compute_side_plans(metas=metas)),
+        per_step_plans=metas_pair.map(lambda metas: _compute_side_plans(metas=metas)),
         token_aligner_plan=token_aligner_plan,
     )
 
 
-def _compute_side_plans(metas: list[dict[str, Any]]) -> list[StepGroupPlan]:
+def _compute_side_plans(metas: list[dict[str, Any]]) -> list[AlignerPerStepPlan]:
     """Group by step, compute unshard + reorder plans for each group."""
     step_to_indices: dict[int, list[int]] = {}
     for i, meta in enumerate(metas):
         step: int = int(meta["step"])
         step_to_indices.setdefault(step, []).append(i)
 
-    result: list[StepGroupPlan] = []
+    result: list[AlignerPerStepPlan] = []
     for step in sorted(step_to_indices):
         indices: list[int] = step_to_indices[step]
         step_metas: list[dict[str, Any]] = [metas[i] for i in indices]
         plans: list[StepPlan] = _compute_step_unshard_reorder(metas=step_metas)
         result.append(
-            StepGroupPlan(step=step, input_indices=indices, unshard_reorder=plans)
+            AlignerPerStepPlan(step=step, input_indices=indices, unshard_reorder=plans)
         )
 
     return result

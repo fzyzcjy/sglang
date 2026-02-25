@@ -14,7 +14,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.executor import (
 )
 from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
     AlignerPlan,
-    StepGroupPlan,
+    AlignerPerStepPlan,
     StepPlan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.executor import (
@@ -41,10 +41,10 @@ def execute_aligner_plan(
 
     # Per-side: unshard + reorder -> dict[step, tensor]
     step_tensors_x, x_warns = _execute_side_plans(
-        tensors=tensors_pair.x, step_plans=plan.side_plans.x
+        tensors=tensors_pair.x, step_plans=plan.per_step_plans.x
     )
     step_tensors_y, y_warns = _execute_side_plans(
-        tensors=tensors_pair.y, step_plans=plan.side_plans.y
+        tensors=tensors_pair.y, step_plans=plan.per_step_plans.y
     )
     all_warnings: list[AlignWarning] = x_warns + y_warns
 
@@ -74,7 +74,7 @@ def execute_aligner_plan(
 
 def _execute_side_plans(
     tensors: list[torch.Tensor],
-    step_plans: list[StepGroupPlan],
+    step_plans: list[AlignerPerStepPlan],
 ) -> tuple[dict[int, torch.Tensor], list[AlignWarning]]:
     """Execute per-step unshard + reorder for one side."""
     result: dict[int, torch.Tensor] = {}

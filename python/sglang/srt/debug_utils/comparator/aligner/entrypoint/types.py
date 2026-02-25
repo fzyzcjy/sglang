@@ -14,9 +14,7 @@ StepPlan = Union[UnsharderPlan, ReordererPlan]
 
 
 @dataclass(frozen=True)
-class StepGroupPlan:
-    """Unshard + reorder plan for a single step."""
-
+class AlignerPerStepPlan:
     step: int
     input_indices: list[int]
     unshard_reorder: list[StepPlan]
@@ -24,7 +22,5 @@ class StepGroupPlan:
 
 @dataclass(frozen=True)
 class AlignerPlan:
-    """Unified plan: per-step unshard/reorder for both sides + cross-side token alignment."""
-
-    side_plans: Pair[list[StepGroupPlan]]
+    per_step_plans: Pair[list[AlignerPerStepPlan]]
     token_aligner_plan: Optional[TokenAlignerPlan]
