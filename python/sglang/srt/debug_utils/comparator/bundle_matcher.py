@@ -32,13 +32,8 @@ def match_bundles(
 
     results: list[Pair[TensorBundleInfo]] = []
     for key_values in unique_keys.iter_rows(named=True):
-        rows_baseline: TensorBundleInfo = _rows_to_tensor_infos(
-            filter_rows(dfs.x, conditions=key_values)
-        )
-        rows_target: TensorBundleInfo = _rows_to_tensor_infos(
-            filter_rows(dfs.y, conditions=key_values)
-        )
-        results.append(Pair(x=rows_baseline, y=rows_target))
+        result = dfs.map(lambda df: _rows_to_tensor_infos(filter_rows(df, conditions=key_values)))
+        results.append(result)
 
     return results
 
