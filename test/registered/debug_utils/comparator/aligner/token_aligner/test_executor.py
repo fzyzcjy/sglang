@@ -8,7 +8,7 @@ import torch
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.executor import (
     execute_token_aligner,
 )
-from sglang.srt.debug_utils.comparator.aligner.token_aligner.indexer import (
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.seq_info_builder import (
     build_seqs_info,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.planner import (
