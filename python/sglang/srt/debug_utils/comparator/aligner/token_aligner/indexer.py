@@ -28,6 +28,19 @@ class _SeqAccumulator:
     steps: list[int] = field(default_factory=list)
     indices: list[int] = field(default_factory=list)
 
+    def append(
+        self,
+        *,
+        input_id: int,
+        position: int,
+        step: int,
+        index: int,
+    ) -> None:
+        self.input_ids.append(input_id)
+        self.positions.append(position)
+        self.steps.append(step)
+        self.indices.append(index)
+
 
 def _build_token_index(
     global_aux: TokenAlignerGlobalAux,
@@ -57,10 +70,12 @@ def _build_token_index(
             acc: _SeqAccumulator = accum[internal_id]
 
             for j in range(slen):
-                acc.input_ids.append(input_ids_flat[offset + j])
-                acc.positions.append(positions_flat[offset + j])
-                acc.steps.append(step)
-                acc.indices.append(offset + j)
+                acc.append(
+                    input_id=input_ids_flat[offset + j],
+                    position=positions_flat[offset + j],
+                    step=step,
+                    index=offset + j,
+                )
 
             offset += slen
 
