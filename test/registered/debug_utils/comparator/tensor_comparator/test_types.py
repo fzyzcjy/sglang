@@ -98,11 +98,13 @@ class TestRecordTypes:
     def test_discriminated_union_parsing(self):
         for record in [
             ConfigRecord(
-                baseline_path="/a",
-                target_path="/b",
-                diff_threshold=1e-3,
-                start_step=0,
-                end_step=100,
+                config={
+                    "baseline_path": "/a",
+                    "target_path": "/b",
+                    "diff_threshold": 1e-3,
+                    "start_step": 0,
+                    "end_step": 100,
+                }
             ),
             SkipRecord(name="attn", reason="no_baseline"),
             ComparisonRecord(
