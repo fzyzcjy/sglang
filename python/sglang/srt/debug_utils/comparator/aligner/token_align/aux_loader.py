@@ -33,6 +33,9 @@ _MEGATRON_AUX_NAMES = frozenset(
 AUX_NAMES: frozenset[str] = _SGLANG_AUX_NAMES | _MEGATRON_AUX_NAMES
 
 
+# ── framework-agnostic ──────────────────────────────────────────────
+
+
 def load_and_normalize_aux(
     dump_path: Path, df: pl.DataFrame
 ) -> Optional[TokenAlignGlobalAux]:
@@ -96,30 +99,7 @@ def _detect_layout(raw: dict[int, dict[str, object]], framework: str) -> str:
     Currently only THD is supported. BSHD detection raises NotImplementedError.
     """
     if framework == "megatron":
-        for step_data in raw.values():
-            qkv_format = step_data.get("qkv_format")
-            if qkv_format is not None:
-                fmt = qkv_format if isinstance(qkv_format, str) else str(qkv_format)
-                if "bshd" in fmt.lower():
-                    raise NotImplementedError(
-                        "BSHD layout is not currently supported. "
-                        "Use aux_loader BSHD→THD conversion (planned)."
-                    )
-                return "thd"
-
-            input_ids = step_data.get("input_ids")
-            if isinstance(input_ids, torch.Tensor) and input_ids.ndim == 2:
-                raise NotImplementedError(
-                    "BSHD layout is not currently supported. "
-                    "Use aux_loader BSHD→THD conversion (planned)."
-                )
-
-        warnings.warn(
-            "Megatron layout detection: no qkv_format or 2D input_ids found, "
-            "falling back to thd"
-        )
-        return "thd"
-
+        return _detect_layout_megatron(raw)
     return "thd"
 
 
@@ -187,6 +167,9 @@ def _normalize_step(
         return _normalize_megatron(step_data, layout=layout, step=step)
 
 
+# ── sglang ──────────────────────────────────────────────────────────
+
+
 def _normalize_sglang(step_data: dict[str, object], *, step: int) -> StepAux:
     input_ids = step_data["input_ids"]
     positions = step_data["positions"]
@@ -217,6 +200,36 @@ def _normalize_sglang(step_data: dict[str, object], *, step: int) -> StepAux:
         seq_lens=seq_lens,
         seq_ids=seq_ids,
     )
+
+
+# ── megatron ────────────────────────────────────────────────────────
+
+
+def _detect_layout_megatron(raw: dict[int, dict[str, object]]) -> str:
+    """Detect layout for Megatron framework from loaded auxiliary tensors."""
+    for step_data in raw.values():
+        qkv_format = step_data.get("qkv_format")
+        if qkv_format is not None:
+            fmt = qkv_format if isinstance(qkv_format, str) else str(qkv_format)
+            if "bshd" in fmt.lower():
+                raise NotImplementedError(
+                    "BSHD layout is not currently supported. "
+                    "Use aux_loader BSHD→THD conversion (planned)."
+                )
+            return "thd"
+
+        input_ids = step_data.get("input_ids")
+        if isinstance(input_ids, torch.Tensor) and input_ids.ndim == 2:
+            raise NotImplementedError(
+                "BSHD layout is not currently supported. "
+                "Use aux_loader BSHD→THD conversion (planned)."
+            )
+
+    warnings.warn(
+        "Megatron layout detection: no qkv_format or 2D input_ids found, "
+        "falling back to thd"
+    )
+    return "thd"
 
 
 def _normalize_megatron(
