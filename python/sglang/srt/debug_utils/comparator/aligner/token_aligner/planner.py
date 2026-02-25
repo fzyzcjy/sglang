@@ -70,10 +70,29 @@ def _match_sequences(
 ) -> list[tuple[int, int]]:
     """Two-pass sequence matching: exact then prefix."""
     matched_seq_id_pairs: list[tuple[int, int]] = []
-    unmatched_seq_ids: Pair[set[int]] = Pair(
-        x=set(seqs.x.keys()), y=set(seqs.y.keys())
+    unmatched_seq_ids: Pair[set[int]] = seqs.map(lambda d: set(d.keys()))
+
+    _match_sequences_exact(
+        seqs=seqs,
+        matched_seq_id_pairs=matched_seq_id_pairs,
+        unmatched_seq_ids=unmatched_seq_ids,
+    )
+    _match_sequences_prefix(
+        seqs=seqs,
+        matched_seq_id_pairs=matched_seq_id_pairs,
+        unmatched_seq_ids=unmatched_seq_ids,
     )
 
+    return matched_seq_id_pairs
+
+
+def _match_sequences_exact(
+    *,
+    seqs: Pair[dict[int, TokenAlignerSeqInfo]],
+    matched_seq_id_pairs: list[tuple[int, int]],
+    unmatched_seq_ids: Pair[set[int]],
+) -> None:
+    """Pass 1: match sequences with identical input_ids."""
     y_lookup: dict[tuple[int, ...], list[int]] = defaultdict(list)
     for seq_id, rec in seqs.y.items():
         y_lookup[tuple(rec.input_ids)].append(seq_id)
@@ -90,6 +109,14 @@ def _match_sequences(
                 unmatched_seq_ids.y.discard(candidate)
                 break
 
+
+def _match_sequences_prefix(
+    *,
+    seqs: Pair[dict[int, TokenAlignerSeqInfo]],
+    matched_seq_id_pairs: list[tuple[int, int]],
+    unmatched_seq_ids: Pair[set[int]],
+) -> None:
+    """Pass 2: match remaining sequences by longest prefix (longest-first)."""
     remaining_x: list[int] = sorted(
         unmatched_seq_ids.x,
         key=lambda s: len(seqs.x[s].input_ids),
@@ -121,5 +148,3 @@ def _match_sequences(
             matched_seq_id_pairs.append((seq_id_x, best_match))
             unmatched_seq_ids.x.discard(seq_id_x)
             unmatched_seq_ids.y.discard(best_match)
-
-    return matched_seq_id_pairs
