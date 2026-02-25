@@ -186,8 +186,7 @@ class _MegatronPlugin(_AuxPlugin):
     ) -> TokenAlignerStepAux:
         input_ids: torch.Tensor = step_data["input_ids"]
 
-        cu_seqlens_q = step_data.get("cu_seqlens_q")
-        if cu_seqlens_q is not None:
+        if (cu_seqlens_q := step_data.get("cu_seqlens_q")) is not None:
             seq_lens: torch.Tensor = cu_seqlens_q[1:] - cu_seqlens_q[:-1]
         else:
             seq_lens = torch.tensor([input_ids.shape[0]], dtype=torch.long)
