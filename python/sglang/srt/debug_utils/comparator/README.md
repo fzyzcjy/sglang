@@ -5,10 +5,10 @@
 
 ## Key Terms
 
-| Term | Definition |
-|------|-----------|
-| **Tensor group** | All dump files sharing the same logical tensor name. In `logical` mode this spans all ranks and steps; in `raw` mode it is per-rank. |
-| **Unshard** | Reassembling a sharded tensor from multiple ranks into one complete tensor, guided by `dims` annotations. |
+| Term                     | Definition                                                                                                                                            |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Tensor group**   | All dump files sharing the same logical tensor name. In `logical` mode this spans all ranks and steps; in `raw` mode it is per-rank.              |
+| **Unshard**        | Reassembling a sharded tensor from multiple ranks into one complete tensor, guided by `dims` annotations.                                           |
 | **Alignment plan** | A token-level mapping between two dumps with different batch compositions, built from aux tensors (`input_ids`, `positions`, `seq_lens`, etc.). |
 
 ## Data Flow
