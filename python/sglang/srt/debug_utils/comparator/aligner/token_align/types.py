@@ -16,7 +16,6 @@ class SeqsInfo(_FrozenBase):
     """All sequences for one side across all steps."""
 
     sequences: dict[int, SeqInfo]
-    framework: str
     layout: str
 
 
@@ -29,5 +28,3 @@ class AlignmentPlan(_FrozenBase):
 
     match_steps: Pair[tuple[int, ...]]
     match_indices: Pair[tuple[int, ...]]
-
-    layouts: Pair[str]

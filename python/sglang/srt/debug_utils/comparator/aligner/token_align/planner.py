@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import warnings
 from collections import defaultdict
-
-import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
     AuxTensorsForStep,
+    ExternalSeqId,
     SideAux,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
@@ -23,16 +21,8 @@ from sglang.srt.debug_utils.comparator.utils import Pair
 
 def build_seqs_info(side_aux: SideAux) -> SeqsInfo:
     """Build sequence info for one side from its auxiliary tensors."""
-    if side_aux.framework == "sglang":
-        sequences = _build_sglang_thd_index(side_aux)
-    elif side_aux.layout == "bshd":
-        sequences = _build_megatron_bshd_index(side_aux)
-    else:
-        sequences = _build_megatron_thd_index(side_aux)
-
     return SeqsInfo(
-        sequences=sequences,
-        framework=side_aux.framework,
+        sequences=_build_token_index(side_aux),
         layout=side_aux.layout,
     )
 
@@ -82,12 +72,11 @@ def compute_alignment_plan(
     return AlignmentPlan(
         match_steps=Pair(x=tuple(steps_a), y=tuple(steps_b)),
         match_indices=Pair(x=tuple(indices_a), y=tuple(indices_b)),
-        layouts=Pair(x=indices.x.layout, y=indices.y.layout),
     )
 
 
 # ---------------------------------------------------------------------------
-# Index builders
+# Index builder
 # ---------------------------------------------------------------------------
 
 
@@ -103,50 +92,30 @@ class _SeqAccumulator:
         self.indices: list[int] = []
 
 
-def _build_sglang_thd_index(
-    side_aux: SideAux,
-) -> dict[int, SeqInfo]:
-    """Build token index for SGLang thd layout using req_pool_indices + rids."""
-    rpi_to_rid: dict[int, str] = {}
-    rpi_to_seq_id: dict[int, int] = {}
-    next_seq_id: int = 0
-
+def _build_token_index(side_aux: SideAux) -> dict[int, SeqInfo]:
+    """Build token index for any framework/layout using seq_ids for identity tracking."""
+    external_to_internal: dict[ExternalSeqId, int] = {}
+    next_internal_id: int = 0
     accum: dict[int, _SeqAccumulator] = {}
 
     for step in sorted(side_aux.steps.keys()):
         aux: AuxTensorsForStep = side_aux.steps[step]
 
-        if aux.req_pool_indices is None:
-            warnings.warn(
-                f"req_pool_indices missing at step {step}, cannot build token index"
-            )
-            continue
-
         input_ids_flat: list[int] = aux.input_ids.flatten().tolist()
         positions_flat: list[int] = aux.positions.flatten().tolist()
         seq_lens_list: list[int] = aux.seq_lens.tolist()
-        rpi_list: list[int] = aux.req_pool_indices.tolist()
-        rids_list: list[str] = (
-            list(aux.rids) if aux.rids is not None else [str(rpi) for rpi in rpi_list]
-        )
 
         offset: int = 0
-        for seg_idx, slen in enumerate(seq_lens_list):
-            rpi: int = rpi_list[seg_idx]
-            rid: str = rids_list[seg_idx]
+        for seq_index, slen in enumerate(seq_lens_list):
+            ext_id: ExternalSeqId = aux.seq_ids[seq_index]
 
-            if rpi in rpi_to_rid and rpi_to_rid[rpi] != rid:
-                rpi_to_seq_id.pop(rpi)
-                del rpi_to_rid[rpi]
+            if ext_id not in external_to_internal:
+                external_to_internal[ext_id] = next_internal_id
+                accum[next_internal_id] = _SeqAccumulator()
+                next_internal_id += 1
 
-            if rpi not in rpi_to_seq_id:
-                rpi_to_rid[rpi] = rid
-                rpi_to_seq_id[rpi] = next_seq_id
-                accum[next_seq_id] = _SeqAccumulator()
-                next_seq_id += 1
-
-            seq_id: int = rpi_to_seq_id[rpi]
-            acc: _SeqAccumulator = accum[seq_id]
+            internal_id: int = external_to_internal[ext_id]
+            acc: _SeqAccumulator = accum[internal_id]
 
             for j in range(slen):
                 acc.input_ids.append(input_ids_flat[offset + j])
@@ -157,97 +126,13 @@ def _build_sglang_thd_index(
             offset += slen
 
     return {
-        seq_id: SeqInfo(
+        sid: SeqInfo(
             input_ids=acc.input_ids,
             positions=acc.positions,
             steps=acc.steps,
             indices=acc.indices,
         )
-        for seq_id, acc in accum.items()
-    }
-
-
-def _build_megatron_bshd_index(
-    side_aux: SideAux,
-) -> dict[int, SeqInfo]:
-    """Build token index for Megatron bshd layout."""
-    accum: dict[int, _SeqAccumulator] = {}
-    next_seq_id: int = 0
-
-    for step in sorted(side_aux.steps.keys()):
-        aux: AuxTensorsForStep = side_aux.steps[step]
-
-        input_ids_2d: torch.Tensor = aux.input_ids  # [B, S]
-        positions_2d: torch.Tensor = aux.positions  # [B, S]
-        seq_lens_list: list[int] = aux.seq_lens.tolist()
-        batch_size: int = input_ids_2d.shape[0]
-        max_seq_len: int = input_ids_2d.shape[1]
-
-        for batch_idx in range(batch_size):
-            seq_id: int = next_seq_id + batch_idx
-            if seq_id not in accum:
-                accum[seq_id] = _SeqAccumulator()
-            acc: _SeqAccumulator = accum[seq_id]
-
-            slen: int = seq_lens_list[batch_idx]
-            for s in range(slen):
-                acc.input_ids.append(int(input_ids_2d[batch_idx, s].item()))
-                acc.positions.append(int(positions_2d[batch_idx, s].item()))
-                acc.steps.append(step)
-                acc.indices.append(batch_idx * max_seq_len + s)
-
-        next_seq_id += batch_size
-
-    return {
-        seq_id: SeqInfo(
-            input_ids=acc.input_ids,
-            positions=acc.positions,
-            steps=acc.steps,
-            indices=acc.indices,
-        )
-        for seq_id, acc in accum.items()
-    }
-
-
-def _build_megatron_thd_index(
-    side_aux: SideAux,
-) -> dict[int, SeqInfo]:
-    """Build token index for Megatron thd layout (static batching, segment-based)."""
-    accum: dict[int, _SeqAccumulator] = {}
-    next_seq_id: int = 0
-
-    for step in sorted(side_aux.steps.keys()):
-        aux: AuxTensorsForStep = side_aux.steps[step]
-
-        input_ids_flat: list[int] = aux.input_ids.flatten().tolist()
-        positions_flat: list[int] = aux.positions.flatten().tolist()
-        seq_lens_list: list[int] = aux.seq_lens.tolist()
-
-        offset: int = 0
-        for seg_idx, slen in enumerate(seq_lens_list):
-            seq_id: int = next_seq_id + seg_idx
-            if seq_id not in accum:
-                accum[seq_id] = _SeqAccumulator()
-            acc: _SeqAccumulator = accum[seq_id]
-
-            for j in range(slen):
-                acc.input_ids.append(input_ids_flat[offset + j])
-                acc.positions.append(positions_flat[offset + j])
-                acc.steps.append(step)
-                acc.indices.append(offset + j)
-
-            offset += slen
-
-        next_seq_id += len(seq_lens_list)
-
-    return {
-        seq_id: SeqInfo(
-            input_ids=acc.input_ids,
-            positions=acc.positions,
-            steps=acc.steps,
-            indices=acc.indices,
-        )
-        for seq_id, acc in accum.items()
+        for sid, acc in accum.items()
     }
 
 

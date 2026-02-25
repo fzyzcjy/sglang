@@ -3,7 +3,7 @@ from __future__ import annotations
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import polars as pl
 import torch
@@ -20,6 +20,9 @@ from sglang.srt.debug_utils.comparator.aligner.unshard.planner import (
 from sglang.srt.debug_utils.comparator.dims import parse_dims
 from sglang.srt.debug_utils.dump_loader import ValueWithMeta, filter_rows
 
+# seq_id type: str (SGLang rid) or tuple[int, int] (Megatron (step, seq_index))
+ExternalSeqId = Union[str, tuple[int, int]]
+
 _SGLANG_AUX_NAMES = frozenset(
     {"input_ids", "positions", "seq_lens", "req_pool_indices", "rids"}
 )
@@ -31,16 +34,12 @@ AUX_NAMES: frozenset[str] = _SGLANG_AUX_NAMES | _MEGATRON_AUX_NAMES
 
 @dataclass(frozen=True)
 class AuxTensorsForStep:
-    """Normalized auxiliary tensors for a single step (framework-agnostic).
+    """Normalized auxiliary tensors for a single step (framework-agnostic)."""
 
-    Preserves original layout (no bshd→thd flatten).
-    """
-
-    input_ids: torch.Tensor  # [T] (thd) or [B, S] (bshd)
-    positions: torch.Tensor  # [T] (thd) or [B, S] (bshd)
+    input_ids: torch.Tensor  # [T] (1D flat)
+    positions: torch.Tensor  # [T] (1D flat)
     seq_lens: torch.Tensor  # [num_seqs]
-    req_pool_indices: Optional[torch.Tensor]  # [num_seqs], SGLang only
-    rids: Optional[tuple[str, ...]]  # SGLang only
+    seq_ids: tuple[ExternalSeqId, ...]  # [num_seqs] — sequence identity
 
 
 @dataclass(frozen=True)
@@ -49,7 +48,7 @@ class SideAux:
 
     steps: dict[int, AuxTensorsForStep]
     framework: str  # "sglang" | "megatron"
-    layout: str  # "thd" | "bshd"
+    layout: str  # "thd"
 
 
 def load_and_normalize_aux(dump_path: Path, df: pl.DataFrame) -> SideAux:
@@ -78,7 +77,7 @@ def load_and_normalize_aux(dump_path: Path, df: pl.DataFrame) -> SideAux:
     steps: dict[int, AuxTensorsForStep] = {}
     for step, step_data in raw.items():
         steps[step] = _normalize_step(
-            step_data=step_data, framework=framework, layout=layout
+            step_data=step_data, framework=framework, layout=layout, step=step
         )
 
     return SideAux(steps=steps, framework=framework, layout=layout)
@@ -112,19 +111,28 @@ def _detect_framework(df: pl.DataFrame, dump_path: Path) -> str:
 
 
 def _detect_layout(raw: dict[int, dict[str, object]], framework: str) -> str:
-    """Detect layout from loaded auxiliary tensors."""
+    """Detect layout from loaded auxiliary tensors.
+
+    Currently only THD is supported. BSHD detection raises NotImplementedError.
+    """
     if framework == "megatron":
         for step_data in raw.values():
             qkv_format = step_data.get("qkv_format")
             if qkv_format is not None:
                 fmt = qkv_format if isinstance(qkv_format, str) else str(qkv_format)
                 if "bshd" in fmt.lower():
-                    return "bshd"
+                    raise NotImplementedError(
+                        "BSHD layout is not currently supported. "
+                        "Use aux_loader BSHD→THD conversion (planned)."
+                    )
                 return "thd"
 
             input_ids = step_data.get("input_ids")
             if isinstance(input_ids, torch.Tensor) and input_ids.ndim == 2:
-                return "bshd"
+                raise NotImplementedError(
+                    "BSHD layout is not currently supported. "
+                    "Use aux_loader BSHD→THD conversion (planned)."
+                )
 
         warnings.warn(
             "Megatron layout detection: no qkv_format or 2D input_ids found, "
@@ -190,20 +198,21 @@ def _load_and_unshard_aux_tensor(
 
 
 def _normalize_step(
-    *, step_data: dict[str, object], framework: str, layout: str
+    *, step_data: dict[str, object], framework: str, layout: str, step: int
 ) -> AuxTensorsForStep:
     """Normalize raw loaded data into AuxTensorsForStep."""
     if framework == "sglang":
-        return _normalize_sglang(step_data)
+        return _normalize_sglang(step_data, step=step)
     else:
-        return _normalize_megatron(step_data, layout=layout)
+        return _normalize_megatron(step_data, layout=layout, step=step)
 
 
-def _normalize_sglang(step_data: dict[str, object]) -> AuxTensorsForStep:
+def _normalize_sglang(
+    step_data: dict[str, object], *, step: int
+) -> AuxTensorsForStep:
     input_ids = step_data["input_ids"]
     positions = step_data["positions"]
     seq_lens = step_data["seq_lens"]
-    req_pool_indices = step_data.get("req_pool_indices")
     rids_raw = step_data.get("rids")
 
     assert isinstance(
@@ -215,26 +224,25 @@ def _normalize_sglang(step_data: dict[str, object]) -> AuxTensorsForStep:
     assert isinstance(
         seq_lens, torch.Tensor
     ), f"seq_lens: expected Tensor, got {type(seq_lens)}"
-    assert req_pool_indices is None or isinstance(
-        req_pool_indices, torch.Tensor
-    ), f"req_pool_indices: expected Tensor or None, got {type(req_pool_indices)}"
 
-    rids: Optional[tuple[str, ...]] = None
-    if rids_raw is not None:
-        if isinstance(rids_raw, (list, tuple)):
-            rids = tuple(str(r) for r in rids_raw)
+    num_seqs: int = int(seq_lens.shape[0])
+
+    seq_ids: tuple[ExternalSeqId, ...]
+    if rids_raw is not None and isinstance(rids_raw, (list, tuple)):
+        seq_ids = tuple(str(r) for r in rids_raw)
+    else:
+        seq_ids = tuple((step, i) for i in range(num_seqs))
 
     return AuxTensorsForStep(
         input_ids=input_ids,
         positions=positions,
         seq_lens=seq_lens,
-        req_pool_indices=req_pool_indices,
-        rids=rids,
+        seq_ids=seq_ids,
     )
 
 
 def _normalize_megatron(
-    step_data: dict[str, object], *, layout: str
+    step_data: dict[str, object], *, layout: str, step: int
 ) -> AuxTensorsForStep:
     input_ids: torch.Tensor = step_data["input_ids"]
 
@@ -242,37 +250,27 @@ def _normalize_megatron(
     if cu_seqlens_q is not None:
         seq_lens: torch.Tensor = cu_seqlens_q[1:] - cu_seqlens_q[:-1]
     else:
-        if layout == "bshd":
-            seq_lens = torch.full(
-                (input_ids.shape[0],), input_ids.shape[1], dtype=torch.long
-            )
-        else:
-            seq_lens = torch.tensor([input_ids.shape[0]], dtype=torch.long)
+        seq_lens = torch.tensor([input_ids.shape[0]], dtype=torch.long)
 
     position_ids = step_data.get("position_ids")
     if position_ids is not None:
         positions: torch.Tensor = position_ids
     else:
-        positions = _infer_positions(
-            seq_lens=seq_lens, input_ids=input_ids, layout=layout
-        )
+        positions = _infer_positions(seq_lens=seq_lens)
+
+    num_seqs: int = int(seq_lens.shape[0])
+    seq_ids: tuple[ExternalSeqId, ...] = tuple(
+        (step, seq_index) for seq_index in range(num_seqs)
+    )
 
     return AuxTensorsForStep(
         input_ids=input_ids,
         positions=positions,
         seq_lens=seq_lens,
-        req_pool_indices=None,
-        rids=None,
+        seq_ids=seq_ids,
     )
 
 
-def _infer_positions(
-    *, seq_lens: torch.Tensor, input_ids: torch.Tensor, layout: str
-) -> torch.Tensor:
-    """Infer positions when position_ids is missing."""
-    if layout == "bshd":
-        batch_size: int = input_ids.shape[0]
-        max_seq_len: int = input_ids.shape[1]
-        return torch.arange(max_seq_len).unsqueeze(0).expand(batch_size, -1)
-    else:
-        return torch.cat([torch.arange(int(slen.item())) for slen in seq_lens])
+def _infer_positions(*, seq_lens: torch.Tensor) -> torch.Tensor:
+    """Infer positions when position_ids is missing (THD only)."""
+    return torch.cat([torch.arange(int(slen.item())) for slen in seq_lens])

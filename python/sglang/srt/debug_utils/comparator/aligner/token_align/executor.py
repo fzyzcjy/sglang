@@ -18,11 +18,6 @@ def execute_alignment(
     tensors_a: dict[int, torch.Tensor] = tensors.x
     tensors_b: dict[int, torch.Tensor] = tensors.y
 
-    if plan.layouts.x == "bshd":
-        tensors_a = {s: t.flatten(0, 1) for s, t in tensors_a.items()}
-    if plan.layouts.y == "bshd":
-        tensors_b = {s: t.flatten(0, 1) for s, t in tensors_b.items()}
-
     if not plan.match_steps.x:
         dummy: torch.Tensor = next(iter(tensors_a.values()))
         empty_shape: list[int] = [0] + list(dummy.shape[1:])
