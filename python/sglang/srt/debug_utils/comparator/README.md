@@ -13,26 +13,23 @@
 
 ## Data Flow
 
+**entrypoint.py** orchestrates the overall pipeline:
+
 ```
-dump files (baseline + target)
-        │
-        ▼
-   read_meta()  →  df_baseline, df_target        ← entrypoint.py
-        │
-        ▼
-   match_rows()  →  list[MatchResult]             ← row_matcher.py
-        │
-        ▼                    ┌──────────────────────────────────────────┐
-   for each match:           │  tensor_group_comparator.py              │
-        │                    │                                          │
-        ├─ load files        │  _load_and_unshard_by_step()             │
-        ├─ unshard per step  │    └─ _load_and_unshard_files()          │
-        ├─ align / concat    │  _compare_tensor()                      │
-        ├─ compare           │    ├─ execute_alignment() or concat     │
-        │                    │    └─ compare_tensors()                  │
-        └─ yield record      │                                          │
-                             └──────────────────────────────────────────┘
-        │
-        ▼
-   print + summary                                ← entrypoint.py
+read_meta(baseline), read_meta(target)
+  → match_rows()          pair tensor groups by name
+  → for each match:
+      compare_tensor_group()    ← tensor_group_comparator.py (see below)
+  → print records + summary
+```
+
+**tensor_group_comparator.py** handles one matched tensor group:
+
+```
+compare_tensor_group(match)
+  → for each step:
+      load files → unshard across ranks → one tensor per step
+  → if alignment_plan: align tokens across steps (reorder to match)
+    else:              concat steps
+  → compare_tensors(baseline, target) → ComparisonRecord
 ```
