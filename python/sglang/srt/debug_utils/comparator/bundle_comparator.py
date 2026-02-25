@@ -48,19 +48,19 @@ _Plan = Union[UnshardPlan, ReorderPlan]
 
 def compare_bundle_pair(
     *,
-    bundles: Pair[TensorBundleInfo],
+    bundle_info_pair: Pair[TensorBundleInfo],
     baseline_path: Path,
     target_path: Path,
     token_align_plan: Optional[TokenAlignPlan],
     diff_threshold: float,
 ) -> Union[ComparisonRecord, SkipRecord]:
-    name: str = bundles.y[0].name
+    name: str = bundle_info_pair.y[0].name
 
     tensors_b, b_warns = _load_and_unshard_by_step(
-        rows=bundles.x, base_path=baseline_path
+        rows=bundle_info_pair.x, base_path=baseline_path
     )
     tensors_t, t_warns = _load_and_unshard_by_step(
-        rows=bundles.y, base_path=target_path
+        rows=bundle_info_pair.y, base_path=target_path
     )
     align_warnings: list[AlignWarning] = b_warns + t_warns
     del b_warns, t_warns
