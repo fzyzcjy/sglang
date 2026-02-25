@@ -1010,6 +1010,74 @@ class TestEntrypointReplicatedAxis:
         assert summary.passed == 0
 
 
+class TestEntrypointAlignment:
+    """Test `--grouping logical` with token alignment (aux tensors present)."""
+
+    def test_sglang_multi_step_alignment(self, tmp_path, capsys):
+        """SGLang multi-step dumps with aux tensors auto-trigger alignment."""
+        torch.manual_seed(42)
+        hidden_dim = 8
+
+        hidden_step0 = torch.randn(5, hidden_dim)
+        hidden_step1 = torch.randn(2, hidden_dim)
+
+        for side_dir in ["baseline", "target"]:
+            d = tmp_path / side_dir
+            d.mkdir()
+
+            dumper = _make_dumper(d)
+
+            # Step 0: prefill with 2 sequences (3+2 tokens)
+            dumper.dump("input_ids", torch.tensor([10, 20, 30, 40, 50]))
+            dumper.dump("positions", torch.tensor([0, 1, 2, 0, 1]))
+            dumper.dump("seq_lens", torch.tensor([3, 2]))
+            dumper.dump("req_pool_indices", torch.tensor([7, 3]))
+            dumper.dump("rids", ["A", "B"])
+            dumper.dump("hidden_states", hidden_step0)
+            dumper.step()
+
+            # Step 1: decode (1 token per sequence)
+            dumper.dump("input_ids", torch.tensor([31, 51]))
+            dumper.dump("positions", torch.tensor([3, 2]))
+            dumper.dump("seq_lens", torch.tensor([1, 1]))
+            dumper.dump("req_pool_indices", torch.tensor([7, 3]))
+            dumper.dump("rids", ["A", "B"])
+            dumper.dump("hidden_states", hidden_step1)
+            dumper.step()
+
+        baseline_path = tmp_path / "baseline" / dumper._config.exp_name
+        target_path = tmp_path / "target" / dumper._config.exp_name
+
+        args = _make_args(baseline_path, target_path, grouping="logical")
+        records = _run_and_parse(args, capsys)
+
+        comparisons = _get_comparisons(records)
+        assert len(comparisons) == 1
+        assert comparisons[0].name == "hidden_states"
+        assert comparisons[0].diff is not None
+        assert comparisons[0].diff.passed
+
+        summary = records[-1]
+        assert isinstance(summary, SummaryRecord)
+        assert summary.passed == 1
+        assert summary.failed == 0
+
+    def test_alignment_fallback_when_no_aux(self, tmp_path, capsys):
+        """Without aux tensors, logical grouping falls back to per-step comparison."""
+        baseline_path, target_path = _create_dumps(
+            tmp_path, ["tensor_a"], num_steps=2
+        )
+        args = _make_args(baseline_path, target_path, grouping="logical")
+
+        captured = capsys.readouterr()
+        records = _run_and_parse(args, capsys)
+
+        output = capsys.readouterr().out
+        summary = records[-1]
+        assert isinstance(summary, SummaryRecord)
+        assert summary.total >= 1
+
+
 # --------------------------- Assertion helpers -------------------
 
 
