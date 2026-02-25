@@ -72,10 +72,8 @@ def run(args: argparse.Namespace) -> None:
         output_format=args.output_format,
     )
 
-    # --- alignment plan (logical mode only) ---
     alignment_plan = _compute_maybe_alignment_plan(args, df_baseline, df_target)
 
-    # --- unified match + iterate ---
     matches: list[MatchResult] = match_rows(
         df_baseline=df_baseline, df_target=df_target, skip_keys=_compute_skip_keys(args)
     )
