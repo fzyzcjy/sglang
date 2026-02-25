@@ -14,7 +14,7 @@ from sglang.srt.debug_utils.comparator.aligner.entrypoint.planner import (
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.aux_plugins import (
     AUX_NAMES,
-    _AuxPlugin,
+    _AuxFrameworkPlugin,
     _plugins,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
@@ -37,7 +37,7 @@ def load_and_normalize_aux(
     dump_path: Path, df: pl.DataFrame
 ) -> Optional[TokenAlignerGlobalAux]:
     """Bootstrap: load, unshard, and normalize auxiliary tensors for one side."""
-    plugin: Optional[_AuxPlugin] = _detect_plugin(df, dump_path=dump_path)
+    plugin: Optional[_AuxFrameworkPlugin] = _detect_plugin(df, dump_path=dump_path)
     if plugin is None:
         return None
 
@@ -79,7 +79,7 @@ def has_aux_tensors(df: pl.DataFrame) -> bool:
     return any(plugin.has_required_names(names) for plugin in _plugins)
 
 
-def _detect_plugin(df: pl.DataFrame, dump_path: Path) -> Optional[_AuxPlugin]:
+def _detect_plugin(df: pl.DataFrame, dump_path: Path) -> Optional[_AuxFrameworkPlugin]:
     names: set[str] = set(df["name"].unique().to_list())
 
     for plugin in _plugins:
@@ -103,7 +103,7 @@ def _load_step_data(
     non_tensor_names: set[str],
     df: pl.DataFrame,
     dump_path: Path,
-    plugin: _AuxPlugin,
+    plugin: _AuxFrameworkPlugin,
 ) -> Iterable[Tuple[str, object]]:
     """Load all tensor and non-tensor aux values for a single step."""
     for name in non_tensor_names:
@@ -150,7 +150,7 @@ def _load_non_tensor_aux(
 
 
 def _load_and_align_aux_tensor(
-    *, name: str, step: int, df: pl.DataFrame, dump_path: Path, plugin: _AuxPlugin
+    *, name: str, step: int, df: pl.DataFrame, dump_path: Path, plugin: _AuxFrameworkPlugin
 ) -> Optional[torch.Tensor]:
     """Load an auxiliary tensor for (name, step), align if needed."""
     rows = filter_rows(df, conditions={"name": name, "step": step})
@@ -192,7 +192,7 @@ def _load_and_align_aux_tensor(
 
 
 def _ensure_dims_in_metas(
-    *, name: str, plugin: _AuxPlugin, metas: list[dict]
+    *, name: str, plugin: _AuxFrameworkPlugin, metas: list[dict]
 ) -> list[dict]:
     """Inject inferred dims into metas if not already present.
 
