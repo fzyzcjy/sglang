@@ -3,7 +3,7 @@ import sys
 import pytest
 import torch
 
-from sglang.srt.debug_utils.comparator.tensor_comparison.compare import (
+from sglang.srt.debug_utils.comparator.tensor_comparator.comparator import (
     QUANTILE_NUMEL_THRESHOLD,
     SAMPLE_DIFF_THRESHOLD,
     _compute_diff,

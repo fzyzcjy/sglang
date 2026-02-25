@@ -34,7 +34,7 @@ from sglang.srt.debug_utils.comparator.output_types import (
     SkipRecord,
 )
 from sglang.srt.debug_utils.comparator.bundle_matcher import TensorBundle
-from sglang.srt.debug_utils.comparator.tensor_comparison.compare import compare_tensor_pair
+from sglang.srt.debug_utils.comparator.tensor_comparator.comparator import compare_tensor_pair
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.srt.debug_utils.dump_loader import ValueWithMeta
 
