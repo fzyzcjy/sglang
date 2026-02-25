@@ -44,7 +44,7 @@ def _compute_per_step_plans(metas: list[dict[str, Any]]) -> list[AlignerPerStepP
     for step in sorted(step_to_input_indices):
         input_indices: list[int] = step_to_input_indices[step]
         step_metas: list[dict[str, Any]] = [metas[idx] for idx in input_indices]
-        plans: list[AlignerPerStepSubPlan] = _compute_per_step_plan(metas=step_metas)
+        plans: list[AlignerPerStepSubPlan] = _compute_per_step_sub_plans(metas=step_metas)
         result.append(
             AlignerPerStepPlan(step=step, input_object_indices=input_indices, sub_plans=plans)
         )
@@ -52,7 +52,7 @@ def _compute_per_step_plans(metas: list[dict[str, Any]]) -> list[AlignerPerStepP
     return result
 
 
-def _compute_per_step_plan(metas: list[dict[str, Any]]) -> list[AlignerPerStepSubPlan]:
+def _compute_per_step_sub_plans(metas: list[dict[str, Any]]) -> list[AlignerPerStepSubPlan]:
     if not metas or len(metas) == 1:
         return []
 
