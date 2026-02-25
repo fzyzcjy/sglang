@@ -1,4 +1,4 @@
-"""Compare two groups of tensors which will be unified and then aligned."""
+"""Compare two tensor bundles which will be unified and then aligned."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ from sglang.srt.debug_utils.dump_loader import ValueWithMeta
 _Plan = Union[UnshardPlan, ReorderPlan]
 
 
-def compare_tensor_group(
+def compare_tensor_bundle(
     *,
     match: MatchResult,
     baseline_path: Path,
@@ -49,7 +49,7 @@ def compare_tensor_group(
     alignment_plan: Optional[AlignmentPlan],
     diff_threshold: float,
 ) -> Union[ComparisonRecord, SkipRecord]:
-    """Compare a matched pair of tensor groups across all steps."""
+    """Compare a matched pair of tensor bundles across all steps."""
     name: str = match.rows_target[0]["name"]
 
     tensors_b, b_warns = _load_and_unshard_by_step(

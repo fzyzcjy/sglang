@@ -613,7 +613,7 @@ class TestEntrypointGroupingLogical:
         assert comp.name == "attn_out"
 
     def test_filter_logical(self, tmp_path, capsys):
-        """--filter in logical grouping selects only matching tensor groups."""
+        """--filter in logical grouping selects only matching tensor bundles."""
         torch.manual_seed(42)
         full_a = torch.randn(4, 8)
         full_b = torch.randn(4, 8)

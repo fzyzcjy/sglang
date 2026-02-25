@@ -7,7 +7,7 @@
 
 | Term                     | Definition                                                                                                                                            |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Tensor group**   | All dump files sharing the same logical tensor name. In `logical` mode this spans all ranks and steps; in `raw` mode it is per-rank.              |
+| **Tensor bundle**   | All dump files sharing the same logical tensor name. In `logical` mode this spans all ranks and steps; in `raw` mode it is per-rank.              |
 | **Unshard**        | Reassembling a sharded tensor from multiple ranks into one complete tensor, guided by `dims` annotations.                                           |
 | **Alignment plan** | A token-level mapping between two dumps with different batch compositions, built from aux tensors (`input_ids`, `positions`, `seq_lens`, etc.). |
 
@@ -26,7 +26,7 @@ dump files (baseline + target)
    for each match:
         │
         │  ┌───────────────────────────────────────┐
-        └─▶│  compare_tensor_group()                │
+        └─▶│  compare_tensor_bundle()                │
            │                                        │
            │  1. load files & unshard (per step)    │
            │  2. align tokens  ─or─  concat steps   │

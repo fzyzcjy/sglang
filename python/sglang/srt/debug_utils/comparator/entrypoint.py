@@ -30,8 +30,8 @@ from sglang.srt.debug_utils.comparator.output_types import (
     print_record,
 )
 from sglang.srt.debug_utils.comparator.row_matcher import MatchResult, match_rows
-from sglang.srt.debug_utils.comparator.tensor_group_comparator import (
-    compare_tensor_group,
+from sglang.srt.debug_utils.comparator.tensor_bundle_comparator import (
+    compare_tensor_bundle,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.srt.debug_utils.dump_loader import read_meta
@@ -161,7 +161,7 @@ def _execute_comparisons(
         if not match.rows_target:
             continue
 
-        yield compare_tensor_group(
+        yield compare_tensor_bundle(
             match=match,
             baseline_path=baseline_path,
             target_path=target_path,
