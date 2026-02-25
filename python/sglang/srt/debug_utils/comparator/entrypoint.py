@@ -75,17 +75,7 @@ def run(args: argparse.Namespace) -> None:
     )
 
     # --- alignment plan (logical mode only) ---
-    plan: Optional[AlignmentPlan] = None
-    if args.grouping == "logical":
-        if has_aux_tensors(df_baseline) and has_aux_tensors(df_target):
-            plan = _build_alignment_plan(
-                args=args, df_baseline=df_baseline, df_target=df_target
-            )
-        else:
-            print(
-                "Warning: aux tensors missing, skipping token alignment",
-                file=sys.stderr,
-            )
+    alignment_plan = _maybe_build_alignment_plan(args, df_baseline, df_target)
 
     # --- skip_keys control grouping granularity ---
     skip_keys: set[str] = set(_BASE_SKIP_KEYS)
@@ -101,12 +91,27 @@ def run(args: argparse.Namespace) -> None:
         matches=matches,
         baseline_path=Path(args.baseline_path),
         target_path=Path(args.target_path),
-        plan=plan,
+        alignment_plan=alignment_plan,
         diff_threshold=args.diff_threshold,
     )
     _consume_comparison_records(
         comparison_records=comparison_records, output_format=args.output_format
     )
+
+
+def _maybe_build_alignment_plan(args, df_baseline, df_target):
+    if args.grouping == "logical":
+        if has_aux_tensors(df_baseline) and has_aux_tensors(df_target):
+            return _build_alignment_plan(
+                args=args, df_baseline=df_baseline, df_target=df_target
+            )
+        else:
+            print(
+                "Warning: aux tensors missing, skipping token alignment",
+                file=sys.stderr,
+            )
+
+    return None
 
 
 def _build_alignment_plan(
@@ -157,7 +162,7 @@ def _execute_comparisons(
     matches: list[MatchResult],
     baseline_path: Path,
     target_path: Path,
-    plan: Optional[AlignmentPlan],
+    alignment_plan: Optional[AlignmentPlan],
     diff_threshold: float,
 ) -> Iterator[Union[ComparisonRecord, SkipRecord]]:
     """Yield comparison records for all matches (unified raw/logical pipeline)."""
@@ -180,7 +185,7 @@ def _execute_comparisons(
             tensors_b=tensors_b,
             tensors_t=tensors_t,
             warnings=all_warnings,
-            plan=plan,
+            alignment_plan=alignment_plan,
             diff_threshold=diff_threshold,
         )
 
@@ -214,7 +219,7 @@ def _compare_tensor(
     tensors_b: dict[int, torch.Tensor],
     tensors_t: dict[int, torch.Tensor],
     warnings: list[AlignWarning],
-    plan: Optional[AlignmentPlan],
+    alignment_plan: Optional[AlignmentPlan],
     diff_threshold: float,
 ) -> Union[ComparisonRecord, SkipRecord]:
     """Compare a single tensor name by concatenating all steps into one pair."""
@@ -222,9 +227,9 @@ def _compare_tensor(
         reason = "baseline_load_failed" if not tensors_b else "target_load_failed"
         return SkipRecord(name=name, reason=reason, align_warnings=warnings)
 
-    if plan is not None and name not in AUX_NAMES:
+    if alignment_plan is not None and name not in AUX_NAMES:
         aligned: Pair[torch.Tensor] = execute_alignment(
-            plan=plan, tensors=Pair(x=tensors_b, y=tensors_t)
+            plan=alignment_plan, tensors=Pair(x=tensors_b, y=tensors_t)
         )
         combined_b, combined_t = aligned.x, aligned.y
     else:
