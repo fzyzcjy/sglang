@@ -39,15 +39,11 @@ def compare_bundle_pair(
     diff_threshold: float,
 ) -> Union[ComparisonRecord, SkipRecord]:
     # 1. Load (tensor + meta, ungrouped)
-    loaded_pair: Pair[list[ValueWithMeta]] = Pair(
-        x=_load_tensors(filenames=filenames_pair.x, base_path=baseline_path),
-        y=_load_tensors(filenames=filenames_pair.y, base_path=target_path),
+    valid_pair: Pair[list[ValueWithMeta]] = Pair(
+        x=_load_valid_tensors(filenames=filenames_pair.x, base_path=baseline_path),
+        y=_load_valid_tensors(filenames=filenames_pair.y, base_path=target_path),
     )
 
-    # Filter failed loads, keep meta/tensor aligned
-    valid_pair: Pair[list[ValueWithMeta]] = loaded_pair.map(
-        lambda items: [it for it in items if isinstance(it.value, torch.Tensor)]
-    )
     if not valid_pair.x or not valid_pair.y:
         reason = "baseline_load_failed" if not valid_pair.x else "target_load_failed"
         return SkipRecord(name=name, reason=reason, align_warnings=[])
@@ -86,5 +82,9 @@ def compare_bundle_pair(
     return ComparisonRecord(**info.model_dump(), align_warnings=align_result.warnings)
 
 
-def _load_tensors(filenames: list[str], base_path: Path) -> list[ValueWithMeta]:
-    return [ValueWithMeta.load(base_path / f) for f in filenames]
+def _load_valid_tensors(filenames: list[str], base_path: Path) -> list[ValueWithMeta]:
+    return [
+        x
+        for f in filenames
+        if isinstance((x := ValueWithMeta.load(base_path / f)).value, torch.Tensor)
+    ]
