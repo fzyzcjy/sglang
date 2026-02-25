@@ -13,13 +13,13 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignGlobalAux,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.executor import (
-    execute_unshard_plan,
+    execute_unsharder_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.parallel_info import (
     normalize_parallel_info,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.planner import (
-    compute_unshard_plan,
+    compute_unsharder_plan,
 )
 from sglang.srt.debug_utils.comparator.dims import parse_dims
 from sglang.srt.debug_utils.dump_loader import ValueWithMeta, filter_rows
@@ -141,11 +141,11 @@ def _load_and_unshard_aux_tensor(
     if dims_str is not None:
         dim_specs = parse_dims(dims_str)
         parallel_infos = [normalize_parallel_info(m) for m in metas]
-        plans = compute_unshard_plan(dim_specs=dim_specs, parallel_infos=parallel_infos)
+        plans = compute_unsharder_plan(dim_specs=dim_specs, parallel_infos=parallel_infos)
 
         current = tensors
         for plan in plans:
-            current, _ = execute_unshard_plan(plan, current)
+            current, _ = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
         return current[0]

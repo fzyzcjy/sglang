@@ -10,7 +10,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.aux_loader import (
     AUX_NAMES,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.entrypoint import (
-    compute_maybe_token_align_plan,
+    compute_maybe_token_aligner_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignerPlan,
@@ -44,7 +44,7 @@ def run(args: argparse.Namespace) -> None:
 
     df_baseline, df_target = _read_df(args)
 
-    token_align_plan = compute_maybe_token_align_plan(args, df_baseline, df_target)
+    token_aligner_plan = compute_maybe_token_aligner_plan(args, df_baseline, df_target)
 
     df_baseline = df_baseline.filter(~pl.col("name").is_in(AUX_NAMES))
     df_target = df_target.filter(~pl.col("name").is_in(AUX_NAMES))
@@ -53,7 +53,7 @@ def run(args: argparse.Namespace) -> None:
         df_baseline=df_baseline,
         df_target=df_target,
         skip_keys=_compute_skip_keys(
-            args, has_token_align_plan=token_align_plan is not None
+            args, has_token_aligner_plan=token_aligner_plan is not None
         ),
     )
 
@@ -61,7 +61,7 @@ def run(args: argparse.Namespace) -> None:
         bundle_info_pairs=bundle_info_pairs,
         baseline_path=Path(args.baseline_path),
         target_path=Path(args.target_path),
-        token_align_plan=token_align_plan,
+        token_aligner_plan=token_aligner_plan,
         diff_threshold=args.diff_threshold,
     )
     _consume_comparison_records(
@@ -83,11 +83,11 @@ def _read_df(args):
     return df_baseline, df_target
 
 
-def _compute_skip_keys(args, *, has_token_align_plan: bool):
+def _compute_skip_keys(args, *, has_token_aligner_plan: bool):
     skip_keys: set[str] = {"dump_index", "filename"}
     if args.grouping == "logical":
         skip_keys |= {"rank"}
-        if has_token_align_plan:
+        if has_token_aligner_plan:
             skip_keys |= {"step"}
     return skip_keys
 
@@ -97,7 +97,7 @@ def _execute_compare_bundle_pair(
     bundle_info_pairs: list[Pair[TensorBundleInfo]],
     baseline_path: Path,
     target_path: Path,
-    token_align_plan: Optional[TokenAlignerPlan],
+    token_aligner_plan: Optional[TokenAlignerPlan],
     diff_threshold: float,
 ) -> Iterator[Union[ComparisonRecord, SkipRecord]]:
     for bundle_info_pair in bundle_info_pairs:
@@ -114,7 +114,7 @@ def _execute_compare_bundle_pair(
             filenames_pair=filenames_pair,
             baseline_path=baseline_path,
             target_path=target_path,
-            token_align_plan=token_align_plan,
+            token_aligner_plan=token_aligner_plan,
             diff_threshold=diff_threshold,
         )
 

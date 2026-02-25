@@ -6,14 +6,14 @@ import torch
 from sglang.srt.debug_utils.comparator.aligner.reorder import (
     ReordererPlan,
     _reorder_zigzag_to_natural,
-    compute_reorder_plans,
-    execute_reorder_plan,
+    compute_reorderer_plans,
+    execute_reorderer_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.executor import (
-    execute_unshard_plan,
+    execute_unsharder_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.planner import (
-    compute_unshard_plan,
+    compute_unsharder_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.types import AxisInfo
 from sglang.srt.debug_utils.comparator.dims import ParallelAxis, parse_dims
@@ -58,7 +58,7 @@ class TestZigzagToNatural:
 
 
 class TestComputeReordererPlans:
-    def test_compute_reorder_plans_zigzag(self) -> None:
+    def test_compute_reorderer_plans_zigzag(self) -> None:
         """s(cp,zigzag) produces a ReordererPlan."""
         dim_specs = parse_dims("b s(cp,zigzag) h(tp)")
         parallel_infos: list[dict[ParallelAxis, AxisInfo]] = [
@@ -67,7 +67,7 @@ class TestComputeReordererPlans:
                 ParallelAxis.TP: AxisInfo(axis_rank=0, axis_size=2),
             },
         ]
-        plans = compute_reorder_plans(
+        plans = compute_reorderer_plans(
             dim_specs=dim_specs, parallel_infos=parallel_infos
         )
 
@@ -76,7 +76,7 @@ class TestComputeReordererPlans:
         assert plans[0].params.dim == 1
         assert plans[0].params.cp_size == 2
 
-    def test_compute_reorder_plans_non_seq_dim_raises(self) -> None:
+    def test_compute_reorderer_plans_non_seq_dim_raises(self) -> None:
         """Zigzag on non-sequence dim (e.g. t(cp,zigzag)) raises ValueError."""
         dim_specs = parse_dims("t(cp,zigzag) h(tp)")
         parallel_infos: list[dict[ParallelAxis, AxisInfo]] = [
@@ -86,9 +86,9 @@ class TestComputeReordererPlans:
             },
         ]
         with pytest.raises(ValueError, match="only supported on sequence dims"):
-            compute_reorder_plans(dim_specs=dim_specs, parallel_infos=parallel_infos)
+            compute_reorderer_plans(dim_specs=dim_specs, parallel_infos=parallel_infos)
 
-    def test_compute_reorder_plans_natural(self) -> None:
+    def test_compute_reorderer_plans_natural(self) -> None:
         """s(cp) and s(cp,natural) produce no reorder plans."""
         for dims_str in ["b s(cp) h(tp)", "b s(cp,natural) h(tp)"]:
             dim_specs = parse_dims(dims_str)
@@ -98,7 +98,7 @@ class TestComputeReordererPlans:
                     ParallelAxis.TP: AxisInfo(axis_rank=0, axis_size=2),
                 },
             ]
-            plans = compute_reorder_plans(
+            plans = compute_reorderer_plans(
                 dim_specs=dim_specs, parallel_infos=parallel_infos
             )
             assert plans == []
@@ -132,23 +132,23 @@ class TestCpZigzagTpE2E:
 
         dim_specs = parse_dims("b s(cp,zigzag) h(tp)")
 
-        unshard_plans = compute_unshard_plan(
+        unsharder_plans = compute_unsharder_plan(
             dim_specs=dim_specs, parallel_infos=parallel_infos
         )
-        reorder_plans = compute_reorder_plans(
+        reorderer_plans = compute_reorderer_plans(
             dim_specs=dim_specs, parallel_infos=parallel_infos
         )
-        all_plans = [*unshard_plans, *reorder_plans]
+        all_plans = [*unsharder_plans, *reorderer_plans]
 
-        assert len(unshard_plans) == 2
-        assert len(reorder_plans) == 1
+        assert len(unsharder_plans) == 2
+        assert len(reorderer_plans) == 1
 
         current: list[torch.Tensor] = tensors
         for plan in all_plans:
             if isinstance(plan, ReordererPlan):
-                current = execute_reorder_plan(plan, current)
+                current = execute_reorderer_plan(plan, current)
             else:
-                current, _ = execute_unshard_plan(plan, current)
+                current, _ = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
         assert torch.allclose(current[0], full_tensor)

@@ -10,21 +10,21 @@ import torch
 
 from sglang.srt.debug_utils.comparator.aligner.reorder import (
     ReordererPlan,
-    compute_reorder_plans,
-    execute_reorder_plan,
+    compute_reorderer_plans,
+    execute_reorderer_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.executor import (
     execute_token_align,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import TokenAlignerPlan
 from sglang.srt.debug_utils.comparator.aligner.unsharder.executor import (
-    execute_unshard_plan,
+    execute_unsharder_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.parallel_info import (
     normalize_parallel_info,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.planner import (
-    compute_unshard_plan,
+    compute_unsharder_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.types import UnsharderPlan
 from sglang.srt.debug_utils.comparator.dims import parse_dims
@@ -65,7 +65,7 @@ def compare_bundle_pair(
     filenames_pair: Pair[list[str]],
     baseline_path: Path,
     target_path: Path,
-    token_align_plan: Optional[TokenAlignerPlan],
+    token_aligner_plan: Optional[TokenAlignerPlan],
     diff_threshold: float,
 ) -> Union[ComparisonRecord, SkipRecord]:
     # 1. Load (tensor + meta, ungrouped)
@@ -89,7 +89,7 @@ def compare_bundle_pair(
         y=[it.meta for it in valid_pair.y],
     )
     plan: _AlignPlan = _compute_plans(
-        metas_pair=metas_pair, token_align_plan=token_align_plan
+        metas_pair=metas_pair, token_aligner_plan=token_aligner_plan
     )
 
     # 3. Execute (tensor + plan only)
@@ -127,14 +127,14 @@ def _load_tensors(filenames: list[str], base_path: Path) -> list[ValueWithMeta]:
 def _compute_plans(
     *,
     metas_pair: Pair[list[dict[str, Any]]],
-    token_align_plan: Optional[TokenAlignerPlan],
+    token_aligner_plan: Optional[TokenAlignerPlan],
 ) -> _AlignPlan:
     return _AlignPlan(
         side_plans=Pair(
             x=_compute_side_plans(metas=metas_pair.x),
             y=_compute_side_plans(metas=metas_pair.y),
         ),
-        token_align=token_align_plan,
+        token_align=token_aligner_plan,
     )
 
 
@@ -168,13 +168,13 @@ def _compute_step_unshard_reorder(metas: list[dict[str, Any]]) -> list[_Plan]:
     dim_specs = parse_dims(dims_str)
     parallel_infos = [normalize_parallel_info(meta) for meta in metas]
 
-    unshard_plans = compute_unshard_plan(
+    unsharder_plans = compute_unsharder_plan(
         dim_specs=dim_specs, parallel_infos=parallel_infos
     )
-    reorder_plans = compute_reorder_plans(
+    reorderer_plans = compute_reorderer_plans(
         dim_specs=dim_specs, parallel_infos=parallel_infos
     )
-    return [*unshard_plans, *reorder_plans]
+    return [*unsharder_plans, *reorderer_plans]
 
 
 def _execute_plans(
@@ -266,8 +266,8 @@ def _execute_single_plan(
     plan: _Plan,
 ) -> tuple[list[torch.Tensor], list[AlignWarning]]:
     if isinstance(plan, UnsharderPlan):
-        return execute_unshard_plan(plan, tensors)
+        return execute_unsharder_plan(plan, tensors)
     elif isinstance(plan, ReordererPlan):
-        return execute_reorder_plan(plan, tensors), []
+        return execute_reorderer_plan(plan, tensors), []
     else:
         raise NotImplementedError(f"Unknown {plan=}")

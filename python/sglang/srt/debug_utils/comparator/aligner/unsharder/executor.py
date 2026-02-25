@@ -13,7 +13,7 @@ from sglang.srt.debug_utils.comparator.output_types import (
 )
 
 
-def execute_unshard_plan(
+def execute_unsharder_plan(
     plan: UnsharderPlan,
     tensors: list[torch.Tensor],
 ) -> tuple[list[torch.Tensor], list[AlignWarning]]:

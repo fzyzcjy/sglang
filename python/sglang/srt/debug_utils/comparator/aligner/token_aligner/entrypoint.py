@@ -15,7 +15,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.indexer import (
     build_seqs_info,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.planner import (
-    compute_token_align_plan,
+    compute_token_aligner_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     SeqsInfo,
@@ -25,7 +25,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
 from sglang.srt.debug_utils.comparator.utils import Pair
 
 
-def compute_maybe_token_align_plan(args, df_baseline, df_target):
+def compute_maybe_token_aligner_plan(args, df_baseline, df_target):
     if args.grouping == "logical":
         if not (has_aux_tensors(df_baseline) and has_aux_tensors(df_target)):
             print(
@@ -34,14 +34,14 @@ def compute_maybe_token_align_plan(args, df_baseline, df_target):
             )
             return None
 
-        return _build_token_align_plan(
+        return _build_token_aligner_plan(
             args=args, df_baseline=df_baseline, df_target=df_target
         )
 
     return None
 
 
-def _build_token_align_plan(
+def _build_token_aligner_plan(
     *,
     args: argparse.Namespace,
     df_baseline: pl.DataFrame,
@@ -71,4 +71,4 @@ def _build_token_align_plan(
         y=build_seqs_info(global_aux.y),
     )
 
-    return compute_token_align_plan(seqs_info_pair=seqs_info)
+    return compute_token_aligner_plan(seqs_info_pair=seqs_info)

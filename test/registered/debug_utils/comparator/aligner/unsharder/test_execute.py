@@ -6,10 +6,10 @@ import torch
 from sglang.srt.debug_utils.comparator.aligner.unsharder.executor import (
     _apply_unshard,
     _verify_replicated_group,
-    execute_unshard_plan,
+    execute_unsharder_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.planner import (
-    compute_unshard_plan,
+    compute_unsharder_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.types import (
     AxisInfo,
@@ -30,10 +30,10 @@ class TestExecuteUnsharderPlan:
         parallel_infos = [
             {ParallelAxis.TP: AxisInfo(axis_rank=i, axis_size=4)} for i in range(4)
         ]
-        plans = compute_unshard_plan(dim_specs, parallel_infos)
+        plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 1
 
-        result, warnings = execute_unshard_plan(plans[0], shards)
+        result, warnings = execute_unsharder_plan(plans[0], shards)
         assert len(result) == 1
         assert torch.allclose(result[0], full_tensor)
         assert warnings == []
@@ -49,7 +49,7 @@ class TestExecuteUnsharderPlan:
             {ParallelAxis.TP: AxisInfo(axis_rank=1, axis_size=4)},
         ]
         dim_specs = parse_dims("h(tp) d")
-        plans = compute_unshard_plan(dim_specs, parallel_infos)
+        plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 1
 
         tensors_ordered_by_world_rank = [
@@ -59,7 +59,7 @@ class TestExecuteUnsharderPlan:
             shards[1],  # world_rank=3, axis_rank=1
         ]
 
-        result, warnings = execute_unshard_plan(plans[0], tensors_ordered_by_world_rank)
+        result, warnings = execute_unsharder_plan(plans[0], tensors_ordered_by_world_rank)
         assert len(result) == 1
         assert torch.allclose(result[0], full_tensor)
         assert warnings == []
@@ -82,7 +82,7 @@ class TestExecuteUnsharderPlan:
                     }
                 )
 
-        plans = compute_unshard_plan(dim_specs, parallel_infos)
+        plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 2
 
         tensors: list[torch.Tensor] = []
@@ -91,10 +91,10 @@ class TestExecuteUnsharderPlan:
             for tp_rank in range(4):
                 tensors.append(source[tp_rank])
 
-        intermediate, _ = execute_unshard_plan(plans[0], tensors)
+        intermediate, _ = execute_unsharder_plan(plans[0], tensors)
         assert len(intermediate) == 4
 
-        final, _ = execute_unshard_plan(plans[1], intermediate)
+        final, _ = execute_unsharder_plan(plans[1], intermediate)
         assert len(final) == 1
 
     def test_cp_tp_concat(self) -> None:
@@ -117,12 +117,12 @@ class TestExecuteUnsharderPlan:
                 )
 
         dim_specs = parse_dims("b s(cp) h(tp)")
-        plans = compute_unshard_plan(dim_specs, parallel_infos)
+        plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 2
 
         current = tensors
         for plan in plans:
-            current, _ = execute_unshard_plan(plan, current)
+            current, _ = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
         assert torch.allclose(current[0], full_tensor)
@@ -158,12 +158,12 @@ class TestExecuteUnsharderPlan:
             )
 
         dim_specs = parse_dims("b s(cp) h(tp)")
-        plans = compute_unshard_plan(dim_specs, parallel_infos)
+        plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 2
 
         current = tensors
         for plan in plans:
-            current, _ = execute_unshard_plan(plan, current)
+            current, _ = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
         assert torch.allclose(current[0], full_tensor)
@@ -211,12 +211,12 @@ class TestExecuteUnsharderPlan:
                     )
 
         dim_specs = parse_dims("b e(ep) s(cp) h(tp)")
-        plans = compute_unshard_plan(dim_specs, parallel_infos)
+        plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 3
 
         current = tensors
         for plan in plans:
-            current, _ = execute_unshard_plan(plan, current)
+            current, _ = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
         assert torch.allclose(current[0], full_tensor)
@@ -259,12 +259,12 @@ class TestExecuteUnsharderPlan:
             )
 
         dim_specs = parse_dims("b e(ep) s(cp) h(tp)")
-        plans = compute_unshard_plan(dim_specs, parallel_infos)
+        plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 3
 
         current = tensors
         for plan in plans:
-            current, _ = execute_unshard_plan(plan, current)
+            current, _ = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
         assert torch.allclose(current[0], full_tensor)
@@ -280,11 +280,11 @@ class TestPickOperation:
             {ParallelAxis.TP: AxisInfo(axis_rank=1, axis_size=2)},
         ]
 
-        plans = compute_unshard_plan(dim_specs, parallel_infos)
+        plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 1
         assert isinstance(plans[0].params, PickParams)
 
-        result, warnings = execute_unshard_plan(plans[0], [tensor, tensor.clone()])
+        result, warnings = execute_unsharder_plan(plans[0], [tensor, tensor.clone()])
         assert len(result) == 1
         assert torch.allclose(result[0], tensor)
         assert warnings == []
@@ -311,7 +311,7 @@ class TestPickOperation:
             },
         ]
 
-        plans = compute_unshard_plan(dim_specs, parallel_infos)
+        plans = compute_unsharder_plan(dim_specs, parallel_infos)
         pick_plans = [p for p in plans if isinstance(p.params, PickParams)]
         assert len(pick_plans) == 1
         assert pick_plans[0].axis == ParallelAxis.CP
@@ -319,7 +319,7 @@ class TestPickOperation:
         tensor = torch.randn(4)
         tensors = [tensor.clone() for _ in range(4)]
 
-        result, warnings = execute_unshard_plan(pick_plans[0], tensors)
+        result, warnings = execute_unsharder_plan(pick_plans[0], tensors)
         assert len(result) == 2
         assert warnings == []
 
@@ -342,12 +342,12 @@ class TestPickOperation:
                 )
 
         dim_specs = parse_dims("b s(cp) d")
-        plans = compute_unshard_plan(dim_specs, parallel_infos)
+        plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 2
 
         current = tensors
         for plan in plans:
-            current, _ = execute_unshard_plan(plan, current)
+            current, _ = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
         assert torch.allclose(current[0], full_tensor)
@@ -370,13 +370,13 @@ class TestPickOperation:
                 )
 
         dim_specs = parse_dims("b h d")
-        plans = compute_unshard_plan(dim_specs, parallel_infos)
+        plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 2
         assert all(isinstance(p.params, PickParams) for p in plans)
 
         current = tensors
         for plan in plans:
-            current, _ = execute_unshard_plan(plan, current)
+            current, _ = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
         assert torch.allclose(current[0], full_tensor)
@@ -428,18 +428,18 @@ class TestVerifyReplicatedGroup:
         assert warnings[1].max_abs_diff == pytest.approx(2.0, abs=1e-5)
 
     def test_execute_returns_warnings(self) -> None:
-        """execute_unshard_plan returns warnings for replicated mismatch."""
+        """execute_unsharder_plan returns warnings for replicated mismatch."""
         dim_specs = parse_dims("h d")
         parallel_infos = [
             {ParallelAxis.TP: AxisInfo(axis_rank=0, axis_size=2)},
             {ParallelAxis.TP: AxisInfo(axis_rank=1, axis_size=2)},
         ]
-        plans = compute_unshard_plan(dim_specs, parallel_infos)
+        plans = compute_unsharder_plan(dim_specs, parallel_infos)
 
         tensor_a = torch.zeros(4)
         tensor_b = torch.ones(4)
 
-        result, warnings = execute_unshard_plan(plans[0], [tensor_a, tensor_b])
+        result, warnings = execute_unsharder_plan(plans[0], [tensor_a, tensor_b])
         assert len(result) == 1
         assert len(warnings) == 1
         assert torch.allclose(result[0], tensor_a)

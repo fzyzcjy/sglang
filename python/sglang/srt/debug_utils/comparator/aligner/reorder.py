@@ -23,7 +23,7 @@ class ReordererPlan(_FrozenBase):
 _ALLOWED_ZIGZAG_DIM_NAMES: set[str] = {"s"}
 
 
-def compute_reorder_plans(
+def compute_reorderer_plans(
     dim_specs: list[DimSpec],
     parallel_infos: list[dict[ParallelAxis, AxisInfo]],
 ) -> list[ReordererPlan]:
@@ -54,7 +54,7 @@ def compute_reorder_plans(
     return plans
 
 
-def execute_reorder_plan(
+def execute_reorderer_plan(
     plan: ReordererPlan,
     tensors: list[torch.Tensor],
 ) -> list[torch.Tensor]:

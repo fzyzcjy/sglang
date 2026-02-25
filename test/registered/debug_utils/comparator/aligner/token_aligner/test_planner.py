@@ -7,7 +7,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.indexer import (
     build_seqs_info,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.planner import (
-    compute_token_align_plan,
+    compute_token_aligner_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     SeqInfo,
@@ -218,7 +218,7 @@ class TestMatchSequences:
             sequences={0: (10, 20, 30), 1: (40, 50)},
         )
 
-        plan = compute_token_align_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
+        plan = compute_token_aligner_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
         assert len(plan.match_steps.x) == 5
 
     def test_different_order(self):
@@ -230,7 +230,7 @@ class TestMatchSequences:
             sequences={0: (40, 50), 1: (10, 20, 30)},
         )
 
-        plan = compute_token_align_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
+        plan = compute_token_aligner_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
         assert len(plan.match_steps.x) == 5
 
     def test_prefix_match(self):
@@ -242,7 +242,7 @@ class TestMatchSequences:
             sequences={0: (10, 20, 30)},
         )
 
-        plan = compute_token_align_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
+        plan = compute_token_aligner_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
         assert len(plan.match_steps.x) == 2
 
     def test_no_match(self):
@@ -254,7 +254,7 @@ class TestMatchSequences:
             sequences={0: (99, 88)},
         )
 
-        plan = compute_token_align_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
+        plan = compute_token_aligner_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
         assert len(plan.match_steps.x) == 0
 
     def test_ambiguous_same_input_ids(self):
@@ -266,7 +266,7 @@ class TestMatchSequences:
             sequences={0: (10, 20), 1: (10, 20)},
         )
 
-        plan = compute_token_align_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
+        plan = compute_token_aligner_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
         assert len(plan.match_steps.x) == 4
 
 
@@ -309,7 +309,7 @@ class TestComputeAlignmentPlanCrossLayout:
         index_a = build_seqs_info(side_aux_a)
         index_b = build_seqs_info(side_aux_b)
 
-        plan = compute_token_align_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
+        plan = compute_token_aligner_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
         assert len(plan.match_steps.x) == 3
 
     def test_sglang_vs_megatron_thd(self):
@@ -348,7 +348,7 @@ class TestComputeAlignmentPlanCrossLayout:
         index_a = build_seqs_info(side_aux_a)
         index_b = build_seqs_info(side_aux_b)
 
-        plan = compute_token_align_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
+        plan = compute_token_aligner_plan(seqs_info_pair=Pair(x=index_a, y=index_b))
 
         assert len(plan.match_steps.x) == 7
 

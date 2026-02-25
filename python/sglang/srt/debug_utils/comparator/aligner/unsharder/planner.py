@@ -21,7 +21,7 @@ class _GroupResult(NamedTuple):
     projected_coords: _CoordsList
 
 
-def compute_unshard_plan(
+def compute_unsharder_plan(
     dim_specs: list[DimSpec],
     parallel_infos: list[dict[ParallelAxis, AxisInfo]],
 ) -> list[UnsharderPlan]:
