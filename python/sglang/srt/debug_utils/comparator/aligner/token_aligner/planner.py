@@ -36,14 +36,9 @@ def compute_token_aligner_plan(
         # and the common range is simply [0, min(len_x, len_y)).
         common_len: int = min(len(rec.x.positions), len(rec.y.positions))
 
-        if rec.x.input_ids[:common_len] != rec.y.input_ids[:common_len]:
-            for i in range(common_len):
-                if rec.x.input_ids[i] != rec.y.input_ids[i]:
-                    raise ValueError(
-                        f"Sanity check failed: input_id mismatch at position {i} "
-                        f"for seq_id_x={seq_id_x}, seq_id_y={seq_id_y}: "
-                        f"{rec.x.input_ids[i]} != {rec.y.input_ids[i]}"
-                    )
+        x_ids = rec.x.input_ids[:common_len]
+        y_ids = rec.y.input_ids[:common_len]
+        assert x_ids == y_ids, f"{seq_id_x=} {seq_id_y=} {x_ids=} {y_ids=}"
 
         for i in range(common_len):
             steps_x.append(rec.x.locator.steps[i])
