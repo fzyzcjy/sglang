@@ -178,15 +178,15 @@ def _normalize_step(
 ) -> TokenAlignerStepAux:
     """Normalize raw loaded data into StepAux."""
     if framework == "sglang":
-        return _normalize_sglang(step_data, step=step)
+        return _normalize_step_sglang(step_data, step=step)
     else:
-        return _normalize_megatron(step_data, layout=layout, step=step)
+        return _normalize_step_megatron(step_data, layout=layout, step=step)
 
 
 # ── sglang ──────────────────────────────────────────────────────────
 
 
-def _normalize_sglang(step_data: dict[str, object], *, step: int) -> TokenAlignerStepAux:
+def _normalize_step_sglang(step_data: dict[str, object], *, step: int) -> TokenAlignerStepAux:
     input_ids = step_data["input_ids"]
     positions = step_data["positions"]
     seq_lens = step_data["seq_lens"]
@@ -248,7 +248,7 @@ def _detect_layout_megatron(raw: dict[int, dict[str, object]]) -> str:
     return "thd"
 
 
-def _normalize_megatron(
+def _normalize_step_megatron(
     step_data: dict[str, object], *, layout: str, step: int
 ) -> TokenAlignerStepAux:
     input_ids: torch.Tensor = step_data["input_ids"]
