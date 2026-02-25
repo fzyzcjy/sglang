@@ -8,7 +8,7 @@ from sglang.srt.debug_utils.comparator.aligner.reorderer.planner import (
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignerPlan,
 )
-from sglang.srt.debug_utils.comparator.aligner.types import (
+from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
     AlignPlan,
     StepGroupPlan,
     StepPlan,

@@ -7,15 +7,17 @@ from typing import Any, Optional, Union
 
 import torch
 
-from sglang.srt.debug_utils.comparator.aligner.executor import (
+from sglang.srt.debug_utils.comparator.aligner.entrypoint.executor import (
     AlignResult,
     execute_align_plan,
 )
-from sglang.srt.debug_utils.comparator.aligner.planner import compute_align_plan
+from sglang.srt.debug_utils.comparator.aligner.entrypoint.planner import (
+    compute_align_plan,
+)
+from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import AlignPlan
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignerPlan,
 )
-from sglang.srt.debug_utils.comparator.aligner.types import AlignPlan
 from sglang.srt.debug_utils.comparator.output_types import (
     ComparisonRecord,
     SkipRecord,

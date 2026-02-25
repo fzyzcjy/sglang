@@ -12,7 +12,7 @@ from sglang.srt.debug_utils.comparator.aligner.reorderer.types import ReordererP
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.executor import (
     execute_token_aligner,
 )
-from sglang.srt.debug_utils.comparator.aligner.types import (
+from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
     AlignPlan,
     StepGroupPlan,
     StepPlan,
