@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import NamedTuple, Union
 
-import torch
-
 from sglang.srt.debug_utils.comparator.utils import Pair, _FrozenBase
 
 
@@ -24,9 +22,9 @@ ExternalSeqId = Union[SGLangSeqId, MegatronSeqId]
 class TokenAlignerStepAux:
     """Normalized auxiliary tensors for a single step (framework-agnostic)."""
 
-    input_ids: torch.Tensor  # [num_tokens] (1D flat)
-    positions: torch.Tensor  # [num_tokens] (1D flat)
-    seq_lens: torch.Tensor  # [num_seqs]
+    input_ids: list[int]  # [num_tokens]
+    positions: list[int]  # [num_tokens]
+    seq_lens: list[int]  # [num_seqs]
     seq_ids: list[ExternalSeqId]  # [num_seqs] — sequence identity
 
 

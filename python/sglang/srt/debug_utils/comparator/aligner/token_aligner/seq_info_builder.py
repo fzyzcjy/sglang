@@ -30,12 +30,8 @@ def _build_token_aligner_seq_infos(
     for step in sorted(global_aux.step_auxs.keys()):
         aux: TokenAlignerStepAux = global_aux.step_auxs[step]
 
-        input_ids_flat: list[int] = aux.input_ids.tolist()
-        positions_flat: list[int] = aux.positions.tolist()
-        seq_lens_list: list[int] = aux.seq_lens.tolist()
-
         offset: int = 0
-        for seq_index, seq_len in enumerate(seq_lens_list):
+        for seq_index, seq_len in enumerate(aux.seq_lens):
             external_seq_id: ExternalSeqId = aux.seq_ids[seq_index]
 
             if external_seq_id not in external_to_internal_seq_id:
@@ -46,8 +42,8 @@ def _build_token_aligner_seq_infos(
             internal_id: int = external_to_internal_seq_id[external_seq_id]
 
             accum[internal_id] = accum[internal_id] + TokenAlignerSeqInfo(
-                input_ids=input_ids_flat[offset : offset + seq_len],
-                positions=positions_flat[offset : offset + seq_len],
+                input_ids=aux.input_ids[offset: offset + seq_len],
+                positions=aux.positions[offset: offset + seq_len],
                 steps=[step] * seq_len,
                 indices=list(range(offset, offset + seq_len)),
             )
