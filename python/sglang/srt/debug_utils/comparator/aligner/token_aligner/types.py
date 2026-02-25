@@ -71,5 +71,5 @@ class TokenAlignerPlan(_FrozenBase):
     correspond to the same logical token.
     """
 
-    match_steps: Pair[tuple[int, ...]]
-    match_indices: Pair[tuple[int, ...]]
+    match_steps: Pair[list[int]]
+    match_indices: Pair[list[int]]

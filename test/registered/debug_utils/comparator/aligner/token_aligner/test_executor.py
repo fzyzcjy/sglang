@@ -39,13 +39,13 @@ class TestExecuteAlignment:
             input_ids=torch.tensor([10, 20, 30, 40, 50]),
             positions=torch.tensor([0, 1, 2, 0, 1]),
             seq_lens=torch.tensor([3, 2]),
-            seq_ids=(SGLangSeqId(rid="A"), SGLangSeqId(rid="B")),
+            seq_ids=[SGLangSeqId(rid="A"), SGLangSeqId(rid="B")],
         )
         aux_step1 = TokenAlignerStepAux(
             input_ids=torch.tensor([31, 51]),
             positions=torch.tensor([3, 2]),
             seq_lens=torch.tensor([1, 1]),
-            seq_ids=(SGLangSeqId(rid="A"), SGLangSeqId(rid="B")),
+            seq_ids=[SGLangSeqId(rid="A"), SGLangSeqId(rid="B")],
         )
 
         side_aux = TokenAlignerGlobalAux(
@@ -70,8 +70,8 @@ class TestExecuteAlignment:
         torch.manual_seed(42)
 
         plan = TokenAlignerPlan(
-            match_steps=Pair(x=(), y=()),
-            match_indices=Pair(x=(), y=()),
+            match_steps=Pair(x=[], y=[]),
+            match_indices=Pair(x=[], y=[]),
         )
 
         tensors = {0: torch.randn(5, 8)}

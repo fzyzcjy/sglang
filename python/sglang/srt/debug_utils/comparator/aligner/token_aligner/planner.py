@@ -56,8 +56,8 @@ def compute_token_aligner_plan(
             match_indices.y.append(rec.y.indices[idx.y])
 
     return TokenAlignerPlan(
-        match_steps=match_steps.map(tuple),
-        match_indices=match_indices.map(tuple),
+        match_steps=match_steps,
+        match_indices=match_indices,
     )
 
 

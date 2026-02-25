@@ -36,7 +36,7 @@ class TestNormalizeSGLang:
         assert torch.equal(result.input_ids, step_data["input_ids"])
         assert torch.equal(result.positions, step_data["positions"])
         assert torch.equal(result.seq_lens, step_data["seq_lens"])
-        assert result.seq_ids == (SGLangSeqId(rid="A"),)
+        assert result.seq_ids == [SGLangSeqId(rid="A")]
 
     def test_rids_none_fallback(self):
         """Missing rids results in (step, index) fallback seq_ids."""
@@ -47,7 +47,7 @@ class TestNormalizeSGLang:
         }
 
         result: TokenAlignerStepAux = _normalize_step_sglang(step_data, step=3)
-        assert result.seq_ids == (MegatronSeqId(step=3, seq_index=0),)
+        assert result.seq_ids == [MegatronSeqId(step=3, seq_index=0)]
 
     def test_multiple_seqs_with_rids(self):
         """Multiple sequences with rids."""
@@ -59,7 +59,7 @@ class TestNormalizeSGLang:
         }
 
         result: TokenAlignerStepAux = _normalize_step_sglang(step_data, step=0)
-        assert result.seq_ids == (SGLangSeqId(rid="A"), SGLangSeqId(rid="B"))
+        assert result.seq_ids == [SGLangSeqId(rid="A"), SGLangSeqId(rid="B")]
 
 
 class TestNormalizeMegatron:
@@ -117,10 +117,10 @@ class TestNormalizeMegatron:
         result: TokenAlignerStepAux = _normalize_step_megatron(
             step_data, layout="thd", step=5
         )
-        assert result.seq_ids == (
+        assert result.seq_ids == [
             MegatronSeqId(step=5, seq_index=0),
             MegatronSeqId(step=5, seq_index=1),
-        )
+        ]
 
 
 class TestInferPositions:

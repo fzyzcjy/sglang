@@ -230,11 +230,11 @@ def _normalize_step_sglang(
 
     num_seqs: int = int(seq_lens.shape[0])
 
-    seq_ids: tuple[ExternalSeqId, ...]
+    seq_ids: list[ExternalSeqId]
     if rids_raw is not None and isinstance(rids_raw, (list, tuple)):
-        seq_ids = tuple(SGLangSeqId(rid=str(r)) for r in rids_raw)
+        seq_ids = [SGLangSeqId(rid=str(r)) for r in rids_raw]
     else:
-        seq_ids = tuple(MegatronSeqId(step=step, seq_index=i) for i in range(num_seqs))
+        seq_ids = [MegatronSeqId(step=step, seq_index=i) for i in range(num_seqs)]
 
     return TokenAlignerStepAux(
         input_ids=input_ids,
@@ -292,9 +292,9 @@ def _normalize_step_megatron(
         positions = _infer_positions(seq_lens=seq_lens)
 
     num_seqs: int = int(seq_lens.shape[0])
-    seq_ids: tuple[ExternalSeqId, ...] = tuple(
+    seq_ids: list[ExternalSeqId] = [
         MegatronSeqId(step=step, seq_index=seq_index) for seq_index in range(num_seqs)
-    )
+    ]
 
     return TokenAlignerStepAux(
         input_ids=input_ids,
