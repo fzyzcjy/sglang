@@ -69,7 +69,7 @@ def _match_sequences(
     seqs: Pair[dict[int, TokenAlignerSeqInfo]],
 ) -> list[tuple[int, int]]:
     """Two-pass sequence matching: exact then prefix."""
-    matched: list[tuple[int, int]] = []
+    matched_seq_id_pairs: list[tuple[int, int]] = []
     unmatched_x: set[int] = set(seqs.x.keys())
     unmatched_y: set[int] = set(seqs.y.keys())
 
@@ -84,7 +84,7 @@ def _match_sequences(
         candidates: list[int] = y_lookup.get(ids_x_key, [])
         for candidate in candidates:
             if candidate in unmatched_y:
-                matched.append((seq_id_x, candidate))
+                matched_seq_id_pairs.append((seq_id_x, candidate))
                 unmatched_x.discard(seq_id_x)
                 unmatched_y.discard(candidate)
                 break
@@ -115,8 +115,8 @@ def _match_sequences(
                 best_len = len(shorter)
 
         if best_match is not None:
-            matched.append((seq_id_x, best_match))
+            matched_seq_id_pairs.append((seq_id_x, best_match))
             unmatched_x.discard(seq_id_x)
             unmatched_y.discard(best_match)
 
-    return matched
+    return matched_seq_id_pairs
