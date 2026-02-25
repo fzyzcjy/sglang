@@ -35,18 +35,18 @@ def compute_aligner_plan(
 
 
 def _compute_per_step_plans(metas: list[dict[str, Any]]) -> list[AlignerPerStepPlan]:
-    step_to_indices: dict[int, list[int]] = {}
+    step_to_input_indices: dict[int, list[int]] = {}
     for i, meta in enumerate(metas):
         step: int = int(meta["step"])
-        step_to_indices.setdefault(step, []).append(i)
+        step_to_input_indices.setdefault(step, []).append(i)
 
     result: list[AlignerPerStepPlan] = []
-    for step in sorted(step_to_indices):
-        indices: list[int] = step_to_indices[step]
-        step_metas: list[dict[str, Any]] = [metas[i] for i in indices]
+    for step in sorted(step_to_input_indices):
+        input_indices: list[int] = step_to_input_indices[step]
+        step_metas: list[dict[str, Any]] = [metas[idx] for idx in input_indices]
         plans: list[AlignerPerStepSubPlan] = _compute_per_step_plan(metas=step_metas)
         result.append(
-            AlignerPerStepPlan(step=step, input_indices=indices, sub_plans=plans)
+            AlignerPerStepPlan(step=step, input_object_indices=input_indices, sub_plans=plans)
         )
 
     return result

@@ -81,7 +81,7 @@ def _execute_side_plans(
     all_warnings: list[AlignWarning] = []
 
     for step_plan in step_plans:
-        step_tensors: list[torch.Tensor] = [tensors[i] for i in step_plan.input_indices]
+        step_tensors: list[torch.Tensor] = [tensors[i] for i in step_plan.input_object_indices]
         tensor, warnings = _execute_step_plans(
             tensors=step_tensors, plans=step_plan.sub_plans
         )

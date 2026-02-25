@@ -16,7 +16,7 @@ AlignerPerStepSubPlan = Union[UnsharderPlan, ReordererPlan]
 @dataclass(frozen=True)
 class AlignerPerStepPlan:
     step: int
-    input_indices: list[int]
+    input_object_indices: list[int]
     sub_plans: list[AlignerPerStepSubPlan]
 
 
