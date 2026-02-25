@@ -69,18 +69,19 @@ def compare_bundle_pair(
         return SkipRecord(name=name, reason=reason, align_warnings=align_warnings)
 
     if token_align_plan is not None:
-        aligned: Pair[torch.Tensor] = execute_token_align(
+        combined: Pair[torch.Tensor] = execute_token_align(
             plan=token_align_plan,
             tensor_of_step_pair=Pair(x=tensors_b, y=tensors_t),
         )
-        combined_b, combined_t = aligned.x, aligned.y
     else:
         assert len(tensors_b) == 1 and len(tensors_t) == 1, (
             f"Expected single-step bundles without alignment plan, "
             f"got {len(tensors_b)} baseline steps and {len(tensors_t)} target steps"
         )
-        combined_b = list(tensors_b.values())[0]
-        combined_t = list(tensors_t.values())[0]
+        combined = Pair(
+            x=list(tensors_b.values())[0],
+            y=list(tensors_t.values())[0],
+        )
 
     info = compare_tensor_pair(
         x_baseline=combined_b,
