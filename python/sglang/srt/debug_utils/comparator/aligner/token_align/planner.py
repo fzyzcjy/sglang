@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
-    AlignmentPlan,
+    TokenAlignmentPlan,
     SeqInfo,
     SeqsInfo,
 )
@@ -12,7 +12,7 @@ from sglang.srt.debug_utils.comparator.utils import Pair
 
 def compute_alignment_plan(
     seqs_info_pair: Pair[SeqsInfo],
-) -> AlignmentPlan:
+) -> TokenAlignmentPlan:
     """Compute a token alignment plan from two side token seqs_info_pair."""
     matched_pairs: list[tuple[int, int]] = _match_sequences(
         seqs=Pair(x=seqs_info_pair.x.sequences, y=seqs_info_pair.y.sequences)
@@ -52,7 +52,7 @@ def compute_alignment_plan(
             steps_b.append(rec_b.steps[b_idx])
             indices_b.append(rec_b.indices[b_idx])
 
-    return AlignmentPlan(
+    return TokenAlignmentPlan(
         match_steps=Pair(x=tuple(steps_a), y=tuple(steps_b)),
         match_indices=Pair(x=tuple(indices_a), y=tuple(indices_b)),
     )

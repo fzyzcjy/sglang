@@ -19,7 +19,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
     compute_alignment_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
-    AlignmentPlan,
+    TokenAlignmentPlan,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -67,10 +67,10 @@ class TestExecuteAlignment:
         assert aligned.x.shape[0] == len(plan.match_steps.x)
 
     def test_zero_matched_tokens(self):
-        """Empty AlignmentPlan (no matched tokens) returns shape[0]==0 without crash."""
+        """Empty TokenAlignmentPlan (no matched tokens) returns shape[0]==0 without crash."""
         torch.manual_seed(42)
 
-        plan = AlignmentPlan(
+        plan = TokenAlignmentPlan(
             match_steps=Pair(x=(), y=()),
             match_indices=Pair(x=(), y=()),
         )

@@ -18,7 +18,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
     compute_alignment_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
-    AlignmentPlan,
+    TokenAlignmentPlan,
     SeqsInfo,
     TokenAlignGlobalAux,
 )
@@ -108,7 +108,7 @@ def _build_alignment_plan(
     args: argparse.Namespace,
     df_baseline: pl.DataFrame,
     df_target: pl.DataFrame,
-) -> AlignmentPlan:
+) -> TokenAlignmentPlan:
     """Load aux tensors, build token indices, and compute the alignment plan."""
     baseline_path: Path = Path(args.baseline_path)
     target_path: Path = Path(args.target_path)
@@ -151,7 +151,7 @@ def _execute_comparisons(
     bundle_pairs: list[Pair[TensorBundle]],
     baseline_path: Path,
     target_path: Path,
-    alignment_plan: Optional[AlignmentPlan],
+    alignment_plan: Optional[TokenAlignmentPlan],
     diff_threshold: float,
 ) -> Iterator[Union[ComparisonRecord, SkipRecord]]:
     """Yield comparison records for all bundle pairs (unified raw/logical pipeline)."""
