@@ -13,7 +13,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.executor import (
     execute_token_aligner,
 )
 from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
-    AlignPlan,
+    AlignerPlan,
     StepGroupPlan,
     StepPlan,
 )
@@ -26,17 +26,17 @@ from sglang.srt.debug_utils.comparator.utils import Pair
 
 
 @dataclass(frozen=True)
-class AlignResult:
+class AlignerResult:
     tensors: Optional[Pair[torch.Tensor]]
     warnings: list[AlignWarning]
     failed_side_xy: Optional[str]  # "x" or "y"; None if success
 
 
-def execute_align_plan(
+def execute_aligner_plan(
     *,
     tensors_pair: Pair[list[torch.Tensor]],
-    plan: AlignPlan,
-) -> AlignResult:
+    plan: AlignerPlan,
+) -> AlignerResult:
     """Execute unified unshard/reorder + token-align."""
 
     # Per-side: unshard + reorder -> dict[step, tensor]
@@ -50,7 +50,7 @@ def execute_align_plan(
 
     if not step_tensors_x or not step_tensors_y:
         failed_side_xy: str = "x" if not step_tensors_x else "y"
-        return AlignResult(
+        return AlignerResult(
             tensors=None, warnings=all_warnings, failed_side_xy=failed_side_xy
         )
 
@@ -67,7 +67,7 @@ def execute_align_plan(
             y=list(step_tensors_y.values())[0],
         )
 
-    return AlignResult(
+    return AlignerResult(
         tensors=combined, warnings=all_warnings, failed_side_xy=None
     )
 

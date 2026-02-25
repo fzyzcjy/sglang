@@ -8,13 +8,13 @@ from typing import Any, Optional, Union
 import torch
 
 from sglang.srt.debug_utils.comparator.aligner.entrypoint.executor import (
-    AlignResult,
-    execute_align_plan,
+    AlignerResult,
+    execute_aligner_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.entrypoint.planner import (
-    compute_align_plan,
+    compute_aligner_plan,
 )
-from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import AlignPlan
+from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import AlignerPlan
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignerPlan,
 )
@@ -54,7 +54,7 @@ def compare_bundle_pair(
     metas_pair: Pair[list[dict[str, Any]]] = valid_pair.map(
         lambda items: [it.meta for it in items]
     )
-    plan: AlignPlan = compute_align_plan(
+    plan: AlignerPlan = compute_aligner_plan(
         metas_pair=metas_pair, token_aligner_plan=token_aligner_plan
     )
 
@@ -62,26 +62,26 @@ def compare_bundle_pair(
     tensors_pair: Pair[list[torch.Tensor]] = valid_pair.map(
         lambda items: [it.value for it in items]
     )
-    align_result: AlignResult = execute_align_plan(
+    aligner_result: AlignerResult = execute_aligner_plan(
         tensors_pair=tensors_pair, plan=plan
     )
 
-    if align_result.tensors is None:
-        assert align_result.failed_side_xy is not None
-        side_name: str = _FAILED_SIDE_MAP[align_result.failed_side_xy]
+    if aligner_result.tensors is None:
+        assert aligner_result.failed_side_xy is not None
+        side_name: str = _FAILED_SIDE_MAP[aligner_result.failed_side_xy]
         reason = f"{side_name}_load_failed"
         return SkipRecord(
-            name=name, reason=reason, align_warnings=align_result.warnings
+            name=name, reason=reason, align_warnings=aligner_result.warnings
         )
 
     # 4. Compare
     info = compare_tensor_pair(
-        x_baseline=align_result.tensors.x,
-        x_target=align_result.tensors.y,
+        x_baseline=aligner_result.tensors.x,
+        x_target=aligner_result.tensors.y,
         name=name,
         diff_threshold=diff_threshold,
     )
-    return ComparisonRecord(**info.model_dump(), align_warnings=align_result.warnings)
+    return ComparisonRecord(**info.model_dump(), align_warnings=aligner_result.warnings)
 
 
 def _load_valid_tensors(filenames: list[str], base_path: Path) -> list[ValueWithMeta]:

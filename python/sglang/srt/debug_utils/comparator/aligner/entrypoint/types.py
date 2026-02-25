@@ -23,7 +23,7 @@ class StepGroupPlan:
 
 
 @dataclass(frozen=True)
-class AlignPlan:
+class AlignerPlan:
     """Unified plan: per-step unshard/reorder for both sides + cross-side token alignment."""
 
     side_plans: Pair[list[StepGroupPlan]]
