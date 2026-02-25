@@ -136,6 +136,5 @@ def _find_matching_x_prefix(
 
 def _is_prefix_pair(a: list[int], b: list[int]) -> bool:
     """True if a is a prefix of b, or b is a prefix of a."""
-    shorter: list[int] = a if len(a) <= len(b) else b
-    longer: list[int] = b if len(a) <= len(b) else a
-    return longer[: len(shorter)] == shorter
+    shorter_len: int = min(len(a), len(b))
+    return a[:shorter_len] == b[:shorter_len]
