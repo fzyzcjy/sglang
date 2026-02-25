@@ -21,7 +21,7 @@ QUANTILE_NUMEL_THRESHOLD = 10_000_000
 SAMPLE_DIFF_THRESHOLD = 1e-3
 
 
-def compare_tensors(
+def compare_tensor_pair(
     x_baseline: torch.Tensor,
     x_target: torch.Tensor,
     name: str = "",

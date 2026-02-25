@@ -29,7 +29,7 @@ from sglang.srt.debug_utils.comparator.output_types import (
     SummaryRecord,
     print_record,
 )
-from sglang.srt.debug_utils.comparator.bundle_comparator import compare_bundles
+from sglang.srt.debug_utils.comparator.bundle_comparator import compare_bundle_pair
 from sglang.srt.debug_utils.comparator.bundle_matcher import TensorBundle, match_bundles
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.srt.debug_utils.dump_loader import read_meta
@@ -68,7 +68,7 @@ def run(args: argparse.Namespace) -> None:
         df_baseline=df_baseline, df_target=df_target, skip_keys=_compute_skip_keys(args)
     )
 
-    comparison_records = _execute_comparisons(
+    comparison_records = _execute_compare_bundles(
         bundle_pairs=bundle_pairs,
         baseline_path=Path(args.baseline_path),
         target_path=Path(args.target_path),
@@ -128,7 +128,7 @@ def _build_alignment_plan(
     return compute_alignment_plan(seqs_info_pair=seqs_info)
 
 
-def _execute_comparisons(
+def _execute_compare_bundles(
     *,
     bundle_pairs: list[Pair[TensorBundle]],
     baseline_path: Path,
@@ -140,7 +140,7 @@ def _execute_comparisons(
         if not pair.y:
             continue
 
-        yield compare_bundles(
+        yield compare_bundle_pair(
             bundles=pair,
             baseline_path=baseline_path,
             target_path=target_path,

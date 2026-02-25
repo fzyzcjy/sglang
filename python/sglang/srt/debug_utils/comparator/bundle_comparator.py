@@ -34,14 +34,14 @@ from sglang.srt.debug_utils.comparator.output_types import (
     SkipRecord,
 )
 from sglang.srt.debug_utils.comparator.bundle_matcher import TensorBundle
-from sglang.srt.debug_utils.comparator.tensor_comparison.compare import compare_tensors
+from sglang.srt.debug_utils.comparator.tensor_comparison.compare import compare_tensor_pair
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.srt.debug_utils.dump_loader import ValueWithMeta
 
 _Plan = Union[UnshardPlan, ReorderPlan]
 
 
-def compare_bundles(
+def compare_bundle_pair(
     *,
     bundles: Pair[TensorBundle],
     baseline_path: Path,
@@ -93,7 +93,7 @@ def _compare_tensor(
         combined_b = _concat_steps(tensors_b)
         combined_t = _concat_steps(tensors_t)
 
-    info = compare_tensors(
+    info = compare_tensor_pair(
         x_baseline=combined_b,
         x_target=combined_t,
         name=name,
