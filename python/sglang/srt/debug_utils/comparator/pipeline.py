@@ -146,6 +146,14 @@ def _execute_plan(
         raise NotImplementedError(f"Unknown {plan=}")
 
 
+def concat_steps(tensors: dict[int, torch.Tensor]) -> torch.Tensor:
+    """Concat all step tensors into a single tensor (sorted by step key)."""
+    sorted_tensors: list[torch.Tensor] = [tensors[s] for s in sorted(tensors)]
+    if sorted_tensors[0].ndim == 0:
+        return torch.stack(sorted_tensors)
+    return torch.cat(sorted_tensors, dim=0)
+
+
 def _load_and_unshard_for_step(
     *, name: str, step: int, df: pl.DataFrame, dump_path: Path
 ) -> tuple[Optional[torch.Tensor], list[AlignWarning]]:

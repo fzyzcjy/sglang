@@ -33,6 +33,7 @@ from sglang.srt.debug_utils.comparator.output_types import (
     print_record,
 )
 from sglang.srt.debug_utils.comparator.pipeline import (
+    concat_steps,
     load_and_unshard_all_steps,
     process_tensor_group,
 )
@@ -87,7 +88,7 @@ def run(args: argparse.Namespace) -> None:
             )
         else:
             print(
-                "Warning: aux tensors missing, falling back to per-step comparison",
+                "Warning: aux tensors missing, skipping token alignment",
                 file=sys.stderr,
             )
 
@@ -134,7 +135,7 @@ def _run_logical(
     df_target: pl.DataFrame,
     plan: Optional[AlignmentPlan],
 ) -> None:
-    """Unified logical comparison: alignment-aware when plan is provided, per-step otherwise."""
+    """Unified logical comparison: concat all steps per name, optionally alignment-aware."""
     baseline_path: Path = Path(args.baseline_path)
     target_path: Path = Path(args.target_path)
 
@@ -155,7 +156,7 @@ def _run_logical(
         )
         all_warnings: list[AlignWarning] = b_warns + t_warns
 
-        records: list[Union[ComparisonRecord, SkipRecord]] = _compare_tensor(
+        record = _compare_tensor(
             name=tensor_name,
             tensors_b=tensors_b,
             tensors_t=tensors_t,
@@ -164,9 +165,8 @@ def _run_logical(
             diff_threshold=args.diff_threshold,
         )
 
-        for record in records:
-            counts[record.category] += 1
-            print_record(record, output_format=args.output_format)
+        counts[record.category] += 1
+        print_record(record, output_format=args.output_format)
 
     print_record(
         SummaryRecord(total=sum(counts.values()), **counts),
@@ -182,40 +182,27 @@ def _compare_tensor(
     warnings: list[AlignWarning],
     plan: Optional[AlignmentPlan],
     diff_threshold: float,
-) -> list[Union[ComparisonRecord, SkipRecord]]:
-    """Compare a single tensor name, returning one or more records."""
+) -> Union[ComparisonRecord, SkipRecord]:
+    """Compare a single tensor name by concatenating all steps into one pair."""
     if not tensors_b or not tensors_t:
         reason = "baseline_load_failed" if not tensors_b else "target_load_failed"
-        return [SkipRecord(name=name, reason=reason, align_warnings=warnings)]
+        return SkipRecord(name=name, reason=reason, align_warnings=warnings)
 
     if plan is not None:
-        aligned_b, aligned_t = execute_alignment(
+        combined_b, combined_t = execute_alignment(
             plan=plan, tensors_a=tensors_b, tensors_b=tensors_t
         )
-        info = compare_tensors(
-            x_baseline=aligned_b,
-            x_target=aligned_t,
-            name=name,
-            diff_threshold=diff_threshold,
-        )
-        return [ComparisonRecord(**info.model_dump(), align_warnings=warnings)]
+    else:
+        combined_b = concat_steps(tensors_b)
+        combined_t = concat_steps(tensors_t)
 
-    common_steps: list[int] = sorted(set(tensors_b) & set(tensors_t))
-    if not common_steps:
-        return [SkipRecord(name=name, reason="no_common_steps", align_warnings=warnings)]
-
-    return [
-        ComparisonRecord(
-            **compare_tensors(
-                x_baseline=tensors_b[step],
-                x_target=tensors_t[step],
-                name=name,
-                diff_threshold=diff_threshold,
-            ).model_dump(),
-            align_warnings=warnings,
-        )
-        for step in common_steps
-    ]
+    info = compare_tensors(
+        x_baseline=combined_b,
+        x_target=combined_t,
+        name=name,
+        diff_threshold=diff_threshold,
+    )
+    return ComparisonRecord(**info.model_dump(), align_warnings=warnings)
 
 
 def _run_raw(
