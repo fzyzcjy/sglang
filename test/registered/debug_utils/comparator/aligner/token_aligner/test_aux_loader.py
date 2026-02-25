@@ -5,6 +5,8 @@ import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.aux_loader import (
     _infer_aux_dims,
+)
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.aux_plugins import (
     _infer_positions,
     _MegatronPlugin,
     _SGLangPlugin,
