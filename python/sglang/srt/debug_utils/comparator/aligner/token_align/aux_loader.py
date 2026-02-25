@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -116,6 +117,11 @@ def _detect_layout(raw: dict[int, dict[str, object]], framework: str) -> str:
             input_ids = step_data.get("input_ids")
             if isinstance(input_ids, torch.Tensor) and input_ids.ndim == 2:
                 return "bshd"
+
+        warnings.warn(
+            "Megatron layout detection: no qkv_format or 2D input_ids found, "
+            "falling back to thd"
+        )
         return "thd"
 
     return "thd"
@@ -134,6 +140,15 @@ def _load_and_unshard_aux_tensor(
     ]
 
     if name == "rids":
+        if len(loaded) > 1:
+            first_value = loaded[0].value
+            for i, item in enumerate(loaded[1:], start=1):
+                if item.value != first_value:
+                    warnings.warn(
+                        f"rids mismatch across ranks: rank 0 has {first_value}, "
+                        f"rank {i} has {item.value}"
+                    )
+                    break
         return loaded[0].value
 
     tensors: list[torch.Tensor] = [
@@ -159,6 +174,10 @@ def _load_and_unshard_aux_tensor(
         assert len(current) == 1
         return current[0]
 
+    warnings.warn(
+        f"aux tensor '{name}' has {len(tensors)} ranks but no dims metadata, "
+        f"using rank 0 only"
+    )
     return tensors[0]
 
 
