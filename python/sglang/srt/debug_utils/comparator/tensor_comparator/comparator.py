@@ -2,7 +2,7 @@ from typing import Optional
 
 import torch
 
-from sglang.srt.debug_utils.comparator.tensor_comparison.types import (
+from sglang.srt.debug_utils.comparator.tensor_comparator.types import (
     DiffInfo,
     TensorComparisonInfo,
     TensorInfo,
