@@ -49,7 +49,7 @@ class TestExecuteAlignment:
         )
 
         side_aux = TokenAlignerGlobalAux(
-            steps={0: aux, 1: aux_step1},
+            step_auxs={0: aux, 1: aux_step1},
             framework="sglang",
             layout="thd",
         )

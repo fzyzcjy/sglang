@@ -29,7 +29,7 @@ class TestBuildTokenIndexSGLangThd:
     def test_single_step_prefill(self):
         """Single prefill step with two sequences."""
         side_aux = TokenAlignerGlobalAux(
-            steps={
+            step_auxs={
                 0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20, 30, 40, 50]),
                     positions=torch.tensor([0, 1, 2, 0, 1]),
@@ -58,7 +58,7 @@ class TestBuildTokenIndexSGLangThd:
     def test_multi_step_prefill_decode(self):
         """Prefill step followed by decode steps, sequences accumulate tokens."""
         side_aux = TokenAlignerGlobalAux(
-            steps={
+            step_auxs={
                 0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20, 30, 40, 50]),
                     positions=torch.tensor([0, 1, 2, 0, 1]),
@@ -91,7 +91,7 @@ class TestBuildTokenIndexSGLangThd:
     def test_sequence_exit_and_join(self):
         """Sequence A exits, new sequence D joins with different seq_id."""
         side_aux = TokenAlignerGlobalAux(
-            steps={
+            step_auxs={
                 0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20, 30]),
                     positions=torch.tensor([0, 1, 2]),
@@ -115,7 +115,7 @@ class TestBuildTokenIndexSGLangThd:
     def test_different_seq_ids_produce_separate_sequences(self):
         """Different seq_ids at different steps → separate sequences."""
         side_aux = TokenAlignerGlobalAux(
-            steps={
+            step_auxs={
                 0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20]),
                     positions=torch.tensor([0, 1]),
@@ -149,7 +149,7 @@ class TestBuildTokenIndexMegatronThd:
     def test_single_step_two_sequences(self):
         """Single step with two sequences in thd layout."""
         side_aux = TokenAlignerGlobalAux(
-            steps={
+            step_auxs={
                 0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20, 30, 40, 50]),
                     positions=torch.tensor([0, 1, 2, 0, 1]),
@@ -181,7 +181,7 @@ class TestBuildTokenIndexMegatronThd:
     def test_multi_step_accumulation(self):
         """Two steps with different seq_ids produce separate sequences."""
         side_aux = TokenAlignerGlobalAux(
-            steps={
+            step_auxs={
                 0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20, 30, 40]),
                     positions=torch.tensor([0, 1, 0, 1]),
@@ -287,7 +287,7 @@ class TestComputeAlignmentPlanCrossLayout:
     def test_thd_vs_thd_different_step_splits(self):
         """Two thd sides with same tokens but different step distributions."""
         side_aux_a = TokenAlignerGlobalAux(
-            steps={
+            step_auxs={
                 0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20]),
                     positions=torch.tensor([0, 1]),
@@ -305,7 +305,7 @@ class TestComputeAlignmentPlanCrossLayout:
             layout="thd",
         )
         side_aux_b = TokenAlignerGlobalAux(
-            steps={
+            step_auxs={
                 0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20, 30]),
                     positions=torch.tensor([0, 1, 2]),
@@ -326,7 +326,7 @@ class TestComputeAlignmentPlanCrossLayout:
     def test_sglang_vs_megatron_thd(self):
         """SGLang multi-step thd aligned with Megatron single-step thd."""
         side_aux_a = TokenAlignerGlobalAux(
-            steps={
+            step_auxs={
                 0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20, 30, 40, 50]),
                     positions=torch.tensor([0, 1, 2, 0, 1]),
@@ -344,7 +344,7 @@ class TestComputeAlignmentPlanCrossLayout:
             layout="thd",
         )
         side_aux_b = TokenAlignerGlobalAux(
-            steps={
+            step_auxs={
                 0: TokenAlignerStepAux(
                     input_ids=torch.tensor([10, 20, 30, 31, 40, 50, 51]),
                     positions=torch.tensor([0, 1, 2, 3, 0, 1, 2]),
