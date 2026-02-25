@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, Union
 
 from pydantic import Discriminator, Field, TypeAdapter
 
@@ -48,28 +48,18 @@ class _OutputRecord(_StrictBase):
 
 class ConfigRecord(_OutputRecord):
     type: Literal["config"] = "config"
-    baseline_path: str
-    target_path: str
-    diff_threshold: float
-    start_step: int
-    end_step: int
+    config: dict[str, Any]
 
     @classmethod
     def from_args(cls, args) -> "ConfigRecord":
         """Create ConfigRecord from argparse.Namespace."""
-        return cls(
-            baseline_path=args.baseline_path,
-            target_path=args.target_path,
-            diff_threshold=args.diff_threshold,
-            start_step=args.start_step,
-            end_step=args.end_step,
-        )
+        return cls(config=vars(args))
 
     def _format_body(self) -> str:
         return (
-            f"Config: baseline={self.baseline_path} target={self.target_path}\n"
-            f"diff_threshold={self.diff_threshold} "
-            f"steps=[{self.start_step}, {self.end_step}]"
+            f"Config: baseline={self.config.get('baseline_path')} target={self.config.get('target_path')}\n"
+            f"diff_threshold={self.config.get('diff_threshold')} "
+            f"steps=[{self.config.get('start_step')}, {self.config.get('end_step')}]"
         )
 
 

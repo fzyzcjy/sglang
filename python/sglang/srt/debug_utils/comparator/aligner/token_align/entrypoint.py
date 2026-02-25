@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import polars as pl
+
+import argparse
 import sys
 from pathlib import Path
 
@@ -21,7 +24,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
 from sglang.srt.debug_utils.comparator.utils import Pair
 
 
-def _compute_maybe_alignment_plan(args, df_baseline, df_target):
+def compute_maybe_alignment_plan(args, df_baseline, df_target):
     if args.grouping == "logical":
         if not (has_aux_tensors(df_baseline) and has_aux_tensors(df_target)):
             print(

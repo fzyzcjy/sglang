@@ -20,6 +20,7 @@ from sglang.srt.debug_utils.comparator.output_types import (
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.srt.debug_utils.dump_loader import read_meta
+from sglang.srt.debug_utils.comparator.aligner.token_align.entrypoint import compute_maybe_alignment_plan
 
 
 def main() -> None:
@@ -35,7 +36,7 @@ def run(args: argparse.Namespace) -> None:
 
     df_baseline, df_target = _read_df(args)
 
-    alignment_plan = _compute_maybe_alignment_plan(args, df_baseline, df_target)
+    alignment_plan = compute_maybe_alignment_plan(args, df_baseline, df_target)
 
     bundle_pairs: list[Pair[TensorBundle]] = match_bundles(
         df_baseline=df_baseline, df_target=df_target, skip_keys=_compute_skip_keys(args)
