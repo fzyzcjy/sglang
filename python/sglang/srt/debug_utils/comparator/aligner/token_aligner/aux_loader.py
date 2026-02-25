@@ -161,8 +161,7 @@ class _MegatronPlugin(_AuxPlugin):
     def detect_layout(self, raw: dict[int, dict[str, object]]) -> str:
         """Detect layout for Megatron framework from loaded auxiliary tensors."""
         for step_data in raw.values():
-            qkv_format = step_data.get("qkv_format")
-            if qkv_format is not None:
+            if (qkv_format := step_data.get("qkv_format")) is not None:
                 fmt = qkv_format if isinstance(qkv_format, str) else str(qkv_format)
                 if "bshd" in fmt.lower():
                     raise NotImplementedError(_BSHD_NOT_SUPPORTED_MSG)
