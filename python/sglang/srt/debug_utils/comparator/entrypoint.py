@@ -101,15 +101,16 @@ def run(args: argparse.Namespace) -> None:
 
 def _maybe_build_alignment_plan(args, df_baseline, df_target):
     if args.grouping == "logical":
-        if has_aux_tensors(df_baseline) and has_aux_tensors(df_target):
-            return _build_alignment_plan(
-                args=args, df_baseline=df_baseline, df_target=df_target
-            )
-        else:
+        if not (has_aux_tensors(df_baseline) and has_aux_tensors(df_target)):
             print(
                 "Warning: aux tensors missing, skipping token alignment",
                 file=sys.stderr,
             )
+            return None
+
+        return _build_alignment_plan(
+            args=args, df_baseline=df_baseline, df_target=df_target
+        )
 
     return None
 
