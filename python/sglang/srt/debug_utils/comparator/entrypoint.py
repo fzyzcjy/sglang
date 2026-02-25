@@ -44,8 +44,6 @@ from sglang.srt.debug_utils.comparator.tensor_comparison.compare import compare_
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.srt.debug_utils.dump_loader import read_meta
 
-_BASE_SKIP_KEYS: set[str] = {"dump_index", "filename"}
-
 
 def main() -> None:
     args = _parse_args()
@@ -77,14 +75,9 @@ def run(args: argparse.Namespace) -> None:
     # --- alignment plan (logical mode only) ---
     alignment_plan = _maybe_build_alignment_plan(args, df_baseline, df_target)
 
-    # --- skip_keys control grouping granularity ---
-    skip_keys: set[str] = set(_BASE_SKIP_KEYS)
-    if args.grouping == "logical":
-        skip_keys |= {"rank", "step"}
-
     # --- unified match + iterate ---
     matches: list[MatchResult] = match_rows(
-        df_baseline=df_baseline, df_target=df_target, skip_keys=skip_keys
+        df_baseline=df_baseline, df_target=df_target, skip_keys=_compute_skip_keys(args)
     )
 
     comparison_records = _execute_comparisons(
@@ -97,6 +90,13 @@ def run(args: argparse.Namespace) -> None:
     _consume_comparison_records(
         comparison_records=comparison_records, output_format=args.output_format
     )
+
+
+def _compute_skip_keys(args):
+    skip_keys: set[str] = {"dump_index", "filename"}
+    if args.grouping == "logical":
+        skip_keys |= {"rank", "step"}
+    return skip_keys
 
 
 def _maybe_build_alignment_plan(args, df_baseline, df_target):
