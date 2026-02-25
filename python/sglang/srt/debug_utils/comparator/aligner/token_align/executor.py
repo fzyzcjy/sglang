@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import torch
 
-from sglang.srt.debug_utils.comparator.aligner.token_align.types import TokenAlignmentPlan
+from sglang.srt.debug_utils.comparator.aligner.token_align.types import TokenAlignPlan
 from sglang.srt.debug_utils.comparator.utils import Pair
 
 
 def execute_alignment(
-    plan: TokenAlignmentPlan,
+    plan: TokenAlignPlan,
     tensors: Pair[dict[int, torch.Tensor]],
 ) -> Pair[torch.Tensor]:
     """Extract aligned token pairs from step-keyed tensors according to the plan.

@@ -16,7 +16,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import AUX
 from sglang.srt.debug_utils.comparator.aligner.token_align.executor import (
     execute_alignment,
 )
-from sglang.srt.debug_utils.comparator.aligner.token_align.types import TokenAlignmentPlan
+from sglang.srt.debug_utils.comparator.aligner.token_align.types import TokenAlignPlan
 from sglang.srt.debug_utils.comparator.aligner.unshard.executor import (
     execute_unshard_plan,
 )
@@ -46,7 +46,7 @@ def compare_bundles(
     bundles: Pair[TensorBundle],
     baseline_path: Path,
     target_path: Path,
-    alignment_plan: Optional[TokenAlignmentPlan],
+    alignment_plan: Optional[TokenAlignPlan],
     diff_threshold: float,
 ) -> Union[ComparisonRecord, SkipRecord]:
     """Compare a matched pair of tensor bundles across all steps."""
@@ -76,7 +76,7 @@ def _compare_tensor(
     tensors_b: dict[int, torch.Tensor],
     tensors_t: dict[int, torch.Tensor],
     warnings: list[AlignWarning],
-    alignment_plan: Optional[TokenAlignmentPlan],
+    alignment_plan: Optional[TokenAlignPlan],
     diff_threshold: float,
 ) -> Union[ComparisonRecord, SkipRecord]:
     """Compare a single tensor name by concatenating all steps into one pair."""
