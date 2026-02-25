@@ -84,10 +84,11 @@ def has_aux_tensors(df: pl.DataFrame) -> bool:
 def _detect_framework(df: pl.DataFrame, dump_path: Path) -> Optional[str]:
     """Detect framework from embedded metadata."""
     first_row: dict = df.row(0, named=True)
-    vwm: ValueWithMeta = ValueWithMeta.load(dump_path / first_row["filename"])
-    if "sglang_parallel_info" in vwm.meta:
+    value: ValueWithMeta = ValueWithMeta.load(dump_path / first_row["filename"])
+
+    if "sglang_parallel_info" in value.meta:
         return "sglang"
-    if "megatron_parallel_info" in vwm.meta:
+    if "megatron_parallel_info" in value.meta:
         return "megatron"
 
     return None
