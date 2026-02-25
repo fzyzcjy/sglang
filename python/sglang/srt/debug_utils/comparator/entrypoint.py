@@ -68,7 +68,7 @@ def run(args: argparse.Namespace) -> None:
         df_baseline=df_baseline, df_target=df_target, skip_keys=_compute_skip_keys(args)
     )
 
-    comparison_records = _execute_compare_bundles(
+    comparison_records = _execute_compare_bundle_pair(
         bundle_pairs=bundle_pairs,
         baseline_path=Path(args.baseline_path),
         target_path=Path(args.target_path),
@@ -128,7 +128,7 @@ def _build_alignment_plan(
     return compute_alignment_plan(seqs_info_pair=seqs_info)
 
 
-def _execute_compare_bundles(
+def _execute_compare_bundle_pair(
     *,
     bundle_pairs: list[Pair[TensorBundle]],
     baseline_path: Path,
