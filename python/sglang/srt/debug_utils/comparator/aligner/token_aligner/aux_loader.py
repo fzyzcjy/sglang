@@ -230,13 +230,13 @@ def load_and_normalize_aux(
         return None
 
     available_names: set[str] = set(df["name"].unique().to_list()) & plugin.all_names
-    step_values: list[int] = sorted(df["step"].unique().to_list())
+    steps: list[int] = sorted(df["step"].unique().to_list())
 
     available_tensor_names: set[str] = available_names & plugin.tensor_names
     available_non_tensor_names: set[str] = available_names & plugin.non_tensor_names
 
     raw: dict[int, dict[str, object]] = {}
-    for step in step_values:
+    for step in steps:
         step_data: dict[str, object] = {}
 
         for name in available_non_tensor_names:
