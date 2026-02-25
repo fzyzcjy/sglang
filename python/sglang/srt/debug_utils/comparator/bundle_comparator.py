@@ -29,7 +29,7 @@ from sglang.srt.debug_utils.comparator.aligner.unshard.planner import (
 from sglang.srt.debug_utils.comparator.aligner.unshard.types import UnshardPlan
 from sglang.srt.debug_utils.comparator.bundle_matcher import (
     TensorInfo,
-    TensorInfoBundle,
+    TensorBundleInfo,
 )
 from sglang.srt.debug_utils.comparator.dims import parse_dims
 from sglang.srt.debug_utils.comparator.output_types import (
@@ -48,7 +48,7 @@ _Plan = Union[UnshardPlan, ReorderPlan]
 
 def compare_bundle_pair(
     *,
-    bundles: Pair[TensorInfoBundle],
+    bundles: Pair[TensorBundleInfo],
     baseline_path: Path,
     target_path: Path,
     token_align_plan: Optional[TokenAlignPlan],
@@ -62,12 +62,12 @@ def compare_bundle_pair(
     tensors_t, t_warns = _load_and_unshard_by_step(
         rows=bundles.y, base_path=target_path
     )
-    all_warnings: list[AlignWarning] = b_warns + t_warns
+    align_warnings: list[AlignWarning] = b_warns + t_warns
     del b_warns, t_warns
 
     if not tensors_b or not tensors_t:
         reason = "baseline_load_failed" if not tensors_b else "target_load_failed"
-        return SkipRecord(name=name, reason=reason, align_warnings=all_warnings)
+        return SkipRecord(name=name, reason=reason, align_warnings=align_warnings)
 
     if token_align_plan is not None and name not in AUX_NAMES:
         aligned: Pair[torch.Tensor] = execute_token_align(
@@ -84,7 +84,7 @@ def compare_bundle_pair(
         name=name,
         diff_threshold=diff_threshold,
     )
-    return ComparisonRecord(**info.model_dump(), align_warnings=all_warnings)
+    return ComparisonRecord(**info.model_dump(), align_warnings=align_warnings)
 
 
 def _load_and_unshard_by_step(

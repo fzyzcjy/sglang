@@ -17,7 +17,7 @@ class TensorInfo:
     step: int
 
 
-TensorInfoBundle = list[TensorInfo]
+TensorBundleInfo = list[TensorInfo]
 
 
 def match_bundles(
@@ -25,18 +25,18 @@ def match_bundles(
     df_baseline: pl.DataFrame,
     df_target: pl.DataFrame,
     skip_keys: set[str],
-) -> list[Pair[TensorInfoBundle]]:
+) -> list[Pair[TensorBundleInfo]]:
     match_key_cols: list[str] = [c for c in df_target.columns if c not in skip_keys]
     unique_keys: pl.DataFrame = df_target.select(match_key_cols).unique(
         maintain_order=True
     )
 
-    results: list[Pair[TensorInfoBundle]] = []
+    results: list[Pair[TensorBundleInfo]] = []
     for key_values in unique_keys.iter_rows(named=True):
-        rows_baseline: TensorInfoBundle = _rows_to_tensor_infos(
+        rows_baseline: TensorBundleInfo = _rows_to_tensor_infos(
             filter_rows(df_baseline, conditions=key_values)
         )
-        rows_target: TensorInfoBundle = _rows_to_tensor_infos(
+        rows_target: TensorBundleInfo = _rows_to_tensor_infos(
             filter_rows(df_target, conditions=key_values)
         )
         results.append(Pair(x=rows_baseline, y=rows_target))
