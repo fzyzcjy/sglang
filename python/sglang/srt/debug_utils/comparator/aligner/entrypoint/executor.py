@@ -82,7 +82,7 @@ def _execute_side_plans(
 
     for step_plan in step_plans:
         step_tensors: list[torch.Tensor] = [tensors[i] for i in step_plan.input_object_indices]
-        tensor, warnings = _execute_step_plans(
+        tensor, warnings = _execute_sub_plans(
             tensors=step_tensors, plans=step_plan.sub_plans
         )
         all_warnings.extend(warnings)
@@ -92,7 +92,7 @@ def _execute_side_plans(
     return result, all_warnings
 
 
-def _execute_step_plans(
+def _execute_sub_plans(
     tensors: list[torch.Tensor],
     plans: list[AlignerPerStepSubPlan],
 ) -> tuple[Optional[torch.Tensor], list[AlignWarning]]:
@@ -107,14 +107,14 @@ def _execute_step_plans(
     warnings: list[AlignWarning] = []
     current = tensors
     for plan in plans:
-        current, new_warnings = _execute_single_plan(tensors=current, plan=plan)
+        current, new_warnings = _execute_sub_plan(tensors=current, plan=plan)
         warnings.extend(new_warnings)
 
     assert len(current) == 1
     return current[0], warnings
 
 
-def _execute_single_plan(
+def _execute_sub_plan(
     tensors: list[torch.Tensor],
     plan: AlignerPerStepSubPlan,
 ) -> tuple[list[torch.Tensor], list[AlignWarning]]:
