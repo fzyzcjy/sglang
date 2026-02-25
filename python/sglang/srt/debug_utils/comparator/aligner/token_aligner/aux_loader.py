@@ -66,13 +66,13 @@ def load_and_normalize_aux(
             raw[step] = step_data
 
     layout: str = _detect_layout(raw, framework)
-    steps: dict[int, TokenAlignerStepAux] = {}
+    step_auxs: dict[int, TokenAlignerStepAux] = {}
     for step, step_data in raw.items():
-        steps[step] = _normalize_step(
+        step_auxs[step] = _normalize_step(
             step_data=step_data, framework=framework, layout=layout, step=step
         )
 
-    return TokenAlignerGlobalAux(steps=steps, framework=framework, layout=layout)
+    return TokenAlignerGlobalAux(step_auxs=step_auxs, framework=framework, layout=layout)
 
 
 def has_aux_tensors(df: pl.DataFrame) -> bool:

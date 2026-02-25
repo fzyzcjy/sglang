@@ -35,8 +35,8 @@ def _build_token_index(global_aux: TokenAlignerGlobalAux) -> dict[int, TokenAlig
     next_internal_id: int = 0
     accum: dict[int, _SeqAccumulator] = {}
 
-    for step in sorted(global_aux.steps.keys()):
-        aux: TokenAlignerStepAux = global_aux.steps[step]
+    for step in sorted(global_aux.step_auxs.keys()):
+        aux: TokenAlignerStepAux = global_aux.step_auxs[step]
 
         input_ids_flat: list[int] = aux.input_ids.flatten().tolist()
         positions_flat: list[int] = aux.positions.flatten().tolist()

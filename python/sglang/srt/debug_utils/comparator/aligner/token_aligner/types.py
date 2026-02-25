@@ -34,7 +34,7 @@ class TokenAlignerStepAux:
 class TokenAlignerGlobalAux:
     """Auxiliary tensors for one side across all steps + side-level metadata."""
 
-    steps: dict[int, TokenAlignerStepAux]
+    step_auxs: dict[int, TokenAlignerStepAux]
     framework: str  # "sglang" | "megatron"
     layout: str  # "thd"
 
