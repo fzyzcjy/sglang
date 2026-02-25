@@ -287,8 +287,7 @@ class TestMatchSequences:
         )
 
         plan = compute_alignment_plan(indices=Pair(x=index_a, y=index_b))
-        assert plan.summary.num_matched_tokens == 5
-        assert len(plan.summary.sequence_matches) == 2
+        assert len(plan.match_steps.x) == 5
 
     def test_different_order(self):
         """Sequences in different order still match by input_ids content."""
@@ -302,7 +301,7 @@ class TestMatchSequences:
         )
 
         plan = compute_alignment_plan(indices=Pair(x=index_a, y=index_b))
-        assert plan.summary.num_matched_tokens == 5
+        assert len(plan.match_steps.x) == 5
 
     def test_prefix_match(self):
         """A-side has shorter sequence (prefix of B-side), still matches."""
@@ -316,8 +315,7 @@ class TestMatchSequences:
         )
 
         plan = compute_alignment_plan(indices=Pair(x=index_a, y=index_b))
-        assert plan.summary.num_matched_tokens == 2
-        assert plan.summary.sequence_matches[0].num_matched == 2
+        assert len(plan.match_steps.x) == 2
 
     def test_no_match(self):
         """Completely different sequences produce no matches."""
@@ -331,9 +329,7 @@ class TestMatchSequences:
         )
 
         plan = compute_alignment_plan(indices=Pair(x=index_a, y=index_b))
-        assert plan.summary.num_matched_tokens == 0
-        assert len(plan.summary.unmatched_seq_ids.x) == 1
-        assert len(plan.summary.unmatched_seq_ids.y) == 1
+        assert len(plan.match_steps.x) == 0
 
     def test_ambiguous_same_input_ids(self):
         """Two sequences with identical input_ids: greedy match, no error."""
@@ -347,8 +343,7 @@ class TestMatchSequences:
         )
 
         plan = compute_alignment_plan(indices=Pair(x=index_a, y=index_b))
-        assert plan.summary.num_matched_tokens == 4
-        assert len(plan.summary.sequence_matches) == 2
+        assert len(plan.match_steps.x) == 4
 
 
 class TestComputeAlignmentPlanCrossLayout:
@@ -395,8 +390,7 @@ class TestComputeAlignmentPlanCrossLayout:
 
         plan = compute_alignment_plan(indices=Pair(x=index_a, y=index_b))
 
-        assert plan.summary.num_matched_tokens == 7
-        assert len(plan.summary.sequence_matches) == 2
+        assert len(plan.match_steps.x) == 7
 
     def test_thd_vs_thd_different_step_splits(self):
         """Two thd sides with same tokens but different step distributions."""
@@ -438,7 +432,7 @@ class TestComputeAlignmentPlanCrossLayout:
         index_b = build_seqs_info(side_aux_b)
 
         plan = compute_alignment_plan(indices=Pair(x=index_a, y=index_b))
-        assert plan.summary.num_matched_tokens == 3
+        assert len(plan.match_steps.x) == 3
 
 
 # ---------------------------------------------------------------------------

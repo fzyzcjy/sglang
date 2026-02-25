@@ -11,11 +11,8 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
     AlignmentPlan,
-    AlignmentSummary,
     SeqInfo,
-    SeqMatchInfo,
     SeqsInfo,
-    SideInfo,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 
@@ -52,15 +49,8 @@ def compute_alignment_plan(
     indices_a: list[int] = []
     steps_b: list[int] = []
     indices_b: list[int] = []
-    match_infos: list[SeqMatchInfo] = []
-
-    matched_a_ids: set[int] = set()
-    matched_b_ids: set[int] = set()
 
     for seq_id_a, seq_id_b in matched_pairs:
-        matched_a_ids.add(seq_id_a)
-        matched_b_ids.add(seq_id_b)
-
         rec_a: SeqInfo = indices.x.sequences[seq_id_a]
         rec_b: SeqInfo = indices.y.sequences[seq_id_b]
 
@@ -70,7 +60,6 @@ def compute_alignment_plan(
         assert len(pos_to_b) == len(rec_b.positions), "duplicate positions in side B"
 
         common_positions: set[int] = set(pos_to_a.keys()) & set(pos_to_b.keys())
-        num_matched: int = 0
 
         for pos in sorted(common_positions):
             a_idx: int = pos_to_a[pos]
@@ -89,35 +78,11 @@ def compute_alignment_plan(
             indices_a.append(rec_a.indices[a_idx])
             steps_b.append(rec_b.steps[b_idx])
             indices_b.append(rec_b.indices[b_idx])
-            num_matched += 1
-
-        match_infos.append(
-            SeqMatchInfo(
-                seq_ids=Pair(x=seq_id_a, y=seq_id_b),
-                num_tokens=Pair(x=len(rec_a.positions), y=len(rec_b.positions)),
-                num_matched=num_matched,
-            )
-        )
-
-    unmatched_a: tuple[int, ...] = tuple(
-        sorted(set(indices.x.sequences.keys()) - matched_a_ids)
-    )
-    unmatched_b: tuple[int, ...] = tuple(
-        sorted(set(indices.y.sequences.keys()) - matched_b_ids)
-    )
-
-    summary = AlignmentSummary(
-        sides=Pair(x=_make_side_info(indices.x), y=_make_side_info(indices.y)),
-        sequence_matches=tuple(match_infos),
-        unmatched_seq_ids=Pair(x=unmatched_a, y=unmatched_b),
-        num_matched_tokens=len(steps_a),
-    )
 
     return AlignmentPlan(
         match_steps=Pair(x=tuple(steps_a), y=tuple(steps_b)),
         match_indices=Pair(x=tuple(indices_a), y=tuple(indices_b)),
         layouts=Pair(x=indices.x.layout, y=indices.y.layout),
-        summary=summary,
     )
 
 
@@ -346,24 +311,3 @@ def _match_sequences(
             unmatched_b.discard(best_match)
 
     return matched
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_side_info(index: SeqsInfo) -> SideInfo:
-    all_steps: set[int] = set()
-    total_tokens: int = 0
-    for rec in index.sequences.values():
-        total_tokens += len(rec.positions)
-        all_steps.update(rec.steps)
-
-    return SideInfo(
-        framework=index.framework,
-        layout=index.layout,
-        num_sequences=len(index.sequences),
-        num_tokens=total_tokens,
-        num_steps=len(all_steps),
-    )

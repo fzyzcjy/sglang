@@ -18,8 +18,6 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
     AlignmentPlan,
-    AlignmentSummary,
-    SideInfo,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -66,7 +64,7 @@ class TestExecuteAlignment:
         )
 
         assert torch.equal(aligned.x, aligned.y)
-        assert aligned.x.shape[0] == plan.summary.num_matched_tokens
+        assert aligned.x.shape[0] == len(plan.match_steps.x)
 
     def test_thd_vs_bshd_alignment(self):
         """SGLang thd and Megatron bshd produce correctly aligned tokens."""
@@ -121,23 +119,10 @@ class TestExecuteAlignment:
         """Empty AlignmentPlan (no matched tokens) returns shape[0]==0 without crash."""
         torch.manual_seed(42)
 
-        _dummy_side = SideInfo(
-            framework="sglang",
-            layout="thd",
-            num_sequences=0,
-            num_tokens=0,
-            num_steps=0,
-        )
         plan = AlignmentPlan(
             match_steps=Pair(x=(), y=()),
             match_indices=Pair(x=(), y=()),
             layouts=Pair(x="thd", y="thd"),
-            summary=AlignmentSummary(
-                sides=Pair(x=_dummy_side, y=_dummy_side),
-                sequence_matches=(),
-                unmatched_seq_ids=Pair(x=(), y=()),
-                num_matched_tokens=0,
-            ),
         )
 
         tensors = {0: torch.randn(5, 8)}

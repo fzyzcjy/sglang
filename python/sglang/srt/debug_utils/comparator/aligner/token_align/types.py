@@ -20,29 +20,6 @@ class SeqsInfo(_FrozenBase):
     layout: str
 
 
-class SeqMatchInfo(_FrozenBase):
-    """Statistics for one pair of matched sequences."""
-
-    seq_ids: Pair[int]
-    num_tokens: Pair[int]
-    num_matched: int
-
-
-class SideInfo(_FrozenBase):
-    framework: str
-    layout: str
-    num_sequences: int
-    num_tokens: int
-    num_steps: int
-
-
-class AlignmentSummary(_FrozenBase):
-    sides: Pair[SideInfo]
-    sequence_matches: tuple[SeqMatchInfo, ...]
-    unmatched_seq_ids: Pair[tuple[int, ...]]
-    num_matched_tokens: int
-
-
 class AlignmentPlan(_FrozenBase):
     """Token alignment plan.
 
@@ -54,28 +31,3 @@ class AlignmentPlan(_FrozenBase):
     match_indices: Pair[tuple[int, ...]]
 
     layouts: Pair[str]
-
-    summary: AlignmentSummary
-
-
-def format_alignment_summary(summary: AlignmentSummary) -> str:
-    lines: list[str] = [
-        "Alignment Summary:",
-        f"  Side A: {summary.sides.x.framework} ({summary.sides.x.layout}), "
-        f"{summary.sides.x.num_sequences} sequences, "
-        f"{summary.sides.x.num_tokens} tokens, "
-        f"{summary.sides.x.num_steps} steps",
-        f"  Side B: {summary.sides.y.framework} ({summary.sides.y.layout}), "
-        f"{summary.sides.y.num_sequences} sequences, "
-        f"{summary.sides.y.num_tokens} tokens, "
-        f"{summary.sides.y.num_steps} steps",
-        f"  Matched: {len(summary.sequence_matches)} sequence pairs, "
-        f"{summary.num_matched_tokens} tokens",
-    ]
-
-    if summary.unmatched_seq_ids.x:
-        lines.append(f"  Unmatched A: {summary.unmatched_seq_ids.x}")
-    if summary.unmatched_seq_ids.y:
-        lines.append(f"  Unmatched B: {summary.unmatched_seq_ids.y}")
-
-    return "\n".join(lines)

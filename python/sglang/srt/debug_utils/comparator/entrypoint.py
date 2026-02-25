@@ -24,7 +24,6 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
     AlignmentPlan,
     SeqsInfo,
-    format_alignment_summary,
 )
 from sglang.srt.debug_utils.comparator.output_types import (
     AlignWarning,
@@ -128,7 +127,6 @@ def _build_alignment_plan(
     plan: AlignmentPlan = compute_alignment_plan(
         indices=Pair(x=index_baseline, y=index_target)
     )
-    print(format_alignment_summary(plan.summary), file=sys.stderr)
 
     return plan
 
