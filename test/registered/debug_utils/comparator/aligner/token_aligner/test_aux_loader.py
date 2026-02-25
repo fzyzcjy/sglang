@@ -4,10 +4,10 @@ import pytest
 import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.aux_loader import (
+    _MegatronPlugin,
+    _SGLangPlugin,
     _infer_aux_dims,
     _infer_positions,
-    _normalize_step_megatron,
-    _normalize_step_sglang,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     PositionalSeqId,
@@ -17,6 +17,9 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
 from sglang.test.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=15, suite="default", nightly=True)
+
+_sglang_plugin = _SGLangPlugin()
+_megatron_plugin = _MegatronPlugin()
 
 
 class TestNormalizeSGLang:
@@ -31,7 +34,7 @@ class TestNormalizeSGLang:
             "rids": ["A"],
         }
 
-        result: TokenAlignerStepAux = _normalize_step_sglang(
+        result: TokenAlignerStepAux = _sglang_plugin.normalize_step(
             step_data, layout="thd", step=0
         )
 
@@ -48,7 +51,7 @@ class TestNormalizeSGLang:
             "seq_lens": torch.tensor([2]),
         }
 
-        result: TokenAlignerStepAux = _normalize_step_sglang(
+        result: TokenAlignerStepAux = _sglang_plugin.normalize_step(
             step_data, layout="thd", step=3
         )
         assert result.seq_ids == [PositionalSeqId(step=3, seq_index=0)]
@@ -62,7 +65,7 @@ class TestNormalizeSGLang:
             "rids": ["A", "B"],
         }
 
-        result: TokenAlignerStepAux = _normalize_step_sglang(
+        result: TokenAlignerStepAux = _sglang_plugin.normalize_step(
             step_data, layout="thd", step=0
         )
         assert result.seq_ids == [SGLangSeqId(rid="A"), SGLangSeqId(rid="B")]
@@ -78,7 +81,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 3, 5]),
         }
 
-        result: TokenAlignerStepAux = _normalize_step_megatron(
+        result: TokenAlignerStepAux = _megatron_plugin.normalize_step(
             step_data, layout="thd", step=0
         )
 
@@ -91,7 +94,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 3, 5]),
         }
 
-        result: TokenAlignerStepAux = _normalize_step_megatron(
+        result: TokenAlignerStepAux = _megatron_plugin.normalize_step(
             step_data, layout="thd", step=0
         )
 
@@ -105,7 +108,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 5]),
         }
 
-        result: TokenAlignerStepAux = _normalize_step_megatron(
+        result: TokenAlignerStepAux = _megatron_plugin.normalize_step(
             step_data, layout="thd", step=0
         )
 
@@ -118,7 +121,7 @@ class TestNormalizeMegatron:
             "cu_seqlens_q": torch.tensor([0, 3, 5]),
         }
 
-        result: TokenAlignerStepAux = _normalize_step_megatron(
+        result: TokenAlignerStepAux = _megatron_plugin.normalize_step(
             step_data, layout="thd", step=5
         )
         assert result.seq_ids == [
@@ -154,7 +157,9 @@ class TestInferAuxDims:
     def test_no_cp_returns_none(self):
         """Without CP parallelism, _infer_aux_dims returns None."""
         metas: list[dict] = [self._make_meta(cp_size=1)]
-        result = _infer_aux_dims(name="input_ids", framework="sglang", metas=metas)
+        result = _infer_aux_dims(
+            name="input_ids", plugin=_sglang_plugin, metas=metas
+        )
         assert result is None
 
     def test_cp_sharded_sglang_input_ids_raises(self):
@@ -164,7 +169,7 @@ class TestInferAuxDims:
             self._make_meta(cp_size=2, cp_rank=1),
         ]
         with pytest.raises(NotImplementedError, match="CP-sharded"):
-            _infer_aux_dims(name="input_ids", framework="sglang", metas=metas)
+            _infer_aux_dims(name="input_ids", plugin=_sglang_plugin, metas=metas)
 
     def test_cp_sharded_sglang_positions_raises(self):
         """CP + positions in sglang raises NotImplementedError."""
@@ -173,7 +178,7 @@ class TestInferAuxDims:
             self._make_meta(cp_size=2, cp_rank=1),
         ]
         with pytest.raises(NotImplementedError, match="CP-sharded"):
-            _infer_aux_dims(name="positions", framework="sglang", metas=metas)
+            _infer_aux_dims(name="positions", plugin=_sglang_plugin, metas=metas)
 
     def test_cp_sharded_megatron_input_ids_raises(self):
         """CP + input_ids in megatron raises NotImplementedError."""
@@ -182,7 +187,7 @@ class TestInferAuxDims:
             {"megatron_parallel_info": {"cp_rank": 1, "cp_size": 2}},
         ]
         with pytest.raises(NotImplementedError, match="CP-sharded"):
-            _infer_aux_dims(name="input_ids", framework="megatron", metas=metas)
+            _infer_aux_dims(name="input_ids", plugin=_megatron_plugin, metas=metas)
 
     def test_cp_non_sharded_name_returns_none(self):
         """CP + non-sharded tensor name (seq_lens) returns None."""
@@ -190,16 +195,26 @@ class TestInferAuxDims:
             self._make_meta(cp_size=2, cp_rank=0),
             self._make_meta(cp_size=2, cp_rank=1),
         ]
-        result = _infer_aux_dims(name="seq_lens", framework="sglang", metas=metas)
+        result = _infer_aux_dims(
+            name="seq_lens", plugin=_sglang_plugin, metas=metas
+        )
         assert result is None
 
-    def test_unknown_framework_returns_none(self):
-        """CP + unknown framework returns None (no match in _CP_SHARDED_AUX_NAMES)."""
+    def test_unknown_plugin_returns_none(self):
+        """CP + plugin with empty cp_sharded_names returns None."""
+
+        class _DummyPlugin(_SGLangPlugin):
+            @property
+            def cp_sharded_names(self) -> frozenset[str]:
+                return frozenset()
+
         metas: list[dict] = [
             self._make_meta(cp_size=2, cp_rank=0),
             self._make_meta(cp_size=2, cp_rank=1),
         ]
-        result = _infer_aux_dims(name="input_ids", framework="unknown", metas=metas)
+        result = _infer_aux_dims(
+            name="input_ids", plugin=_DummyPlugin(), metas=metas
+        )
         assert result is None
 
 
