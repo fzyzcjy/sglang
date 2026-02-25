@@ -92,13 +92,6 @@ def run(args: argparse.Namespace) -> None:
     )
 
 
-def _compute_skip_keys(args):
-    skip_keys: set[str] = {"dump_index", "filename"}
-    if args.grouping == "logical":
-        skip_keys |= {"rank", "step"}
-    return skip_keys
-
-
 def _maybe_build_alignment_plan(args, df_baseline, df_target):
     if args.grouping == "logical":
         if not (has_aux_tensors(df_baseline) and has_aux_tensors(df_target)):
@@ -113,6 +106,13 @@ def _maybe_build_alignment_plan(args, df_baseline, df_target):
         )
 
     return None
+
+
+def _compute_skip_keys(args):
+    skip_keys: set[str] = {"dump_index", "filename"}
+    if args.grouping == "logical":
+        skip_keys |= {"rank", "step"}
+    return skip_keys
 
 
 def _build_alignment_plan(
