@@ -191,8 +191,7 @@ class _MegatronPlugin(_AuxPlugin):
         else:
             seq_lens = torch.tensor([input_ids.shape[0]], dtype=torch.long)
 
-        position_ids = step_data.get("position_ids")
-        if position_ids is not None:
+        if (position_ids := step_data.get("position_ids")) is not None:
             positions: torch.Tensor = position_ids
         else:
             positions = _infer_positions(seq_lens=seq_lens)
