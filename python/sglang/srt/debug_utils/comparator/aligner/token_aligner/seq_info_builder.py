@@ -30,8 +30,8 @@ def _build_token_aligner_seq_infos(
     for step in sorted(global_aux.step_auxs.keys()):
         aux: TokenAlignerStepAux = global_aux.step_auxs[step]
 
-        input_ids_flat: list[int] = aux.input_ids.flatten().tolist()
-        positions_flat: list[int] = aux.positions.flatten().tolist()
+        input_ids_flat: list[int] = aux.input_ids.tolist()
+        positions_flat: list[int] = aux.positions.tolist()
         seq_lens_list: list[int] = aux.seq_lens.tolist()
 
         offset: int = 0
