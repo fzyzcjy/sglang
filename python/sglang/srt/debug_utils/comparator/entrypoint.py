@@ -1,4 +1,5 @@
 import argparse
+import sys
 from pathlib import Path
 
 import polars as pl
@@ -75,7 +76,7 @@ def run(args: argparse.Namespace) -> None:
         )
     else:
         if grouping == "logical" and not (_has_aux_tensors(df_baseline) and _has_aux_tensors(df_target)):
-            print("Warning: aux tensors missing, falling back to per-step comparison")
+            print("Warning: aux tensors missing, falling back to per-step comparison", file=sys.stderr)
         _run_per_step(
             args=args,
             df_baseline=df_baseline,
@@ -143,7 +144,7 @@ def _run_with_alignment(
     plan: AlignmentPlan = compute_alignment_plan(
         index_a=index_baseline, index_b=index_target
     )
-    print(_format_alignment_summary(plan.summary))
+    print(_format_alignment_summary(plan.summary), file=sys.stderr)
 
     comparable_names: list[str] = _get_comparable_names(
         df_baseline=df_baseline, df_target=df_target
