@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from sglang.srt.debug_utils.comparator.utils import (
+    Pair,
     argmax_coord,
     calc_rel_diff,
     compute_smaller_dtype,
@@ -78,16 +79,22 @@ class TestTryUnifyShape:
 
 class TestComputeSmallerDtype:
     def test_float32_bfloat16(self):
-        assert compute_smaller_dtype(torch.float32, torch.bfloat16) == torch.bfloat16
+        assert (
+            compute_smaller_dtype(Pair(a=torch.float32, b=torch.bfloat16))
+            == torch.bfloat16
+        )
 
     def test_reverse_order(self):
-        assert compute_smaller_dtype(torch.bfloat16, torch.float32) == torch.bfloat16
+        assert (
+            compute_smaller_dtype(Pair(a=torch.bfloat16, b=torch.float32))
+            == torch.bfloat16
+        )
 
     def test_same_dtype_returns_none(self):
-        assert compute_smaller_dtype(torch.float32, torch.float32) is None
+        assert compute_smaller_dtype(Pair(a=torch.float32, b=torch.float32)) is None
 
     def test_unknown_pair_returns_none(self):
-        assert compute_smaller_dtype(torch.int32, torch.int64) is None
+        assert compute_smaller_dtype(Pair(a=torch.int32, b=torch.int64)) is None
 
 
 if __name__ == "__main__":

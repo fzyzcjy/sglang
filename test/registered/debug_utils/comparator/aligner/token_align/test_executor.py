@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import sys
 
 import pytest
@@ -19,6 +21,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
     AlignmentSummary,
     SideInfo,
 )
+from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=15, suite="default", nightly=True)
@@ -55,15 +58,15 @@ class TestExecuteAlignment:
         )
 
         index = build_token_index(side_aux)
-        plan = compute_alignment_plan(index_a=index, index_b=index)
+        plan = compute_alignment_plan(indices=Pair(a=index, b=index))
 
         tensors = {0: hidden_step0, 1: hidden_step1}
-        aligned_a, aligned_b = execute_alignment(
-            plan=plan, tensors_a=tensors, tensors_b=tensors
+        aligned: Pair[torch.Tensor] = execute_alignment(
+            plan=plan, tensors=Pair(a=tensors, b=tensors)
         )
 
-        assert torch.equal(aligned_a, aligned_b)
-        assert aligned_a.shape[0] == plan.summary.num_matched_tokens
+        assert torch.equal(aligned.a, aligned.b)
+        assert aligned.a.shape[0] == plan.summary.num_matched_tokens
 
     def test_thd_vs_bshd_alignment(self):
         """SGLang thd and Megatron bshd produce correctly aligned tokens."""
@@ -99,21 +102,20 @@ class TestExecuteAlignment:
 
         index_a = build_token_index(side_aux_a)
         index_b = build_token_index(side_aux_b)
-        plan = compute_alignment_plan(index_a=index_a, index_b=index_b)
+        plan = compute_alignment_plan(indices=Pair(a=index_a, b=index_b))
 
         hidden_a = torch.randn(3, 8)  # [3, hidden]
         hidden_b_raw = torch.randn(1, 4, 8)  # [B=1, S=4, hidden]
         hidden_b_raw[0, :3] = hidden_a  # same content for matched tokens
 
-        aligned_a, aligned_b = execute_alignment(
+        aligned: Pair[torch.Tensor] = execute_alignment(
             plan=plan,
-            tensors_a={0: hidden_a},
-            tensors_b={0: hidden_b_raw},
+            tensors=Pair(a={0: hidden_a}, b={0: hidden_b_raw}),
         )
 
-        assert aligned_a.shape == aligned_b.shape
-        assert aligned_a.shape[0] == 3
-        assert torch.allclose(aligned_a, aligned_b)
+        assert aligned.a.shape == aligned.b.shape
+        assert aligned.a.shape[0] == 3
+        assert torch.allclose(aligned.a, aligned.b)
 
     def test_zero_matched_tokens(self):
         """Empty AlignmentPlan (no matched tokens) returns shape[0]==0 without crash."""
@@ -127,31 +129,26 @@ class TestExecuteAlignment:
             num_steps=0,
         )
         plan = AlignmentPlan(
-            match_steps_a=(),
-            match_indices_a=(),
-            match_steps_b=(),
-            match_indices_b=(),
-            layout_a="thd",
-            layout_b="thd",
+            match_steps=Pair(a=(), b=()),
+            match_indices=Pair(a=(), b=()),
+            layouts=Pair(a="thd", b="thd"),
             summary=AlignmentSummary(
-                side_a=_dummy_side,
-                side_b=_dummy_side,
+                sides=Pair(a=_dummy_side, b=_dummy_side),
                 sequence_matches=(),
-                unmatched_seq_ids_a=(),
-                unmatched_seq_ids_b=(),
+                unmatched_seq_ids=Pair(a=(), b=()),
                 num_matched_tokens=0,
             ),
         )
 
         tensors = {0: torch.randn(5, 8)}
-        aligned_a, aligned_b = execute_alignment(
-            plan=plan, tensors_a=tensors, tensors_b=tensors
+        aligned: Pair[torch.Tensor] = execute_alignment(
+            plan=plan, tensors=Pair(a=tensors, b=tensors)
         )
 
-        assert aligned_a.shape[0] == 0
-        assert aligned_b.shape[0] == 0
-        assert aligned_a.shape[1:] == (8,)
-        assert aligned_b.shape[1:] == (8,)
+        assert aligned.a.shape[0] == 0
+        assert aligned.b.shape[0] == 0
+        assert aligned.a.shape[1:] == (8,)
+        assert aligned.b.shape[1:] == (8,)
 
 
 if __name__ == "__main__":

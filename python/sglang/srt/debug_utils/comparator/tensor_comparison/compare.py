@@ -9,6 +9,7 @@ from sglang.srt.debug_utils.comparator.tensor_comparison.types import (
     TensorStats,
 )
 from sglang.srt.debug_utils.comparator.utils import (
+    Pair,
     argmax_coord,
     calc_rel_diff,
     compute_smaller_dtype,
@@ -66,7 +67,7 @@ def compare_tensors(
 
         if baseline_original_dtype != target_original_dtype:
             downcast_dtype = compute_smaller_dtype(
-                baseline_original_dtype, target_original_dtype
+                Pair(a=baseline_original_dtype, b=target_original_dtype)
             )
             if downcast_dtype is not None:
                 diff_downcast = _compute_diff(

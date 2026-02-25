@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import sys
 from pathlib import Path
@@ -38,6 +40,7 @@ from sglang.srt.debug_utils.comparator.pipeline import (
     load_and_unshard_files,
 )
 from sglang.srt.debug_utils.comparator.tensor_comparison.compare import compare_tensors
+from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.srt.debug_utils.dump_loader import filter_rows, read_meta
 
 _NON_KEY_COLS = {"dump_index", "filename"}
@@ -123,7 +126,7 @@ def _build_alignment_plan(
     index_target: SideTokenIndex = build_token_index(side_aux_target)
 
     plan: AlignmentPlan = compute_alignment_plan(
-        index_a=index_baseline, index_b=index_target
+        indices=Pair(a=index_baseline, b=index_target)
     )
     print(format_alignment_summary(plan.summary), file=sys.stderr)
 
@@ -246,9 +249,10 @@ def _compare_tensor(
         return SkipRecord(name=name, reason=reason, align_warnings=warnings)
 
     if plan is not None:
-        combined_b, combined_t = execute_alignment(
-            plan=plan, tensors_a=tensors_b, tensors_b=tensors_t
+        aligned: Pair[torch.Tensor] = execute_alignment(
+            plan=plan, tensors=Pair(a=tensors_b, b=tensors_t)
         )
+        combined_b, combined_t = aligned.a, aligned.b
     else:
         combined_b = concat_steps(tensors_b)
         combined_t = concat_steps(tensors_t)

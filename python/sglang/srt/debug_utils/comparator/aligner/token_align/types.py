@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sglang.srt.debug_utils.comparator.utils import _FrozenBase
+from sglang.srt.debug_utils.comparator.utils import Pair, _FrozenBase
 
 
 class SequenceRecord(_FrozenBase):
@@ -23,10 +23,8 @@ class SideTokenIndex(_FrozenBase):
 class SeqMatchInfo(_FrozenBase):
     """Statistics for one pair of matched sequences."""
 
-    seq_id_a: int
-    seq_id_b: int
-    num_tokens_a: int
-    num_tokens_b: int
+    seq_ids: Pair[int]
+    num_tokens: Pair[int]
     num_matched: int
 
 
@@ -39,28 +37,23 @@ class SideInfo(_FrozenBase):
 
 
 class AlignmentSummary(_FrozenBase):
-    side_a: SideInfo
-    side_b: SideInfo
+    sides: Pair[SideInfo]
     sequence_matches: tuple[SeqMatchInfo, ...]
-    unmatched_seq_ids_a: tuple[int, ...]
-    unmatched_seq_ids_b: tuple[int, ...]
+    unmatched_seq_ids: Pair[tuple[int, ...]]
     num_matched_tokens: int
 
 
 class AlignmentPlan(_FrozenBase):
     """Token alignment plan.
 
-    match_steps_a[i] + match_indices_a[i] and match_steps_b[i] + match_indices_b[i]
+    match_steps.a[i] + match_indices.a[i] and match_steps.b[i] + match_indices.b[i]
     correspond to the same logical token.
     """
 
-    match_steps_a: tuple[int, ...]
-    match_indices_a: tuple[int, ...]
-    match_steps_b: tuple[int, ...]
-    match_indices_b: tuple[int, ...]
+    match_steps: Pair[tuple[int, ...]]
+    match_indices: Pair[tuple[int, ...]]
 
-    layout_a: str
-    layout_b: str
+    layouts: Pair[str]
 
     summary: AlignmentSummary
 
@@ -68,21 +61,21 @@ class AlignmentPlan(_FrozenBase):
 def format_alignment_summary(summary: AlignmentSummary) -> str:
     lines: list[str] = [
         "Alignment Summary:",
-        f"  Side A: {summary.side_a.framework} ({summary.side_a.layout}), "
-        f"{summary.side_a.num_sequences} sequences, "
-        f"{summary.side_a.num_tokens} tokens, "
-        f"{summary.side_a.num_steps} steps",
-        f"  Side B: {summary.side_b.framework} ({summary.side_b.layout}), "
-        f"{summary.side_b.num_sequences} sequences, "
-        f"{summary.side_b.num_tokens} tokens, "
-        f"{summary.side_b.num_steps} steps",
+        f"  Side A: {summary.sides.a.framework} ({summary.sides.a.layout}), "
+        f"{summary.sides.a.num_sequences} sequences, "
+        f"{summary.sides.a.num_tokens} tokens, "
+        f"{summary.sides.a.num_steps} steps",
+        f"  Side B: {summary.sides.b.framework} ({summary.sides.b.layout}), "
+        f"{summary.sides.b.num_sequences} sequences, "
+        f"{summary.sides.b.num_tokens} tokens, "
+        f"{summary.sides.b.num_steps} steps",
         f"  Matched: {len(summary.sequence_matches)} sequence pairs, "
         f"{summary.num_matched_tokens} tokens",
     ]
 
-    if summary.unmatched_seq_ids_a:
-        lines.append(f"  Unmatched A: {summary.unmatched_seq_ids_a}")
-    if summary.unmatched_seq_ids_b:
-        lines.append(f"  Unmatched B: {summary.unmatched_seq_ids_b}")
+    if summary.unmatched_seq_ids.a:
+        lines.append(f"  Unmatched A: {summary.unmatched_seq_ids.a}")
+    if summary.unmatched_seq_ids.b:
+        lines.append(f"  Unmatched B: {summary.unmatched_seq_ids.b}")
 
     return "\n".join(lines)

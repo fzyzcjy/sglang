@@ -1099,10 +1099,15 @@ class TestEntrypointAlignment:
         sglang_dumper.dump("rids", ["A", "B"])
         sglang_dumper.dump(
             "hidden_states",
-            torch.stack([
-                seq_a_hiddens[0], seq_a_hiddens[1], seq_a_hiddens[2],
-                seq_b_hiddens[0], seq_b_hiddens[1],
-            ]),
+            torch.stack(
+                [
+                    seq_a_hiddens[0],
+                    seq_a_hiddens[1],
+                    seq_a_hiddens[2],
+                    seq_b_hiddens[0],
+                    seq_b_hiddens[1],
+                ]
+            ),
         )
         sglang_dumper.step()
 
@@ -1145,10 +1150,12 @@ class TestEntrypointAlignment:
             )
         )
 
-        megatron_input_ids: torch.Tensor = torch.tensor([
-            [10, 20, 30, 31, 32, 33],
-            [40, 50, 51, 52, 53, 0],
-        ])
+        megatron_input_ids: torch.Tensor = torch.tensor(
+            [
+                [10, 20, 30, 31, 32, 33],
+                [40, 50, 51, 52, 53, 0],
+            ]
+        )
         megatron_cu_seqlens: torch.Tensor = torch.tensor([0, 6, 11])
 
         megatron_hidden: torch.Tensor = torch.zeros(2, 6, hidden_dim)
@@ -1182,8 +1189,14 @@ class TestEntrypointAlignment:
 
         comparison_names: set[str] = {c.name for c in comparisons}
         assert comparison_names.isdisjoint(
-            {"input_ids", "positions", "seq_lens", "req_pool_indices",
-             "rids", "cu_seqlens_q"}
+            {
+                "input_ids",
+                "positions",
+                "seq_lens",
+                "req_pool_indices",
+                "rids",
+                "cu_seqlens_q",
+            }
         )
 
     def test_alignment_fallback_when_no_aux(self, tmp_path, capsys):

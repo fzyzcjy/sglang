@@ -17,6 +17,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
     SideInfo,
     SideTokenIndex,
 )
+from sglang.srt.debug_utils.comparator.utils import Pair
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -40,12 +41,11 @@ def build_token_index(side_aux: SideAux) -> SideTokenIndex:
 
 
 def compute_alignment_plan(
-    index_a: SideTokenIndex,
-    index_b: SideTokenIndex,
+    indices: Pair[SideTokenIndex],
 ) -> AlignmentPlan:
     """Compute a token alignment plan from two side token indices."""
     matched_pairs: list[tuple[int, int]] = _match_sequences(
-        seqs_a=index_a.sequences, seqs_b=index_b.sequences
+        seqs=Pair(a=indices.a.sequences, b=indices.b.sequences)
     )
 
     steps_a: list[int] = []
@@ -61,8 +61,8 @@ def compute_alignment_plan(
         matched_a_ids.add(seq_id_a)
         matched_b_ids.add(seq_id_b)
 
-        rec_a: SequenceRecord = index_a.sequences[seq_id_a]
-        rec_b: SequenceRecord = index_b.sequences[seq_id_b]
+        rec_a: SequenceRecord = indices.a.sequences[seq_id_a]
+        rec_b: SequenceRecord = indices.b.sequences[seq_id_b]
 
         pos_to_a: dict[int, int] = {pos: idx for idx, pos in enumerate(rec_a.positions)}
         pos_to_b: dict[int, int] = {pos: idx for idx, pos in enumerate(rec_b.positions)}
@@ -93,37 +93,30 @@ def compute_alignment_plan(
 
         match_infos.append(
             SeqMatchInfo(
-                seq_id_a=seq_id_a,
-                seq_id_b=seq_id_b,
-                num_tokens_a=len(rec_a.positions),
-                num_tokens_b=len(rec_b.positions),
+                seq_ids=Pair(a=seq_id_a, b=seq_id_b),
+                num_tokens=Pair(a=len(rec_a.positions), b=len(rec_b.positions)),
                 num_matched=num_matched,
             )
         )
 
     unmatched_a: tuple[int, ...] = tuple(
-        sorted(set(index_a.sequences.keys()) - matched_a_ids)
+        sorted(set(indices.a.sequences.keys()) - matched_a_ids)
     )
     unmatched_b: tuple[int, ...] = tuple(
-        sorted(set(index_b.sequences.keys()) - matched_b_ids)
+        sorted(set(indices.b.sequences.keys()) - matched_b_ids)
     )
 
     summary = AlignmentSummary(
-        side_a=_make_side_info(index_a),
-        side_b=_make_side_info(index_b),
+        sides=Pair(a=_make_side_info(indices.a), b=_make_side_info(indices.b)),
         sequence_matches=tuple(match_infos),
-        unmatched_seq_ids_a=unmatched_a,
-        unmatched_seq_ids_b=unmatched_b,
+        unmatched_seq_ids=Pair(a=unmatched_a, b=unmatched_b),
         num_matched_tokens=len(steps_a),
     )
 
     return AlignmentPlan(
-        match_steps_a=tuple(steps_a),
-        match_indices_a=tuple(indices_a),
-        match_steps_b=tuple(steps_b),
-        match_indices_b=tuple(indices_b),
-        layout_a=index_a.layout,
-        layout_b=index_b.layout,
+        match_steps=Pair(a=tuple(steps_a), b=tuple(steps_b)),
+        match_indices=Pair(a=tuple(indices_a), b=tuple(indices_b)),
+        layouts=Pair(a=indices.a.layout, b=indices.b.layout),
         summary=summary,
     )
 
@@ -299,23 +292,21 @@ def _build_megatron_thd_index(
 
 
 def _match_sequences(
-    *,
-    seqs_a: dict[int, SequenceRecord],
-    seqs_b: dict[int, SequenceRecord],
+    seqs: Pair[dict[int, SequenceRecord]],
 ) -> list[tuple[int, int]]:
     """Two-pass sequence matching: exact then prefix."""
     matched: list[tuple[int, int]] = []
-    unmatched_a: set[int] = set(seqs_a.keys())
-    unmatched_b: set[int] = set(seqs_b.keys())
+    unmatched_a: set[int] = set(seqs.a.keys())
+    unmatched_b: set[int] = set(seqs.b.keys())
 
     b_lookup: dict[tuple[int, ...], list[int]] = defaultdict(list)
-    for seq_id, rec in seqs_b.items():
+    for seq_id, rec in seqs.b.items():
         b_lookup[rec.input_ids].append(seq_id)
 
-    for seq_id_a in sorted(seqs_a.keys()):
+    for seq_id_a in sorted(seqs.a.keys()):
         if seq_id_a not in unmatched_a:
             continue
-        ids_a: tuple[int, ...] = seqs_a[seq_id_a].input_ids
+        ids_a: tuple[int, ...] = seqs.a[seq_id_a].input_ids
         candidates: list[int] = b_lookup.get(ids_a, [])
         for candidate in candidates:
             if candidate in unmatched_b:
@@ -325,16 +316,16 @@ def _match_sequences(
                 break
 
     remaining_a: list[int] = sorted(
-        unmatched_a, key=lambda s: len(seqs_a[s].input_ids), reverse=True
+        unmatched_a, key=lambda s: len(seqs.a[s].input_ids), reverse=True
     )
     remaining_b_by_len: list[tuple[int, tuple[int, ...]]] = sorted(
-        [(s, seqs_b[s].input_ids) for s in unmatched_b],
+        [(s, seqs.b[s].input_ids) for s in unmatched_b],
         key=lambda x: len(x[1]),
         reverse=True,
     )
 
     for seq_id_a in remaining_a:
-        ids_a = seqs_a[seq_id_a].input_ids
+        ids_a = seqs.a[seq_id_a].input_ids
         best_match: int | None = None
         best_len: int = 0
 
