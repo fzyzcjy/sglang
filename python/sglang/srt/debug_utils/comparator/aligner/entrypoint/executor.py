@@ -39,6 +39,7 @@ def execute_aligner_plan(
 ) -> AlignerResult:
     """Execute unified unshard/reorder + token-align."""
 
+    # Per-side: unshard + reorder -> dict[step, tensor]
     step_tensors_x, x_warns = _execute_step_plans(
         tensors=tensors_pair.x, step_plans=plan.per_step_plans.x
     )
