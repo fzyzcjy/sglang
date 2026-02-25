@@ -540,7 +540,7 @@ class TestEntrypointGroupingLogical:
         assert summary.skipped == 0
 
     def test_multi_step_tp(self, tmp_path, capsys):
-        """Two steps with TP=2 shards produce two logical groups (one per step)."""
+        """Two steps with TP=2 shards are concatenated into one comparison."""
         torch.manual_seed(42)
         full_tensor = torch.randn(4, 8)
 
@@ -570,12 +570,13 @@ class TestEntrypointGroupingLogical:
 
         records = _run_and_parse(args, capsys)
         comparisons = _get_comparisons(records)
-        assert len(comparisons) == 2
+        assert len(comparisons) == 1
+        assert comparisons[0].baseline.shape == [8, 8]
 
         summary = records[-1]
         assert isinstance(summary, SummaryRecord)
-        assert summary.total == 2
-        assert summary.passed == 2
+        assert summary.total == 1
+        assert summary.passed == 1
 
     def test_cp_axis_unshard(self, tmp_path, capsys):
         """CP-sharded tensors are correctly concatenated along the sequence dim."""
