@@ -45,27 +45,24 @@ def compare_bundle_pair(
     )
 
     # Filter failed loads, keep meta/tensor aligned
-    valid_pair: Pair[list[ValueWithMeta]] = Pair(
-        x=[it for it in loaded_pair.x if isinstance(it.value, torch.Tensor)],
-        y=[it for it in loaded_pair.y if isinstance(it.value, torch.Tensor)],
+    valid_pair: Pair[list[ValueWithMeta]] = loaded_pair.map(
+        lambda items: [it for it in items if isinstance(it.value, torch.Tensor)]
     )
     if not valid_pair.x or not valid_pair.y:
         reason = "baseline_load_failed" if not valid_pair.x else "target_load_failed"
         return SkipRecord(name=name, reason=reason, align_warnings=[])
 
     # 2. Plan (meta only)
-    metas_pair: Pair[list[dict[str, Any]]] = Pair(
-        x=[it.meta for it in valid_pair.x],
-        y=[it.meta for it in valid_pair.y],
+    metas_pair: Pair[list[dict[str, Any]]] = valid_pair.map(
+        lambda items: [it.meta for it in items]
     )
     plan: AlignPlan = compute_align_plan(
         metas_pair=metas_pair, token_aligner_plan=token_aligner_plan
     )
 
     # 3. Execute (tensor + plan only)
-    tensors_pair: Pair[list[torch.Tensor]] = Pair(
-        x=[it.value for it in valid_pair.x],
-        y=[it.value for it in valid_pair.y],
+    tensors_pair: Pair[list[torch.Tensor]] = valid_pair.map(
+        lambda items: [it.value for it in items]
     )
     align_result: AlignResult = execute_align_plan(
         tensors_pair=tensors_pair, plan=plan

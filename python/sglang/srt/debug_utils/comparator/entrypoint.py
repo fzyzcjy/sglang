@@ -105,9 +105,8 @@ def _execute_compare_bundle_pair(
             continue
 
         name: str = bundle_info_pair.y[0].name
-        filenames_pair: Pair[list[str]] = Pair(
-            x=[info.filename for info in bundle_info_pair.x],
-            y=[info.filename for info in bundle_info_pair.y],
+        filenames_pair: Pair[list[str]] = bundle_info_pair.map(
+            lambda infos: [info.filename for info in infos]
         )
         yield compare_bundle_pair(
             name=name,

@@ -27,9 +27,8 @@ def compute_token_aligner_plan(
             y=seqs_info_pair.y.sequences[seq_id_b],
         )
 
-        pos_to: Pair[dict[int, int]] = Pair(
-            x={pos: idx for idx, pos in enumerate(rec.x.positions)},
-            y={pos: idx for idx, pos in enumerate(rec.y.positions)},
+        pos_to: Pair[dict[int, int]] = rec.map(
+            lambda r: {pos: idx for idx, pos in enumerate(r.positions)}
         )
         assert len(pos_to.x) == len(rec.x.positions), "duplicate positions in side A"
         assert len(pos_to.y) == len(rec.y.positions), "duplicate positions in side B"
@@ -56,8 +55,8 @@ def compute_token_aligner_plan(
             indices.y.append(rec.y.indices[idx.y])
 
     return TokenAlignerPlan(
-        match_steps=Pair(x=tuple(steps.x), y=tuple(steps.y)),
-        match_indices=Pair(x=tuple(indices.x), y=tuple(indices.y)),
+        match_steps=steps.map(tuple),
+        match_indices=indices.map(tuple),
     )
 
 

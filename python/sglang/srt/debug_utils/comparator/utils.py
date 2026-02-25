@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import functools
-from typing import Generic, Optional, Tuple, TypeVar
+from typing import Callable, Generic, Optional, Tuple, TypeVar
 
 import torch
 from pydantic import BaseModel, ConfigDict
 
 _T = TypeVar("_T")
+_U = TypeVar("_U")
 
 
 class _StrictBase(BaseModel):
@@ -20,6 +21,9 @@ class _FrozenBase(BaseModel):
 class Pair(_FrozenBase, Generic[_T]):
     x: _T
     y: _T
+
+    def map(self, fn: Callable[[_T], _U]) -> Pair[_U]:
+        return Pair(x=fn(self.x), y=fn(self.y))
 
 
 def argmax_coord(x: torch.Tensor) -> Tuple[int, ...]:

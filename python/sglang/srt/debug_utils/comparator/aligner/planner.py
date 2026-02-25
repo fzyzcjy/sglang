@@ -29,10 +29,7 @@ def compute_align_plan(
     token_aligner_plan: Optional[TokenAlignerPlan],
 ) -> AlignPlan:
     return AlignPlan(
-        side_plans=Pair(
-            x=_compute_side_plans(metas=metas_pair.x),
-            y=_compute_side_plans(metas=metas_pair.y),
-        ),
+        side_plans=metas_pair.map(lambda metas: _compute_side_plans(metas=metas)),
         token_align=token_aligner_plan,
     )
 

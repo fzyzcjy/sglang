@@ -97,5 +97,26 @@ class TestComputeSmallerDtype:
         assert compute_smaller_dtype(Pair(x=torch.int32, y=torch.int64)) is None
 
 
+class TestPairMap:
+    def test_map_basic(self):
+        pair = Pair(x=[1, 2, 3], y=[4, 5, 6])
+        result = pair.map(lambda lst: sum(lst))
+        assert result.x == 6
+        assert result.y == 15
+
+    def test_map_type_change(self):
+        pair = Pair(x=[1, 2, 3], y=[10, 20])
+        result = pair.map(len)
+        assert result.x == 3
+        assert result.y == 2
+
+    def test_map_returns_new_pair(self):
+        pair = Pair(x="hello", y="world")
+        result = pair.map(str.upper)
+        assert result.x == "HELLO"
+        assert result.y == "WORLD"
+        assert result is not pair
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__]))

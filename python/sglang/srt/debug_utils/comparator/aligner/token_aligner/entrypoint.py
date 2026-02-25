@@ -66,9 +66,6 @@ def _build_token_aligner_plan(
         y=target_aux,
     )
 
-    seqs_info: Pair[SeqsInfo] = Pair(
-        x=build_seqs_info(global_aux.x),
-        y=build_seqs_info(global_aux.y),
-    )
+    seqs_info: Pair[SeqsInfo] = global_aux.map(build_seqs_info)
 
     return compute_token_aligner_plan(seqs_info_pair=seqs_info)
