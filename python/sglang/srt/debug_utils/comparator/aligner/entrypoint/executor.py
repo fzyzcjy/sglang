@@ -15,7 +15,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.executor import (
 from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
     AlignerPlan,
     AlignerPerStepPlan,
-    StepPlan,
+    AlignerPerStepSubPlan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.executor import (
     execute_unsharder_plan,
@@ -83,7 +83,7 @@ def _execute_side_plans(
     for step_plan in step_plans:
         step_tensors: list[torch.Tensor] = [tensors[i] for i in step_plan.input_indices]
         tensor, warnings = _execute_step_plans(
-            tensors=step_tensors, plans=step_plan.unshard_reorder
+            tensors=step_tensors, plans=step_plan.sub_plans
         )
         all_warnings.extend(warnings)
         if tensor is not None:
@@ -94,7 +94,7 @@ def _execute_side_plans(
 
 def _execute_step_plans(
     tensors: list[torch.Tensor],
-    plans: list[StepPlan],
+    plans: list[AlignerPerStepSubPlan],
 ) -> tuple[Optional[torch.Tensor], list[AlignWarning]]:
     if not tensors:
         return None, []
@@ -116,7 +116,7 @@ def _execute_step_plans(
 
 def _execute_single_plan(
     tensors: list[torch.Tensor],
-    plan: StepPlan,
+    plan: AlignerPerStepSubPlan,
 ) -> tuple[list[torch.Tensor], list[AlignWarning]]:
     if isinstance(plan, UnsharderPlan):
         return execute_unsharder_plan(plan, tensors)

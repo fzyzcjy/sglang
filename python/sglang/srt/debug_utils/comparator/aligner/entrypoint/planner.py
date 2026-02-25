@@ -11,7 +11,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
 from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
     AlignerPlan,
     AlignerPerStepPlan,
-    StepPlan,
+    AlignerPerStepSubPlan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.parallel_info import (
     normalize_parallel_info,
@@ -44,15 +44,15 @@ def _compute_per_step_plans(metas: list[dict[str, Any]]) -> list[AlignerPerStepP
     for step in sorted(step_to_indices):
         indices: list[int] = step_to_indices[step]
         step_metas: list[dict[str, Any]] = [metas[i] for i in indices]
-        plans: list[StepPlan] = _compute_per_step_plan(metas=step_metas)
+        plans: list[AlignerPerStepSubPlan] = _compute_per_step_plan(metas=step_metas)
         result.append(
-            AlignerPerStepPlan(step=step, input_indices=indices, unshard_reorder=plans)
+            AlignerPerStepPlan(step=step, input_indices=indices, sub_plans=plans)
         )
 
     return result
 
 
-def _compute_per_step_plan(metas: list[dict[str, Any]]) -> list[StepPlan]:
+def _compute_per_step_plan(metas: list[dict[str, Any]]) -> list[AlignerPerStepSubPlan]:
     if not metas or len(metas) == 1:
         return []
 

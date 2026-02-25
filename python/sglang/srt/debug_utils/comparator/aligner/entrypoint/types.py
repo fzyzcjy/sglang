@@ -10,14 +10,14 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
 from sglang.srt.debug_utils.comparator.aligner.unsharder.types import UnsharderPlan
 from sglang.srt.debug_utils.comparator.utils import Pair
 
-StepPlan = Union[UnsharderPlan, ReordererPlan]
+AlignerPerStepSubPlan = Union[UnsharderPlan, ReordererPlan]
 
 
 @dataclass(frozen=True)
 class AlignerPerStepPlan:
     step: int
     input_indices: list[int]
-    unshard_reorder: list[StepPlan]
+    sub_plans: list[AlignerPerStepSubPlan]
 
 
 @dataclass(frozen=True)
