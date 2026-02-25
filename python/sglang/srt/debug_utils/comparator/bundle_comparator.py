@@ -14,7 +14,7 @@ from sglang.srt.debug_utils.comparator.aligner.reorder import (
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import AUX_NAMES
 from sglang.srt.debug_utils.comparator.aligner.token_align.executor import (
-    execute_alignment,
+    execute_token_align,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import TokenAlignPlan
 from sglang.srt.debug_utils.comparator.aligner.unshard.executor import (
@@ -48,7 +48,7 @@ def compare_bundle_pair(
     bundles: Pair[TensorInfoBundle],
     baseline_path: Path,
     target_path: Path,
-    alignment_plan: Optional[TokenAlignPlan],
+    token_align_plan: Optional[TokenAlignPlan],
     diff_threshold: float,
 ) -> Union[ComparisonRecord, SkipRecord]:
     name: str = bundles.y[0]["name"]
@@ -66,9 +66,9 @@ def compare_bundle_pair(
         reason = "baseline_load_failed" if not tensors_b else "target_load_failed"
         return SkipRecord(name=name, reason=reason, align_warnings=all_warnings)
 
-    if alignment_plan is not None and name not in AUX_NAMES:
-        aligned: Pair[torch.Tensor] = execute_alignment(
-            plan=alignment_plan, tensors=Pair(x=tensors_b, y=tensors_t)
+    if token_align_plan is not None and name not in AUX_NAMES:
+        aligned: Pair[torch.Tensor] = execute_token_align(
+            plan=token_align_plan, tensors=Pair(x=tensors_b, y=tensors_t)
         )
         combined_b, combined_t = aligned.x, aligned.y
     else:

@@ -6,7 +6,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.types import TokenAli
 from sglang.srt.debug_utils.comparator.utils import Pair
 
 
-def execute_alignment(
+def execute_token_align(
     plan: TokenAlignPlan,
     tensors: Pair[dict[int, torch.Tensor]],
 ) -> Pair[torch.Tensor]:
