@@ -95,18 +95,14 @@ def run(args: argparse.Namespace) -> None:
         df_baseline=df_baseline, df_target=df_target, skip_keys=skip_keys
     )
 
-    # When alignment is active, exclude aux tensors from comparison
-    if plan is not None:
-        matches = [m for m in matches if m.match_key.get("name") not in AUX_NAMES]
-
-    records = _iter_records(
+    comparison_records = _execute_comparisons(
         matches=matches,
         baseline_path=Path(args.baseline_path),
         target_path=Path(args.target_path),
         plan=plan,
         diff_threshold=args.diff_threshold,
     )
-    _run_comparison(records=records, output_format=args.output_format)
+    _consume_comparison_records(comparison_records=comparison_records, output_format=args.output_format)
 
 
 def _build_alignment_plan(
@@ -136,15 +132,15 @@ def _build_alignment_plan(
     return plan
 
 
-def _run_comparison(
+def _consume_comparison_records(
     *,
-    records: Iterator[Union[ComparisonRecord, SkipRecord]],
+    comparison_records: Iterator[Union[ComparisonRecord, SkipRecord]],
     output_format: str,
 ) -> None:
-    """Consume comparison records: count, print each, then emit summary."""
+    """Consume comparison comparison_records: count, print each, then emit summary."""
     counts: dict[str, int] = {"passed": 0, "failed": 0, "skipped": 0}
 
-    for record in records:
+    for record in comparison_records:
         counts[record.category] += 1
         print_record(record, output_format=output_format)
 
@@ -154,7 +150,7 @@ def _run_comparison(
     )
 
 
-def _iter_records(
+def _execute_comparisons(
     *,
     matches: list[MatchResult],
     baseline_path: Path,
@@ -224,7 +220,7 @@ def _compare_tensor(
         reason = "baseline_load_failed" if not tensors_b else "target_load_failed"
         return SkipRecord(name=name, reason=reason, align_warnings=warnings)
 
-    if plan is not None:
+    if plan is not None and name not in AUX_NAMES:
         aligned: Pair[torch.Tensor] = execute_alignment(
             plan=plan, tensors=Pair(x=tensors_b, y=tensors_t)
         )
