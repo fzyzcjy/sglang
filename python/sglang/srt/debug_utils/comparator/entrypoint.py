@@ -1,8 +1,10 @@
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional, Union
 
 import polars as pl
+import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
     SideAux,
@@ -69,72 +71,41 @@ def run(args: argparse.Namespace) -> None:
 
     grouping: str = args.grouping
 
-    baseline_has_aux: bool = has_aux_tensors(df_baseline)
-    target_has_aux: bool = has_aux_tensors(df_target)
-
-    if grouping == "logical" and baseline_has_aux and target_has_aux:
-        _run_with_alignment(
+    if grouping == "raw":
+        _run_raw(
             args=args,
             df_baseline=df_baseline,
             df_target=df_target,
         )
     else:
-        if grouping == "logical" and not (baseline_has_aux and target_has_aux):
+        plan: Optional[AlignmentPlan] = None
+        if has_aux_tensors(df_baseline) and has_aux_tensors(df_target):
+            plan = _build_alignment_plan(
+                args=args,
+                df_baseline=df_baseline,
+                df_target=df_target,
+            )
+        else:
             print(
                 "Warning: aux tensors missing, falling back to per-step comparison",
                 file=sys.stderr,
             )
-        _run_per_step(
+
+        _run_logical(
             args=args,
             df_baseline=df_baseline,
             df_target=df_target,
-            grouping=grouping,
+            plan=plan,
         )
 
 
-def _run_per_step(
+def _build_alignment_plan(
     *,
     args: argparse.Namespace,
     df_baseline: pl.DataFrame,
     df_target: pl.DataFrame,
-    grouping: str,
-) -> None:
-    """Original per-step comparison path."""
-    counts: dict[str, int] = {"passed": 0, "failed": 0, "skipped": 0}
-
-    non_key_cols = _NON_KEY_COLS | ({"rank"} if grouping == "logical" else set())
-    key_cols = [c for c in df_target.columns if c not in non_key_cols]
-    tensor_group_keys = df_target.unique(subset=key_cols)
-
-    for tensor_group_key in tensor_group_keys.iter_rows(named=True):
-        conditions = {k: tensor_group_key[k] for k in key_cols}
-        baseline_rows = filter_rows(df_baseline, conditions=conditions)
-        target_rows = filter_rows(df_target, conditions=conditions)
-
-        record = process_tensor_group(
-            name=tensor_group_key["name"],
-            baseline_filenames=[r["filename"] for r in baseline_rows],
-            target_filenames=[r["filename"] for r in target_rows],
-            baseline_path=Path(args.baseline_path),
-            target_path=Path(args.target_path),
-            diff_threshold=args.diff_threshold,
-        )
-        counts[record.category] += 1
-        print_record(record, output_format=args.output_format)
-
-    print_record(
-        SummaryRecord(total=sum(counts.values()), **counts),
-        output_format=args.output_format,
-    )
-
-
-def _run_with_alignment(
-    *,
-    args: argparse.Namespace,
-    df_baseline: pl.DataFrame,
-    df_target: pl.DataFrame,
-) -> None:
-    """Alignment-aware comparison: bootstrap aux, build index, align, compare."""
+) -> AlignmentPlan:
+    """Load aux tensors, build token indices, and compute the alignment plan."""
     baseline_path: Path = Path(args.baseline_path)
     target_path: Path = Path(args.target_path)
 
@@ -153,8 +124,24 @@ def _run_with_alignment(
     )
     print(format_alignment_summary(plan.summary), file=sys.stderr)
 
+    return plan
+
+
+def _run_logical(
+    *,
+    args: argparse.Namespace,
+    df_baseline: pl.DataFrame,
+    df_target: pl.DataFrame,
+    plan: Optional[AlignmentPlan],
+) -> None:
+    """Unified logical comparison: alignment-aware when plan is provided, per-step otherwise."""
+    baseline_path: Path = Path(args.baseline_path)
+    target_path: Path = Path(args.target_path)
+
     comparable_names: list[str] = get_comparable_names(
-        df_baseline=df_baseline, df_target=df_target
+        df_baseline=df_baseline,
+        df_target=df_target,
+        exclude_aux=(plan is not None),
     )
 
     counts: dict[str, int] = {"passed": 0, "failed": 0, "skipped": 0}
@@ -168,23 +155,94 @@ def _run_with_alignment(
         )
         all_warnings: list[AlignWarning] = b_warns + t_warns
 
-        if not tensors_b or not tensors_t:
-            reason = "baseline_load_failed" if not tensors_b else "target_load_failed"
-            record = SkipRecord(
-                name=tensor_name, reason=reason, align_warnings=all_warnings
-            )
-        else:
-            aligned_b, aligned_t = execute_alignment(
-                plan=plan, tensors_a=tensors_b, tensors_b=tensors_t
-            )
-            info = compare_tensors(
-                x_baseline=aligned_b,
-                x_target=aligned_t,
-                name=tensor_name,
-                diff_threshold=args.diff_threshold,
-            )
-            record = ComparisonRecord(**info.model_dump(), align_warnings=all_warnings)
+        records: list[Union[ComparisonRecord, SkipRecord]] = _compare_tensor(
+            name=tensor_name,
+            tensors_b=tensors_b,
+            tensors_t=tensors_t,
+            warnings=all_warnings,
+            plan=plan,
+            diff_threshold=args.diff_threshold,
+        )
 
+        for record in records:
+            counts[record.category] += 1
+            print_record(record, output_format=args.output_format)
+
+    print_record(
+        SummaryRecord(total=sum(counts.values()), **counts),
+        output_format=args.output_format,
+    )
+
+
+def _compare_tensor(
+    *,
+    name: str,
+    tensors_b: dict[int, torch.Tensor],
+    tensors_t: dict[int, torch.Tensor],
+    warnings: list[AlignWarning],
+    plan: Optional[AlignmentPlan],
+    diff_threshold: float,
+) -> list[Union[ComparisonRecord, SkipRecord]]:
+    """Compare a single tensor name, returning one or more records."""
+    if not tensors_b or not tensors_t:
+        reason = "baseline_load_failed" if not tensors_b else "target_load_failed"
+        return [SkipRecord(name=name, reason=reason, align_warnings=warnings)]
+
+    if plan is not None:
+        aligned_b, aligned_t = execute_alignment(
+            plan=plan, tensors_a=tensors_b, tensors_b=tensors_t
+        )
+        info = compare_tensors(
+            x_baseline=aligned_b,
+            x_target=aligned_t,
+            name=name,
+            diff_threshold=diff_threshold,
+        )
+        return [ComparisonRecord(**info.model_dump(), align_warnings=warnings)]
+
+    common_steps: list[int] = sorted(set(tensors_b) & set(tensors_t))
+    if not common_steps:
+        return [SkipRecord(name=name, reason="no_common_steps", align_warnings=warnings)]
+
+    return [
+        ComparisonRecord(
+            **compare_tensors(
+                x_baseline=tensors_b[step],
+                x_target=tensors_t[step],
+                name=name,
+                diff_threshold=diff_threshold,
+            ).model_dump(),
+            align_warnings=warnings,
+        )
+        for step in common_steps
+    ]
+
+
+def _run_raw(
+    *,
+    args: argparse.Namespace,
+    df_baseline: pl.DataFrame,
+    df_target: pl.DataFrame,
+) -> None:
+    """Raw comparison path: rank-by-rank, no cross-rank unshard."""
+    counts: dict[str, int] = {"passed": 0, "failed": 0, "skipped": 0}
+
+    key_cols: list[str] = [c for c in df_target.columns if c not in _NON_KEY_COLS]
+    tensor_group_keys: pl.DataFrame = df_target.unique(subset=key_cols)
+
+    for tensor_group_key in tensor_group_keys.iter_rows(named=True):
+        conditions: dict[str, object] = {k: tensor_group_key[k] for k in key_cols}
+        baseline_rows: list[dict] = filter_rows(df_baseline, conditions=conditions)
+        target_rows: list[dict] = filter_rows(df_target, conditions=conditions)
+
+        record = process_tensor_group(
+            name=tensor_group_key["name"],
+            baseline_filenames=[r["filename"] for r in baseline_rows],
+            target_filenames=[r["filename"] for r in target_rows],
+            baseline_path=Path(args.baseline_path),
+            target_path=Path(args.target_path),
+            diff_threshold=args.diff_threshold,
+        )
         counts[record.category] += 1
         print_record(record, output_format=args.output_format)
 

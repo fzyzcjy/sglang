@@ -93,12 +93,14 @@ def has_aux_tensors(df: pl.DataFrame) -> bool:
 
 
 def get_comparable_names(
-    *, df_baseline: pl.DataFrame, df_target: pl.DataFrame
+    *, df_baseline: pl.DataFrame, df_target: pl.DataFrame, exclude_aux: bool = True
 ) -> list[str]:
-    """Get tensor names present in both sides, excluding auxiliary tensors."""
+    """Get tensor names present in both sides, optionally excluding auxiliary tensors."""
     baseline_names: set[str] = set(df_baseline["name"].unique().to_list())
     target_names: set[str] = set(df_target["name"].unique().to_list())
-    common: set[str] = (baseline_names & target_names) - AUX_NAMES
+    common: set[str] = baseline_names & target_names
+    if exclude_aux:
+        common -= AUX_NAMES
     return sorted(common)
 
 
