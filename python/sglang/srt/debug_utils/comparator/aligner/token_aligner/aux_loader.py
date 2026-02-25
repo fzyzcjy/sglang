@@ -171,13 +171,10 @@ def _load_and_align_aux_tensor(
         return tensors[0]
 
     metas: list[dict] = [item.meta for item in loaded]
-    dims_str: Optional[str] = metas[0].get("dims") or _infer_aux_dims(
-        name=name, plugin=plugin, metas=metas
-    )
+    metas = _ensure_dims_in_metas(name=name, plugin=plugin, metas=metas)
 
-    if dims_str is not None:
-        effective_metas: list[dict] = [{**m, "dims": dims_str} for m in metas]
-        sub_plans = compute_per_step_sub_plans(metas=effective_metas)
+    sub_plans = compute_per_step_sub_plans(metas=metas)
+    if sub_plans:
         result = execute_sub_plans(tensors=tensors, plans=sub_plans)
         assert result is not None
         return result
@@ -194,14 +191,22 @@ def _load_and_align_aux_tensor(
     return tensors[0]
 
 
-def _infer_aux_dims(
+def _ensure_dims_in_metas(
     *, name: str, plugin: _AuxPlugin, metas: list[dict]
-) -> Optional[str]:
-    """Infer dims for aux tensors lacking explicit dims metadata."""
+) -> list[dict]:
+    """Inject inferred dims into metas if not already present.
+
+    Returns metas unchanged if dims is already set, or a new list with dims
+    injected if inference succeeds. Raises if the tensor is CP-sharded
+    (not yet supported).
+    """
+    if metas[0].get("dims") is not None:
+        return metas
+
     parallel_infos = [normalize_parallel_info(m) for m in metas]
     has_cp: bool = any(ParallelAxis.CP in info for info in parallel_infos)
     if not has_cp:
-        return None
+        return metas
 
     if name in plugin.cp_sharded_names:
         raise NotImplementedError(
@@ -210,4 +215,4 @@ def _infer_aux_dims(
             f"Pass explicit dims= at dump time or wait for t-dim zigzag support."
         )
 
-    return None
+    return metas
