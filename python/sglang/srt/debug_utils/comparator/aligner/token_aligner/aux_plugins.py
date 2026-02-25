@@ -22,7 +22,7 @@ _BSHD_NOT_SUPPORTED_MSG: str = (
 # ── plugin ABC ─────────────────────────────────────────────────────
 
 
-class _AuxPlugin(ABC):
+class _AuxFrameworkPlugin(ABC):
     @property
     @abstractmethod
     def name(self) -> str: ...
@@ -65,7 +65,7 @@ class _AuxPlugin(ABC):
 # ── sglang plugin ─────────────────────────────────────────────────
 
 
-class _SGLangPlugin(_AuxPlugin):
+class _SGLangPlugin(_AuxFrameworkPlugin):
     @property
     def name(self) -> str:
         return "sglang"
@@ -130,7 +130,7 @@ class _SGLangPlugin(_AuxPlugin):
 # ── megatron plugin ───────────────────────────────────────────────
 
 
-class _MegatronPlugin(_AuxPlugin):
+class _MegatronPlugin(_AuxFrameworkPlugin):
     @property
     def name(self) -> str:
         return "megatron"
@@ -209,7 +209,7 @@ class _MegatronPlugin(_AuxPlugin):
 
 # ── plugin registry ───────────────────────────────────────────────
 
-_plugins: list[_AuxPlugin] = [_SGLangPlugin(), _MegatronPlugin()]
+_plugins: list[_AuxFrameworkPlugin] = [_SGLangPlugin(), _MegatronPlugin()]
 
 AUX_NAMES: frozenset[str] = frozenset().union(*(p.all_names for p in _plugins))
 
