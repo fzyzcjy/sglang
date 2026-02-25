@@ -15,8 +15,8 @@ ExternalSeqId = Union[str, tuple[int, int]]
 class TokenAlignerStepAux:
     """Normalized auxiliary tensors for a single step (framework-agnostic)."""
 
-    input_ids: torch.Tensor  # [T] (1D flat)
-    positions: torch.Tensor  # [T] (1D flat)
+    input_ids: torch.Tensor  # [num_tokens] (1D flat)
+    positions: torch.Tensor  # [num_tokens] (1D flat)
     seq_lens: torch.Tensor  # [num_seqs]
     seq_ids: tuple[ExternalSeqId, ...]  # [num_seqs] — sequence identity
 
