@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import NamedTuple, Union
 
+from pydantic import model_validator
+
 from sglang.srt.debug_utils.comparator.utils import Pair, _FrozenBase
 
 
@@ -45,6 +47,17 @@ class TokenAlignerSeqInfo(_FrozenBase):
     positions: list[int]
     steps: list[int]
     indices: list[int]
+
+    @model_validator(mode="after")
+    def _validate_fields(self) -> TokenAlignerSeqInfo:
+        n: int = len(self.input_ids)
+        assert len(self.positions) == n, f"positions length {len(self.positions)} != {n}"
+        assert len(self.steps) == n, f"steps length {len(self.steps)} != {n}"
+        assert len(self.indices) == n, f"indices length {len(self.indices)} != {n}"
+        assert self.positions == list(range(n)), (
+            f"positions must be [0, 1, ..., {n - 1}], got {self.positions}"
+        )
+        return self
 
     def __add__(self, other: TokenAlignerSeqInfo) -> TokenAlignerSeqInfo:
         return TokenAlignerSeqInfo(

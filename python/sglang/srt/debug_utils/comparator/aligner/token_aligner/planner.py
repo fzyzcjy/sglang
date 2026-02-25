@@ -28,32 +28,24 @@ def compute_token_aligner_plan(
             y=seqs_info_pair.y.sequences[seq_id_y],
         )
 
-        pos_to: Pair[dict[int, int]] = rec.map(
-            lambda r: {pos: idx for idx, pos in enumerate(r.positions)}
-        )
-        assert len(pos_to.x) == len(rec.x.positions), "duplicate positions in side X"
-        assert len(pos_to.y) == len(rec.y.positions), "duplicate positions in side Y"
+        # positions is validated to be [0, 1, ..., N-1], so position == index
+        # and the common range is simply [0, min(len_x, len_y)).
+        common_len: int = min(len(rec.x.positions), len(rec.y.positions))
 
-        common_positions: set[int] = set(pos_to.x.keys()) & set(pos_to.y.keys())
+        if rec.x.input_ids[:common_len] != rec.y.input_ids[:common_len]:
+            for i in range(common_len):
+                if rec.x.input_ids[i] != rec.y.input_ids[i]:
+                    raise ValueError(
+                        f"Sanity check failed: input_id mismatch at position {i} "
+                        f"for seq_id_x={seq_id_x}, seq_id_y={seq_id_y}: "
+                        f"{rec.x.input_ids[i]} != {rec.y.input_ids[i]}"
+                    )
 
-        for pos in sorted(common_positions):
-            idx: Pair[int] = Pair(x=pos_to.x[pos], y=pos_to.y[pos])
-
-            input_id: Pair[int] = Pair(
-                x=rec.x.input_ids[idx.x],
-                y=rec.y.input_ids[idx.y],
-            )
-            if input_id.x != input_id.y:
-                raise ValueError(
-                    f"Sanity check failed: input_id mismatch at position {pos} "
-                    f"for seq_id_x={seq_id_x}, seq_id_y={seq_id_y}: "
-                    f"{input_id.x} != {input_id.y}"
-                )
-
-            match_steps.x.append(rec.x.steps[idx.x])
-            match_indices.x.append(rec.x.indices[idx.x])
-            match_steps.y.append(rec.y.steps[idx.y])
-            match_indices.y.append(rec.y.indices[idx.y])
+        for i in range(common_len):
+            match_steps.x.append(rec.x.steps[i])
+            match_indices.x.append(rec.x.indices[i])
+            match_steps.y.append(rec.y.steps[i])
+            match_indices.y.append(rec.y.indices[i])
 
     return TokenAlignerPlan(
         match_steps=match_steps,
