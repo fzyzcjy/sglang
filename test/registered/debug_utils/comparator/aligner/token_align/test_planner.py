@@ -7,8 +7,10 @@ from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
     AuxTensorsForStep,
     SideAux,
 )
-from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
+from sglang.srt.debug_utils.comparator.aligner.token_align.indexer import (
     build_seqs_info,
+)
+from sglang.srt.debug_utils.comparator.aligner.token_align.planner import (
     compute_alignment_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
