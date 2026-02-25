@@ -6,6 +6,9 @@ from typing import Iterator, Optional, Union
 
 import polars as pl
 
+from sglang.srt.debug_utils.comparator.aligner.token_align.entrypoint import (
+    compute_maybe_alignment_plan,
+)
 from sglang.srt.debug_utils.comparator.aligner.token_align.types import (
     TokenAlignPlan,
 )
@@ -20,7 +23,6 @@ from sglang.srt.debug_utils.comparator.output_types import (
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.srt.debug_utils.dump_loader import read_meta
-from sglang.srt.debug_utils.comparator.aligner.token_align.entrypoint import compute_maybe_alignment_plan
 
 
 def main() -> None:

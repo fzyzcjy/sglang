@@ -61,30 +61,11 @@ def compare_bundle_pair(
         rows=bundles.y, base_path=target_path
     )
     all_warnings: list[AlignWarning] = b_warns + t_warns
+    del b_warns, t_warns
 
-    return _compare_tensor(
-        name=name,
-        tensors_b=tensors_b,
-        tensors_t=tensors_t,
-        warnings=all_warnings,
-        alignment_plan=alignment_plan,
-        diff_threshold=diff_threshold,
-    )
-
-
-def _compare_tensor(
-    *,
-    name: str,
-    tensors_b: dict[int, torch.Tensor],
-    tensors_t: dict[int, torch.Tensor],
-    warnings: list[AlignWarning],
-    alignment_plan: Optional[TokenAlignPlan],
-    diff_threshold: float,
-) -> Union[ComparisonRecord, SkipRecord]:
-    """Compare a single tensor name by concatenating all steps into one pair."""
     if not tensors_b or not tensors_t:
         reason = "baseline_load_failed" if not tensors_b else "target_load_failed"
-        return SkipRecord(name=name, reason=reason, align_warnings=warnings)
+        return SkipRecord(name=name, reason=reason, align_warnings=all_warnings)
 
     if alignment_plan is not None and name not in AUX_NAMES:
         aligned: Pair[torch.Tensor] = execute_alignment(
@@ -101,7 +82,7 @@ def _compare_tensor(
         name=name,
         diff_threshold=diff_threshold,
     )
-    return ComparisonRecord(**info.model_dump(), align_warnings=warnings)
+    return ComparisonRecord(**info.model_dump(), align_warnings=all_warnings)
 
 
 def _load_and_unshard_by_step(

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import polars as pl
-
 import argparse
 import sys
 from pathlib import Path
+
+import polars as pl
 
 from sglang.srt.debug_utils.comparator.aligner.token_align.aux_loader import (
     has_aux_tensors,
