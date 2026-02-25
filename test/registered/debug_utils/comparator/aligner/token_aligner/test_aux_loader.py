@@ -4,10 +4,10 @@ import pytest
 import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.aux_loader import (
-    _MegatronPlugin,
-    _SGLangPlugin,
     _infer_aux_dims,
     _infer_positions,
+    _MegatronPlugin,
+    _SGLangPlugin,
 )
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     PositionalSeqId,
@@ -157,9 +157,7 @@ class TestInferAuxDims:
     def test_no_cp_returns_none(self):
         """Without CP parallelism, _infer_aux_dims returns None."""
         metas: list[dict] = [self._make_meta(cp_size=1)]
-        result = _infer_aux_dims(
-            name="input_ids", plugin=_sglang_plugin, metas=metas
-        )
+        result = _infer_aux_dims(name="input_ids", plugin=_sglang_plugin, metas=metas)
         assert result is None
 
     def test_cp_sharded_sglang_input_ids_raises(self):
@@ -195,9 +193,7 @@ class TestInferAuxDims:
             self._make_meta(cp_size=2, cp_rank=0),
             self._make_meta(cp_size=2, cp_rank=1),
         ]
-        result = _infer_aux_dims(
-            name="seq_lens", plugin=_sglang_plugin, metas=metas
-        )
+        result = _infer_aux_dims(name="seq_lens", plugin=_sglang_plugin, metas=metas)
         assert result is None
 
     def test_unknown_plugin_returns_none(self):
@@ -212,9 +208,7 @@ class TestInferAuxDims:
             self._make_meta(cp_size=2, cp_rank=0),
             self._make_meta(cp_size=2, cp_rank=1),
         ]
-        result = _infer_aux_dims(
-            name="input_ids", plugin=_DummyPlugin(), metas=metas
-        )
+        result = _infer_aux_dims(name="input_ids", plugin=_DummyPlugin(), metas=metas)
         assert result is None
 
 
