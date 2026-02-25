@@ -70,31 +70,34 @@ def _match_sequences(
 ) -> list[tuple[int, int]]:
     """Two-pass sequence matching: exact then prefix."""
     matched_seq_id_pairs: list[tuple[int, int]] = []
-    unmatched_x: set[int] = set(seqs.x.keys())
-    unmatched_y: set[int] = set(seqs.y.keys())
+    unmatched_seq_ids: Pair[set[int]] = Pair(
+        x=set(seqs.x.keys()), y=set(seqs.y.keys())
+    )
 
-    y_seq_id_of_input_ids: dict[tuple[int, ...], list[int]] = defaultdict(list)
+    y_lookup: dict[tuple[int, ...], list[int]] = defaultdict(list)
     for seq_id, rec in seqs.y.items():
-        y_seq_id_of_input_ids[tuple(rec.input_ids)].append(seq_id)
+        y_lookup[tuple(rec.input_ids)].append(seq_id)
 
     for seq_id_x in sorted(seqs.x.keys()):
-        if seq_id_x not in unmatched_x:
+        if seq_id_x not in unmatched_seq_ids.x:
             continue
         ids_x_key: tuple[int, ...] = tuple(seqs.x[seq_id_x].input_ids)
-        candidates: list[int] = y_seq_id_of_input_ids.get(ids_x_key, [])
+        candidates: list[int] = y_lookup.get(ids_x_key, [])
         for candidate in candidates:
-            if candidate in unmatched_y:
+            if candidate in unmatched_seq_ids.y:
                 matched_seq_id_pairs.append((seq_id_x, candidate))
-                unmatched_x.discard(seq_id_x)
-                unmatched_y.discard(candidate)
+                unmatched_seq_ids.x.discard(seq_id_x)
+                unmatched_seq_ids.y.discard(candidate)
                 break
 
     remaining_x: list[int] = sorted(
-        unmatched_x, key=lambda s: len(seqs.x[s].input_ids), reverse=True
+        unmatched_seq_ids.x,
+        key=lambda s: len(seqs.x[s].input_ids),
+        reverse=True,
     )
     remaining_y_by_len: list[tuple[int, list[int]]] = sorted(
-        [(s, seqs.y[s].input_ids) for s in unmatched_y],
-        key=lambda x: len(x[1]),
+        [(s, seqs.y[s].input_ids) for s in unmatched_seq_ids.y],
+        key=lambda t: len(t[1]),
         reverse=True,
     )
 
@@ -104,7 +107,7 @@ def _match_sequences(
         best_len: int = 0
 
         for seq_id_y, ids_y in remaining_y_by_len:
-            if seq_id_y not in unmatched_y:
+            if seq_id_y not in unmatched_seq_ids.y:
                 continue
 
             shorter: list[int] = ids_x if len(ids_x) <= len(ids_y) else ids_y
@@ -116,7 +119,7 @@ def _match_sequences(
 
         if best_match is not None:
             matched_seq_id_pairs.append((seq_id_x, best_match))
-            unmatched_x.discard(seq_id_x)
-            unmatched_y.discard(best_match)
+            unmatched_seq_ids.x.discard(seq_id_x)
+            unmatched_seq_ids.y.discard(best_match)
 
     return matched_seq_id_pairs
