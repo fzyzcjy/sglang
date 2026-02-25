@@ -198,12 +198,18 @@ def _normalize_sglang(step_data: dict[str, object]) -> AuxTensorsForStep:
     req_pool_indices = step_data.get("req_pool_indices")
     rids_raw = step_data.get("rids")
 
-    assert isinstance(input_ids, torch.Tensor), f"input_ids: expected Tensor, got {type(input_ids)}"
-    assert isinstance(positions, torch.Tensor), f"positions: expected Tensor, got {type(positions)}"
-    assert isinstance(seq_lens, torch.Tensor), f"seq_lens: expected Tensor, got {type(seq_lens)}"
-    assert req_pool_indices is None or isinstance(req_pool_indices, torch.Tensor), (
-        f"req_pool_indices: expected Tensor or None, got {type(req_pool_indices)}"
-    )
+    assert isinstance(
+        input_ids, torch.Tensor
+    ), f"input_ids: expected Tensor, got {type(input_ids)}"
+    assert isinstance(
+        positions, torch.Tensor
+    ), f"positions: expected Tensor, got {type(positions)}"
+    assert isinstance(
+        seq_lens, torch.Tensor
+    ), f"seq_lens: expected Tensor, got {type(seq_lens)}"
+    assert req_pool_indices is None or isinstance(
+        req_pool_indices, torch.Tensor
+    ), f"req_pool_indices: expected Tensor or None, got {type(req_pool_indices)}"
 
     rids: Optional[tuple[str, ...]] = None
     if rids_raw is not None:
