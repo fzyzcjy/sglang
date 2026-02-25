@@ -24,13 +24,15 @@ from sglang.srt.debug_utils.comparator.aligner.unsharder.planner import (
 from sglang.srt.debug_utils.comparator.dims import parse_dims
 from sglang.srt.debug_utils.dump_loader import ValueWithMeta, filter_rows
 
-_SGLANG_AUX_NAMES = frozenset(
-    {"input_ids", "positions", "seq_lens", "req_pool_indices", "rids"}
-)
-_MEGATRON_AUX_NAMES = frozenset(
-    {"input_ids", "position_ids", "cu_seqlens_q", "cu_seqlens_kv", "qkv_format"}
-)
-AUX_NAMES: frozenset[str] = _SGLANG_AUX_NAMES | _MEGATRON_AUX_NAMES
+_AUX_NAMES_BY_FRAMEWORK: dict[str, frozenset[str]] = {
+    "sglang": frozenset(
+        {"input_ids", "positions", "seq_lens", "req_pool_indices", "rids"}
+    ),
+    "megatron": frozenset(
+        {"input_ids", "position_ids", "cu_seqlens_q", "cu_seqlens_kv", "qkv_format"}
+    ),
+}
+AUX_NAMES: frozenset[str] = frozenset().union(*_AUX_NAMES_BY_FRAMEWORK.values())
 
 
 # ── framework-agnostic ──────────────────────────────────────────────
@@ -44,9 +46,7 @@ def load_and_normalize_aux(
     if framework is None:
         return None
 
-    aux_names: frozenset[str] = (
-        _SGLANG_AUX_NAMES if framework == "sglang" else _MEGATRON_AUX_NAMES
-    )
+    aux_names: frozenset[str] = _AUX_NAMES_BY_FRAMEWORK[framework]
 
     available_names: set[str] = set(df["name"].unique().to_list()) & aux_names
     step_values: list[int] = sorted(df["step"].unique().to_list())
