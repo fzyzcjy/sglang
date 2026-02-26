@@ -24,6 +24,7 @@ from sglang.srt.debug_utils.comparator.aligner.unsharder.executor import (
     execute_unsharder_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.types import UnsharderPlan
+from sglang.srt.debug_utils.comparator.dims import apply_dim_names
 from sglang.srt.debug_utils.comparator.utils import Pair
 
 
@@ -40,12 +41,15 @@ def execute_aligner_plan(
 ) -> AlignerResult:
     """Execute unified unshard/reorder + token-align."""
 
+    named_x: list[torch.Tensor] = _apply_names(tensors_pair.x, plan.dim_names.x)
+    named_y: list[torch.Tensor] = _apply_names(tensors_pair.y, plan.dim_names.y)
+
     # Per-side: unshard + reorder -> dict[step, tensor]
     step_tensors_x: dict[int, torch.Tensor] = _execute_step_plans(
-        tensors=tensors_pair.x, step_plans=plan.per_step_plans.x
+        tensors=named_x, step_plans=plan.per_step_plans.x
     )
     step_tensors_y: dict[int, torch.Tensor] = _execute_step_plans(
-        tensors=tensors_pair.y, step_plans=plan.per_step_plans.y
+        tensors=named_y, step_plans=plan.per_step_plans.y
     )
 
     if not step_tensors_x or not step_tensors_y:
@@ -57,7 +61,7 @@ def execute_aligner_plan(
         combined: Pair[torch.Tensor] = execute_token_aligner(
             plan=plan.token_aligner_plan,
             tensor_of_step_pair=Pair(x=step_tensors_x, y=step_tensors_y),
-            token_dims=plan.token_dims,
+            token_dim_info=plan.token_dim_info,
         )
     else:
         assert len(step_tensors_x) == 1 and len(step_tensors_y) == 1
@@ -74,6 +78,14 @@ def execute_aligner_plan(
         )
 
     return AlignerResult(tensors=combined, failed_side_xy=None)
+
+
+def _apply_names(
+    tensors: list[torch.Tensor], dim_names: Optional[list[str]]
+) -> list[torch.Tensor]:
+    if dim_names is None:
+        return tensors
+    return [apply_dim_names(t, dim_names) for t in tensors]
 
 
 def _execute_step_plans(
