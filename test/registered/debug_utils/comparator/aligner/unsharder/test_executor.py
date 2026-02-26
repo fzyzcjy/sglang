@@ -181,14 +181,13 @@ class TestExecuteUnsharderPlan:
         class _FakeParams:
             pass
 
-        with warning_sink.context():
-            with pytest.raises(ValueError, match="Unsupported unshard"):
-                _apply_unshard(
-                    _FakeParams(),
-                    [torch.randn(2, 2)],
-                    axis=ParallelAxis.TP,
-                    group_index=0,
-                )
+        with pytest.raises(ValueError, match="Unsupported unshard"):
+            _apply_unshard(
+                _FakeParams(),
+                [torch.randn(2, 2)],
+                axis=ParallelAxis.TP,
+                group_index=0,
+            )
 
     def test_cp_tp_ep_three_axis_concat(self) -> None:
         """CP=2 + TP=2 + EP=2: three-step unshard reconstructs original tensor."""
@@ -366,7 +365,7 @@ class TestPickOperation:
         assert torch.allclose(current[0], full_tensor)
 
     def test_fully_replicated_e2e(self) -> None:
-        """CP2 TP2, dims='b h d': fully replicated → 2 pick steps → 1 tensor."""
+        """CP2 TP2, dims='b h d': fully replicated -> 2 pick steps -> 1 tensor."""
         torch.manual_seed(42)
         full_tensor = torch.randn(4, 8, 16)
 
@@ -463,7 +462,7 @@ class TestVerifyReplicatedGroup:
         assert torch.allclose(result[0], tensor_a)
 
     def test_atol_boundary_within(self) -> None:
-        """Difference exactly at atol (1e-6) → torch.allclose passes → no warning."""
+        """Difference exactly at atol (1e-6) -> torch.allclose passes -> no warning."""
         baseline = torch.zeros(4)
         other = torch.full((4,), 1e-6)
 
@@ -476,7 +475,7 @@ class TestVerifyReplicatedGroup:
         assert warnings == []
 
     def test_atol_boundary_exceeded(self) -> None:
-        """Difference just above atol (1e-6 + 1e-9) → torch.allclose fails → warning."""
+        """Difference just above atol (1e-6 + 1e-9) -> torch.allclose fails -> warning."""
         baseline = torch.zeros(4)
         other = torch.full((4,), 1e-6 + 1e-9)
 
