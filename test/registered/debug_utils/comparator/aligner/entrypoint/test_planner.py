@@ -8,7 +8,6 @@ from sglang.srt.debug_utils.comparator.aligner.entrypoint.planner import (
     compute_aligner_plan,
     compute_per_step_sub_plans,
 )
-from sglang.srt.debug_utils.comparator.dims import TokenLayout
 from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
     AlignerPerStepPlan,
     AlignerPerStepSubPlan,
@@ -16,6 +15,7 @@ from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
 )
 from sglang.srt.debug_utils.comparator.aligner.reorderer.types import ReordererPlan
 from sglang.srt.debug_utils.comparator.aligner.unsharder.types import UnsharderPlan
+from sglang.srt.debug_utils.comparator.dims import TokenLayout
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci
 
