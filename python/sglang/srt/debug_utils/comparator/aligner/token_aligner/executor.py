@@ -16,6 +16,14 @@ from sglang.srt.debug_utils.comparator.dims import (
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 
+_UNNAMED_TOKEN_DIM_FALLBACK: int = 0
+
+
+def _resolve_dim_or_fallback(tensor: torch.Tensor, name: str) -> int:
+    if tensor.names[0] is None:
+        return _UNNAMED_TOKEN_DIM_FALLBACK
+    return resolve_dim_by_name(tensor, name)
+
 
 def execute_token_aligner(
     plan: TokenAlignerPlan,
@@ -64,9 +72,9 @@ def _make_empty(
     dummy: torch.Tensor = next(iter(tensor_of_step.values()))
 
     if layout == TokenLayout.BS:
-        batch_dim: int = resolve_dim_by_name(dummy, token_dim_info.token_dim_name)
+        batch_dim: int = _resolve_dim_or_fallback(dummy, token_dim_info.token_dim_name)
         assert token_dim_info.seq_dim_name is not None
-        seq_dim: int = resolve_dim_by_name(dummy, token_dim_info.seq_dim_name)
+        seq_dim: int = _resolve_dim_or_fallback(dummy, token_dim_info.seq_dim_name)
         lo, hi = min(batch_dim, seq_dim), max(batch_dim, seq_dim)
 
         shape: list[int] = list(dummy.shape)
@@ -74,7 +82,7 @@ def _make_empty(
         shape[lo] = 0
         return torch.empty(shape, dtype=dummy.dtype)
 
-    token_dim: int = resolve_dim_by_name(dummy, token_dim_info.token_dim_name)
+    token_dim: int = _resolve_dim_or_fallback(dummy, token_dim_info.token_dim_name)
     shape = list(dummy.shape)
     shape[token_dim] = 0
     return torch.empty(shape, dtype=dummy.dtype)
@@ -92,13 +100,13 @@ def _resolve_bs_layout(
     """
     if layout != TokenLayout.BS:
         some_tensor: torch.Tensor = next(iter(tensor_of_step.values()))
-        token_dim: int = resolve_dim_by_name(some_tensor, token_dim_info.token_dim_name)
+        token_dim: int = _resolve_dim_or_fallback(some_tensor, token_dim_info.token_dim_name)
         return tensor_of_step, token_dim
 
     some_tensor = next(iter(tensor_of_step.values()))
-    batch_dim: int = resolve_dim_by_name(some_tensor, token_dim_info.token_dim_name)
+    batch_dim: int = _resolve_dim_or_fallback(some_tensor, token_dim_info.token_dim_name)
     assert token_dim_info.seq_dim_name is not None
-    seq_dim: int = resolve_dim_by_name(some_tensor, token_dim_info.seq_dim_name)
+    seq_dim: int = _resolve_dim_or_fallback(some_tensor, token_dim_info.seq_dim_name)
 
     if abs(batch_dim - seq_dim) != 1:
         raise ValueError(
