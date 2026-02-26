@@ -14,7 +14,6 @@ from sglang.srt.debug_utils.comparator.dims import TokenLayout
 from sglang.srt.debug_utils.comparator.output_types import GeneralWarning
 from sglang.srt.debug_utils.comparator.warning_sink import warning_sink
 
-
 # ── plugin ABC ─────────────────────────────────────────────────────
 
 

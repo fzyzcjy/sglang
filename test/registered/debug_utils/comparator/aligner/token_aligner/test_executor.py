@@ -215,7 +215,12 @@ class TestBSHDExecutor:
         # After reshape → [6, 4], token 0 = batch0/pos0, token 3 = batch1/pos0
         locator = TokenLocator(
             steps=[0, 0, 0, 0],
-            token_index_in_step=[0, 2, 3, 5],  # batch0/pos0, batch0/pos2, batch1/pos0, batch1/pos2
+            token_index_in_step=[
+                0,
+                2,
+                3,
+                5,
+            ],  # batch0/pos0, batch0/pos2, batch1/pos0, batch1/pos2
         )
         plan = TokenAlignerPlan(
             locators=Pair(x=locator, y=locator),
