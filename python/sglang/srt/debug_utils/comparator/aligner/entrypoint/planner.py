@@ -24,6 +24,7 @@ from sglang.srt.debug_utils.comparator.aligner.unsharder.planner import (
     compute_unsharder_plan,
 )
 from sglang.srt.debug_utils.comparator.dims import (
+    BATCH_DIM_NAME,
     TOKEN_DIM_NAME,
     find_dim_index,
     parse_dims,
@@ -56,7 +57,7 @@ def compute_aligner_plan(
 
 
 def _compute_token_dim(metas: list[dict[str, Any]]) -> int:
-    fallback_dim = 0
+    fallback_dim: int = 0
 
     if not metas:
         return fallback_dim
@@ -65,11 +66,19 @@ def _compute_token_dim(metas: list[dict[str, Any]]) -> int:
     if dims_str is None:
         return fallback_dim
 
-    idx: Optional[int] = find_dim_index(parse_dims(dims_str), TOKEN_DIM_NAME)
-    if idx is None:
-        return fallback_dim
+    dim_specs = parse_dims(dims_str)
 
-    return idx
+    # T layout: look for "t" dim
+    token_idx: Optional[int] = find_dim_index(dim_specs, TOKEN_DIM_NAME)
+    if token_idx is not None:
+        return token_idx
+
+    # BS layout: "b" dim (executor knows s is at b+1)
+    batch_idx: Optional[int] = find_dim_index(dim_specs, BATCH_DIM_NAME)
+    if batch_idx is not None:
+        return batch_idx
+
+    return fallback_dim
 
 
 def _compute_per_step_plans(metas: list[dict[str, Any]]) -> list[AlignerPerStepPlan]:

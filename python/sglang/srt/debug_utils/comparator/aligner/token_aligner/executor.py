@@ -52,25 +52,40 @@ def _make_empty(
     dummy: torch.Tensor = next(iter(tensor_of_step.values()))
     shape: list[int] = list(dummy.shape)
 
-    if layout == TokenLayout.BS and dummy.ndim >= 2:
-        # [B, S, ...] → collapse B*S into token_dim, drop batch dim
-        shape = [shape[0] * shape[1]] + shape[2:]
+    if layout == TokenLayout.BS:
+        seq_dim: int = token_dim + 1
+        if dummy.ndim >= seq_dim + 1:
+            shape = (
+                shape[:token_dim]
+                + [shape[token_dim] * shape[seq_dim]]
+                + shape[seq_dim + 1 :]
+            )
 
     shape[token_dim] = 0
     return torch.empty(shape, dtype=dummy.dtype)
 
 
-def _resolve_bshd(
-    *, tensor_of_step: dict[int, torch.Tensor], layout: TokenLayout
+def _resolve_bs_layout(
+    *,
+    tensor_of_step: dict[int, torch.Tensor],
+    layout: TokenLayout,
+    token_dim: int,
 ) -> dict[int, torch.Tensor]:
-    """BSHD: reshape [B, S, ...] → [B*S, ...] so token indices are flat."""
+    """BS layout: collapse B and S dims into a single flat token dim."""
     if layout != TokenLayout.BS:
         return tensor_of_step
 
+    seq_dim: int = token_dim + 1
     resolved: dict[int, torch.Tensor] = {}
     for step, tensor in tensor_of_step.items():
-        if tensor.ndim >= 2:
-            resolved[step] = tensor.reshape(-1, *tensor.shape[2:])
+        if tensor.ndim >= seq_dim + 1:
+            shape: list[int] = list(tensor.shape)
+            new_shape: list[int] = (
+                shape[:token_dim]
+                + [shape[token_dim] * shape[seq_dim]]
+                + shape[seq_dim + 1 :]
+            )
+            resolved[step] = tensor.reshape(new_shape)
         else:
             resolved[step] = tensor
     return resolved
@@ -83,8 +98,8 @@ def _extract_and_stack_tokens(
     token_dim: int,
     layout: TokenLayout,
 ) -> torch.Tensor:
-    resolved: dict[int, torch.Tensor] = _resolve_bshd(
-        tensor_of_step=tensor_of_step, layout=layout
+    resolved: dict[int, torch.Tensor] = _resolve_bs_layout(
+        tensor_of_step=tensor_of_step, layout=layout, token_dim=token_dim
     )
     tokens: list[torch.Tensor] = [
         resolved[s].select(dim=token_dim, index=i)

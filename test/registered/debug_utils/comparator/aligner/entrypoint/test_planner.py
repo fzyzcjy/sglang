@@ -8,6 +8,7 @@ from sglang.srt.debug_utils.comparator.aligner.entrypoint.planner import (
     compute_aligner_plan,
     compute_per_step_sub_plans,
 )
+from sglang.srt.debug_utils.comparator.dims import TokenLayout
 from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
     AlignerPerStepPlan,
     AlignerPerStepSubPlan,
@@ -148,7 +149,6 @@ class TestComputeAlignerPlan:
             TokenAlignerPlan,
             TokenLocator,
         )
-        from sglang.srt.debug_utils.comparator.dims import TokenLayout
 
         ta_plan = TokenAlignerPlan(
             locators=Pair(

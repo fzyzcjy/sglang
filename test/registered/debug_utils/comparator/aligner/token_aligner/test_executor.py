@@ -270,7 +270,7 @@ class TestBSHDExecutor:
         )
         plan = TokenAlignerPlan(
             locators=Pair(x=locator, y=locator),
-            layouts=Pair(x="bshd", y="bshd"),
+            layouts=Pair(x=TokenLayout.BS, y=TokenLayout.BS),
         )
 
         tensors: dict[int, torch.Tensor] = {0: tensor}
@@ -305,7 +305,7 @@ class TestBSHDExecutor:
         )
         plan = TokenAlignerPlan(
             locators=Pair(x=locator, y=locator),
-            layouts=Pair(x="bshd", y="bshd"),
+            layouts=Pair(x=TokenLayout.BS, y=TokenLayout.BS),
         )
 
         tensors: dict[int, torch.Tensor] = {0: tensor}
@@ -340,7 +340,7 @@ class TestBSHDExecutor:
         )
         plan = TokenAlignerPlan(
             locators=Pair(x=locator, y=locator),
-            layouts=Pair(x="bshd", y="bshd"),
+            layouts=Pair(x=TokenLayout.BS, y=TokenLayout.BS),
         )
 
         tensors: dict[int, torch.Tensor] = {0: tensor}
@@ -375,7 +375,7 @@ class TestBSHDExecutor:
         )
         plan = TokenAlignerPlan(
             locators=Pair(x=locator, y=locator),
-            layouts=Pair(x="bshd", y="bshd"),
+            layouts=Pair(x=TokenLayout.BS, y=TokenLayout.BS),
         )
 
         tensors: dict[int, torch.Tensor] = {0: tensor}
@@ -411,7 +411,7 @@ class TestBSHDExecutor:
         )
         plan = TokenAlignerPlan(
             locators=Pair(x=locator, y=locator),
-            layouts=Pair(x="thd", y="bshd"),
+            layouts=Pair(x=TokenLayout.T, y=TokenLayout.BS),
         )
 
         aligned: Pair[torch.Tensor] = execute_token_aligner(
@@ -438,7 +438,7 @@ class TestBSHDExecutor:
                 x=TokenLocator(steps=[], token_index_in_step=[]),
                 y=TokenLocator(steps=[], token_index_in_step=[]),
             ),
-            layouts=Pair(x="bshd", y="bshd"),
+            layouts=Pair(x=TokenLayout.BS, y=TokenLayout.BS),
         )
 
         tensors: dict[int, torch.Tensor] = {0: torch.randn(4, 2, 3, 5)}
