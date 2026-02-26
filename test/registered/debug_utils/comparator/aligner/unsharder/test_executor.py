@@ -15,7 +15,18 @@ from sglang.srt.debug_utils.comparator.aligner.unsharder.types import (
     AxisInfo,
     PickParams,
 )
-from sglang.srt.debug_utils.comparator.dims import ParallelAxis, parse_dims
+from sglang.srt.debug_utils.comparator.dims import (
+    DimSpec,
+    ParallelAxis,
+    parse_dims,
+)
+
+
+def _name_tensors(
+    tensors: list[torch.Tensor], dim_specs: list[DimSpec]
+) -> list[torch.Tensor]:
+    names: list[str] = [s.name for s in dim_specs]
+    return [t.refine_names(*names) for t in tensors]
 from sglang.srt.debug_utils.comparator.warning_sink import warning_sink
 from sglang.test.ci.ci_register import register_cpu_ci
 
@@ -34,8 +45,9 @@ class TestExecuteUnsharderPlan:
         plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 1
 
+        named_shards: list[torch.Tensor] = _name_tensors(shards, dim_specs)
         with warning_sink.context() as warnings:
-            result = execute_unsharder_plan(plans[0], shards)
+            result = execute_unsharder_plan(plans[0], named_shards)
         assert len(result) == 1
         assert torch.allclose(result[0], full_tensor)
         assert warnings == []
@@ -54,12 +66,15 @@ class TestExecuteUnsharderPlan:
         plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 1
 
-        tensors_ordered_by_world_rank = [
-            shards[2],  # world_rank=0, axis_rank=2
-            shards[0],  # world_rank=1, axis_rank=0
-            shards[3],  # world_rank=2, axis_rank=3
-            shards[1],  # world_rank=3, axis_rank=1
-        ]
+        tensors_ordered_by_world_rank = _name_tensors(
+            [
+                shards[2],  # world_rank=0, axis_rank=2
+                shards[0],  # world_rank=1, axis_rank=0
+                shards[3],  # world_rank=2, axis_rank=3
+                shards[1],  # world_rank=3, axis_rank=1
+            ],
+            dim_specs,
+        )
 
         with warning_sink.context() as warnings:
             result = execute_unsharder_plan(plans[0], tensors_ordered_by_world_rank)
@@ -94,8 +109,9 @@ class TestExecuteUnsharderPlan:
             for tp_rank in range(4):
                 tensors.append(source[tp_rank])
 
+        named_tensors: list[torch.Tensor] = _name_tensors(tensors, dim_specs)
         with warning_sink.context():
-            intermediate = execute_unsharder_plan(plans[0], tensors)
+            intermediate = execute_unsharder_plan(plans[0], named_tensors)
         assert len(intermediate) == 4
 
         with warning_sink.context():
@@ -125,7 +141,7 @@ class TestExecuteUnsharderPlan:
         plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 2
 
-        current = tensors
+        current: list[torch.Tensor] = _name_tensors(tensors, dim_specs)
         with warning_sink.context():
             for plan in plans:
                 current = execute_unsharder_plan(plan, current)
@@ -167,7 +183,7 @@ class TestExecuteUnsharderPlan:
         plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 2
 
-        current = tensors
+        current: list[torch.Tensor] = _name_tensors(tensors, dim_specs)
         with warning_sink.context():
             for plan in plans:
                 current = execute_unsharder_plan(plan, current)
@@ -221,7 +237,7 @@ class TestExecuteUnsharderPlan:
         plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 3
 
-        current = tensors
+        current: list[torch.Tensor] = _name_tensors(tensors, dim_specs)
         with warning_sink.context():
             for plan in plans:
                 current = execute_unsharder_plan(plan, current)
@@ -270,7 +286,7 @@ class TestExecuteUnsharderPlan:
         plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 3
 
-        current = tensors
+        current: list[torch.Tensor] = _name_tensors(tensors, dim_specs)
         with warning_sink.context():
             for plan in plans:
                 current = execute_unsharder_plan(plan, current)
@@ -356,7 +372,7 @@ class TestPickOperation:
         plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 2
 
-        current = tensors
+        current: list[torch.Tensor] = _name_tensors(tensors, dim_specs)
         with warning_sink.context():
             for plan in plans:
                 current = execute_unsharder_plan(plan, current)
@@ -386,7 +402,7 @@ class TestPickOperation:
         assert len(plans) == 2
         assert all(isinstance(p.params, PickParams) for p in plans)
 
-        current = tensors
+        current: list[torch.Tensor] = _name_tensors(tensors, dim_specs)
         with warning_sink.context():
             for plan in plans:
                 current = execute_unsharder_plan(plan, current)

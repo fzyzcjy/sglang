@@ -50,12 +50,12 @@ class TestExecuteSubPlans:
         assert result is None
 
     def test_with_unsharder_plan(self) -> None:
-        t0: torch.Tensor = torch.tensor([[1.0, 2.0]])
-        t1: torch.Tensor = torch.tensor([[3.0, 4.0]])
+        t0: torch.Tensor = torch.tensor([[1.0, 2.0]]).refine_names("b", "h")
+        t1: torch.Tensor = torch.tensor([[3.0, 4.0]]).refine_names("b", "h")
 
         plan = UnsharderPlan(
             axis=ParallelAxis.TP,
-            params=ConcatParams(dim=1),
+            params=ConcatParams(dim_name="h"),
             groups=[[0, 1]],
         )
 
