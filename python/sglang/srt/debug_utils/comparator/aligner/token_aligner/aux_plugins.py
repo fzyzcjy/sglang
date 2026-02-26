@@ -176,69 +176,26 @@ class _MegatronPlugin(_AuxFrameworkPlugin):
         self, step_data: dict[str, object], *, layout: TokenLayout, step: int
     ) -> TokenAlignerStepAux:
         input_ids: torch.Tensor = step_data["input_ids"]
+        is_bshd: bool = layout == TokenLayout.BS
 
-        if layout == TokenLayout.BS:
-            return self._compute_step_aux_bshd(
-                input_ids=input_ids, step_data=step_data, step=step
-            )
-
-        return self._compute_step_aux_thd(
-            input_ids=input_ids, step_data=step_data, step=step
-        )
-
-    def _compute_step_aux_thd(
-        self,
-        *,
-        input_ids: torch.Tensor,
-        step_data: dict[str, object],
-        step: int,
-    ) -> TokenAlignerStepAux:
-        if (cu_seqlens_q := step_data.get("cu_seqlens_q")) is not None:
-            seq_lens: torch.Tensor = cu_seqlens_q[1:] - cu_seqlens_q[:-1]
-        else:
-            seq_lens = torch.tensor([input_ids.shape[0]], dtype=torch.long)
-
-        if (position_ids := step_data.get("position_ids")) is not None:
-            positions: torch.Tensor = position_ids
-        else:
-            positions = _infer_positions(seq_lens=seq_lens)
-
-        seq_lens_list: list[int] = seq_lens.tolist()
-        num_seqs: int = len(seq_lens_list)
-        seq_ids: list[SeqId] = [
-            PositionalSeqId(step=step, seq_index=seq_index)
-            for seq_index in range(num_seqs)
-        ]
-
-        return TokenAlignerStepAux(
-            input_ids=input_ids.tolist(),
-            positions=positions.tolist(),
-            seq_lens=seq_lens_list,
-            seq_ids=seq_ids,
-        )
-
-    def _compute_step_aux_bshd(
-        self,
-        *,
-        input_ids: torch.Tensor,
-        step_data: dict[str, object],
-        step: int,
-    ) -> TokenAlignerStepAux:
-        """BSHD: input_ids [B, S] → flat [B*S], each batch slot is one sequence."""
-        batch_size: int = input_ids.shape[0]
-        seq_len: int = input_ids.shape[1]
-
-        flat_input_ids: list[int] = input_ids.reshape(-1).tolist()
+        # BSHD [B, S] → flat [B*S]; THD [T] stays as-is
+        flat_ids: list[int] = input_ids.reshape(-1).tolist()
 
         if (cu_seqlens_q := step_data.get("cu_seqlens_q")) is not None:
             seq_lens_list: list[int] = (cu_seqlens_q[1:] - cu_seqlens_q[:-1]).tolist()
+        elif is_bshd:
+            seq_lens_list = [input_ids.shape[1]] * input_ids.shape[0]
         else:
-            seq_lens_list = [seq_len] * batch_size
+            seq_lens_list = [input_ids.shape[0]]
 
         if (position_ids := step_data.get("position_ids")) is not None:
             flat_positions: list[int] = position_ids.reshape(-1).tolist()
+        elif is_bshd:
+            flat_positions = list(range(input_ids.shape[1])) * input_ids.shape[0]
         else:
-            flat_positions = list(range(seq_len)) * batch_size
+            flat_positions = _infer_positions(
+                seq_lens=torch.tensor(seq_lens_list)
+            ).tolist()
 
         num_seqs: int = len(seq_lens_list)
         seq_ids: list[SeqId] = [
@@ -247,7 +204,7 @@ class _MegatronPlugin(_AuxFrameworkPlugin):
         ]
 
         return TokenAlignerStepAux(
-            input_ids=flat_input_ids,
+            input_ids=flat_ids,
             positions=flat_positions,
             seq_lens=seq_lens_list,
             seq_ids=seq_ids,
