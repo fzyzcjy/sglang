@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+from typing import Tuple
+
 import torch
 
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignerPlan,
     TokenLocator,
 )
-from sglang.srt.debug_utils.comparator.dims import TokenLayout
+from sglang.srt.debug_utils.comparator.dims import (
+    TokenDimInfo,
+    TokenLayout,
+    resolve_dim_by_name,
+    strip_dim_names,
+)
 from sglang.srt.debug_utils.comparator.utils import Pair
 
 
@@ -14,18 +21,20 @@ def execute_token_aligner(
     plan: TokenAlignerPlan,
     tensor_of_step_pair: Pair[dict[int, torch.Tensor]],
     *,
-    token_dims: Pair[int] = Pair(x=0, y=0),
+    token_dim_info: Pair[TokenDimInfo] = Pair(
+        x=TokenDimInfo(token_dim_name="t"), y=TokenDimInfo(token_dim_name="t")
+    ),
 ) -> Pair[torch.Tensor]:
     if not plan.locators.x.steps:
         return Pair(
             x=_make_empty(
                 tensor_of_step=tensor_of_step_pair.x,
-                token_dim=token_dims.x,
+                token_dim_info=token_dim_info.x,
                 layout=plan.layouts.x,
             ),
             y=_make_empty(
                 tensor_of_step=tensor_of_step_pair.y,
-                token_dim=token_dims.y,
+                token_dim_info=token_dim_info.y,
                 layout=plan.layouts.y,
             ),
         )
@@ -34,33 +43,39 @@ def execute_token_aligner(
         x=_extract_and_stack_tokens(
             tensor_of_step=tensor_of_step_pair.x,
             locator=plan.locators.x,
-            token_dim=token_dims.x,
+            token_dim_info=token_dim_info.x,
             layout=plan.layouts.x,
         ),
         y=_extract_and_stack_tokens(
             tensor_of_step=tensor_of_step_pair.y,
             locator=plan.locators.y,
-            token_dim=token_dims.y,
+            token_dim_info=token_dim_info.y,
             layout=plan.layouts.y,
         ),
     )
 
 
 def _make_empty(
-    *, tensor_of_step: dict[int, torch.Tensor], token_dim: int, layout: TokenLayout
+    *,
+    tensor_of_step: dict[int, torch.Tensor],
+    token_dim_info: TokenDimInfo,
+    layout: TokenLayout,
 ) -> torch.Tensor:
     dummy: torch.Tensor = next(iter(tensor_of_step.values()))
-    shape: list[int] = list(dummy.shape)
 
     if layout == TokenLayout.BS:
-        seq_dim: int = token_dim + 1
-        if dummy.ndim >= seq_dim + 1:
-            shape = (
-                shape[:token_dim]
-                + [shape[token_dim] * shape[seq_dim]]
-                + shape[seq_dim + 1 :]
-            )
+        batch_dim: int = resolve_dim_by_name(dummy, token_dim_info.token_dim_name)
+        assert token_dim_info.seq_dim_name is not None
+        seq_dim: int = resolve_dim_by_name(dummy, token_dim_info.seq_dim_name)
+        lo, hi = min(batch_dim, seq_dim), max(batch_dim, seq_dim)
 
+        shape: list[int] = list(dummy.shape)
+        shape = shape[:lo] + [shape[lo] * shape[hi]] + shape[hi + 1 :]
+        shape[lo] = 0
+        return torch.empty(shape, dtype=dummy.dtype)
+
+    token_dim: int = resolve_dim_by_name(dummy, token_dim_info.token_dim_name)
+    shape = list(dummy.shape)
     shape[token_dim] = 0
     return torch.empty(shape, dtype=dummy.dtype)
 
@@ -69,40 +84,59 @@ def _resolve_bs_layout(
     *,
     tensor_of_step: dict[int, torch.Tensor],
     layout: TokenLayout,
-    token_dim: int,
-) -> dict[int, torch.Tensor]:
-    """BS layout: collapse B and S dims into a single flat token dim."""
-    if layout != TokenLayout.BS:
-        return tensor_of_step
+    token_dim_info: TokenDimInfo,
+) -> Tuple[dict[int, torch.Tensor], int]:
+    """BS layout: collapse B and S dims into a single flat token dim.
 
-    seq_dim: int = token_dim + 1
+    Returns (resolved_tensors, token_dim_index_after_collapse).
+    """
+    if layout != TokenLayout.BS:
+        some_tensor: torch.Tensor = next(iter(tensor_of_step.values()))
+        token_dim: int = resolve_dim_by_name(some_tensor, token_dim_info.token_dim_name)
+        return tensor_of_step, token_dim
+
+    some_tensor = next(iter(tensor_of_step.values()))
+    batch_dim: int = resolve_dim_by_name(some_tensor, token_dim_info.token_dim_name)
+    assert token_dim_info.seq_dim_name is not None
+    seq_dim: int = resolve_dim_by_name(some_tensor, token_dim_info.seq_dim_name)
+
+    if abs(batch_dim - seq_dim) != 1:
+        raise ValueError(
+            f"BS dims must be adjacent: "
+            f"{token_dim_info.token_dim_name}={batch_dim}, "
+            f"{token_dim_info.seq_dim_name}={seq_dim}"
+        )
+
+    lo: int = min(batch_dim, seq_dim)
+    hi: int = max(batch_dim, seq_dim)
+
     resolved: dict[int, torch.Tensor] = {}
     for step, tensor in tensor_of_step.items():
-        if tensor.ndim >= seq_dim + 1:
-            shape: list[int] = list(tensor.shape)
-            new_shape: list[int] = (
-                shape[:token_dim]
-                + [shape[token_dim] * shape[seq_dim]]
-                + shape[seq_dim + 1 :]
-            )
-            resolved[step] = tensor.reshape(new_shape)
-        else:
-            resolved[step] = tensor
-    return resolved
+        plain: torch.Tensor = strip_dim_names(tensor)
+        shape: list[int] = list(plain.shape)
+        new_shape: list[int] = shape[:lo] + [shape[lo] * shape[hi]] + shape[hi + 1 :]
+        resolved[step] = plain.reshape(new_shape)
+
+    return resolved, lo
 
 
 def _extract_and_stack_tokens(
     *,
     tensor_of_step: dict[int, torch.Tensor],
     locator: TokenLocator,
-    token_dim: int,
+    token_dim_info: TokenDimInfo,
     layout: TokenLayout,
 ) -> torch.Tensor:
-    resolved: dict[int, torch.Tensor] = _resolve_bs_layout(
-        tensor_of_step=tensor_of_step, layout=layout, token_dim=token_dim
+    resolved: dict[int, torch.Tensor]
+    token_dim: int
+    resolved, token_dim = _resolve_bs_layout(
+        tensor_of_step=tensor_of_step,
+        layout=layout,
+        token_dim_info=token_dim_info,
     )
+
     tokens: list[torch.Tensor] = [
-        resolved[s].select(dim=token_dim, index=i)
+        strip_dim_names(resolved[s]).select(dim=token_dim, index=i)
         for s, i in zip(locator.steps, locator.token_index_in_step)
     ]
     return torch.stack(tokens, dim=token_dim)
