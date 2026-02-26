@@ -120,7 +120,7 @@ class TestCpZigzagTpE2E:
                     current = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
-        assert torch.allclose(current[0], full_tensor)
+        assert torch.allclose(current[0].rename(None), full_tensor)
 
 
 if __name__ == "__main__":
