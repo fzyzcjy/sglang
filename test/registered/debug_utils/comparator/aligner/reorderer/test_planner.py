@@ -17,7 +17,7 @@ from sglang.srt.debug_utils.comparator.aligner.unsharder.planner import (
     compute_unsharder_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.types import AxisInfo
-from sglang.srt.debug_utils.comparator.dims import ParallelAxis, parse_dims
+from sglang.srt.debug_utils.comparator.dims import DimSpec, ParallelAxis, parse_dims
 from sglang.srt.debug_utils.comparator.warning_sink import warning_sink
 from sglang.test.ci.ci_register import register_cpu_ci
 
@@ -97,7 +97,8 @@ class TestCpZigzagTpE2E:
                     }
                 )
 
-        dim_specs = parse_dims("b s(cp,zigzag) h(tp)")
+        dim_specs: list[DimSpec] = parse_dims("b s(cp,zigzag) h(tp)")
+        dim_names: list[str] = [s.name for s in dim_specs]
 
         unsharder_plans = compute_unsharder_plan(
             dim_specs=dim_specs, parallel_infos=parallel_infos
@@ -110,7 +111,9 @@ class TestCpZigzagTpE2E:
         assert len(unsharder_plans) == 2
         assert len(reorderer_plans) == 1
 
-        current: list[torch.Tensor] = tensors
+        current: list[torch.Tensor] = [
+            t.refine_names(*dim_names) for t in tensors
+        ]
         with warning_sink.context():
             for plan in all_plans:
                 if isinstance(plan, ReordererPlan):
