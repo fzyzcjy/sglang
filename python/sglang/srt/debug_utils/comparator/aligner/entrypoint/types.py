@@ -9,6 +9,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.types import (
     TokenAlignerPlan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.types import UnsharderPlan
+from sglang.srt.debug_utils.comparator.dims import TokenDimInfo
 from sglang.srt.debug_utils.comparator.utils import Pair
 
 AlignerPerStepSubPlan = Union[UnsharderPlan, ReordererPlan]
@@ -25,5 +26,6 @@ class AlignerPerStepPlan:
 class AlignerPlan:
     per_step_plans: Pair[list[AlignerPerStepPlan]]
     token_aligner_plan: Optional[TokenAlignerPlan]
-    token_dims: Pair[int]
+    token_dim_info: Pair[TokenDimInfo]
+    dim_names: Pair[Optional[list[str]]]
     axis_swapper_plan: Optional[AxisSwapperPlan] = None
