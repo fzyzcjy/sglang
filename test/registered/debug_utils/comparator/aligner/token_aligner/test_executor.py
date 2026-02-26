@@ -125,9 +125,10 @@ class TestTokenDim:
 
         assert aligned.x.shape == (3, 5, 8)
         assert torch.equal(aligned.x, aligned.y)
+        plain: torch.Tensor = tensor.rename(None)
         for i in range(5):
             assert torch.equal(
-                aligned.x.select(dim=1, index=i), tensor.select(dim=1, index=i)
+                aligned.x.select(dim=1, index=i), plain.select(dim=1, index=i)
             )
 
     def test_token_dim_last(self) -> None:
@@ -144,9 +145,10 @@ class TestTokenDim:
         )
 
         assert aligned.x.shape == (3, 8, 5)
+        plain: torch.Tensor = tensor.rename(None)
         for i in range(5):
             assert torch.equal(
-                aligned.x.select(dim=2, index=i), tensor.select(dim=2, index=i)
+                aligned.x.select(dim=2, index=i), plain.select(dim=2, index=i)
             )
 
     def test_token_dim_zero(self) -> None:
@@ -163,8 +165,9 @@ class TestTokenDim:
         )
 
         assert aligned.x.shape == (5, 8)
+        plain: torch.Tensor = tensor.rename(None)
         for i in range(5):
-            assert torch.equal(aligned.x[i], tensor.select(dim=0, index=i))
+            assert torch.equal(aligned.x[i], plain.select(dim=0, index=i))
 
     def test_zero_matched_tokens_nonzero_token_dim(self) -> None:
         """Empty plan with token_dim=1 produces correct empty shape."""
@@ -207,9 +210,10 @@ class TestTokenDim:
         )
 
         assert aligned.x.shape == (2, 3, 5, 4, 8)
+        plain: torch.Tensor = tensor.rename(None)
         for i in range(5):
             assert torch.equal(
-                aligned.x.select(dim=2, index=i), tensor.select(dim=2, index=i)
+                aligned.x.select(dim=2, index=i), plain.select(dim=2, index=i)
             )
 
 
