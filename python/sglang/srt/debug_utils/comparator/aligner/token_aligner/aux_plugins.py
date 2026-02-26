@@ -14,11 +14,6 @@ from sglang.srt.debug_utils.comparator.dims import TokenLayout
 from sglang.srt.debug_utils.comparator.output_types import GeneralWarning
 from sglang.srt.debug_utils.comparator.warning_sink import warning_sink
 
-_BSHD_NOT_SUPPORTED_MSG: str = (
-    "BSHD layout is not currently supported. "
-    "Use aux_loader BSHD→THD conversion (planned)."
-)
-
 
 # ── plugin ABC ─────────────────────────────────────────────────────
 
@@ -153,26 +148,26 @@ class _MegatronPlugin(_AuxFrameworkPlugin):
         return frozenset({"cu_seqlens_q", "cu_seqlens_kv", "qkv_format"})
 
     def has_required_names(self, names: set[str]) -> bool:
-        return "input_ids" in names and "cu_seqlens_q" in names
+        return "input_ids" in names
 
     def detect_layout(self, raw: dict[int, dict[str, object]]) -> TokenLayout:
         for step_data in raw.values():
             if (qkv_format := step_data.get("qkv_format")) is not None:
                 fmt = qkv_format if isinstance(qkv_format, str) else str(qkv_format)
                 if "bshd" in fmt.lower():
-                    raise NotImplementedError(_BSHD_NOT_SUPPORTED_MSG)
+                    return TokenLayout.BS
                 return TokenLayout.T
 
             input_ids = step_data.get("input_ids")
             if isinstance(input_ids, torch.Tensor) and input_ids.ndim == 2:
-                raise NotImplementedError(_BSHD_NOT_SUPPORTED_MSG)
+                return TokenLayout.BS
 
         warning_sink.add(
             GeneralWarning(
                 category="layout_detection_fallback",
                 message=(
                     "Megatron layout detection: no qkv_format or 2D input_ids found, "
-                    "falling back to thd"
+                    "falling back to T"
                 ),
             )
         )
@@ -183,6 +178,22 @@ class _MegatronPlugin(_AuxFrameworkPlugin):
     ) -> TokenAlignerStepAux:
         input_ids: torch.Tensor = step_data["input_ids"]
 
+        if layout == TokenLayout.BS:
+            return self._compute_step_aux_bshd(
+                input_ids=input_ids, step_data=step_data, step=step
+            )
+
+        return self._compute_step_aux_thd(
+            input_ids=input_ids, step_data=step_data, step=step
+        )
+
+    def _compute_step_aux_thd(
+        self,
+        *,
+        input_ids: torch.Tensor,
+        step_data: dict[str, object],
+        step: int,
+    ) -> TokenAlignerStepAux:
         if (cu_seqlens_q := step_data.get("cu_seqlens_q")) is not None:
             seq_lens: torch.Tensor = cu_seqlens_q[1:] - cu_seqlens_q[:-1]
         else:
@@ -203,6 +214,42 @@ class _MegatronPlugin(_AuxFrameworkPlugin):
         return TokenAlignerStepAux(
             input_ids=input_ids.tolist(),
             positions=positions.tolist(),
+            seq_lens=seq_lens_list,
+            seq_ids=seq_ids,
+        )
+
+    def _compute_step_aux_bshd(
+        self,
+        *,
+        input_ids: torch.Tensor,
+        step_data: dict[str, object],
+        step: int,
+    ) -> TokenAlignerStepAux:
+        """BSHD: input_ids [B, S] → flat [B*S], each batch slot is one sequence."""
+        batch_size: int = input_ids.shape[0]
+        seq_len: int = input_ids.shape[1]
+
+        flat_input_ids: list[int] = input_ids.reshape(-1).tolist()
+
+        if (cu_seqlens_q := step_data.get("cu_seqlens_q")) is not None:
+            seq_lens_list: list[int] = (cu_seqlens_q[1:] - cu_seqlens_q[:-1]).tolist()
+        else:
+            seq_lens_list = [seq_len] * batch_size
+
+        if (position_ids := step_data.get("position_ids")) is not None:
+            flat_positions: list[int] = position_ids.reshape(-1).tolist()
+        else:
+            flat_positions = list(range(seq_len)) * batch_size
+
+        num_seqs: int = len(seq_lens_list)
+        seq_ids: list[SeqId] = [
+            PositionalSeqId(step=step, seq_index=seq_index)
+            for seq_index in range(num_seqs)
+        ]
+
+        return TokenAlignerStepAux(
+            input_ids=flat_input_ids,
+            positions=flat_positions,
             seq_lens=seq_lens_list,
             seq_ids=seq_ids,
         )

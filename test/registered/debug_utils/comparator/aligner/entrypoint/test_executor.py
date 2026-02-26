@@ -23,7 +23,7 @@ from sglang.srt.debug_utils.comparator.aligner.unsharder.types import (
     ConcatParams,
     UnsharderPlan,
 )
-from sglang.srt.debug_utils.comparator.dims import ParallelAxis
+from sglang.srt.debug_utils.comparator.dims import ParallelAxis, TokenLayout
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci
 
@@ -229,7 +229,10 @@ class TestExecuteAlignerPlanWithTokenDim:
             steps=[0, 0, 0],
             token_index_in_step=[0, 1, 2],
         )
-        token_plan = TokenAlignerPlan(locators=Pair(x=locator_x, y=locator_y))
+        token_plan = TokenAlignerPlan(
+            locators=Pair(x=locator_x, y=locator_y),
+            layouts=Pair(x=TokenLayout.T, y=TokenLayout.T),
+        )
 
         plan = AlignerPlan(
             per_step_plans=Pair(

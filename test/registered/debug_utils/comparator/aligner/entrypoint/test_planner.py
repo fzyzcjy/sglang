@@ -148,12 +148,14 @@ class TestComputeAlignerPlan:
             TokenAlignerPlan,
             TokenLocator,
         )
+        from sglang.srt.debug_utils.comparator.dims import TokenLayout
 
         ta_plan = TokenAlignerPlan(
             locators=Pair(
                 x=TokenLocator(steps=[0], token_index_in_step=[0]),
                 y=TokenLocator(steps=[0], token_index_in_step=[0]),
             ),
+            layouts=Pair(x=TokenLayout.T, y=TokenLayout.T),
         )
 
         plan: AlignerPlan = compute_aligner_plan(
