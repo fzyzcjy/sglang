@@ -49,7 +49,7 @@ class TestExecuteUnsharderPlan:
         with warning_sink.context() as warnings:
             result = execute_unsharder_plan(plans[0], named_shards)
         assert len(result) == 1
-        assert torch.allclose(result[0], full_tensor)
+        assert torch.allclose(result[0].rename(None), full_tensor)
         assert warnings == []
 
     def test_scrambled_world_ranks_correct_result(self) -> None:
@@ -79,7 +79,7 @@ class TestExecuteUnsharderPlan:
         with warning_sink.context() as warnings:
             result = execute_unsharder_plan(plans[0], tensors_ordered_by_world_rank)
         assert len(result) == 1
-        assert torch.allclose(result[0], full_tensor)
+        assert torch.allclose(result[0].rename(None), full_tensor)
         assert warnings == []
 
     def test_single_step_reduces_tensor_count(self) -> None:
@@ -147,7 +147,7 @@ class TestExecuteUnsharderPlan:
                 current = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
-        assert torch.allclose(current[0], full_tensor)
+        assert torch.allclose(current[0].rename(None), full_tensor)
 
     def test_cp_tp_scrambled(self) -> None:
         """Scrambled world_ranks for CP=2 + TP=2 still reconstruct correctly."""
@@ -189,7 +189,7 @@ class TestExecuteUnsharderPlan:
                 current = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
-        assert torch.allclose(current[0], full_tensor)
+        assert torch.allclose(current[0].rename(None), full_tensor)
 
     def test_unsupported_params_type_raises(self) -> None:
         """_apply_unshard raises ValueError for unknown params type."""
@@ -243,7 +243,7 @@ class TestExecuteUnsharderPlan:
                 current = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
-        assert torch.allclose(current[0], full_tensor)
+        assert torch.allclose(current[0].rename(None), full_tensor)
 
     def test_cp_tp_ep_scrambled_three_axis(self) -> None:
         """Scrambled ranks for CP=2 + TP=2 + EP=2 still reconstruct correctly."""
@@ -292,7 +292,7 @@ class TestExecuteUnsharderPlan:
                 current = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
-        assert torch.allclose(current[0], full_tensor)
+        assert torch.allclose(current[0].rename(None), full_tensor)
 
 
 class TestPickOperation:
@@ -312,7 +312,7 @@ class TestPickOperation:
         with warning_sink.context() as warnings:
             result = execute_unsharder_plan(plans[0], [tensor, tensor.clone()])
         assert len(result) == 1
-        assert torch.allclose(result[0], tensor)
+        assert torch.allclose(result[0].rename(None), tensor)
         assert warnings == []
 
     def test_pick_multiple_groups(self) -> None:
@@ -378,7 +378,7 @@ class TestPickOperation:
                 current = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
-        assert torch.allclose(current[0], full_tensor)
+        assert torch.allclose(current[0].rename(None), full_tensor)
 
     def test_fully_replicated_e2e(self) -> None:
         """CP2 TP2, dims='b h d': fully replicated -> 2 pick steps -> 1 tensor."""
@@ -408,7 +408,7 @@ class TestPickOperation:
                 current = execute_unsharder_plan(plan, current)
 
         assert len(current) == 1
-        assert torch.allclose(current[0], full_tensor)
+        assert torch.allclose(current[0].rename(None), full_tensor)
 
 
 class TestVerifyReplicatedGroup:
@@ -475,7 +475,7 @@ class TestVerifyReplicatedGroup:
             result = execute_unsharder_plan(plans[0], [tensor_a, tensor_b])
         assert len(result) == 1
         assert len(warnings) == 1
-        assert torch.allclose(result[0], tensor_a)
+        assert torch.allclose(result[0].rename(None), tensor_a)
 
     def test_atol_boundary_within(self) -> None:
         """Difference exactly at atol (1e-6) -> torch.allclose passes -> no warning."""
