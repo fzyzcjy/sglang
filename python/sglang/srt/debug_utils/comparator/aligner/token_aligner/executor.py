@@ -100,11 +100,15 @@ def _resolve_bs_layout(
     """
     if layout != TokenLayout.BS:
         some_tensor: torch.Tensor = next(iter(tensor_of_step.values()))
-        token_dim: int = _resolve_dim_or_fallback(some_tensor, token_dim_info.token_dim_name)
+        token_dim: int = _resolve_dim_or_fallback(
+            some_tensor, token_dim_info.token_dim_name
+        )
         return tensor_of_step, token_dim
 
     some_tensor = next(iter(tensor_of_step.values()))
-    batch_dim: int = _resolve_dim_or_fallback(some_tensor, token_dim_info.token_dim_name)
+    batch_dim: int = _resolve_dim_or_fallback(
+        some_tensor, token_dim_info.token_dim_name
+    )
     assert token_dim_info.seq_dim_name is not None
     seq_dim: int = _resolve_dim_or_fallback(some_tensor, token_dim_info.seq_dim_name)
 
