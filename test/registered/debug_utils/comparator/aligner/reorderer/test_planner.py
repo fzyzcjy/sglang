@@ -40,7 +40,7 @@ class TestComputeReordererPlans:
 
         assert len(plans) == 1
         assert plans[0].params.op == "zigzag_to_natural"
-        assert plans[0].params.dim == 1
+        assert plans[0].params.dim_name == "s"
         assert plans[0].params.cp_size == 2
 
     def test_compute_reorderer_plans_non_seq_dim_raises(self) -> None:
