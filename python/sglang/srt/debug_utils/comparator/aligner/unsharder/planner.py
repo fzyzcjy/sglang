@@ -29,9 +29,7 @@ def compute_unsharder_plan(
         raise ValueError("parallel_infos must not be empty")
 
     sharded_axis_infos: dict[ParallelAxis, DimSpec] = {
-        spec.parallel: spec
-        for spec in dim_specs
-        if spec.parallel is not None
+        spec.parallel: spec for spec in dim_specs if spec.parallel is not None
     }
     sharded_axes: set[ParallelAxis] = set(sharded_axis_infos)
 

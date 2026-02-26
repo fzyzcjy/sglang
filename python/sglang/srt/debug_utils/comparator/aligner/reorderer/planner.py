@@ -37,9 +37,7 @@ def compute_reorderer_plans(
             axis_size: int = parallel_infos[0][spec.parallel].axis_size
             plans.append(
                 ReordererPlan(
-                    params=ZigzagToNaturalParams(
-                        dim_name=spec.name, cp_size=axis_size
-                    ),
+                    params=ZigzagToNaturalParams(dim_name=spec.name, cp_size=axis_size),
                 )
             )
 

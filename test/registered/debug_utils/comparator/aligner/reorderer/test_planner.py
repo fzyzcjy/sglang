@@ -111,9 +111,7 @@ class TestCpZigzagTpE2E:
         assert len(unsharder_plans) == 2
         assert len(reorderer_plans) == 1
 
-        current: list[torch.Tensor] = [
-            t.refine_names(*dim_names) for t in tensors
-        ]
+        current: list[torch.Tensor] = [t.refine_names(*dim_names) for t in tensors]
         with warning_sink.context():
             for plan in all_plans:
                 if isinstance(plan, ReordererPlan):
