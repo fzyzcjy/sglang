@@ -72,7 +72,7 @@ class TestExecuteSubPlans:
 
         assert result is not None
         expected: torch.Tensor = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
-        assert torch.equal(result, expected)
+        assert torch.equal(result.rename(None), expected)
 
 
 class TestExecuteSubPlan:
