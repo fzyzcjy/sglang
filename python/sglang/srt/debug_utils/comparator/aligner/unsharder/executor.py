@@ -59,10 +59,10 @@ def _verify_replicated_group(
     axis: ParallelAxis,
     group_index: int,
 ) -> None:
-    baseline = ordered_tensors[0]
+    baseline = ordered_tensors[0].rename(None)
 
     for i in range(1, len(ordered_tensors)):
-        other = ordered_tensors[i]
+        other = ordered_tensors[i].rename(None)
         if not torch.allclose(baseline, other, atol=1e-6):
             warning_sink.add(
                 ReplicatedMismatchWarning(
