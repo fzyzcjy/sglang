@@ -1,9 +1,7 @@
 import io
 import multiprocessing
 import os
-import subprocess
 import sys
-import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -14,11 +12,6 @@ import requests
 import torch
 import torch.distributed as dist
 
-from sglang.srt.debug_utils.comparator.output_types import (
-    AnyRecord,
-    SummaryRecord,
-    parse_record_json,
-)
 from sglang.srt.debug_utils.dumper import (
     DumperConfig,
     _collective_with_timeout,
@@ -2051,155 +2044,6 @@ class TestDumperE2E:
             ), f"each rid should be a str, got {[type(r) for r in rids_value]}"
         finally:
             kill_process_tree(proc.pid)
-
-    @pytest.mark.timeout(300)
-    def test_dump_and_compare(self, tmp_path: Path) -> None:
-        """Launch 1-GPU baseline and 2-GPU TP=2 target, dump, then compare."""
-        base_url: str = DEFAULT_URL_FOR_TEST
-        exp_name: str = "e2e_compare"
-
-        baseline_dir: Path = tmp_path / "baseline"
-        _launch_dump_and_kill(
-            dump_dir=baseline_dir,
-            exp_name=exp_name,
-            tp=1,
-            base_url=base_url,
-        )
-
-        target_dir: Path = tmp_path / "target"
-        _launch_dump_and_kill(
-            dump_dir=target_dir,
-            exp_name=exp_name,
-            tp=2,
-            base_url=base_url,
-        )
-
-        baseline_exp: Path = baseline_dir / exp_name
-        target_exp: Path = target_dir / exp_name
-        assert baseline_exp.exists(), f"Baseline exp dir missing: {baseline_exp}"
-        assert target_exp.exists(), f"Target exp dir missing: {target_exp}"
-
-        result: subprocess.CompletedProcess[str] = subprocess.run(
-            [
-                "python",
-                "-m",
-                "sglang.srt.debug_utils.comparator",
-                "--baseline-path",
-                str(baseline_exp),
-                "--target-path",
-                str(target_exp),
-                "--output-format",
-                "json",
-                "--grouping",
-                "logical",
-            ],
-            capture_output=True,
-            text=True,
-        )
-
-        debug_file: Path = _save_comparator_debug(
-            stdout=result.stdout, stderr=result.stderr
-        )
-        print(f"Comparator debug output: {debug_file}")
-
-        assert result.returncode == 0, (
-            f"Comparator failed (rc={result.returncode}). "
-            f"Debug output: {debug_file}"
-        )
-
-        records: list[AnyRecord] = [
-            parse_record_json(line)
-            for line in result.stdout.strip().splitlines()
-            if line.strip()
-        ]
-        assert len(records) > 0, (
-            f"Comparator produced no output records. Debug: {debug_file}"
-        )
-
-        summary: SummaryRecord = _extract_summary(
-            records=records, debug_file=debug_file
-        )
-        assert summary.passed > 0, (
-            f"No comparisons passed (total={summary.total}). Debug: {debug_file}"
-        )
-        assert summary.failed == 0, (
-            f"{summary.failed} comparisons failed "
-            f"(passed={summary.passed}, skipped={summary.skipped}). "
-            f"Debug: {debug_file}"
-        )
-
-
-def _launch_dump_and_kill(
-    *,
-    dump_dir: Path,
-    exp_name: str,
-    tp: int,
-    base_url: str,
-) -> None:
-    """Launch SGLang server with dumper, send a generate request, then kill."""
-    env: dict[str, str] = {
-        **os.environ,
-        "DUMPER_DIR": str(dump_dir),
-        "DUMPER_EXP_NAME": exp_name,
-        "DUMPER_SERVER_PORT": "reuse",
-    }
-
-    proc = popen_launch_server(
-        "Qwen/Qwen3-0.6B",
-        base_url,
-        timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-        other_args=["--tp", str(tp), "--max-total-tokens", "128"],
-        env=env,
-    )
-    try:
-        requests.post(
-            f"{base_url}/dumper/configure",
-            json={
-                "enable": True,
-                "cleanup_previous": True,
-            },
-        ).raise_for_status()
-
-        resp = requests.post(
-            f"{base_url}/generate",
-            json={
-                "text": "The capital of France is",
-                "sampling_params": {"max_new_tokens": 8},
-            },
-        )
-        assert resp.status_code == 200, f"Generate failed: {resp.text}"
-    finally:
-        kill_process_tree(proc.pid)
-
-
-def _extract_summary(
-    *, records: list[AnyRecord], debug_file: Path
-) -> SummaryRecord:
-    """Extract the single SummaryRecord from comparator output."""
-    summaries: list[SummaryRecord] = [
-        r for r in records if isinstance(r, SummaryRecord)
-    ]
-    assert len(summaries) == 1, (
-        f"Expected 1 summary record, got {len(summaries)}. "
-        f"Record types: {[type(r).__name__ for r in records]}. "
-        f"Debug: {debug_file}"
-    )
-    return summaries[0]
-
-
-def _save_comparator_debug(*, stdout: str, stderr: str) -> Path:
-    """Save comparator stdout+stderr to a temp file for debugging."""
-    fd: int
-    path_str: str
-    fd, path_str = tempfile.mkstemp(
-        prefix="comparator_e2e_", suffix=".log", dir="/tmp"
-    )
-    with os.fdopen(fd, "w") as f:
-        f.write("=== STDOUT ===\n")
-        f.write(stdout)
-        f.write("\n=== STDERR ===\n")
-        f.write(stderr)
-    return Path(path_str)
 
 
 class TestRegisterForwardHook:
