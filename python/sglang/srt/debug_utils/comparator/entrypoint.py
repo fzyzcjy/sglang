@@ -177,9 +177,6 @@ def _read_df(args: argparse.Namespace) -> Pair[pl.DataFrame]:
     )
     if args.filter:
         df_target = df_target.filter(pl.col("filename").str.contains(args.filter))
-    if args.exclude:
-        df_baseline = df_baseline.filter(~pl.col("filename").str.contains(args.exclude))
-        df_target = df_target.filter(~pl.col("filename").str.contains(args.exclude))
     assert all(c in df_target.columns for c in ["rank", "step", "dump_index", "name"])
 
     return Pair(x=df_baseline, y=df_target)
@@ -267,13 +264,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--end-step", type=int, default=1000000)
     parser.add_argument("--diff-threshold", type=float, default=1e-3)
     parser.add_argument(
-        "--filter", type=str, default=None, help="Regex to filter filenames (include)"
-    )
-    parser.add_argument(
-        "--exclude",
-        type=str,
-        default=None,
-        help="Regex to exclude filenames (applied after --filter)",
+        "--filter", type=str, default=None, help="Regex to filter filenames"
     )
     parser.add_argument(
         "--output-format",
