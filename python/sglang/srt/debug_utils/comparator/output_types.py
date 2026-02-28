@@ -118,6 +118,11 @@ class InputIdsRecord(_TableRecord):
         return f"{self.label} input_ids & positions"
 
 
+_INFORMATIONAL_WARNING_CATEGORIES: frozenset[str] = frozenset({
+    "dim_name_squeeze",
+})
+
+
 class ComparisonRecord(TensorComparisonInfo, _OutputRecord):
     model_config = ConfigDict(extra="forbid", defer_build=True)
 
@@ -127,7 +132,11 @@ class ComparisonRecord(TensorComparisonInfo, _OutputRecord):
 
     @property
     def category(self) -> str:
-        if self.warnings:
+        fatal_warnings: list[AnyWarning] = [
+            w for w in self.warnings
+            if w.category not in _INFORMATIONAL_WARNING_CATEGORIES
+        ]
+        if fatal_warnings:
             return "failed"
         if any(not check.passed for check in self.replicated_checks):
             return "failed"
