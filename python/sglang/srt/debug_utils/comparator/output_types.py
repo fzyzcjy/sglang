@@ -157,11 +157,18 @@ class ConfigRecord(_OutputRecord):
 
     @classmethod
     def from_args(cls, args) -> "ConfigRecord":
-        """Create ConfigRecord from argparse.Namespace."""
         return cls(config=vars(args))
 
     def _format_body(self) -> str:
         return f"Config: {self.config}"
+
+    def _format_rich_body(self) -> RenderableType:
+        from rich.panel import Panel
+
+        lines: list[str] = [
+            f"  [bold]{k}[/] : {v}" for k, v in self.config.items()
+        ]
+        return Panel("\n".join(lines), title="Comparator Config", border_style="cyan")
 
 
 class SkipComparisonRecord(_BaseComparisonRecord):
@@ -177,6 +184,10 @@ class SkipComparisonRecord(_BaseComparisonRecord):
 
     def _format_body(self) -> str:
         return f"Skip: {self.name}{self._format_location_suffix()} ({self.reason})"
+
+    def _format_rich_body(self) -> RenderableType:
+        suffix: str = self._format_location_suffix()
+        return f"[dim]⊘ {self.name}{suffix} ── skipped ({self.reason})[/]"
 
 
 class _TableRecord(_OutputRecord):
@@ -242,6 +253,13 @@ class TensorComparisonRecord(TensorComparisonInfo, _BaseComparisonRecord):
             body += "\n" + _format_aligner_plan(self.aligner_plan)
         return body
 
+    def _format_rich_body(self) -> RenderableType:
+        from sglang.srt.debug_utils.comparator.tensor_comparator.formatter import (
+            format_comparison_rich,
+        )
+
+        return self._format_location_prefix() + format_comparison_rich(self)
+
 
 class NonTensorComparisonRecord(_BaseComparisonRecord):
     type: Literal["non_tensor"] = "non_tensor"
@@ -268,6 +286,19 @@ class NonTensorComparisonRecord(_BaseComparisonRecord):
             f"  target   = {self.target_value} ({self.target_type})"
         )
 
+    def _format_rich_body(self) -> RenderableType:
+        suffix: str = self._format_location_suffix()
+        if self.values_equal:
+            return (
+                f"═ {self.name}{suffix} = {self.baseline_value} "
+                f"({self.baseline_type}) [green]✓[/]"
+            )
+        return (
+            f"═ [bold red]{self.name}{suffix}[/]\n"
+            f"  baseline = {self.baseline_value} ({self.baseline_type})\n"
+            f"  target   = {self.target_value} ({self.target_type})"
+        )
+
 
 class SummaryRecord(_OutputRecord):
     type: Literal["summary"] = "summary"
@@ -290,6 +321,17 @@ class SummaryRecord(_OutputRecord):
             f"Summary: {self.passed} passed, {self.failed} failed, "
             f"{self.skipped} skipped (total {self.total})"
         )
+
+    def _format_rich_body(self) -> RenderableType:
+        from rich.panel import Panel
+
+        text: str = (
+            f"[bold green]{self.passed} passed[/] │ "
+            f"[bold red]{self.failed} failed[/] │ "
+            f"[yellow]{self.skipped} skipped[/] │ "
+            f"{self.total} total"
+        )
+        return Panel(text, title="SUMMARY", border_style="bold")
 
 
 class LogRecord(_OutputRecord):
