@@ -7,6 +7,7 @@ from typing import IO, TYPE_CHECKING, Annotated, Any, Literal, Optional, Union
 
 import polars as pl
 from pydantic import ConfigDict, Discriminator, Field, TypeAdapter, model_validator
+from rich.console import Console, RenderableType
 
 from sglang.srt.debug_utils.comparator.tensor_comparator.formatter import (
     format_comparison,
@@ -22,6 +23,17 @@ if TYPE_CHECKING:
     from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
         AlignerPlan,
     )
+
+
+def _get_console() -> Console:
+    """Return a shared Console instance (lazy singleton)."""
+    global _CONSOLE
+    if _CONSOLE is None:
+        _CONSOLE = Console()
+    return _CONSOLE
+
+
+_CONSOLE: Optional[Console] = None
 
 
 class BaseLog(_StrictBase):
@@ -65,6 +77,30 @@ class _OutputRecord(_StrictBase):
 
     @abstractmethod
     def _format_body(self) -> str: ...
+
+    def _format_rich_body(self) -> RenderableType:
+        """Return a Rich renderable. Override in subclasses for styled output."""
+        return self._format_body()
+
+    def to_rich(self) -> RenderableType:
+        """Return Rich renderable including warnings/errors."""
+        from rich.console import Group
+
+        body: RenderableType = self._format_rich_body()
+
+        log_lines: list[str] = []
+        if self.errors:
+            log_lines.extend(f"  [red]✗ {e.to_text()}[/]" for e in self.errors)
+        if self.infos:
+            log_lines.extend(f"  [dim]ℹ {i.to_text()}[/]" for i in self.infos)
+
+        if not log_lines:
+            return body
+
+        log_block: str = "\n".join(log_lines)
+        if isinstance(body, str):
+            return body + "\n" + log_block
+        return Group(body, log_block)
 
     def to_text(self) -> str:
         body = self._format_body()
@@ -292,7 +328,9 @@ def _print_to_stdout(record: _OutputRecord, *, output_format: str) -> None:
     if output_format == "json":
         print(record.model_dump_json())
     else:
-        print(record.to_text())
+        console: Console = _get_console()
+        console.print(record.to_rich())
+        console.print()  # blank line between records
 
 
 class ReportSink:
