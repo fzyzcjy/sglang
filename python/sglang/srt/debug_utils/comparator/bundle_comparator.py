@@ -29,6 +29,8 @@ from sglang.srt.debug_utils.comparator.dp_utils import filter_to_non_empty_dp_ra
 from sglang.srt.debug_utils.comparator.log_sink import log_sink
 from sglang.srt.debug_utils.comparator.meta_overrider import MetaOverrider
 from sglang.srt.debug_utils.comparator.output_types import (
+    BundleFileInfo,
+    BundleSideInfo,
     ErrorLog,
     NonTensorComparisonRecord,
     SkipComparisonRecord,
@@ -42,6 +44,44 @@ from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.srt.debug_utils.dump_loader import LOAD_FAILED, ValueWithMeta
 
 _FAILED_SIDE_MAP: dict[str, str] = {"x": "baseline", "y": "target"}
+
+_PARALLEL_INFO_KEYS: list[str] = ["sglang_parallel_info", "megatron_parallel_info"]
+
+
+def _collect_bundle_side_info(
+    items: list[ValueWithMeta],
+    metas: list[dict[str, Any]],
+) -> BundleSideInfo:
+    """Collect raw bundle info from one side's loaded values."""
+    files: list[BundleFileInfo] = []
+    for item, meta in zip(items, metas):
+        tensor: torch.Tensor = item.value
+        parallel_info: Optional[dict[str, str]] = _extract_parallel_info_from_meta(meta)
+        files.append(BundleFileInfo(
+            shape=list(tensor.shape),
+            dtype=str(tensor.dtype),
+            rank=meta.get("rank"),
+            parallel_info=parallel_info,
+        ))
+
+    dims: Optional[str] = metas[0].get("dims") if metas else None
+    return BundleSideInfo(num_files=len(files), files=files, dims=dims)
+
+
+def _extract_parallel_info_from_meta(meta: dict[str, Any]) -> Optional[dict[str, str]]:
+    """Extract parallel info (e.g. {"tp": "0/4"}) from meta's parallel info keys."""
+    result: dict[str, str] = {}
+    for key in _PARALLEL_INFO_KEYS:
+        info: dict[str, Any] = meta.get(key, {})
+        if not info or info.get("error"):
+            continue
+        for field_name in sorted(info.keys()):
+            if field_name.endswith("_rank"):
+                base: str = field_name[:-5]
+                size_key: str = f"{base}_size"
+                if size_key in info:
+                    result[base] = f"{info[field_name]}/{info[size_key]}"
+    return result if result else None
 
 
 def compare_bundle_pair(
@@ -189,6 +229,12 @@ def _compare_bundle_pair_tensor_type(
         thd_seq_lens_by_step_pair=thd_seq_lens_by_step_pair,
     )
 
+    # Collect raw bundle info before alignment
+    raw_bundle_info: Pair[BundleSideInfo] = Pair(
+        x=_collect_bundle_side_info(items=valid_pair.x, metas=metas_pair.x),
+        y=_collect_bundle_side_info(items=valid_pair.y, metas=metas_pair.y),
+    )
+
     # Apply dim names to tensors, then execute
     tensors_pair: Pair[list[torch.Tensor]] = Pair(
         x=_apply_dim_names_from_meta(
@@ -231,6 +277,7 @@ def _compare_bundle_pair_tensor_type(
         **info.model_dump(),
         aligner_plan=plan,
         replicated_checks=replicated_checks,
+        raw_bundle_info=raw_bundle_info,
     )
 
     if viz_output_dir is not None:

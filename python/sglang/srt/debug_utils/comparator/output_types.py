@@ -17,7 +17,7 @@ from sglang.srt.debug_utils.comparator.tensor_comparator.types import (
     DiffInfo,
     TensorComparisonInfo,
 )
-from sglang.srt.debug_utils.comparator.utils import _StrictBase
+from sglang.srt.debug_utils.comparator.utils import Pair, _StrictBase
 
 if TYPE_CHECKING:
     from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
@@ -69,6 +69,21 @@ class ReplicatedCheckResult(_StrictBase):
     passed: bool
     atol: float
     diff: Optional[DiffInfo] = None
+
+
+class BundleFileInfo(_StrictBase):
+    """Per-file info within a bundle (one rank's raw tensor)."""
+    shape: list[int]
+    dtype: str
+    rank: Optional[int] = None
+    parallel_info: Optional[dict[str, str]] = None  # e.g. {"tp": "0/4", "ep": "1/2"}
+
+
+class BundleSideInfo(_StrictBase):
+    """One side's raw bundle info before alignment."""
+    num_files: int
+    files: list[BundleFileInfo]
+    dims: Optional[str] = None  # e.g. "b s h(tp) d"
 
 
 class _OutputRecord(_StrictBase):
@@ -192,6 +207,7 @@ class TensorComparisonRecord(TensorComparisonInfo, _BaseComparisonRecord):
     type: Literal["comparison"] = "comparison"
     aligner_plan: Optional[AlignerPlan] = None
     replicated_checks: list[ReplicatedCheckResult] = Field(default_factory=list)
+    raw_bundle_info: Optional[Pair[BundleSideInfo]] = None
 
     @property
     def category(self) -> str:
