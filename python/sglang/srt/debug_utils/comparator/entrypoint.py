@@ -178,6 +178,7 @@ def _read_df(args: argparse.Namespace) -> Pair[pl.DataFrame]:
     if args.filter:
         df_target = df_target.filter(pl.col("filename").str.contains(args.filter))
     if args.exclude:
+        df_baseline = df_baseline.filter(~pl.col("filename").str.contains(args.exclude))
         df_target = df_target.filter(~pl.col("filename").str.contains(args.exclude))
     assert all(c in df_target.columns for c in ["rank", "step", "dump_index", "name"])
 
