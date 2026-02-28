@@ -17,8 +17,23 @@ from sglang.srt.debug_utils.comparator.dims import (
 )
 from sglang.srt.debug_utils.comparator.output_types import ReplicatedCheckResult
 from sglang.srt.debug_utils.comparator.tensor_comparator.comparator import compute_diff
+from sglang.srt.debug_utils.comparator.tensor_comparator.types import DiffInfo
 
 _REPLICATED_ATOL: float = 1e-6
+
+
+def _shape_mismatch_diff(*, baseline: torch.Tensor, other: torch.Tensor) -> DiffInfo:
+    return DiffInfo(
+        rel_diff=float("inf"),
+        max_abs_diff=float("inf"),
+        mean_abs_diff=float("inf"),
+        abs_diff_percentiles={},
+        max_diff_coord=[0],
+        baseline_at_max=0.0,
+        target_at_max=0.0,
+        diff_threshold=_REPLICATED_ATOL,
+        passed=False,
+    )
 
 
 @dataclass(frozen=True)
@@ -100,6 +115,21 @@ def _verify_replicated_group(
 
     for i in range(1, len(ordered_tensors)):
         other: torch.Tensor = ordered_tensors[i].rename(None).float()
+
+        if baseline.shape != other.shape:
+            checks.append(
+                ReplicatedCheckResult(
+                    axis=axis.value,
+                    group_index=group_index,
+                    compared_index=i,
+                    baseline_index=0,
+                    passed=False,
+                    atol=_REPLICATED_ATOL,
+                    diff=_shape_mismatch_diff(baseline=baseline, other=other),
+                )
+            )
+            continue
+
         diff_info = compute_diff(
             x_baseline=baseline,
             x_target=other,
