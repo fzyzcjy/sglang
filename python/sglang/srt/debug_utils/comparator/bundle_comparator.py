@@ -268,6 +268,7 @@ def _compare_bundle_pair_tensor_type(
         aligner_plan=plan,
         replicated_checks=replicated_checks,
         raw_bundle_info=raw_bundle_info,
+        shape_traces=aligner_result.shape_traces,
     )
 
     if viz_output_dir is not None:

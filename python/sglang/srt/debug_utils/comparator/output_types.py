@@ -78,10 +78,23 @@ class BundleFileInfo(_StrictBase):
 
 
 class BundleSideInfo(_StrictBase):
-    """One side's raw bundle info before alignment."""
     num_files: int
     files: list[BundleFileInfo]
     dims: Optional[str] = None  # e.g. "b s h(tp) d"
+
+
+class ShapeSnapshot(_StrictBase):
+    input_shapes: list[list[int]]
+    output_shapes: list[list[int]]
+
+
+class StepShapeTrace(_StrictBase):
+    step: int
+    snapshots: list[ShapeSnapshot]  # snapshots[i] corresponds to sub_plans[i]
+
+
+class SideShapeTrace(_StrictBase):
+    step_traces: list[StepShapeTrace]
 
 
 class _OutputRecord(_StrictBase):
@@ -211,6 +224,7 @@ class TensorComparisonRecord(TensorComparisonInfo, _BaseComparisonRecord):
     aligner_plan: Optional[AlignerPlan] = None
     replicated_checks: list[ReplicatedCheckResult] = Field(default_factory=list)
     raw_bundle_info: Optional[Pair[BundleSideInfo]] = None
+    shape_traces: Optional[Pair[SideShapeTrace]] = None
 
     @property
     def category(self) -> str:

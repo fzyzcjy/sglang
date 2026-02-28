@@ -28,7 +28,12 @@ from sglang.srt.debug_utils.comparator.aligner.unsharder.executor import (
     execute_unsharder_plan,
 )
 from sglang.srt.debug_utils.comparator.aligner.unsharder.types import UnsharderPlan
-from sglang.srt.debug_utils.comparator.output_types import ReplicatedCheckResult
+from sglang.srt.debug_utils.comparator.output_types import (
+    ReplicatedCheckResult,
+    ShapeSnapshot,
+    SideShapeTrace,
+    StepShapeTrace,
+)
 from sglang.srt.debug_utils.comparator.utils import Pair
 
 
@@ -37,6 +42,7 @@ class AlignerResult:
     tensors: Optional[Pair[torch.Tensor]]
     failed_side_xy: Optional[str]  # "x" or "y"; None if success
     replicated_checks: list[ReplicatedCheckResult] = field(default_factory=list)
+    shape_traces: Optional[Pair[SideShapeTrace]] = None
 
 
 def execute_aligner_plan(
@@ -48,15 +54,17 @@ def execute_aligner_plan(
     all_checks: list[ReplicatedCheckResult] = []
 
     # Per-side: unshard + reorder -> dict[step, tensor]
-    step_tensors_x, checks_x = _execute_step_plans(
+    step_tensors_x, checks_x, trace_x = _execute_step_plans(
         tensors=tensors_pair.x, step_plans=plan.per_step_plans.x
     )
     all_checks.extend(checks_x)
 
-    step_tensors_y, checks_y = _execute_step_plans(
+    step_tensors_y, checks_y, trace_y = _execute_step_plans(
         tensors=tensors_pair.y, step_plans=plan.per_step_plans.y
     )
     all_checks.extend(checks_y)
+
+    shape_traces: Pair[SideShapeTrace] = Pair(x=trace_x, y=trace_y)
 
     if not step_tensors_x or not step_tensors_y:
         failed_side_xy: str = "x" if not step_tensors_x else "y"
@@ -64,6 +72,7 @@ def execute_aligner_plan(
             tensors=None,
             failed_side_xy=failed_side_xy,
             replicated_checks=all_checks,
+            shape_traces=shape_traces,
         )
 
     # Cross-side: token alignment (or direct extraction for single-step)
@@ -95,50 +104,60 @@ def execute_aligner_plan(
         tensors=combined,
         failed_side_xy=None,
         replicated_checks=all_checks,
+        shape_traces=shape_traces,
     )
 
 
 def _execute_step_plans(
     tensors: list[torch.Tensor],
     step_plans: list[AlignerPerStepPlan],
-) -> tuple[dict[int, torch.Tensor], list[ReplicatedCheckResult]]:
+) -> tuple[dict[int, torch.Tensor], list[ReplicatedCheckResult], SideShapeTrace]:
     result: dict[int, torch.Tensor] = {}
     all_checks: list[ReplicatedCheckResult] = []
+    step_traces: list[StepShapeTrace] = []
 
     for step_plan in step_plans:
         step_tensors: list[torch.Tensor] = [
             tensors[i] for i in step_plan.input_object_indices
         ]
-        tensor, checks = execute_sub_plans(
+        tensor, checks, snapshots = execute_sub_plans(
             tensors=step_tensors, plans=step_plan.sub_plans
         )
         all_checks.extend(checks)
+        step_traces.append(StepShapeTrace(step=step_plan.step, snapshots=snapshots))
         if tensor is not None:
             result[step_plan.step] = tensor
 
-    return result, all_checks
+    return result, all_checks, SideShapeTrace(step_traces=step_traces)
 
 
 def execute_sub_plans(
     tensors: list[torch.Tensor],
     plans: list[AlignerPerStepSubPlan],
-) -> tuple[Optional[torch.Tensor], list[ReplicatedCheckResult]]:
+) -> tuple[Optional[torch.Tensor], list[ReplicatedCheckResult], list[ShapeSnapshot]]:
     if not tensors:
-        return None, []
+        return None, [], []
 
     if not plans:
         if len(tensors) != 1:
-            return None, []
-        return tensors[0], []
+            return None, [], []
+        return tensors[0], [], []
 
     current: list[torch.Tensor] = tensors
     all_checks: list[ReplicatedCheckResult] = []
+    all_snapshots: list[ShapeSnapshot] = []
     for plan in plans:
+        input_shapes: list[list[int]] = [list(t.shape) for t in current]
         current, checks = execute_sub_plan(tensors=current, plan=plan)
+        output_shapes: list[list[int]] = [list(t.shape) for t in current]
         all_checks.extend(checks)
+        all_snapshots.append(ShapeSnapshot(
+            input_shapes=input_shapes,
+            output_shapes=output_shapes,
+        ))
 
     assert len(current) == 1
-    return current[0], all_checks
+    return current[0], all_checks, all_snapshots
 
 
 def execute_sub_plan(
