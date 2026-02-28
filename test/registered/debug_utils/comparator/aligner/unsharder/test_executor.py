@@ -42,7 +42,7 @@ class TestExecuteUnsharderPlan:
         full_tensor = torch.randn(2, 8, 16)
         shards = list(full_tensor.chunk(4, dim=1))
 
-        dim_specs = parse_dims("b h(tp) d")
+        dim_specs = parse_dims("b h(tp) d").dims
         parallel_infos = [
             {ParallelAxis.TP: AxisInfo(axis_rank=i, axis_size=4)} for i in range(4)
         ]
@@ -67,7 +67,7 @@ class TestExecuteUnsharderPlan:
             {ParallelAxis.TP: AxisInfo(axis_rank=3, axis_size=4)},
             {ParallelAxis.TP: AxisInfo(axis_rank=1, axis_size=4)},
         ]
-        dim_specs = parse_dims("h(tp) d")
+        dim_specs = parse_dims("h(tp) d").dims
         plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 1
 
@@ -95,7 +95,7 @@ class TestExecuteUnsharderPlan:
         shards_a = list(full_a.chunk(4, dim=0))
         shards_b = list(full_b.chunk(4, dim=0))
 
-        dim_specs = parse_dims("s(cp) h(tp)")
+        dim_specs = parse_dims("s(cp) h(tp)").dims
         parallel_infos = []
         for cp_rank in range(2):
             for tp_rank in range(4):
@@ -145,7 +145,7 @@ class TestExecuteUnsharderPlan:
                     }
                 )
 
-        dim_specs = parse_dims("b s(cp) h(tp)")
+        dim_specs = parse_dims("b s(cp) h(tp)").dims
         plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 2
 
@@ -187,7 +187,7 @@ class TestExecuteUnsharderPlan:
                 }
             )
 
-        dim_specs = parse_dims("b s(cp) h(tp)")
+        dim_specs = parse_dims("b s(cp) h(tp)").dims
         plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 2
 
@@ -241,7 +241,7 @@ class TestExecuteUnsharderPlan:
                         }
                     )
 
-        dim_specs = parse_dims("b e(ep) s(cp) h(tp)")
+        dim_specs = parse_dims("b e(ep) s(cp) h(tp)").dims
         plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 3
 
@@ -290,7 +290,7 @@ class TestExecuteUnsharderPlan:
                 }
             )
 
-        dim_specs = parse_dims("b e(ep) s(cp) h(tp)")
+        dim_specs = parse_dims("b e(ep) s(cp) h(tp)").dims
         plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 3
 
@@ -307,7 +307,7 @@ class TestPickOperation:
     def test_pick_single_group(self) -> None:
         """PickParams picks the first tensor from a single group."""
         tensor = torch.randn(4, 8)
-        dim_specs = parse_dims("h d")
+        dim_specs = parse_dims("h d").dims
         parallel_infos = [
             {ParallelAxis.TP: AxisInfo(axis_rank=0, axis_size=2)},
             {ParallelAxis.TP: AxisInfo(axis_rank=1, axis_size=2)},
@@ -326,7 +326,7 @@ class TestPickOperation:
 
     def test_pick_multiple_groups(self) -> None:
         """PickParams with multiple groups picks one from each."""
-        dim_specs = parse_dims("h(tp)")
+        dim_specs = parse_dims("h(tp)").dims
         parallel_infos: list[dict[ParallelAxis, AxisInfo]] = [
             {
                 ParallelAxis.CP: AxisInfo(axis_rank=0, axis_size=2),
@@ -378,7 +378,7 @@ class TestPickOperation:
                     }
                 )
 
-        dim_specs = parse_dims("b s(cp) d")
+        dim_specs = parse_dims("b s(cp) d").dims
         plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 2
 
@@ -407,7 +407,7 @@ class TestPickOperation:
                     }
                 )
 
-        dim_specs = parse_dims("b h d")
+        dim_specs = parse_dims("b h d").dims
         plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 2
         assert all(isinstance(p.params, PickParams) for p in plans)
@@ -472,7 +472,7 @@ class TestVerifyReplicatedGroup:
 
     def test_execute_returns_replicated_checks(self) -> None:
         """execute_unsharder_plan returns replicated checks for mismatch."""
-        dim_specs = parse_dims("h d")
+        dim_specs = parse_dims("h d").dims
         parallel_infos = [
             {ParallelAxis.TP: AxisInfo(axis_rank=0, axis_size=2)},
             {ParallelAxis.TP: AxisInfo(axis_rank=1, axis_size=2)},
@@ -654,7 +654,7 @@ class TestReduceSum:
         part_a = full_tensor * 0.6
         part_b = full_tensor * 0.4
 
-        dim_specs = parse_dims("h(tp:partial) d")
+        dim_specs = parse_dims("h(tp:partial) d").dims
         parallel_infos = [
             {ParallelAxis.TP: AxisInfo(axis_rank=i, axis_size=2)} for i in range(2)
         ]
@@ -676,7 +676,7 @@ class TestReduceSum:
         full_tensor = torch.randn(4, 8)
         parts: list[torch.Tensor] = [full_tensor * 0.25 for _ in range(4)]
 
-        dim_specs = parse_dims("h(tp:partial) d")
+        dim_specs = parse_dims("h(tp:partial) d").dims
         parallel_infos = [
             {ParallelAxis.TP: AxisInfo(axis_rank=i, axis_size=4)} for i in range(4)
         ]
@@ -710,7 +710,7 @@ class TestReduceSum:
                     }
                 )
 
-        dim_specs = parse_dims("b s(cp) h(tp:partial)")
+        dim_specs = parse_dims("b s(cp) h(tp:partial)").dims
         plans = compute_unsharder_plan(dim_specs, parallel_infos)
         assert len(plans) == 2
 
@@ -739,7 +739,7 @@ class TestReduceSum:
             {ParallelAxis.TP: AxisInfo(axis_rank=3, axis_size=4)},
             {ParallelAxis.TP: AxisInfo(axis_rank=1, axis_size=4)},
         ]
-        dim_specs = parse_dims("h(tp:partial) d")
+        dim_specs = parse_dims("h(tp:partial) d").dims
         plans = compute_unsharder_plan(dim_specs, parallel_infos)
 
         named_parts: list[torch.Tensor] = _name_tensors(parts, dim_specs)
@@ -752,7 +752,7 @@ class TestReduceSum:
 
     def test_reduce_preserves_named_dims(self) -> None:
         """Named tensor dimensions are preserved through reduce_sum."""
-        dim_specs = parse_dims("h(tp:partial) d")
+        dim_specs = parse_dims("h(tp:partial) d").dims
         part_a = torch.randn(4, 8).refine_names("h", "d")
         part_b = torch.randn(4, 8).refine_names("h", "d")
 

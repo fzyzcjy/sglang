@@ -36,7 +36,11 @@ from sglang.srt.debug_utils.comparator.warning_sink import warning_sink
 from sglang.srt.debug_utils.dump_loader import ValueWithMeta, filter_rows
 
 # re-export for existing callers
-__all__ = ["AUX_NAMES", "has_aux_tensors", "load_and_normalize_aux"]
+__all__ = [
+    "AUX_NAMES",
+    "has_aux_tensors",
+    "load_and_normalize_aux",
+]
 
 
 def load_and_normalize_aux(
@@ -124,7 +128,7 @@ def _load_step_data(
     """
     result: dict[str, object] = {}
 
-    # Pass 1: non-tensor values
+    # Pass 0: non-tensor values
     for name in non_tensor_names:
         value = _load_non_tensor_aux(name=name, step=step, df=df, dump_path=dump_path)
         if value is not None:

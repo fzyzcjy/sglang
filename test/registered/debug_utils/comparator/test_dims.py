@@ -9,6 +9,7 @@ from sglang.srt.debug_utils.comparator.dims import (
     SQUEEZE_DIM_NAME,
     TOKEN_DIM_NAME,
     DimSpec,
+    DimsSpec,
     Ordering,
     ParallelAxis,
     ParallelModifier,
@@ -115,7 +116,7 @@ class TestParseDim:
 
 class TestParseDims:
     def test_multi_dims(self) -> None:
-        assert parse_dims("b s h d") == [
+        assert parse_dims("b s h d").dims == [
             DimSpec(name="b"),
             DimSpec(name="s"),
             DimSpec(name="h"),
@@ -123,10 +124,10 @@ class TestParseDims:
         ]
 
     def test_single_dim(self) -> None:
-        assert parse_dims("t") == [DimSpec(name="t")]
+        assert parse_dims("t").dims == [DimSpec(name="t")]
 
     def test_mixed_annotated(self) -> None:
-        assert parse_dims("b s(cp:zigzag) h(tp) d") == [
+        assert parse_dims("b s(cp:zigzag) h(tp) d").dims == [
             DimSpec(name="b"),
             DimSpec(
                 name="s",
@@ -154,17 +155,17 @@ class TestParseDims:
             parse_dims("h h")
 
     def test_with_squeeze_dims(self) -> None:
-        result: list[DimSpec] = parse_dims("t 1 h")
-        assert len(result) == 3
-        assert result[0] == DimSpec(name="t")
-        assert result[1] == DimSpec(name="1")
-        assert result[2] == DimSpec(name="h")
+        dims: list[DimSpec] = parse_dims("t 1 h").dims
+        assert len(dims) == 3
+        assert dims[0] == DimSpec(name="t")
+        assert dims[1] == DimSpec(name="1")
+        assert dims[2] == DimSpec(name="h")
 
     def test_multiple_squeeze_dims_no_duplicate_error(self) -> None:
-        result: list[DimSpec] = parse_dims("t 1 h 1 d")
-        assert len(result) == 5
-        assert result[1] == DimSpec(name="1")
-        assert result[3] == DimSpec(name="1")
+        dims: list[DimSpec] = parse_dims("t 1 h 1 d").dims
+        assert len(dims) == 5
+        assert dims[1] == DimSpec(name="1")
+        assert dims[3] == DimSpec(name="1")
 
 
 class TestDimConstants:
@@ -180,23 +181,23 @@ class TestDimConstants:
 
 class TestFindDimIndex:
     def test_found(self) -> None:
-        specs: list[DimSpec] = parse_dims("b s h d")
+        specs: list[DimSpec] = parse_dims("b s h d").dims
         assert find_dim_index(specs, "s") == 1
 
     def test_not_found(self) -> None:
-        specs: list[DimSpec] = parse_dims("b s h d")
+        specs: list[DimSpec] = parse_dims("b s h d").dims
         assert find_dim_index(specs, "t") is None
 
     def test_first_dim(self) -> None:
-        specs: list[DimSpec] = parse_dims("t h d")
+        specs: list[DimSpec] = parse_dims("t h d").dims
         assert find_dim_index(specs, "t") == 0
 
     def test_last_dim(self) -> None:
-        specs: list[DimSpec] = parse_dims("b s h d")
+        specs: list[DimSpec] = parse_dims("b s h d").dims
         assert find_dim_index(specs, "d") == 3
 
     def test_with_modifiers(self) -> None:
-        specs: list[DimSpec] = parse_dims("b s(cp:zigzag) h(tp) d")
+        specs: list[DimSpec] = parse_dims("b s(cp:zigzag) h(tp) d").dims
         assert find_dim_index(specs, "h") == 2
 
     def test_empty_list(self) -> None:
@@ -264,18 +265,18 @@ class TestResolveDimNames:
 
 class TestSingletonDimUtilFilterOut:
     def test_no_squeeze(self) -> None:
-        specs: list[DimSpec] = parse_dims("t h d")
+        specs: list[DimSpec] = parse_dims("t h d").dims
         assert _SingletonDimUtil.filter_out(specs) == specs
 
     def test_with_squeeze(self) -> None:
-        specs: list[DimSpec] = parse_dims("t 1 h")
+        specs: list[DimSpec] = parse_dims("t 1 h").dims
         filtered: list[DimSpec] = _SingletonDimUtil.filter_out(specs)
         assert len(filtered) == 2
         assert filtered[0].name == "t"
         assert filtered[1].name == "h"
 
     def test_all_squeeze(self) -> None:
-        specs: list[DimSpec] = parse_dims("1 1")
+        specs: list[DimSpec] = parse_dims("1 1").dims
         assert _SingletonDimUtil.filter_out(specs) == []
 
 
@@ -315,6 +316,55 @@ class TestSingletonDimUtilSanitizeNames:
 
     def test_empty(self) -> None:
         assert _SingletonDimUtil.sanitize_names([]) == []
+
+
+class TestParseDimsWithHash:
+    """parse_dims strips the ``#`` declaration section from dims."""
+
+    def test_shape_dims_unchanged(self) -> None:
+        assert (
+            parse_dims("b s h(tp) # dp:=moe_dp").dims == parse_dims("b s h(tp)").dims
+        )
+
+    def test_dp_group_alias_extracted(self) -> None:
+        assert parse_dims("b s h(tp) # dp:=moe_dp").dp_group_alias == "moe_dp"
+
+    def test_no_hash_no_alias(self) -> None:
+        assert parse_dims("b s h(tp)").dp_group_alias is None
+
+    def test_whitespace_around_hash(self) -> None:
+        assert parse_dims("t h #   dp:=foo  ").dims == parse_dims("t h").dims
+        assert parse_dims("t h #   dp:=foo  ").dp_group_alias == "foo"
+
+    def test_multiple_declarations_picks_dp(self) -> None:
+        result: DimsSpec = parse_dims("t h(tp) # dp:=moe_dp ep:replicated")
+        assert result.dims == parse_dims("t h(tp)").dims
+        assert result.dp_group_alias == "moe_dp"
+
+    def test_no_dp_alias_token(self) -> None:
+        assert parse_dims("t h(tp) # ep:replicated").dp_group_alias is None
+
+
+class TestDpGroupAlias:
+    def test_basic(self) -> None:
+        assert parse_dims("b s h(tp) # dp:=moe_dp").dp_group_alias == "moe_dp"
+
+    def test_no_hash_returns_none(self) -> None:
+        assert parse_dims("t h").dp_group_alias is None
+
+    def test_no_dp_alias_token(self) -> None:
+        assert parse_dims("t h(tp) # ep:replicated").dp_group_alias is None
+
+    def test_multiple_tokens_picks_dp(self) -> None:
+        assert (
+            parse_dims("b s # ep:replicated dp:=custom_dp").dp_group_alias
+            == "custom_dp"
+        )
+
+
+class TestResolveDimNamesWithHash:
+    def test_hash_stripped(self) -> None:
+        assert resolve_dim_names("t h # dp:=moe_dp") == ["t", "h"]
 
 
 if __name__ == "__main__":

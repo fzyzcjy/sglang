@@ -13,7 +13,7 @@ from sglang.srt.debug_utils.comparator.utils import Pair
 _UNNAMED_TOKEN_DIM_FALLBACK: int = 0
 
 
-def execute_token_aligner_concat(
+def execute_token_aligner_concat_steps(
     tensor_of_step_pair: Pair[dict[int, torch.Tensor]],
 ) -> Pair[torch.Tensor]:
     """Concat all steps in order, then truncate to min(total_x, total_y) tokens."""

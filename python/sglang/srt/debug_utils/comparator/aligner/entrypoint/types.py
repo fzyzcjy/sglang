@@ -26,6 +26,6 @@ class AlignerPerStepPlan(_FrozenBase):
 
 class AlignerPlan(_FrozenBase):
     per_step_plans: Pair[list[AlignerPerStepPlan]]
-    token_aligner_mode: Optional[str] = None  # "concat" | "smart" | None
+    token_aligner_mode: Optional[str] = None  # "concat_steps" | "smart" | None
     token_aligner_plan: Optional[TokenAlignerPlan] = None
     axis_aligner_plan: Optional[AxisAlignerPlan] = None
