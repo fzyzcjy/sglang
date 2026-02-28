@@ -173,6 +173,37 @@ def _format_diff(diff: DiffInfo, prefix_text: str = "") -> list[str]:
 # ---------------------------------------------------------------------------
 
 def format_comparison_rich(record: TensorComparisonRecord) -> str:
+    from sglang.srt.debug_utils.comparator.output_types import get_verbosity
+
+    verbosity: str = get_verbosity()
+    if verbosity == "minimal":
+        return _format_comparison_minimal(record)
+
+    return _format_comparison_normal_or_verbose(
+        record=record,
+        verbose=(verbosity == "verbose"),
+    )
+
+
+def _format_comparison_minimal(record: TensorComparisonRecord) -> str:
+    passed: bool = record.category == "passed"
+    color: str = "green" if passed else "red"
+    marker: str = f"[{color}]✅[/]" if passed else f"[{color}]❌[/]"
+
+    name_part: str = f"[bold {color}]{escape(record.name):30s}[/]"
+    if record.diff is not None:
+        return f"{marker} {name_part} rel_diff={_fmt_val(record.diff.rel_diff)}"
+    elif record.shape_mismatch:
+        return f"{marker} {name_part} [yellow]shape mismatch[/]"
+    else:
+        return f"{marker} {name_part}"
+
+
+def _format_comparison_normal_or_verbose(
+    *,
+    record: TensorComparisonRecord,
+    verbose: bool,
+) -> str:
     passed: bool = record.category == "passed"
     color: str = "green" if passed else "red"
     marker: str = f"[{color}]✅[/]" if passed else f"[{color}]❌[/]"
@@ -220,7 +251,10 @@ def format_comparison_rich(record: TensorComparisonRecord) -> str:
     # Bundle section
     if record.raw_bundle_info is not None:
         lines.append("   [dim]Bundle[/]")
-        lines.extend(_format_bundle_section(record.raw_bundle_info))
+        if verbose:
+            lines.extend(_format_bundle_section_verbose(record.raw_bundle_info))
+        else:
+            lines.extend(_format_bundle_section(record.raw_bundle_info))
 
     # Plan section
     if record.aligner_plan is not None:
@@ -228,6 +262,7 @@ def format_comparison_rich(record: TensorComparisonRecord) -> str:
         lines.extend(_format_plan_section_rich(
             plan=record.aligner_plan,
             shape_traces=record.shape_traces,
+            verbose=verbose,
         ))
 
     # Aligned section
@@ -239,26 +274,33 @@ def format_comparison_rich(record: TensorComparisonRecord) -> str:
 
     # Stats section
     lines.append("   [dim]Stats[/]")
-    lines.extend(_format_stats_rich(
-        baseline=baseline.stats,
-        target=target.stats,
-    ))
+    if verbose:
+        lines.extend(_format_stats_rich_verbose(
+            baseline=baseline.stats,
+            target=target.stats,
+        ))
+    else:
+        lines.extend(_format_stats_rich(
+            baseline=baseline.stats,
+            target=target.stats,
+        ))
 
-    # Abs diff percentiles (only for failed)
-    if not passed and record.diff is not None and record.diff.abs_diff_percentiles:
+    show_detail: bool = verbose or not passed
+
+    # Abs diff percentiles
+    if show_detail and record.diff is not None and record.diff.abs_diff_percentiles:
         lines.append("   [dim]Abs Diff Percentiles[/]")
         lines.append("      " + _format_abs_diff_percentiles_rich(record.diff))
 
-    # Samples (only for failed)
-    if not passed:
-        if baseline.sample is not None:
-            lines.append("   [dim]Samples[/]")
-            lines.append(f"      baseline  {escape(baseline.sample)}")
-            if target.sample is not None:
-                lines.append(f"      target    {escape(target.sample)}")
+    # Samples
+    if show_detail and baseline.sample is not None:
+        lines.append("   [dim]Samples[/]")
+        lines.append(f"      baseline  {escape(baseline.sample)}")
+        if target.sample is not None:
+            lines.append(f"      target    {escape(target.sample)}")
 
-    # Replicated checks (only for failed)
-    if not passed and record.replicated_checks:
+    # Replicated checks
+    if show_detail and record.replicated_checks:
         lines.append("   [dim]Replicated Checks[/]")
         for check in record.replicated_checks:
             chk_marker: str = "[green]✅[/]" if check.passed else "[red]❌[/]"
@@ -302,10 +344,40 @@ def _format_bundle_section(bundle_info: Pair[BundleSideInfo]) -> list[str]:
     return lines
 
 
+def _format_bundle_section_verbose(bundle_info: Pair[BundleSideInfo]) -> list[str]:
+    lines: list[str] = []
+    for label, side in [("baseline", bundle_info.x), ("target", bundle_info.y)]:
+        if not side.files:
+            lines.append(f"      {label}  [dim](no files)[/]")
+            continue
+
+        dtype_desc: str = side.files[0].dtype.replace("torch.", "")
+        dims_part: str = f"  dims: {side.dims}" if side.dims else ""
+        lines.append(
+            f"      {label}  [cyan]{side.num_files} files[/]"
+            f" {dtype_desc}{dims_part}"
+        )
+
+        for idx, f in enumerate(side.files):
+            rank_part: str = f"rank={f.rank}" if f.rank is not None else ""
+            par_part: str = ""
+            if f.parallel_info:
+                par_part = " " + " ".join(
+                    f"{k}={v}" for k, v in f.parallel_info.items()
+                )
+            lines.append(
+                f"         [{idx}] {_esc_shape(f.shape)}"
+                f"  {rank_part}{par_part}"
+            )
+
+    return lines
+
+
 def _format_plan_section_rich(
     *,
     plan: AlignerPlan,
     shape_traces: Optional[Pair[SideShapeTrace]],
+    verbose: bool = False,
 ) -> list[str]:
     lines: list[str] = []
 

@@ -25,6 +25,9 @@ if TYPE_CHECKING:
     )
 
 _CONSOLE: Optional[Console] = None
+_VERBOSITY: str = "normal"
+
+Verbosity = Literal["minimal", "normal", "verbose"]
 
 
 def _get_console() -> Console:
@@ -32,6 +35,15 @@ def _get_console() -> Console:
     if _CONSOLE is None:
         _CONSOLE = Console()
     return _CONSOLE
+
+
+def get_verbosity() -> str:
+    return _VERBOSITY
+
+
+def _set_verbosity(verbosity: str) -> None:
+    global _VERBOSITY
+    _VERBOSITY = verbosity
 
 
 class BaseLog(_StrictBase):
@@ -421,8 +433,10 @@ class ReportSink:
         *,
         output_format: str = "text",
         report_path: Optional[Path] = None,
+        verbosity: str = "normal",
     ) -> None:
         self._output_format = output_format
+        _set_verbosity(verbosity)
 
         if report_path is not None:
             try:
@@ -453,9 +467,9 @@ class ReportSink:
         return self._report_path
 
     def _reset(self) -> None:
-        """Reset state for test isolation."""
         self.close()
         self._output_format = "text"
+        _set_verbosity("normal")
         self._report_path = None
 
 

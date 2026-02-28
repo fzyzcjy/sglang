@@ -53,6 +53,7 @@ def run(args: argparse.Namespace) -> int:
     report_sink.configure(
         output_format=args.output_format,
         report_path=report_path,
+        verbosity=args.verbosity,
     )
 
     try:
@@ -275,6 +276,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         choices=["text", "json"],
         default="text",
         help="Output format: text (default) or json (JSONL, one JSON object per line)",
+    )
+    parser.add_argument(
+        "--verbosity",
+        type=str,
+        choices=["minimal", "normal", "verbose"],
+        default="normal",
+        help="Output verbosity: minimal (1 line per tensor), normal (compact lifecycle), "
+        "verbose (full detail). Default: normal",
     )
     parser.add_argument(
         "--preset",
