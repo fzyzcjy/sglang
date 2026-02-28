@@ -120,7 +120,6 @@ class InputIdsRecord(_TableRecord):
 
 _INFORMATIONAL_WARNING_CATEGORIES: frozenset[str] = frozenset({
     "dim_name_squeeze",
-    "axis_aligner_dim_mismatch",
 })
 
 

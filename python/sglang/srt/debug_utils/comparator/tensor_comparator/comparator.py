@@ -23,25 +23,6 @@ QUANTILE_NUMEL_THRESHOLD = 10_000_000
 SAMPLE_DIFF_THRESHOLD = 1e-3
 
 
-def _squeeze_singleton_dims_to_match(
-    a: torch.Tensor, b: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Squeeze size-1 dims from either side so shapes can match.
-
-    Handles cases like [94, 1, 4096] vs [94, 4096] where the singleton dim
-    is in the middle (not just leading), which try_unify_shape doesn't cover.
-    """
-    if a.shape == b.shape:
-        return a, b
-
-    a_squeezed: torch.Tensor = a.squeeze()
-    b_squeezed: torch.Tensor = b.squeeze()
-    if a_squeezed.shape == b_squeezed.shape:
-        return a_squeezed, b_squeezed
-
-    return a, b
-
-
 def compare_tensor_pair(
     x_baseline: torch.Tensor,
     x_target: torch.Tensor,
@@ -61,8 +42,6 @@ def compare_tensor_pair(
     )
 
     x_baseline = try_unify_shape(x_baseline, target_shape=x_target.shape)
-    x_target = try_unify_shape(x_target, target_shape=x_baseline.shape)
-    x_baseline, x_target = _squeeze_singleton_dims_to_match(x_baseline, x_target)
     unified_shape = list(x_baseline.shape)
 
     baseline_original_dtype = x_baseline.dtype
