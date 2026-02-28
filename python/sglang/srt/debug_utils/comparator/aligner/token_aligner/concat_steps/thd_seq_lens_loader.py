@@ -22,8 +22,8 @@ def load_thd_seq_lens_only(
         return None
 
     non_cp_tensor_names: set[str] = (
-        (set(df["name"].unique().to_list()) & plugin.tensor_names) - plugin.cp_sharded_names
-    )
+        set(df["name"].unique().to_list()) & plugin.tensor_names
+    ) - plugin.cp_sharded_names
     steps: list[int] = sorted(df["step"].unique().to_list())
 
     result: dict[int, list[int]] = {}

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from pathlib import Path
 from typing import Any, Iterator, Optional, Union
@@ -26,22 +25,26 @@ from sglang.srt.debug_utils.comparator.bundle_matcher import (
 from sglang.srt.debug_utils.comparator.display import emit_display_records
 from sglang.srt.debug_utils.comparator.meta_overrider import MetaOverrider
 from sglang.srt.debug_utils.comparator.output_types import (
-    ComparisonRecord,
     ConfigRecord,
-    NonTensorRecord,
-    SkipRecord,
+    NonTensorComparisonRecord,
+    RecordLocation,
+    SkipComparisonRecord,
     SummaryRecord,
+    TensorComparisonRecord,
     report_sink,
 )
 from sglang.srt.debug_utils.comparator.per_token_visualizer import (
     generate_per_token_heatmap,
 )
-from sglang.srt.debug_utils.comparator.utils import Pair
+from sglang.srt.debug_utils.comparator.preset import PRESETS, expand_preset
+from sglang.srt.debug_utils.comparator.utils import Pair, compute_exit_code
 from sglang.srt.debug_utils.dump_loader import read_meta, read_tokenizer_path
+
+_DEFAULT_SKIP_KEYS: set[str] = {"dump_index", "filename"}
 
 
 def main() -> None:
-    args = _parse_args()
+    args = parse_args(sys.argv[1:])
     sys.exit(run(args))
 
 
@@ -76,9 +79,7 @@ def run(args: argparse.Namespace) -> int:
 
         bundle_info_pairs: list[Pair[TensorBundleInfo]] = match_bundles(
             dfs=dfs,
-            skip_keys=_compute_skip_keys(
-                args, has_token_aligner=ta_result.mode is not None
-            ),
+            skip_keys=_compute_skip_keys(args),
         )
 
         viz_output_dir: Optional[Path] = (
@@ -110,36 +111,22 @@ def run(args: argparse.Namespace) -> int:
             compute_per_token=visualize_per_token is not None,
             meta_overrider=meta_overrider,
         )
-        summary, skipped_names = _consume_comparison_records(
+        summary, skipped_names, failed_names = _consume_comparison_records(
             comparison_records=comparison_records,
             visualize_per_token=visualize_per_token,
         )
-        return _compute_exit_code(
+        return compute_exit_code(
             summary,
-            allow_skip_pattern=args.allow_skip_pattern,
+            allow_skipped_pattern=args.allow_skipped_pattern,
             skipped_names=skipped_names,
+            allow_failed_pattern=args.allow_failed_pattern,
+            failed_names=failed_names,
         )
     finally:
         report_sink.close()
         if report_path is not None:
             print(f"Report: {report_path}", file=sys.stderr)
 
-
-def _compute_exit_code(
-    summary: SummaryRecord,
-    *,
-    allow_skip_pattern: str,
-    skipped_names: list[str],
-) -> int:
-    if summary.failed > 0:
-        return 1
-
-    pattern: re.Pattern[str] = re.compile(allow_skip_pattern)
-    forbidden: list[str] = [n for n in skipped_names if not pattern.fullmatch(n)]
-    if forbidden:
-        return 1
-
-    return 0
 
 
 def _resolve_report_path(args: argparse.Namespace) -> Optional[Path]:
@@ -182,13 +169,8 @@ def _read_df(args: argparse.Namespace) -> Pair[pl.DataFrame]:
     return Pair(x=df_baseline, y=df_target)
 
 
-def _compute_skip_keys(args, *, has_token_aligner: bool) -> set[str]:
-    skip_keys: set[str] = {"dump_index", "filename"}
-    if args.grouping == "logical":
-        skip_keys |= {"rank", "recompute_status"}
-        if has_token_aligner:
-            skip_keys |= {"step"}
-    return skip_keys
+def _compute_skip_keys(args: argparse.Namespace) -> set[str]:
+    return _DEFAULT_SKIP_KEYS | set(args.grouping_skip_keys or [])
 
 
 def _compare_bundle_pairs(
@@ -203,7 +185,9 @@ def _compare_bundle_pairs(
     viz_output_dir: Optional[Path] = None,
     compute_per_token: bool = False,
     meta_overrider: Optional[MetaOverrider] = None,
-) -> Iterator[Union[ComparisonRecord, SkipRecord, NonTensorRecord]]:
+) -> Iterator[
+    Union[TensorComparisonRecord, SkipComparisonRecord, NonTensorComparisonRecord]
+]:
     for bundle_info_pair in bundle_info_pairs:
         if not bundle_info_pair.y:
             continue
@@ -212,7 +196,9 @@ def _compare_bundle_pairs(
         filenames_pair: Pair[list[str]] = bundle_info_pair.map(
             lambda infos: [info.filename for info in infos]
         )
-        yield compare_bundle_pair(
+        record: Union[
+            TensorComparisonRecord, SkipComparisonRecord, NonTensorComparisonRecord
+        ] = compare_bundle_pair(
             name=name,
             filenames_pair=filenames_pair,
             baseline_path=baseline_path,
@@ -226,22 +212,36 @@ def _compare_bundle_pairs(
             meta_overrider=meta_overrider,
         )
 
+        target_steps: set[int] = {info.step for info in bundle_info_pair.y}
+        step: Optional[int] = target_steps.pop() if len(target_steps) == 1 else None
+        if step is not None:
+            record = record.model_copy(update={"location": RecordLocation(step=step)})
+
+        yield record
+
 
 def _consume_comparison_records(
     *,
-    comparison_records: Iterator[Union[ComparisonRecord, SkipRecord, NonTensorRecord]],
+    comparison_records: Iterator[
+        Union[TensorComparisonRecord, SkipComparisonRecord, NonTensorComparisonRecord]
+    ],
     visualize_per_token: Optional[Path] = None,
-) -> tuple[SummaryRecord, list[str]]:
+) -> tuple[SummaryRecord, list[str], list[str]]:
     counts: dict[str, int] = {"passed": 0, "failed": 0, "skipped": 0}
-    collected_comparisons: list[ComparisonRecord] = []
+    collected_comparisons: list[TensorComparisonRecord] = []
     skipped_names: list[str] = []
+    failed_names: list[str] = []
 
     for record in comparison_records:
         counts[record.category] += 1
         report_sink.add(record)
-        if isinstance(record, SkipRecord) and record.category == "skipped":
+        if isinstance(record, SkipComparisonRecord) and record.category == "skipped":
             skipped_names.append(record.name)
-        if visualize_per_token is not None and isinstance(record, ComparisonRecord):
+        if record.category == "failed":
+            failed_names.append(record.name)
+        if visualize_per_token is not None and isinstance(
+            record, TensorComparisonRecord
+        ):
             collected_comparisons.append(record)
 
     summary: SummaryRecord = SummaryRecord(total=sum(counts.values()), **counts)
@@ -253,10 +253,13 @@ def _consume_comparison_records(
             output_path=visualize_per_token,
         )
 
-    return summary, skipped_names
+    return summary, skipped_names, failed_names
 
 
-def _parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse CLI arguments from an argv list. Applies preset expansion."""
+    argv = expand_preset(argv, presets=PRESETS)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--baseline-path", type=str)
     parser.add_argument("--target-path", type=str)
@@ -264,7 +267,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--end-step", type=int, default=1000000)
     parser.add_argument("--diff-threshold", type=float, default=1e-3)
     parser.add_argument(
-        "--filter", type=str, default=None, help="Regex to filter filenames"
+        "--filter", type=str, default=None, help="Regex to filter filenames (include)"
     )
     parser.add_argument(
         "--output-format",
@@ -274,18 +277,28 @@ def _parse_args() -> argparse.Namespace:
         help="Output format: text (default) or json (JSONL, one JSON object per line)",
     )
     parser.add_argument(
-        "--grouping",
+        "--preset",
         type=str,
-        choices=["logical", "raw"],
-        default="logical",
-        help="Grouping mode: logical (cross-rank unshard) or raw (rank-by-rank)",
+        choices=list(PRESETS.keys()),
+        default=None,
+        help="Preset configuration (expanded before parsing). "
+        f"Available: {list(PRESETS.keys())}",
+    )
+    parser.add_argument(
+        "--grouping-skip-keys",
+        nargs="*",
+        default=None,
+        help="Metadata keys to skip when grouping bundles (additive on top of "
+        "always-skipped dump_index and filename). "
+        "E.g. '--grouping-skip-keys rank step' skips rank and step.",
     )
     parser.add_argument(
         "--token-aligner",
         type=str,
         choices=["smart", "concat_steps"],
-        default="concat_steps",
-        help="Token aligner mode: concat_steps (BS=1, no aux needed) or smart (BS>1, sequence matching)",
+        default=None,
+        help="Token aligner mode: concat_steps (BS=1, no aux needed) or smart (BS>1, sequence matching). "
+        "Default None (per-step comparison).",
     )
     parser.add_argument(
         "--tokenizer",
@@ -338,11 +351,18 @@ def _parse_args() -> argparse.Namespace:
         help="Path to YAML override config file (dims overrides, etc.)",
     )
     parser.add_argument(
-        "--allow-skip-pattern",
+        "--allow-skipped-pattern",
         type=str,
         default=".*",
         help="Regex pattern for tensor names allowed to be skipped. "
         "Default '.*' allows all skips. Use '^$' to forbid all skips.",
+    )
+    parser.add_argument(
+        "--allow-failed-pattern",
+        type=str,
+        default=None,
+        help="Regex pattern for tensor names allowed to fail without affecting exit code. "
+        "Default None (all failures affect exit code).",
     )
 
     # Report output
@@ -354,4 +374,4 @@ def _parse_args() -> argparse.Namespace:
         "Pass empty string '' to disable.",
     )
 
-    return parser.parse_args()
+    return parser.parse_args(argv)

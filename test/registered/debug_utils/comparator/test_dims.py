@@ -234,6 +234,14 @@ class TestApplyDimNames:
         named: torch.Tensor = apply_dim_names(tensor, ["x", "y"])
         assert torch.equal(strip_dim_names(named), tensor)
 
+    def test_ndim_mismatch_gives_clear_error(self) -> None:
+        tensor: torch.Tensor = torch.randn(10, 1, 128)
+        with pytest.raises(
+            ValueError,
+            match=r"dims metadata mismatch.*3 dims.*shape \[10, 1, 128\].*2 names \['t', 'num_experts'\].*fix the dims string",
+        ):
+            apply_dim_names(tensor, ["t", "num_experts"])
+
 
 class TestStripDimNames:
     def test_strip(self) -> None:
@@ -322,9 +330,7 @@ class TestParseDimsWithHash:
     """parse_dims strips the ``#`` declaration section from dims."""
 
     def test_shape_dims_unchanged(self) -> None:
-        assert (
-            parse_dims("b s h(tp) # dp:=moe_dp").dims == parse_dims("b s h(tp)").dims
-        )
+        assert parse_dims("b s h(tp) # dp:=moe_dp").dims == parse_dims("b s h(tp)").dims
 
     def test_dp_group_alias_extracted(self) -> None:
         assert parse_dims("b s h(tp) # dp:=moe_dp").dp_group_alias == "moe_dp"

@@ -24,8 +24,7 @@ if TYPE_CHECKING:
     )
 
 
-class GeneralWarning(_StrictBase):
-    kind: Literal["general"] = "general"
+class BaseLog(_StrictBase):
     category: str
     message: str
 
@@ -33,9 +32,21 @@ class GeneralWarning(_StrictBase):
         return self.message
 
 
-# Type alias — currently only GeneralWarning exists.
-# When adding new warning types, convert back to Union + Discriminator("kind").
-AnyWarning = GeneralWarning
+class ErrorLog(BaseLog):
+    kind: Literal["error"] = "error"
+
+
+class InfoLog(BaseLog):
+    kind: Literal["info"] = "info"
+
+
+AnyLog = Annotated[Union[ErrorLog, InfoLog], Discriminator("kind")]
+
+
+def _split_logs(logs: list[BaseLog]) -> tuple[list[ErrorLog], list[InfoLog]]:
+    errors: list[ErrorLog] = [log for log in logs if isinstance(log, ErrorLog)]
+    infos: list[InfoLog] = [log for log in logs if isinstance(log, InfoLog)]
+    return errors, infos
 
 
 class ReplicatedCheckResult(_StrictBase):
@@ -45,20 +56,41 @@ class ReplicatedCheckResult(_StrictBase):
     baseline_index: int
     passed: bool
     atol: float
-    diff: DiffInfo
+    diff: Optional[DiffInfo] = None
 
 
 class _OutputRecord(_StrictBase):
-    warnings: list[AnyWarning] = Field(default_factory=list)
+    errors: list[ErrorLog] = Field(default_factory=list)
+    infos: list[InfoLog] = Field(default_factory=list)
 
     @abstractmethod
     def _format_body(self) -> str: ...
 
     def to_text(self) -> str:
         body = self._format_body()
-        if self.warnings:
-            body += "\n" + "\n".join(f"  ⚠ {w.to_text()}" for w in self.warnings)
+        if self.errors:
+            body += "\n" + "\n".join(f"  ✗ {e.to_text()}" for e in self.errors)
+        if self.infos:
+            body += "\n" + "\n".join(f"  ℹ {i.to_text()}" for i in self.infos)
         return body
+
+
+class RecordLocation(_StrictBase):
+    step: Optional[int] = None
+
+
+class _BaseComparisonRecord(_OutputRecord):
+    location: RecordLocation = Field(default_factory=RecordLocation)
+
+    def _format_location_prefix(self) -> str:
+        if self.location.step is not None:
+            return f"[step={self.location.step}] "
+        return ""
+
+    def _format_location_suffix(self) -> str:
+        if self.location.step is not None:
+            return f" (step={self.location.step})"
+        return ""
 
 
 class ConfigRecord(_OutputRecord):
@@ -74,19 +106,19 @@ class ConfigRecord(_OutputRecord):
         return f"Config: {self.config}"
 
 
-class SkipRecord(_OutputRecord):
+class SkipComparisonRecord(_BaseComparisonRecord):
     type: Literal["skip"] = "skip"
     name: str
     reason: str
 
     @property
     def category(self) -> str:
-        if self.warnings:
+        if self.errors:
             return "failed"
         return "skipped"
 
     def _format_body(self) -> str:
-        return f"Skip: {self.name} ({self.reason})"
+        return f"Skip: {self.name}{self._format_location_suffix()} ({self.reason})"
 
 
 class _TableRecord(_OutputRecord):
@@ -118,7 +150,7 @@ class InputIdsRecord(_TableRecord):
         return f"{self.label} input_ids & positions"
 
 
-class ComparisonRecord(TensorComparisonInfo, _OutputRecord):
+class TensorComparisonRecord(TensorComparisonInfo, _BaseComparisonRecord):
     model_config = ConfigDict(extra="forbid", defer_build=True)
 
     type: Literal["comparison"] = "comparison"
@@ -127,14 +159,14 @@ class ComparisonRecord(TensorComparisonInfo, _OutputRecord):
 
     @property
     def category(self) -> str:
-        if self.warnings:
+        if self.errors:
             return "failed"
         if any(not check.passed for check in self.replicated_checks):
             return "failed"
         return "passed" if self.diff is not None and self.diff.passed else "failed"
 
     def _format_body(self) -> str:
-        body: str = format_comparison(self)
+        body: str = self._format_location_prefix() + format_comparison(self)
         if self.replicated_checks:
             body += "\n" + format_replicated_checks(self.replicated_checks)
         if self.aligner_plan is not None:
@@ -142,7 +174,7 @@ class ComparisonRecord(TensorComparisonInfo, _OutputRecord):
         return body
 
 
-class NonTensorRecord(_OutputRecord):
+class NonTensorComparisonRecord(_BaseComparisonRecord):
     type: Literal["non_tensor"] = "non_tensor"
     name: str
     baseline_value: str
@@ -153,15 +185,16 @@ class NonTensorRecord(_OutputRecord):
 
     @property
     def category(self) -> str:
-        if self.warnings:
+        if self.errors:
             return "failed"
         return "passed" if self.values_equal else "failed"
 
     def _format_body(self) -> str:
+        suffix: str = self._format_location_suffix()
         if self.values_equal:
-            return f"NonTensor: {self.name} = {self.baseline_value} ({self.baseline_type}) [equal]"
+            return f"NonTensor: {self.name}{suffix} = {self.baseline_value} ({self.baseline_type}) [equal]"
         return (
-            f"NonTensor: {self.name}\n"
+            f"NonTensor: {self.name}{suffix}\n"
             f"  baseline = {self.baseline_value} ({self.baseline_type})\n"
             f"  target   = {self.target_value} ({self.target_type})"
         )
@@ -190,8 +223,8 @@ class SummaryRecord(_OutputRecord):
         )
 
 
-class WarningRecord(_OutputRecord):
-    type: Literal["warning"] = "warning"
+class LogRecord(_OutputRecord):
+    type: Literal["log"] = "log"
 
     def _format_body(self) -> str:
         return ""
@@ -237,11 +270,11 @@ AnyRecord = Annotated[
         ConfigRecord,
         RankInfoRecord,
         InputIdsRecord,
-        SkipRecord,
-        ComparisonRecord,
-        NonTensorRecord,
+        SkipComparisonRecord,
+        TensorComparisonRecord,
+        NonTensorComparisonRecord,
         SummaryRecord,
-        WarningRecord,
+        LogRecord,
     ],
     Discriminator("type"),
 ]
