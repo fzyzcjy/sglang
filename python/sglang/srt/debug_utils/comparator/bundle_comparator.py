@@ -324,7 +324,22 @@ def _apply_dim_names_from_meta(
         return tensors
 
     dim_names: list[str] = resolve_dim_names(dims_str)
-    return [apply_dim_names(t, dim_names) for t in tensors]
+    result: list[torch.Tensor] = []
+    for t in tensors:
+        if t.ndim == len(dim_names):
+            result.append(apply_dim_names(t, dim_names))
+        else:
+            warning_sink.add(
+                GeneralWarning(
+                    category="dim_name_mismatch",
+                    message=(
+                        f"Tensor has {t.ndim} dims but dims metadata specifies "
+                        f"{len(dim_names)} names ({dims_str!r}), skipping dim naming"
+                    ),
+                )
+            )
+            result.append(t)
+    return result
 
 
 def _load_all_values(filenames: list[str], base_path: Path) -> list[ValueWithMeta]:
