@@ -48,7 +48,7 @@ def _render_polars_as_text(df: pl.DataFrame, *, title: Optional[str] = None) -> 
         table.add_row(*[str(v) for v in row])
 
     buf = StringIO()
-    Console(file=buf, force_terminal=False, width=200).print(table)
+    Console(file=buf, force_terminal=True, width=200).print(table)
     return buf.getvalue().rstrip("\n")
 
 
