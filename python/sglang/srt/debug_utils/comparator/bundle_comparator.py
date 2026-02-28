@@ -45,6 +45,7 @@ from sglang.srt.debug_utils.dump_loader import LOAD_FAILED, ValueWithMeta
 
 _FAILED_SIDE_MAP: dict[str, str] = {"x": "baseline", "y": "target"}
 
+
 def _collect_bundle_side_info(
     items: list[ValueWithMeta],
     metas: list[dict[str, Any]],
@@ -63,12 +64,14 @@ def _collect_bundle_side_info(
         for key in _PARALLEL_INFO_KEYS:
             _extract_parallel_info(row_data=parallel_info, info=meta.get(key, {}))
 
-        files.append(BundleFileInfo(
-            shape=list(tensor.shape),
-            dtype=str(tensor.dtype),
-            rank=meta.get("rank"),
-            parallel_info=parallel_info if parallel_info else None,
-        ))
+        files.append(
+            BundleFileInfo(
+                shape=list(tensor.shape),
+                dtype=str(tensor.dtype),
+                rank=meta.get("rank"),
+                parallel_info=parallel_info if parallel_info else None,
+            )
+        )
 
     dims: Optional[str] = metas[0].get("dims") if metas else None
     return BundleSideInfo(num_files=len(files), files=files, dims=dims)

@@ -2104,8 +2104,7 @@ class TestEntrypointAlignment:
             i
             for lr in log_records
             for i in lr.infos
-            if isinstance(i, InfoLog)
-            and i.category == "layout_detection_fallback"
+            if isinstance(i, InfoLog) and i.category == "layout_detection_fallback"
         ]
         assert len(layout_infos) == 1
 
@@ -4280,9 +4279,7 @@ class TestEntrypointDpAttentionMissingAlias:
     """
 
     @staticmethod
-    def _sglang_dp_attn_parallel_info(
-        *, tp_rank: int
-    ) -> dict:
+    def _sglang_dp_attn_parallel_info(*, tp_rank: int) -> dict:
         return {
             "tp_rank": tp_rank,
             "tp_size": 2,

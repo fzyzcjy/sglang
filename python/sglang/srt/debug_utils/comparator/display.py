@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import rich.table
 from collections import defaultdict
 from io import StringIO
 from pathlib import Path
 from typing import Any, Optional
 
 import polars as pl
+import rich.table
 
 from sglang.srt.debug_utils.comparator.output_types import (
     InputIdsRecord,

@@ -83,6 +83,7 @@ class ReplicatedCheckResult(_StrictBase):
 
 class BundleFileInfo(_StrictBase):
     """Per-file info within a bundle (one rank's raw tensor)."""
+
     shape: list[int]
     dtype: str
     rank: Optional[int] = None
@@ -177,9 +178,7 @@ class ConfigRecord(_OutputRecord):
     def _format_rich_body(self) -> RenderableType:
         from rich.panel import Panel
 
-        lines: list[str] = [
-            f"  [bold]{k}[/] : {v}" for k, v in self.config.items()
-        ]
+        lines: list[str] = [f"  [bold]{k}[/] : {v}" for k, v in self.config.items()]
         return Panel("\n".join(lines), title="Comparator Config", border_style="cyan")
 
 

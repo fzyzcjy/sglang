@@ -151,10 +151,12 @@ def execute_sub_plans(
         current, checks = execute_sub_plan(tensors=current, plan=plan)
         output_shapes: list[list[int]] = [list(t.shape) for t in current]
         all_checks.extend(checks)
-        all_snapshots.append(ShapeSnapshot(
-            input_shapes=input_shapes,
-            output_shapes=output_shapes,
-        ))
+        all_snapshots.append(
+            ShapeSnapshot(
+                input_shapes=input_shapes,
+                output_shapes=output_shapes,
+            )
+        )
 
     assert len(current) == 1
     return current[0], all_checks, all_snapshots

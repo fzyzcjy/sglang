@@ -34,6 +34,7 @@ def _esc_shape(shape: Optional[list[int]]) -> str:
 # Number formatting
 # ---------------------------------------------------------------------------
 
+
 def _fmt_val(value: float) -> str:
     return f"{value:.2e}"
 
@@ -48,6 +49,7 @@ def _fmt_diff_colored(diff: float, *, threshold: float = 1e-2) -> str:
 # ---------------------------------------------------------------------------
 # Old text-only formatters (kept for to_text() backward compatibility)
 # ---------------------------------------------------------------------------
+
 
 def format_comparison(info: TensorComparisonInfo) -> str:
     lines: list[str] = []
@@ -172,6 +174,7 @@ def _format_diff(diff: DiffInfo, prefix_text: str = "") -> list[str]:
 # New Rich markup formatters
 # ---------------------------------------------------------------------------
 
+
 def format_comparison_rich(record: TensorComparisonRecord) -> str:
     from sglang.srt.debug_utils.comparator.output_types import get_verbosity
 
@@ -259,11 +262,13 @@ def _format_comparison_normal_or_verbose(
     # Plan section
     if record.aligner_plan is not None:
         lines.append("   [dim]Plan[/]")
-        lines.extend(_format_plan_section_rich(
-            plan=record.aligner_plan,
-            shape_traces=record.shape_traces,
-            verbose=verbose,
-        ))
+        lines.extend(
+            _format_plan_section_rich(
+                plan=record.aligner_plan,
+                shape_traces=record.shape_traces,
+                verbose=verbose,
+            )
+        )
 
     # Aligned section
     lines.append("   [dim]Aligned[/]")
@@ -275,15 +280,19 @@ def _format_comparison_normal_or_verbose(
     # Stats section
     lines.append("   [dim]Stats[/]")
     if verbose:
-        lines.extend(_format_stats_rich_verbose(
-            baseline=baseline.stats,
-            target=target.stats,
-        ))
+        lines.extend(
+            _format_stats_rich_verbose(
+                baseline=baseline.stats,
+                target=target.stats,
+            )
+        )
     else:
-        lines.extend(_format_stats_rich(
-            baseline=baseline.stats,
-            target=target.stats,
-        ))
+        lines.extend(
+            _format_stats_rich(
+                baseline=baseline.stats,
+                target=target.stats,
+            )
+        )
 
     show_detail: bool = verbose or not passed
 
@@ -366,8 +375,7 @@ def _format_bundle_section_verbose(bundle_info: Pair[BundleSideInfo]) -> list[st
                     f"{k}={v}" for k, v in f.parallel_info.items()
                 )
             lines.append(
-                f"         [{idx}] {_esc_shape(f.shape)}"
-                f"  {rank_part}{par_part}"
+                f"         [{idx}] {_esc_shape(f.shape)}" f"  {rank_part}{par_part}"
             )
 
     return lines
@@ -413,8 +421,16 @@ def _format_plan_section_rich(
                 if snapshot:
                     in_count: int = len(snapshot.input_shapes)
                     out_count: int = len(snapshot.output_shapes)
-                    in_shape: str = _esc_shape(snapshot.input_shapes[0]) if snapshot.input_shapes else "?"
-                    out_shape: str = _esc_shape(snapshot.output_shapes[0]) if snapshot.output_shapes else "?"
+                    in_shape: str = (
+                        _esc_shape(snapshot.input_shapes[0])
+                        if snapshot.input_shapes
+                        else "?"
+                    )
+                    out_shape: str = (
+                        _esc_shape(snapshot.output_shapes[0])
+                        if snapshot.output_shapes
+                        else "?"
+                    )
                     shape_change = f" {in_count}×{in_shape} → {out_count}×{out_shape}"
 
                 parts.append(f"[magenta]{op_name}{axis_str}[/]{shape_change}")
@@ -460,9 +476,7 @@ def _format_stats_rich(
     range_baseline: str = escape(f"[{baseline.min:.4f}, {baseline.max:.4f}]")
     range_target: str = escape(f"[{target.min:.4f}, {target.max:.4f}]")
     lines.append(
-        f"      [blue]{'range':10s}[/]"
-        f" {range_baseline}"
-        f" vs {range_target}"
+        f"      [blue]{'range':10s}[/]" f" {range_baseline}" f" vs {range_target}"
     )
 
     return lines
@@ -506,5 +520,3 @@ def _format_abs_diff_percentiles_rich(diff: DiffInfo) -> str:
             formatted = f"[yellow]{formatted}[/]"
         parts.append(formatted)
     return "  ".join(parts)
-
-
