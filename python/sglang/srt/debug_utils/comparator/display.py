@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import rich.table
 from collections import defaultdict
 from io import StringIO
 from pathlib import Path
@@ -48,8 +49,21 @@ def _render_polars_as_text(df: pl.DataFrame, *, title: Optional[str] = None) -> 
         table.add_row(*[str(v) for v in row])
 
     buf = StringIO()
-    Console(file=buf, force_terminal=True, width=200).print(table)
+    Console(file=buf, force_terminal=False, width=200).print(table)
     return buf.getvalue().rstrip("\n")
+
+
+def _render_polars_as_rich_table(
+    df: pl.DataFrame, *, title: Optional[str] = None
+) -> "rich.table.Table":
+    from rich.table import Table
+
+    table = Table(title=title)
+    for col in df.columns:
+        table.add_column(col)
+    for row in df.iter_rows():
+        table.add_row(*[str(v) for v in row])
+    return table
 
 
 def _collect_rank_info(

@@ -7,7 +7,7 @@ from typing import IO, TYPE_CHECKING, Annotated, Any, Literal, Optional, Union
 
 import polars as pl
 from pydantic import ConfigDict, Discriminator, Field, TypeAdapter, model_validator
-from rich.console import Console, RenderableType
+from rich.console import Console, Group, RenderableType
 
 from sglang.srt.debug_utils.comparator.tensor_comparator.formatter import (
     format_comparison,
@@ -24,16 +24,14 @@ if TYPE_CHECKING:
         AlignerPlan,
     )
 
+_CONSOLE: Optional[Console] = None
+
 
 def _get_console() -> Console:
-    """Return a shared Console instance (lazy singleton)."""
     global _CONSOLE
     if _CONSOLE is None:
         _CONSOLE = Console()
     return _CONSOLE
-
-
-_CONSOLE: Optional[Console] = None
 
 
 class BaseLog(_StrictBase):
@@ -94,13 +92,9 @@ class _OutputRecord(_StrictBase):
     def _format_body(self) -> str: ...
 
     def _format_rich_body(self) -> RenderableType:
-        """Return a Rich renderable. Override in subclasses for styled output."""
         return self._format_body()
 
     def to_rich(self) -> RenderableType:
-        """Return Rich renderable including warnings/errors."""
-        from rich.console import Group
-
         body: RenderableType = self._format_rich_body()
 
         log_lines: list[str] = []
@@ -183,6 +177,15 @@ class _TableRecord(_OutputRecord):
         from sglang.srt.debug_utils.comparator.display import _render_polars_as_text
 
         return _render_polars_as_text(
+            pl.DataFrame(self.rows), title=self._table_title()
+        )
+
+    def _format_rich_body(self) -> RenderableType:
+        from sglang.srt.debug_utils.comparator.display import (
+            _render_polars_as_rich_table,
+        )
+
+        return _render_polars_as_rich_table(
             pl.DataFrame(self.rows), title=self._table_title()
         )
 

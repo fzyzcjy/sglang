@@ -45,43 +45,33 @@ from sglang.srt.debug_utils.dump_loader import LOAD_FAILED, ValueWithMeta
 
 _FAILED_SIDE_MAP: dict[str, str] = {"x": "baseline", "y": "target"}
 
-_PARALLEL_INFO_KEYS: list[str] = ["sglang_parallel_info", "megatron_parallel_info"]
-
-
 def _collect_bundle_side_info(
     items: list[ValueWithMeta],
     metas: list[dict[str, Any]],
 ) -> BundleSideInfo:
-    """Collect raw bundle info from one side's loaded values."""
+    from sglang.srt.debug_utils.comparator.display import (
+        _PARALLEL_INFO_KEYS,
+        _extract_parallel_info,
+    )
+
     files: list[BundleFileInfo] = []
     for item, meta in zip(items, metas):
+        assert isinstance(item.value, torch.Tensor)
         tensor: torch.Tensor = item.value
-        parallel_info: Optional[dict[str, str]] = _extract_parallel_info_from_meta(meta)
+
+        parallel_info: dict[str, str] = {}
+        for key in _PARALLEL_INFO_KEYS:
+            _extract_parallel_info(row_data=parallel_info, info=meta.get(key, {}))
+
         files.append(BundleFileInfo(
             shape=list(tensor.shape),
             dtype=str(tensor.dtype),
             rank=meta.get("rank"),
-            parallel_info=parallel_info,
+            parallel_info=parallel_info if parallel_info else None,
         ))
 
     dims: Optional[str] = metas[0].get("dims") if metas else None
     return BundleSideInfo(num_files=len(files), files=files, dims=dims)
-
-
-def _extract_parallel_info_from_meta(meta: dict[str, Any]) -> Optional[dict[str, str]]:
-    """Extract parallel info (e.g. {"tp": "0/4"}) from meta's parallel info keys."""
-    result: dict[str, str] = {}
-    for key in _PARALLEL_INFO_KEYS:
-        info: dict[str, Any] = meta.get(key, {})
-        if not info or info.get("error"):
-            continue
-        for field_name in sorted(info.keys()):
-            if field_name.endswith("_rank"):
-                base: str = field_name[:-5]
-                size_key: str = f"{base}_size"
-                if size_key in info:
-                    result[base] = f"{info[field_name]}/{info[size_key]}"
-    return result if result else None
 
 
 def compare_bundle_pair(
