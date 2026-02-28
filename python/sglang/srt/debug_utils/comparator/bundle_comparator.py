@@ -324,21 +324,56 @@ def _apply_dim_names_from_meta(
         return tensors
 
     dim_names: list[str] = resolve_dim_names(dims_str)
-    result: list[torch.Tensor] = []
-    for t in tensors:
-        if t.ndim == len(dim_names):
-            result.append(apply_dim_names(t, dim_names))
-        else:
+    return [_apply_dim_names_single(t, dim_names, dims_str) for t in tensors]
+
+
+def _apply_dim_names_single(
+    tensor: torch.Tensor,
+    dim_names: list[str],
+    dims_str: str,
+) -> torch.Tensor:
+    if tensor.ndim == len(dim_names):
+        return apply_dim_names(tensor, dim_names)
+
+    if tensor.ndim > len(dim_names):
+        squeezed: torch.Tensor = _squeeze_to_match(tensor, target_ndim=len(dim_names))
+        if squeezed.ndim == len(dim_names):
             warning_sink.add(
                 GeneralWarning(
-                    category="dim_name_mismatch",
+                    category="dim_name_squeeze",
                     message=(
-                        f"Tensor has {t.ndim} dims but dims metadata specifies "
-                        f"{len(dim_names)} names ({dims_str!r}), skipping dim naming"
+                        f"Tensor has {tensor.ndim} dims but dims metadata specifies "
+                        f"{len(dim_names)} names ({dims_str!r}), "
+                        f"squeezed singleton dims to match"
                     ),
                 )
             )
-            result.append(t)
+            return apply_dim_names(squeezed, dim_names)
+
+    warning_sink.add(
+        GeneralWarning(
+            category="dim_name_mismatch",
+            message=(
+                f"Tensor has {tensor.ndim} dims but dims metadata specifies "
+                f"{len(dim_names)} names ({dims_str!r}), skipping dim naming"
+            ),
+        )
+    )
+    return tensor
+
+
+def _squeeze_to_match(tensor: torch.Tensor, *, target_ndim: int) -> torch.Tensor:
+    """Squeeze size-1 dims from the end (then front) until ndim matches target."""
+    result: torch.Tensor = tensor
+    while result.ndim > target_ndim:
+        squeezed_any: bool = False
+        for dim_idx in reversed(range(result.ndim)):
+            if result.shape[dim_idx] == 1:
+                result = result.squeeze(dim_idx)
+                squeezed_any = True
+                break
+        if not squeezed_any:
+            break
     return result
 
 
