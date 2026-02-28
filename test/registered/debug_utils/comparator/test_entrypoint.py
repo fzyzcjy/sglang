@@ -294,8 +294,8 @@ class TestEntrypointGroupingRaw:
         run(parse_args(argv))
 
         output = capsys.readouterr().out
-        assert "Config:" in output
-        assert "Summary:" in output
+        assert "Comparator Config" in output
+        assert "SUMMARY" in output
 
     def test_text_output_with_failure(self, tmp_path, capsys):
         """Text output with a failed comparison renders failure info."""
@@ -317,7 +317,7 @@ class TestEntrypointGroupingRaw:
         run(parse_args(argv))
 
         output = capsys.readouterr().out
-        assert "Summary:" in output
+        assert "SUMMARY" in output
         assert "failed" in output.lower()
 
     def test_duplicate_dump_pairing(self, tmp_path, capsys):
