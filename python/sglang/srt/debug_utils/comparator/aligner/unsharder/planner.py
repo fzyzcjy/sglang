@@ -118,15 +118,11 @@ def _validate_explicit_replicated(
     all_axes: set[ParallelAxis],
 ) -> None:
     """Validate explicit replicated declarations against sharded axes and parallel_infos."""
-    invalid: frozenset[ParallelAxis] = explicit_replicated_axes - all_axes
-    if invalid:
-        invalid_names: str = ", ".join(sorted(a.value for a in invalid))
-        raise ValueError(
-            f"Declared replicated axes {{{invalid_names}}} not found in parallel_infos "
-            f"(active axes: {{{', '.join(sorted(a.value for a in all_axes))}}})"
-        )
+    # Axes declared replicated but not active are silently ignored — this
+    # happens when the same dims string is used across configurations with
+    # different parallelism (e.g. dp_attention remaps tp to attn_tp).
 
-    conflict: set[ParallelAxis] = explicit_replicated_axes & sharded_axes
+    conflict: set[ParallelAxis] = (explicit_replicated_axes & all_axes) & sharded_axes
     if conflict:
         conflict_names: str = ", ".join(sorted(a.value for a in conflict))
         raise ValueError(

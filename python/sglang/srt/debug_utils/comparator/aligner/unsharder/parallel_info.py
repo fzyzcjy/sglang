@@ -11,6 +11,12 @@ def _is_error_sentinel(value: dict) -> bool:
     return any(k.endswith("_error") for k in value)
 
 
+_DP_ATTENTION_AXIS_REMAPPING: dict[str, str] = {
+    "tp": "attn_tp",
+    "cp": "attn_cp",
+}
+
+
 def normalize_parallel_info(meta: dict) -> dict[ParallelAxis, AxisInfo]:
     """Extract unified parallel info from dump meta."""
     info: Optional[dict] = None
@@ -26,15 +32,24 @@ def normalize_parallel_info(meta: dict) -> dict[ParallelAxis, AxisInfo]:
     if info is None:
         info = {}
 
+    # In dp_attention mode, tp/cp groups are repurposed as DP groups.
+    # Use attn_tp/attn_cp instead to get the real parallelism sizes.
+    is_dp_attention: bool = bool(info.get("enable_dp_attention"))
+
     result: dict[ParallelAxis, AxisInfo] = {}
     for axis in ParallelAxis:
-        axis_rank = info.get(f"{axis.value}_rank")
-        axis_size = info.get(f"{axis.value}_size")
+        lookup_name: str = axis.value
+
+        if is_dp_attention and lookup_name in _DP_ATTENTION_AXIS_REMAPPING:
+            lookup_name = _DP_ATTENTION_AXIS_REMAPPING[lookup_name]
+
+        axis_rank = info.get(f"{lookup_name}_rank")
+        axis_size = info.get(f"{lookup_name}_size")
 
         # Recompute pseudo-axis lives at top-level meta, not inside parallel_info
         if axis_rank is None:
-            axis_rank = meta.get(f"{axis.value}_rank")
-            axis_size = meta.get(f"{axis.value}_size")
+            axis_rank = meta.get(f"{lookup_name}_rank")
+            axis_size = meta.get(f"{lookup_name}_size")
 
         if axis_rank is not None and axis_size is not None and axis_size > 1:
             result[axis] = AxisInfo(
