@@ -19,6 +19,7 @@ class ReportSink:
         self._verbosity: Verbosity = "normal"
         self._report_file: Optional[IO[str]] = None
         self._report_path: Optional[Path] = None
+        self._console: Optional[Console] = None
 
     @property
     def verbosity(self) -> Verbosity:
@@ -46,9 +47,7 @@ class ReportSink:
                 )
 
     def add(self, record: _OutputRecord) -> None:
-        _print_to_stdout(
-            record, output_format=self._output_format, verbosity=self._verbosity
-        )
+        self._print_to_stdout(record)
 
         if self._report_file is not None:
             self._report_file.write(record.model_dump_json())
@@ -69,33 +68,20 @@ class ReportSink:
         self._output_format = "text"
         self._verbosity = "normal"
         self._report_path = None
-        _reset_console()
+        self._console = None
 
+    def _get_console(self) -> Console:
+        if self._console is None:
+            self._console = Console()
+        return self._console
 
-_CONSOLE: Optional[Console] = None
-
-
-def _get_console() -> Console:
-    global _CONSOLE
-    if _CONSOLE is None:
-        _CONSOLE = Console()
-    return _CONSOLE
-
-
-def _reset_console() -> None:
-    global _CONSOLE
-    _CONSOLE = None
-
-
-def _print_to_stdout(
-    record: _OutputRecord, *, output_format: str, verbosity: Verbosity
-) -> None:
-    if output_format == "json":
-        print(record.model_dump_json())
-    else:
-        console: Console = _get_console()
-        console.print(record.to_rich(verbosity=verbosity))
-        console.print()  # blank line between records
+    def _print_to_stdout(self, record: _OutputRecord) -> None:
+        if self._output_format == "json":
+            print(record.model_dump_json())
+        else:
+            console: Console = self._get_console()
+            console.print(record.to_rich(verbosity=self._verbosity))
+            console.print()  # blank line between records
 
 
 report_sink = ReportSink()
