@@ -472,7 +472,7 @@ class TestFormatComparisonRichMinimal:
         result: str = format_comparison_rich(record)
 
         assert result == (
-            "[green]✅[/] [bold green]hidden_states                  [/] "
+            "[green]✅[/] [bold green]hidden_states                 [/] "
             "rel_diff=1.00e-04"
         )
 
@@ -484,7 +484,7 @@ class TestFormatComparisonRichMinimal:
         result: str = format_comparison_rich(record)
 
         assert result == (
-            "[red]❌[/] [bold red]hidden_states                  [/] "
+            "[red]❌[/] [bold red]hidden_states                 [/] "
             "rel_diff=5.00e-01"
         )
 
@@ -496,7 +496,7 @@ class TestFormatComparisonRichMinimal:
         result: str = format_comparison_rich(record)
 
         assert result == (
-            "[red]❌[/] [bold red]hidden_states                  [/] "
+            "[red]❌[/] [bold red]hidden_states                 [/] "
             "[yellow]shape mismatch[/]"
         )
 
@@ -505,7 +505,7 @@ class TestFormatComparisonRichMinimal:
         _set_verbosity("minimal")
         result: str = format_comparison_rich(record)
 
-        assert result == ("[red]❌[/] [bold red]hidden_states                  [/]")
+        assert result == ("[red]❌[/] [bold red]hidden_states                 [/]")
 
 
 class TestFormatComparisonRichNormal:
