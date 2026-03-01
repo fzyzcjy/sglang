@@ -84,6 +84,28 @@ def test_log_record_to_text_format() -> None:
     assert "ℹ fyi" in text
 
 
+class TestLogRecord:
+    def test_format_body_returns_empty(self) -> None:
+        record: LogRecord = LogRecord()
+        assert record._format_body() == ""
+
+    def test_format_rich_body_returns_empty(self) -> None:
+        record: LogRecord = LogRecord()
+        assert record._format_rich_body() == ""
+
+    def test_to_text_empty_no_logs(self) -> None:
+        record: LogRecord = LogRecord()
+        assert record.to_text() == ""
+
+    def test_to_text_with_errors_and_infos(self) -> None:
+        record: LogRecord = LogRecord(
+            errors=[ErrorLog(category="a", message="bad thing")],
+            infos=[InfoLog(category="b", message="fyi")],
+        )
+        text: str = record.to_text()
+        assert text == "\n  ✗ bad thing\n  ℹ fyi"
+
+
 # ---------------------------------------------------------------------------
 # ConfigRecord
 # ---------------------------------------------------------------------------
