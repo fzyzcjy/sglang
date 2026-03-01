@@ -517,14 +517,16 @@ class TestFormatComparisonRichNormal:
         _set_verbosity("normal")
         result: str = format_comparison_rich(record)
 
-        assert "[green]✅[/] [bold green]hidden_states[/]" in result
-        assert "rel_diff=1.00e-04" in result
-        assert "max_abs=5.00e-04" in result
-        assert "mean_abs=2.00e-04" in result
-        assert "[dim]Aligned[/]" in result
-        assert "[dim]Stats[/]" in result
-        # Passed normal: no Abs Diff Percentiles section
-        assert "Abs Diff Percentiles" not in result
+        assert result == (
+            "[green]✅[/] [bold green]hidden_states[/] [dim cyan]── float32  [4, 8][/]\n"
+            "   [green]rel_diff=1.00e-04[/]  max_abs=5.00e-04  mean_abs=2.00e-04\n"
+            "   [dim]Aligned[/]\n"
+            "      [4, 8] vs [4, 8]   torch.float32 vs torch.float32\n"
+            "   [dim]Stats[/]\n"
+            "      [blue]mean      [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]std       [/]     1.0000 vs     1.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]range     [/] [-2.0000, 2.0000] vs [-2.0000, 2.0000]"
+        )
 
     def test_failed(self) -> None:
         record: TensorComparisonRecord = _make_comparison_record(
@@ -535,11 +537,19 @@ class TestFormatComparisonRichNormal:
         _set_verbosity("normal")
         result: str = format_comparison_rich(record)
 
-        assert "[red]❌[/] [bold red]hidden_states[/]" in result
-        assert "[bold red]rel_diff=5.00e-01[/]" in result
-        assert "max_abs @" in result
-        assert "[dim]Abs Diff Percentiles[/]" in result
-        assert "[dim]Samples[/]" not in result  # no sample on record
+        assert result == (
+            "[red]❌[/] [bold red]hidden_states[/] [dim cyan]── float32  [4, 8][/]\n"
+            "   [bold red]rel_diff=5.00e-01[/]  max_abs=1.00e+00  mean_abs=3.00e-01\n"
+            "   max_abs @ [2, 3]: baseline=1.0  target=1.0005\n"
+            "   [dim]Aligned[/]\n"
+            "      [4, 8] vs [4, 8]   torch.float32 vs torch.float32\n"
+            "   [dim]Stats[/]\n"
+            "      [blue]mean      [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]std       [/]     1.0000 vs     1.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]range     [/] [-2.0000, 2.0000] vs [-2.0000, 2.0000]\n"
+            "   [dim]Abs Diff Percentiles[/]\n"
+            "      p1=1.00e-04  p5=1.00e-04  p50=2.00e-04  p95=4.00e-04  p99=5.00e-04"
+        )
 
     def test_shape_mismatch(self) -> None:
         record: TensorComparisonRecord = _make_comparison_record(
@@ -548,7 +558,16 @@ class TestFormatComparisonRichNormal:
         _set_verbosity("normal")
         result: str = format_comparison_rich(record)
 
-        assert "[yellow]⚠ Shape mismatch[/]" in result
+        assert result == (
+            "[red]❌[/] [bold red]hidden_states[/] [dim cyan]── float32  [4, 8][/]\n"
+            "   [yellow]⚠ Shape mismatch[/]\n"
+            "   [dim]Aligned[/]\n"
+            "      [4, 8] vs [4, 8]   torch.float32 vs torch.float32\n"
+            "   [dim]Stats[/]\n"
+            "      [blue]mean      [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]std       [/]     1.0000 vs     1.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]range     [/] [-2.0000, 2.0000] vs [-2.0000, 2.0000]"
+        )
 
     def test_with_downcast(self) -> None:
         record: TensorComparisonRecord = _make_comparison_record(
@@ -559,8 +578,20 @@ class TestFormatComparisonRichNormal:
         _set_verbosity("normal")
         result: str = format_comparison_rich(record)
 
-        assert "downcast to torch.bfloat16" in result
-        assert "rel_diff=1.00e-05" in result
+        assert result == (
+            "[red]❌[/] [bold red]hidden_states[/] [dim cyan]── float32  [4, 8][/]\n"
+            "   [bold red]rel_diff=1.00e-02[/]  max_abs=5.00e-04  mean_abs=2.00e-04\n"
+            "   max_abs @ [2, 3]: baseline=1.0  target=1.0005\n"
+            "   [green]✅[/] downcast to torch.bfloat16: rel_diff=1.00e-05\n"
+            "   [dim]Aligned[/]\n"
+            "      [4, 8] vs [4, 8]   torch.float32 vs torch.float32\n"
+            "   [dim]Stats[/]\n"
+            "      [blue]mean      [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]std       [/]     1.0000 vs     1.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]range     [/] [-2.0000, 2.0000] vs [-2.0000, 2.0000]\n"
+            "   [dim]Abs Diff Percentiles[/]\n"
+            "      p1=1.00e-04  p5=1.00e-04  p50=2.00e-04  p95=4.00e-04  p99=5.00e-04"
+        )
 
     def test_with_bundle_info(self) -> None:
         bundle_info: Pair[BundleSideInfo] = Pair(
@@ -574,8 +605,19 @@ class TestFormatComparisonRichNormal:
         _set_verbosity("normal")
         result: str = format_comparison_rich(record)
 
-        assert "[dim]Bundle[/]" in result
-        assert "[cyan]2 files[/]" in result
+        assert result == (
+            "[green]✅[/] [bold green]hidden_states[/] [dim cyan]── float32  [4, 8][/]\n"
+            "   [green]rel_diff=1.00e-04[/]  max_abs=5.00e-04  mean_abs=2.00e-04\n"
+            "   [dim]Bundle[/]\n"
+            "      baseline  [cyan]2 files[/] × [2, 4096] float32  [dim]dims: b s h(tp) d[/]\n"
+            "      target  [cyan]2 files[/] × [2, 4096] float32  [dim]dims: b s h(tp) d[/]\n"
+            "   [dim]Aligned[/]\n"
+            "      [4, 8] vs [4, 8]   torch.float32 vs torch.float32\n"
+            "   [dim]Stats[/]\n"
+            "      [blue]mean      [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]std       [/]     1.0000 vs     1.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]range     [/] [-2.0000, 2.0000] vs [-2.0000, 2.0000]"
+        )
 
     def test_with_plan(self) -> None:
         plan: AlignerPlan = _make_simple_aligner_plan(with_unsharder=True)
@@ -586,8 +628,19 @@ class TestFormatComparisonRichNormal:
         _set_verbosity("normal")
         result: str = format_comparison_rich(record)
 
-        assert "[dim]Plan[/]" in result
-        assert "[magenta]unsharder(ParallelAxis.TP)[/]" in result
+        assert result == (
+            "[green]✅[/] [bold green]hidden_states[/] [dim cyan]── float32  [4, 8][/]\n"
+            "   [green]rel_diff=1.00e-04[/]  max_abs=5.00e-04  mean_abs=2.00e-04\n"
+            "   [dim]Plan[/]\n"
+            "      baseline  [dim](passthrough)[/]\n"
+            "      target  [magenta]unsharder(ParallelAxis.TP)[/]\n"
+            "   [dim]Aligned[/]\n"
+            "      [4, 8] vs [4, 8]   torch.float32 vs torch.float32\n"
+            "   [dim]Stats[/]\n"
+            "      [blue]mean      [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]std       [/]     1.0000 vs     1.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]range     [/] [-2.0000, 2.0000] vs [-2.0000, 2.0000]"
+        )
 
 
 class TestFormatComparisonRichVerbose:
@@ -601,12 +654,28 @@ class TestFormatComparisonRichVerbose:
         _set_verbosity("verbose")
         result: str = format_comparison_rich(record)
 
-        # Verbose always shows detail sections, even for passed
-        assert "[dim]Abs Diff Percentiles[/]" in result
-        assert "[dim]Samples[/]" in result
-        assert "baseline  tensor" in result
-        # Verbose stats show all fields
-        assert "[blue]abs_mean" in result
+        assert result == (
+            "[green]✅[/] [bold green]hidden_states[/] [dim cyan]── float32  [4, 8][/]\n"
+            "   [green]rel_diff=1.00e-04[/]  max_abs=5.00e-04  mean_abs=2.00e-04\n"
+            "   [dim]Aligned[/]\n"
+            "      [4, 8] vs [4, 8]   torch.float32 vs torch.float32\n"
+            "   [dim]Stats[/]\n"
+            "      [blue]mean      [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]abs_mean  [/]     0.8000 vs     0.8000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]std       [/]     1.0000 vs     1.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]min       [/]    -2.0000 vs    -2.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]max       [/]     2.0000 vs     2.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]p1        [/]    -1.8000 vs    -1.8000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]p5        [/]    -1.5000 vs    -1.5000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]p50       [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]p95       [/]     1.5000 vs     1.5000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]p99       [/]     1.8000 vs     1.8000  Δ [dim]+0.00e+00[/]\n"
+            "   [dim]Abs Diff Percentiles[/]\n"
+            "      p1=1.00e-04  p5=1.00e-04  p50=2.00e-04  p95=4.00e-04  p99=5.00e-04\n"
+            "   [dim]Samples[/]\n"
+            "      baseline  tensor([0.1, 0.2, ...])\n"
+            "      target    tensor([0.1, 0.2, ...])"
+        )
 
     def test_with_bundle_verbose(self) -> None:
         bundle_info: Pair[BundleSideInfo] = Pair(
@@ -620,11 +689,32 @@ class TestFormatComparisonRichVerbose:
         _set_verbosity("verbose")
         result: str = format_comparison_rich(record)
 
-        assert "[dim]Bundle[/]" in result
-        # Verbose shows per-file listing
-        assert "[0]" in result
-        assert "[1]" in result
-        assert "rank=0" in result
+        assert result == (
+            "[green]✅[/] [bold green]hidden_states[/] [dim cyan]── float32  [4, 8][/]\n"
+            "   [green]rel_diff=1.00e-04[/]  max_abs=5.00e-04  mean_abs=2.00e-04\n"
+            "   [dim]Bundle[/]\n"
+            "      baseline  [cyan]2 files[/] float32\n"
+            "         [0] [2, 4096]  rank=0 tp=0/2\n"
+            "         [1] [2, 4096]  rank=1 tp=1/2\n"
+            "      target  [cyan]2 files[/] float32\n"
+            "         [0] [2, 4096]  rank=0 tp=0/2\n"
+            "         [1] [2, 4096]  rank=1 tp=1/2\n"
+            "   [dim]Aligned[/]\n"
+            "      [4, 8] vs [4, 8]   torch.float32 vs torch.float32\n"
+            "   [dim]Stats[/]\n"
+            "      [blue]mean      [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]abs_mean  [/]     0.8000 vs     0.8000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]std       [/]     1.0000 vs     1.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]min       [/]    -2.0000 vs    -2.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]max       [/]     2.0000 vs     2.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]p1        [/]    -1.8000 vs    -1.8000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]p5        [/]    -1.5000 vs    -1.5000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]p50       [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]p95       [/]     1.5000 vs     1.5000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]p99       [/]     1.8000 vs     1.8000  Δ [dim]+0.00e+00[/]\n"
+            "   [dim]Abs Diff Percentiles[/]\n"
+            "      p1=1.00e-04  p5=1.00e-04  p50=2.00e-04  p95=4.00e-04  p99=5.00e-04"
+        )
 
     def test_with_plan_and_traces(self) -> None:
         plan: AlignerPlan = _make_simple_aligner_plan(with_unsharder=True)
@@ -640,8 +730,28 @@ class TestFormatComparisonRichVerbose:
         _set_verbosity("verbose")
         result: str = format_comparison_rich(record)
 
-        assert "[dim]Plan[/]" in result
-        assert "→" in result  # shape change arrow
+        assert result == (
+            "[green]✅[/] [bold green]hidden_states[/] [dim cyan]── float32  [4, 8][/]\n"
+            "   [green]rel_diff=1.00e-04[/]  max_abs=5.00e-04  mean_abs=2.00e-04\n"
+            "   [dim]Plan[/]\n"
+            "      baseline  [dim](passthrough)[/]\n"
+            "      target  [magenta]unsharder(ParallelAxis.TP)[/] 2×[2, 4096] → 1×[4, 4096]\n"
+            "   [dim]Aligned[/]\n"
+            "      [4, 8] vs [4, 8]   torch.float32 vs torch.float32\n"
+            "   [dim]Stats[/]\n"
+            "      [blue]mean      [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]abs_mean  [/]     0.8000 vs     0.8000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]std       [/]     1.0000 vs     1.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]min       [/]    -2.0000 vs    -2.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]max       [/]     2.0000 vs     2.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]p1        [/]    -1.8000 vs    -1.8000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]p5        [/]    -1.5000 vs    -1.5000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]p50       [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]p95       [/]     1.5000 vs     1.5000  Δ [dim]+0.00e+00[/]\n"
+            "      [blue]p99       [/]     1.8000 vs     1.8000  Δ [dim]+0.00e+00[/]\n"
+            "   [dim]Abs Diff Percentiles[/]\n"
+            "      p1=1.00e-04  p5=1.00e-04  p50=2.00e-04  p95=4.00e-04  p99=5.00e-04"
+        )
 
 
 class TestFormatBundleSection:
@@ -670,7 +780,10 @@ class TestFormatBundleSection:
         bundle: Pair[BundleSideInfo] = Pair(x=side, y=side)
         lines: list[str] = _format_bundle_section(bundle)
 
-        assert "mixed shapes" in lines[0]
+        assert lines == [
+            "      baseline  [cyan]2 files[/] × mixed shapes float32",
+            "      target  [cyan]2 files[/] × mixed shapes float32",
+        ]
 
     def test_no_files(self) -> None:
         empty: BundleSideInfo = BundleSideInfo(num_files=0, files=[])
@@ -689,8 +802,10 @@ class TestFormatBundleSection:
         )
         lines: list[str] = _format_bundle_section(bundle)
 
-        assert "[dim]dims: b s h(tp) d[/]" in lines[0]
-        assert "[dim]dims: b s h(tp) d[/]" in lines[1]
+        assert lines == [
+            "      baseline  [cyan]1 files[/] × [2, 4096] float32  [dim]dims: b s h(tp) d[/]",
+            "      target  [cyan]1 files[/] × [2, 4096] float32  [dim]dims: b s h(tp) d[/]",
+        ]
 
 
 class TestFormatBundleSectionVerbose:
@@ -703,12 +818,14 @@ class TestFormatBundleSectionVerbose:
         )
         lines: list[str] = _format_bundle_section_verbose(bundle)
 
-        # Header lines + 2 per-file lines per side = 6 lines total
-        assert len(lines) == 6
-        assert "rank=0" in lines[1]
-        assert "tp=0/2" in lines[1]
-        assert "rank=1" in lines[2]
-        assert "tp=1/2" in lines[2]
+        assert lines == [
+            "      baseline  [cyan]2 files[/] float32",
+            "         [0] [2, 4096]  rank=0 tp=0/2",
+            "         [1] [2, 4096]  rank=1 tp=1/2",
+            "      target  [cyan]2 files[/] float32",
+            "         [0] [2, 4096]  rank=0 tp=0/2",
+            "         [1] [2, 4096]  rank=1 tp=1/2",
+        ]
 
     def test_no_files(self) -> None:
         empty: BundleSideInfo = BundleSideInfo(num_files=0, files=[])
@@ -737,14 +854,19 @@ class TestFormatPlanSectionRich:
         plan: AlignerPlan = _make_simple_aligner_plan(with_unsharder=True)
         lines: list[str] = _format_plan_section_rich(plan=plan, shape_traces=None)
 
-        assert lines[0] == "      baseline  [dim](passthrough)[/]"
-        assert "[magenta]unsharder(ParallelAxis.TP)[/]" in lines[1]
+        assert lines == [
+            "      baseline  [dim](passthrough)[/]",
+            "      target  [magenta]unsharder(ParallelAxis.TP)[/]",
+        ]
 
     def test_reorderer_op(self) -> None:
         plan: AlignerPlan = _make_simple_aligner_plan(with_reorderer=True)
         lines: list[str] = _format_plan_section_rich(plan=plan, shape_traces=None)
 
-        assert "[magenta]reorderer[/]" in lines[1]
+        assert lines == [
+            "      baseline  [dim](passthrough)[/]",
+            "      target  [magenta]reorderer[/]",
+        ]
 
     def test_with_shape_traces(self) -> None:
         plan: AlignerPlan = _make_simple_aligner_plan(with_unsharder=True)
@@ -757,23 +879,30 @@ class TestFormatPlanSectionRich:
         )
         lines: list[str] = _format_plan_section_rich(plan=plan, shape_traces=traces)
 
-        # Shape change should appear
-        target_line: str = lines[1]
-        assert "2×[2, 4096] → 1×[4, 4096]" in target_line
+        assert lines == [
+            "      baseline  [dim](passthrough)[/]",
+            "      target  [magenta]unsharder(ParallelAxis.TP)[/] 2×[2, 4096] → 1×[4, 4096]",
+        ]
 
     def test_with_token_aligner(self) -> None:
         plan: AlignerPlan = _make_simple_aligner_plan(with_token_aligner=True)
         lines: list[str] = _format_plan_section_rich(plan=plan, shape_traces=None)
 
-        assert any("token_aligner" in line and "3 tokens" in line for line in lines)
+        assert lines == [
+            "      baseline  [dim](passthrough)[/]",
+            "      target  [dim](passthrough)[/]",
+            "      token_aligner  [dim]3 tokens[/]",
+        ]
 
     def test_with_axis_aligner(self) -> None:
         plan: AlignerPlan = _make_simple_aligner_plan(with_axis_aligner=True)
         lines: list[str] = _format_plan_section_rich(plan=plan, shape_traces=None)
 
-        assert any(
-            "axis_aligner" in line and "x=b s d -> s b d" in line for line in lines
-        )
+        assert lines == [
+            "      baseline  [dim](passthrough)[/]",
+            "      target  [dim](passthrough)[/]",
+            "      axis_aligner  [dim]x=b s d -> s b d[/]",
+        ]
 
     def test_axis_aligner_noop(self) -> None:
         plan: AlignerPlan = _make_simple_aligner_plan(
@@ -781,7 +910,11 @@ class TestFormatPlanSectionRich:
         )
         lines: list[str] = _format_plan_section_rich(plan=plan, shape_traces=None)
 
-        assert any("axis_aligner" in line and "(no-op)" in line for line in lines)
+        assert lines == [
+            "      baseline  [dim](passthrough)[/]",
+            "      target  [dim](passthrough)[/]",
+            "      axis_aligner  [dim](no-op)[/]",
+        ]
 
 
 class TestFormatStatsRich:
@@ -794,28 +927,33 @@ class TestFormatStatsRich:
         )
         lines: list[str] = _format_stats_rich(baseline=baseline, target=target)
 
-        assert len(lines) == 3  # mean, std, range
-        assert "[blue]mean" in lines[0]
-        assert "0.0000 vs     0.0001" in lines[0]
-        assert "[blue]std" in lines[1]
-        assert "[blue]range" in lines[2]
-        assert "[-2.0000, 2.0000]" in lines[2]
+        assert lines == [
+            "      [blue]mean      [/]     0.0000 vs     0.0001  Δ [dim]+1.00e-04[/]",
+            "      [blue]std       [/]     1.0000 vs     1.0001  Δ [dim]+1.00e-04[/]",
+            "      [blue]range     [/] [-2.0000, 2.0000] vs [-2.0001, 2.0001]",
+        ]
 
     def test_large_delta(self) -> None:
         baseline: TensorStats = _make_stats(mean=0.0)
         target: TensorStats = _make_stats(mean=1.0)
         lines: list[str] = _format_stats_rich(baseline=baseline, target=target)
 
-        # Large diff → yellow
-        assert "[yellow]" in lines[0]
+        assert lines == [
+            "      [blue]mean      [/]     0.0000 vs     1.0000  Δ [yellow]+1.00e+00[/]",
+            "      [blue]std       [/]     1.0000 vs     1.0000  Δ [dim]+0.00e+00[/]",
+            "      [blue]range     [/] [-2.0000, 2.0000] vs [-2.0000, 2.0000]",
+        ]
 
     def test_small_delta(self) -> None:
         baseline: TensorStats = _make_stats(mean=0.0)
         target: TensorStats = _make_stats(mean=0.001)
         lines: list[str] = _format_stats_rich(baseline=baseline, target=target)
 
-        # Small diff → dim
-        assert "[dim]" in lines[0]
+        assert lines == [
+            "      [blue]mean      [/]     0.0000 vs     0.0010  Δ [dim]+1.00e-03[/]",
+            "      [blue]std       [/]     1.0000 vs     1.0000  Δ [dim]+0.00e+00[/]",
+            "      [blue]range     [/] [-2.0000, 2.0000] vs [-2.0000, 2.0000]",
+        ]
 
 
 class TestFormatStatsRichVerbose:
@@ -826,21 +964,31 @@ class TestFormatStatsRichVerbose:
         target: TensorStats = _make_stats()
         lines: list[str] = _format_stats_rich_verbose(baseline=baseline, target=target)
 
-        # 5 stat fields + 5 percentiles = 10 lines
-        assert len(lines) == 10
-        stat_names: list[str] = ["mean", "abs_mean", "std", "min", "max"]
-        for i, name in enumerate(stat_names):
-            assert f"[blue]{name}" in lines[i]
-        # Percentile lines
-        assert "[blue]p1" in lines[5]
-        assert "[blue]p99" in lines[9]
+        assert lines == [
+            "      [blue]mean      [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]",
+            "      [blue]abs_mean  [/]     0.8000 vs     0.8000  Δ [dim]+0.00e+00[/]",
+            "      [blue]std       [/]     1.0000 vs     1.0000  Δ [dim]+0.00e+00[/]",
+            "      [blue]min       [/]    -2.0000 vs    -2.0000  Δ [dim]+0.00e+00[/]",
+            "      [blue]max       [/]     2.0000 vs     2.0000  Δ [dim]+0.00e+00[/]",
+            "      [blue]p1        [/]    -1.8000 vs    -1.8000  Δ [dim]+0.00e+00[/]",
+            "      [blue]p5        [/]    -1.5000 vs    -1.5000  Δ [dim]+0.00e+00[/]",
+            "      [blue]p50       [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]",
+            "      [blue]p95       [/]     1.5000 vs     1.5000  Δ [dim]+0.00e+00[/]",
+            "      [blue]p99       [/]     1.8000 vs     1.8000  Δ [dim]+0.00e+00[/]",
+        ]
 
     def test_no_percentiles(self) -> None:
         baseline: TensorStats = _make_stats(percentiles={})
         target: TensorStats = _make_stats(percentiles={})
         lines: list[str] = _format_stats_rich_verbose(baseline=baseline, target=target)
 
-        assert len(lines) == 5  # only stat fields, no percentile lines
+        assert lines == [
+            "      [blue]mean      [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]",
+            "      [blue]abs_mean  [/]     0.8000 vs     0.8000  Δ [dim]+0.00e+00[/]",
+            "      [blue]std       [/]     1.0000 vs     1.0000  Δ [dim]+0.00e+00[/]",
+            "      [blue]min       [/]    -2.0000 vs    -2.0000  Δ [dim]+0.00e+00[/]",
+            "      [blue]max       [/]     2.0000 vs     2.0000  Δ [dim]+0.00e+00[/]",
+        ]
 
 
 class TestFormatAbsDiffPercentilesRich:
@@ -908,8 +1056,11 @@ class TestFormatReplicatedChecks:
         ]
         result: str = format_replicated_checks(checks)
 
-        assert "❌ axis=tp" in result
-        assert "rel_diff=5.000000e-01" in result
+        assert result == (
+            "Replicated checks:\n"
+            "  ❌ axis=tp group=0 idx=1 vs 0: "
+            "rel_diff=5.000000e-01 max_abs_diff=1.000000e+00 mean_abs_diff=3.000000e-01"
+        )
 
     def test_no_diff(self) -> None:
         checks: list[ReplicatedCheckResult] = [
@@ -924,7 +1075,10 @@ class TestFormatReplicatedChecks:
         ]
         result: str = format_replicated_checks(checks)
 
-        assert "n/a diff" in result
+        assert result == (
+            "Replicated checks:\n"
+            "  ✅ axis=tp group=0 idx=1 vs 0: n/a diff"
+        )
 
 
 if __name__ == "__main__":
