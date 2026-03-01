@@ -70,9 +70,7 @@ def _category_marker(category: str) -> tuple[bool, str, str]:
 # ---------------------------------------------------------------------------
 
 
-def _format_stat_line(
-    stat_name: str, val_b: float, val_t: float, diff: float
-) -> str:
+def _format_stat_line(stat_name: str, val_b: float, val_t: float, diff: float) -> str:
     return (
         f"      [blue]{stat_name:10s}[/] {val_b:>10.4f} vs {val_t:>10.4f}"
         f"  Δ {_fmt_diff_colored(diff)}"
@@ -284,9 +282,7 @@ def _format_comparison_normal_or_verbose(
     if record.raw_bundle_info is not None:
         lines.append("   [dim]Bundle[/]")
         lines.extend(
-            _format_bundle_section(
-                bundle_info=record.raw_bundle_info, verbose=verbose
-            )
+            _format_bundle_section(bundle_info=record.raw_bundle_info, verbose=verbose)
         )
 
     # Plan section
@@ -310,7 +306,9 @@ def _format_comparison_normal_or_verbose(
     # Stats section
     lines.append("   [dim]Stats[/]")
     lines.extend(
-        _format_stats_rich(baseline=baseline.stats, target=target.stats, verbose=verbose)
+        _format_stats_rich(
+            baseline=baseline.stats, target=target.stats, verbose=verbose
+        )
     )
 
     show_detail: bool = verbose or not passed
@@ -501,9 +499,7 @@ def _format_stats_rich(
         # Range line: combine min/max (escape brackets to avoid Rich markup)
         range_baseline: str = escape(f"[{baseline.min:.4f}, {baseline.max:.4f}]")
         range_target: str = escape(f"[{target.min:.4f}, {target.max:.4f}]")
-        lines.append(
-            f"      [blue]{'range':10s}[/] {range_baseline} vs {range_target}"
-        )
+        lines.append(f"      [blue]{'range':10s}[/] {range_baseline} vs {range_target}")
 
     return lines
 

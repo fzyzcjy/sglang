@@ -71,7 +71,9 @@ def compute_unsharder_plan(
         sharded_axes=sharded_axes,
         all_axes=all_axes,
     )
-    replicated_axes: frozenset[ParallelAxis] = effective_replicated | implicit_replicated
+    replicated_axes: frozenset[ParallelAxis] = (
+        effective_replicated | implicit_replicated
+    )
 
     if not sharded_axes and not replicated_axes:
         return []
@@ -144,14 +146,16 @@ def _validate_explicit_replicated(
     )
     if undeclared:
         undeclared_names: str = ", ".join(sorted(a.value for a in undeclared))
-        log_sink.add(InfoLog(
-            category="unsharder",
-            message=(
-                f"Axes {{{undeclared_names}}} are active (axis_size > 1) but not declared "
-                f"in dims. Treating as implicitly replicated. "
-                f"Consider annotating as sharded in dim spec or as '# axis:replicated'."
-            ),
-        ))
+        log_sink.add(
+            InfoLog(
+                category="unsharder",
+                message=(
+                    f"Axes {{{undeclared_names}}} are active (axis_size > 1) but not declared "
+                    f"in dims. Treating as implicitly replicated. "
+                    f"Consider annotating as sharded in dim spec or as '# axis:replicated'."
+                ),
+            )
+        )
 
     return undeclared
 

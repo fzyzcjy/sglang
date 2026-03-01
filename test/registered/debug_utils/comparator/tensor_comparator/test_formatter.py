@@ -1,6 +1,11 @@
 import sys
 
 import pytest
+from registered.debug_utils.comparator.testing_helpers import make_diff as _make_diff
+from registered.debug_utils.comparator.testing_helpers import make_stats as _make_stats
+from registered.debug_utils.comparator.testing_helpers import (
+    make_tensor_info as _make_tensor_info,
+)
 
 from sglang.srt.debug_utils.comparator.aligner.axis_aligner import AxisAlignerPlan
 from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
@@ -41,16 +46,10 @@ from sglang.srt.debug_utils.comparator.tensor_comparator.formatter import (
 from sglang.srt.debug_utils.comparator.tensor_comparator.types import (
     DiffInfo,
     TensorComparisonInfo,
-    TensorInfo,
     TensorStats,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci
-from registered.debug_utils.comparator.testing_helpers import (
-    make_diff as _make_diff,
-    make_stats as _make_stats,
-    make_tensor_info as _make_tensor_info,
-)
 
 register_cpu_ci(est_time=10, suite="default", nightly=True)
 
@@ -876,7 +875,9 @@ class TestFormatStatsRichVerbose:
     def test_all_stats_with_percentiles(self) -> None:
         baseline: TensorStats = _make_stats()
         target: TensorStats = _make_stats()
-        lines: list[str] = _format_stats_rich(baseline=baseline, target=target, verbose=True)
+        lines: list[str] = _format_stats_rich(
+            baseline=baseline, target=target, verbose=True
+        )
 
         assert lines == [
             "      [blue]mean      [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]",
@@ -894,7 +895,9 @@ class TestFormatStatsRichVerbose:
     def test_no_percentiles(self) -> None:
         baseline: TensorStats = _make_stats(percentiles={})
         target: TensorStats = _make_stats(percentiles={})
-        lines: list[str] = _format_stats_rich(baseline=baseline, target=target, verbose=True)
+        lines: list[str] = _format_stats_rich(
+            baseline=baseline, target=target, verbose=True
+        )
 
         assert lines == [
             "      [blue]mean      [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]",

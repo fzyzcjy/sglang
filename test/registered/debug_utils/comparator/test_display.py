@@ -9,8 +9,8 @@ import torch
 from sglang.srt.debug_utils.comparator.display import (
     _collect_input_ids_and_positions,
     _collect_rank_info,
-    extract_parallel_info,
     _render_polars_as_text,
+    extract_parallel_info,
 )
 from sglang.srt.debug_utils.comparator.output_types import (
     InputIdsRecord,

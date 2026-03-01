@@ -2,6 +2,10 @@ import sys
 from io import StringIO
 
 import pytest
+from registered.debug_utils.comparator.testing_helpers import make_diff as _make_diff
+from registered.debug_utils.comparator.testing_helpers import (
+    make_tensor_info as _make_tensor_info,
+)
 from rich.console import Console, Group
 from rich.panel import Panel
 
@@ -38,11 +42,6 @@ from sglang.srt.debug_utils.comparator.output_types import (
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci
-from registered.debug_utils.comparator.testing_helpers import (
-    make_diff as _make_diff,
-    make_stats as _make_stats,
-    make_tensor_info as _make_tensor_info,
-)
 
 register_cpu_ci(est_time=10, suite="default", nightly=True)
 
