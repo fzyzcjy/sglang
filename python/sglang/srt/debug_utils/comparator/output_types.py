@@ -3,14 +3,25 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Optional, Union
 
-import polars as pl
 from pydantic import ConfigDict, Discriminator, Field, TypeAdapter, model_validator
 from rich.console import Group, RenderableType
 from rich.markup import escape
 
-from sglang.srt.debug_utils.comparator.tensor_comparator.formatter import (
-    format_comparison,
-    format_replicated_checks,
+from sglang.srt.debug_utils.comparator.output_formatter import (
+    _format_aligner_plan,
+    _format_config_body,
+    _format_config_rich_body,
+    _format_log_body,
+    _format_non_tensor_body,
+    _format_non_tensor_rich_body,
+    _format_skip_body,
+    _format_skip_rich_body,
+    _format_summary_body,
+    _format_summary_rich_body,
+    _format_table_body,
+    _format_table_rich_body,
+    _format_tensor_comparison_body,
+    _format_tensor_comparison_rich_body,
 )
 from sglang.srt.debug_utils.comparator.tensor_comparator.types import (
     DiffInfo,
@@ -153,13 +164,10 @@ class ConfigRecord(_OutputRecord):
     config: dict[str, Any]
 
     def _format_body(self) -> str:
-        return f"Config: {self.config}"
+        return _format_config_body(self)
 
     def _format_rich_body(self, verbosity: Verbosity = "normal") -> RenderableType:
-        from rich.panel import Panel
-
-        lines: list[str] = [f"  [bold]{k}[/] : {v}" for k, v in self.config.items()]
-        return Panel("\n".join(lines), title="Comparator Config", border_style="cyan")
+        return _format_config_rich_body(self, verbosity=verbosity)
 
 
 class SkipComparisonRecord(_BaseComparisonRecord):
@@ -174,11 +182,10 @@ class SkipComparisonRecord(_BaseComparisonRecord):
         return "skipped"
 
     def _format_body(self) -> str:
-        return f"Skip: {self.name}{self._format_location_suffix()} ({self.reason})"
+        return _format_skip_body(self)
 
     def _format_rich_body(self, verbosity: Verbosity = "normal") -> RenderableType:
-        suffix: str = self._format_location_suffix()
-        return f"[dim]⊘ {escape(self.name)}{suffix} ── skipped ({escape(self.reason)})[/]"
+        return _format_skip_rich_body(self, verbosity=verbosity)
 
 
 class _TableRecord(_OutputRecord):
@@ -189,20 +196,10 @@ class _TableRecord(_OutputRecord):
     def _table_title(self) -> str: ...
 
     def _format_body(self) -> str:
-        from sglang.srt.debug_utils.comparator.display import _render_polars_as_text
-
-        return _render_polars_as_text(
-            pl.DataFrame(self.rows), title=self._table_title()
-        )
+        return _format_table_body(self)
 
     def _format_rich_body(self, verbosity: Verbosity = "normal") -> RenderableType:
-        from sglang.srt.debug_utils.comparator.display import (
-            _render_polars_as_rich_table,
-        )
-
-        return _render_polars_as_rich_table(
-            pl.DataFrame(self.rows), title=self._table_title()
-        )
+        return _format_table_rich_body(self, verbosity=verbosity)
 
 
 class RankInfoRecord(_TableRecord):
@@ -237,21 +234,10 @@ class TensorComparisonRecord(TensorComparisonInfo, _BaseComparisonRecord):
         return "passed" if self.diff is not None and self.diff.passed else "failed"
 
     def _format_body(self) -> str:
-        body: str = self._format_location_prefix() + format_comparison(self)
-        if self.replicated_checks:
-            body += "\n" + format_replicated_checks(self.replicated_checks)
-        if self.aligner_plan is not None:
-            body += "\n" + _format_aligner_plan(self.aligner_plan)
-        return body
+        return _format_tensor_comparison_body(self)
 
     def _format_rich_body(self, verbosity: Verbosity = "normal") -> RenderableType:
-        from sglang.srt.debug_utils.comparator.tensor_comparator.formatter import (
-            format_comparison_rich,
-        )
-
-        return self._format_location_prefix_rich() + format_comparison_rich(
-            record=self, verbosity=verbosity
-        )
+        return _format_tensor_comparison_rich_body(self, verbosity=verbosity)
 
 
 class NonTensorComparisonRecord(_BaseComparisonRecord):
@@ -270,31 +256,10 @@ class NonTensorComparisonRecord(_BaseComparisonRecord):
         return "passed" if self.values_equal else "failed"
 
     def _format_body(self) -> str:
-        suffix: str = self._format_location_suffix()
-        if self.values_equal:
-            return f"NonTensor: {self.name}{suffix} = {self.baseline_value} ({self.baseline_type}) [equal]"
-        return (
-            f"NonTensor: {self.name}{suffix}\n"
-            f"  baseline = {self.baseline_value} ({self.baseline_type})\n"
-            f"  target   = {self.target_value} ({self.target_type})"
-        )
+        return _format_non_tensor_body(self)
 
     def _format_rich_body(self, verbosity: Verbosity = "normal") -> RenderableType:
-        suffix: str = self._format_location_suffix()
-        name: str = escape(self.name)
-        baseline_val: str = escape(self.baseline_value)
-        target_val: str = escape(self.target_value)
-
-        if self.values_equal:
-            return (
-                f"═ {name}{suffix} = {baseline_val} "
-                f"({self.baseline_type}) [green]✓[/]"
-            )
-        return (
-            f"═ [bold red]{name}{suffix}[/]\n"
-            f"  baseline = {baseline_val} ({self.baseline_type})\n"
-            f"  target   = {target_val} ({self.target_type})"
-        )
+        return _format_non_tensor_rich_body(self, verbosity=verbosity)
 
 
 class SummaryRecord(_OutputRecord):
@@ -314,63 +279,17 @@ class SummaryRecord(_OutputRecord):
         return self
 
     def _format_body(self) -> str:
-        return (
-            f"Summary: {self.passed} passed, {self.failed} failed, "
-            f"{self.skipped} skipped (total {self.total})"
-        )
+        return _format_summary_body(self)
 
     def _format_rich_body(self, verbosity: Verbosity = "normal") -> RenderableType:
-        from rich.panel import Panel
-
-        text: str = (
-            f"[bold green]{self.passed} passed[/] │ "
-            f"[bold red]{self.failed} failed[/] │ "
-            f"[yellow]{self.skipped} skipped[/] │ "
-            f"{self.total} total"
-        )
-        return Panel(text, title="SUMMARY", border_style="bold")
+        return _format_summary_rich_body(self, verbosity=verbosity)
 
 
 class LogRecord(_OutputRecord):
     type: Literal["log"] = "log"
 
     def _format_body(self) -> str:
-        return ""
-
-
-def _format_aligner_plan(plan: AlignerPlan) -> str:
-    lines: list[str] = ["Aligner Plan:"]
-
-    for side_label, side_plans in [
-        ("baseline", plan.per_step_plans.x),
-        ("target", plan.per_step_plans.y),
-    ]:
-        if not side_plans:
-            lines.append(f"  {side_label}: (no steps)")
-            continue
-
-        step_summaries: list[str] = []
-        for step_plan in side_plans:
-            sub_strs: list[str] = []
-            for sub in step_plan.sub_plans:
-                sub_strs.append(f"{sub.type}")
-            summary: str = ", ".join(sub_strs) if sub_strs else "passthrough"
-            step_summaries.append(f"step={step_plan.step}: {summary}")
-        lines.append(f"  {side_label}: [{'; '.join(step_summaries)}]")
-
-    if plan.token_aligner_plan is not None:
-        num_tokens: int = len(plan.token_aligner_plan.locators.x.steps)
-        lines.append(f"  token_aligner: {num_tokens} tokens aligned")
-
-    if plan.axis_aligner_plan is not None:
-        parts: list[str] = []
-        if plan.axis_aligner_plan.pattern.x:
-            parts.append(f"x: {plan.axis_aligner_plan.pattern.x}")
-        if plan.axis_aligner_plan.pattern.y:
-            parts.append(f"y: {plan.axis_aligner_plan.pattern.y}")
-        lines.append(f"  axis_aligner: {', '.join(parts)}")
-
-    return "\n".join(lines)
+        return _format_log_body(self)
 
 
 AnyRecord = Annotated[
