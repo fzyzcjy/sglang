@@ -2,8 +2,6 @@ import sys
 
 import pytest
 
-from sglang.srt.debug_utils.comparator.report_sink import _set_verbosity
-
 from sglang.srt.debug_utils.comparator.aligner.axis_aligner import AxisAlignerPlan
 from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
     AlignerPerStepPlan,
@@ -31,6 +29,7 @@ from sglang.srt.debug_utils.comparator.output_types import (
     StepShapeTrace,
     TensorComparisonRecord,
 )
+from sglang.srt.debug_utils.comparator.report_sink import _set_verbosity
 from sglang.srt.debug_utils.comparator.tensor_comparator.formatter import (
     _format_abs_diff_percentiles_rich,
     _format_bundle_section,
