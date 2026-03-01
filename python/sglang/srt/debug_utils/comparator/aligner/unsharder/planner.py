@@ -69,7 +69,8 @@ def compute_unsharder_plan(
         sharded_axes=sharded_axes,
         all_axes=all_axes,
     )
-    replicated_axes: frozenset[ParallelAxis] = effective_replicated
+    # Only keep replicated axes that are actually active (present in parallel_infos)
+    replicated_axes: frozenset[ParallelAxis] = effective_replicated & all_axes
 
     if not sharded_axes and not replicated_axes:
         return []
