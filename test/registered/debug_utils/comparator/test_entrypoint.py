@@ -1458,7 +1458,7 @@ class TestEntrypointConcatMode:
         assert len(comparisons) == 3
 
     def test_concat_aligner_plan_fields(self, tmp_path, capsys):
-        """TensorComparisonRecord.aligner_plan reports mode='concat' with plan=None."""
+        """TensorComparisonRecord.traced_plan reports mode='concat' with plan=None."""
         torch.manual_seed(42)
 
         records = self._run_concat(
@@ -1470,8 +1470,9 @@ class TestEntrypointConcatMode:
         )
         comparisons = _get_comparisons(records)
         assert len(comparisons) == 1
-        plan = comparisons[0].aligner_plan
-        assert plan is not None
+        traced_plan = comparisons[0].traced_plan
+        assert traced_plan is not None
+        plan = traced_plan.plan
         assert plan.token_aligner_mode == "concat_steps"
         assert plan.token_aligner_plan is None
 
