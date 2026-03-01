@@ -5,6 +5,8 @@ import torch
 
 from sglang.srt.debug_utils.comparator.aligner.entrypoint.executor import (
     AlignerResult,
+    StepPlansResult,
+    SubPlansResult,
     _execute_step_plans,
     execute_aligner_plan,
     execute_sub_plan,
@@ -31,28 +33,28 @@ register_cpu_ci(est_time=15, suite="default", nightly=True)
 
 class TestExecuteSubPlans:
     def test_empty_tensors_returns_none(self) -> None:
-        result, checks, snapshots = execute_sub_plans(tensors=[], plans=[])
-        assert result is None
-        assert checks == []
-        assert snapshots == []
+        r: SubPlansResult = execute_sub_plans(tensors=[], plans=[])
+        assert r.tensor is None
+        assert r.checks == []
+        assert r.snapshots == []
 
     def test_no_plans_single_tensor_passthrough(self) -> None:
         tensor: torch.Tensor = torch.tensor([1.0, 2.0, 3.0])
-        result, checks, snapshots = execute_sub_plans(tensors=[tensor], plans=[])
-        assert result is not None
-        assert torch.equal(result, tensor)
-        assert checks == []
-        assert snapshots == []
+        r: SubPlansResult = execute_sub_plans(tensors=[tensor], plans=[])
+        assert r.tensor is not None
+        assert torch.equal(r.tensor, tensor)
+        assert r.checks == []
+        assert r.snapshots == []
 
     def test_no_plans_multiple_tensors_returns_none(self) -> None:
         tensors: list[torch.Tensor] = [
             torch.tensor([1.0]),
             torch.tensor([2.0]),
         ]
-        result, checks, snapshots = execute_sub_plans(tensors=tensors, plans=[])
-        assert result is None
-        assert checks == []
-        assert snapshots == []
+        r: SubPlansResult = execute_sub_plans(tensors=tensors, plans=[])
+        assert r.tensor is None
+        assert r.checks == []
+        assert r.snapshots == []
 
     def test_with_unsharder_plan(self) -> None:
         t0: torch.Tensor = torch.tensor([[1.0, 2.0]]).refine_names("b", "h")
@@ -64,13 +66,13 @@ class TestExecuteSubPlans:
             groups=[[0, 1]],
         )
 
-        result, checks, snapshots = execute_sub_plans(tensors=[t0, t1], plans=[plan])
+        r: SubPlansResult = execute_sub_plans(tensors=[t0, t1], plans=[plan])
 
-        assert result is not None
+        assert r.tensor is not None
         expected: torch.Tensor = torch.tensor([[1.0, 2.0, 3.0, 4.0]])
-        assert torch.equal(result.rename(None), expected)
-        assert checks == []
-        assert len(snapshots) == 1
+        assert torch.equal(r.tensor.rename(None), expected)
+        assert r.checks == []
+        assert len(r.snapshots) == 1
 
 
 class TestExecuteSubPlan:
@@ -95,13 +97,13 @@ class TestExecuteStepPlans:
             sub_plans=[],
         )
 
-        result, checks, trace = _execute_step_plans(
+        r: StepPlansResult = _execute_step_plans(
             tensors=tensors, step_plans=[step_plan]
         )
 
-        assert result == {}
-        assert checks == []
-        assert len(trace.step_traces) == 1
+        assert r.tensors == {}
+        assert r.checks == []
+        assert len(r.trace.step_traces) == 1
 
     def test_single_step_passthrough(self) -> None:
         tensor: torch.Tensor = torch.tensor([1.0, 2.0])
@@ -112,15 +114,15 @@ class TestExecuteStepPlans:
             sub_plans=[],
         )
 
-        result, checks, trace = _execute_step_plans(
+        r: StepPlansResult = _execute_step_plans(
             tensors=[tensor], step_plans=[step_plan]
         )
 
-        assert 5 in result
-        assert torch.equal(result[5], tensor)
-        assert checks == []
-        assert len(trace.step_traces) == 1
-        assert trace.step_traces[0].step == 5
+        assert 5 in r.tensors
+        assert torch.equal(r.tensors[5], tensor)
+        assert r.checks == []
+        assert len(r.trace.step_traces) == 1
+        assert r.trace.step_traces[0].step == 5
 
 
 class TestExecuteAlignerPlan:

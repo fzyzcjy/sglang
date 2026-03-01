@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import torch
 
@@ -37,6 +37,18 @@ from sglang.srt.debug_utils.comparator.output_types import (
 from sglang.srt.debug_utils.comparator.utils import Pair
 
 
+class StepPlansResult(NamedTuple):
+    tensors: dict[int, torch.Tensor]
+    checks: list[ReplicatedCheckResult]
+    trace: SideShapeTrace
+
+
+class SubPlansResult(NamedTuple):
+    tensor: Optional[torch.Tensor]
+    checks: list[ReplicatedCheckResult]
+    snapshots: list[ShapeSnapshot]
+
+
 @dataclass(frozen=True)
 class AlignerResult:
     tensors: Optional[Pair[torch.Tensor]]
@@ -54,20 +66,20 @@ def execute_aligner_plan(
     all_checks: list[ReplicatedCheckResult] = []
 
     # Per-side: unshard + reorder -> dict[step, tensor]
-    step_tensors_x, checks_x, trace_x = _execute_step_plans(
+    result_x: StepPlansResult = _execute_step_plans(
         tensors=tensors_pair.x, step_plans=plan.per_step_plans.x
     )
-    all_checks.extend(checks_x)
+    all_checks.extend(result_x.checks)
 
-    step_tensors_y, checks_y, trace_y = _execute_step_plans(
+    result_y: StepPlansResult = _execute_step_plans(
         tensors=tensors_pair.y, step_plans=plan.per_step_plans.y
     )
-    all_checks.extend(checks_y)
+    all_checks.extend(result_y.checks)
 
-    shape_traces: Pair[SideShapeTrace] = Pair(x=trace_x, y=trace_y)
+    shape_traces: Pair[SideShapeTrace] = Pair(x=result_x.trace, y=result_y.trace)
 
-    if not step_tensors_x or not step_tensors_y:
-        failed_side_xy: str = "x" if not step_tensors_x else "y"
+    if not result_x.tensors or not result_y.tensors:
+        failed_side_xy: str = "x" if not result_x.tensors else "y"
         return AlignerResult(
             tensors=None,
             failed_side_xy=failed_side_xy,
@@ -76,7 +88,9 @@ def execute_aligner_plan(
         )
 
     # Cross-side: token alignment (or direct extraction for single-step)
-    step_pair: Pair[dict[int, torch.Tensor]] = Pair(x=step_tensors_x, y=step_tensors_y)
+    step_pair: Pair[dict[int, torch.Tensor]] = Pair(
+        x=result_x.tensors, y=result_y.tensors
+    )
     combined: Pair[torch.Tensor]
     if plan.token_aligner_mode == "concat_steps":
         combined = execute_token_aligner_concat_steps(tensor_of_step_pair=step_pair)
@@ -87,10 +101,10 @@ def execute_aligner_plan(
             tensor_of_step_pair=step_pair,
         )
     else:
-        assert len(step_tensors_x) == 1 and len(step_tensors_y) == 1
+        assert len(result_x.tensors) == 1 and len(result_y.tensors) == 1
         combined = Pair(
-            x=list(step_tensors_x.values())[0],
-            y=list(step_tensors_y.values())[0],
+            x=list(result_x.tensors.values())[0],
+            y=list(result_y.tensors.values())[0],
         )
 
     # Cross-side: axis alignment (squeeze singletons + rearrange dim order)
@@ -111,7 +125,7 @@ def execute_aligner_plan(
 def _execute_step_plans(
     tensors: list[torch.Tensor],
     step_plans: list[AlignerPerStepPlan],
-) -> tuple[dict[int, torch.Tensor], list[ReplicatedCheckResult], SideShapeTrace]:
+) -> StepPlansResult:
     result: dict[int, torch.Tensor] = {}
     all_checks: list[ReplicatedCheckResult] = []
     step_traces: list[StepShapeTrace] = []
@@ -120,28 +134,34 @@ def _execute_step_plans(
         step_tensors: list[torch.Tensor] = [
             tensors[i] for i in step_plan.input_object_indices
         ]
-        tensor, checks, snapshots = execute_sub_plans(
+        sub_result: SubPlansResult = execute_sub_plans(
             tensors=step_tensors, plans=step_plan.sub_plans
         )
-        all_checks.extend(checks)
-        step_traces.append(StepShapeTrace(step=step_plan.step, snapshots=snapshots))
-        if tensor is not None:
-            result[step_plan.step] = tensor
+        all_checks.extend(sub_result.checks)
+        step_traces.append(
+            StepShapeTrace(step=step_plan.step, snapshots=sub_result.snapshots)
+        )
+        if sub_result.tensor is not None:
+            result[step_plan.step] = sub_result.tensor
 
-    return result, all_checks, SideShapeTrace(step_traces=step_traces)
+    return StepPlansResult(
+        tensors=result,
+        checks=all_checks,
+        trace=SideShapeTrace(step_traces=step_traces),
+    )
 
 
 def execute_sub_plans(
     tensors: list[torch.Tensor],
     plans: list[AlignerPerStepSubPlan],
-) -> tuple[Optional[torch.Tensor], list[ReplicatedCheckResult], list[ShapeSnapshot]]:
+) -> SubPlansResult:
     if not tensors:
-        return None, [], []
+        return SubPlansResult(tensor=None, checks=[], snapshots=[])
 
     if not plans:
         if len(tensors) != 1:
-            return None, [], []
-        return tensors[0], [], []
+            return SubPlansResult(tensor=None, checks=[], snapshots=[])
+        return SubPlansResult(tensor=tensors[0], checks=[], snapshots=[])
 
     current: list[torch.Tensor] = tensors
     all_checks: list[ReplicatedCheckResult] = []
@@ -159,7 +179,9 @@ def execute_sub_plans(
         )
 
     assert len(current) == 1
-    return current[0], all_checks, all_snapshots
+    return SubPlansResult(
+        tensor=current[0], checks=all_checks, snapshots=all_snapshots
+    )
 
 
 def execute_sub_plan(
