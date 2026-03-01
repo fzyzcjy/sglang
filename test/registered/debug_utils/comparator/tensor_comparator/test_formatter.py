@@ -656,8 +656,8 @@ class TestFormatBundleSection:
         lines: list[str] = _format_bundle_section(bundle)
 
         assert lines == [
-            "      baseline  [cyan]2 files[/] × \\[2, 4096] float32",
-            "      target  [cyan]2 files[/] × \\[2, 4096] float32",
+            "      baseline  [cyan]2 files[/] × [2, 4096] float32",
+            "      target  [cyan]2 files[/] × [2, 4096] float32",
         ]
 
     def test_mixed_shapes(self) -> None:
