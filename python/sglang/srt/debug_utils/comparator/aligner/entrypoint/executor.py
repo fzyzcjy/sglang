@@ -179,9 +179,7 @@ def execute_sub_plans(
         )
 
     assert len(current) == 1
-    return SubPlansResult(
-        tensor=current[0], checks=all_checks, snapshots=all_snapshots
-    )
+    return SubPlansResult(tensor=current[0], checks=all_checks, snapshots=all_snapshots)
 
 
 def execute_sub_plan(

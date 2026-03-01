@@ -242,7 +242,9 @@ def _load_and_align_aux_tensor(
 
         sub_result = execute_sub_plans(tensors=tensors, plans=sub_plans)
         assert sub_result.tensor is not None
-        return sub_result.tensor.rename(None)  # strip named dims before returning to plugin
+        return sub_result.tensor.rename(
+            None
+        )  # strip named dims before returning to plugin
 
     log_sink.add(
         InfoLog(
