@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, Optional, Union
 import polars as pl
 from pydantic import ConfigDict, Discriminator, Field, TypeAdapter, model_validator
 from rich.console import Group, RenderableType
+from rich.markup import escape
 
 from sglang.srt.debug_utils.comparator.tensor_comparator.formatter import (
     format_comparison,
@@ -136,6 +137,11 @@ class _BaseComparisonRecord(_OutputRecord):
             return f"[step={self.location.step}] "
         return ""
 
+    def _format_location_prefix_rich(self) -> str:
+        if self.location.step is not None:
+            return escape(f"[step={self.location.step}]") + " "
+        return ""
+
     def _format_location_suffix(self) -> str:
         if self.location.step is not None:
             return f" (step={self.location.step})"
@@ -149,7 +155,7 @@ class ConfigRecord(_OutputRecord):
     def _format_body(self) -> str:
         return f"Config: {self.config}"
 
-    def _format_rich_body(self) -> RenderableType:
+    def _format_rich_body(self, verbosity: Verbosity = "normal") -> RenderableType:
         from rich.panel import Panel
 
         lines: list[str] = [f"  [bold]{k}[/] : {v}" for k, v in self.config.items()]
@@ -170,9 +176,9 @@ class SkipComparisonRecord(_BaseComparisonRecord):
     def _format_body(self) -> str:
         return f"Skip: {self.name}{self._format_location_suffix()} ({self.reason})"
 
-    def _format_rich_body(self) -> RenderableType:
+    def _format_rich_body(self, verbosity: Verbosity = "normal") -> RenderableType:
         suffix: str = self._format_location_suffix()
-        return f"[dim]⊘ {self.name}{suffix} ── skipped ({self.reason})[/]"
+        return f"[dim]⊘ {escape(self.name)}{suffix} ── skipped ({escape(self.reason)})[/]"
 
 
 class _TableRecord(_OutputRecord):
@@ -189,7 +195,7 @@ class _TableRecord(_OutputRecord):
             pl.DataFrame(self.rows), title=self._table_title()
         )
 
-    def _format_rich_body(self) -> RenderableType:
+    def _format_rich_body(self, verbosity: Verbosity = "normal") -> RenderableType:
         from sglang.srt.debug_utils.comparator.display import (
             _render_polars_as_rich_table,
         )
@@ -243,7 +249,7 @@ class TensorComparisonRecord(TensorComparisonInfo, _BaseComparisonRecord):
             format_comparison_rich,
         )
 
-        return self._format_location_prefix() + format_comparison_rich(
+        return self._format_location_prefix_rich() + format_comparison_rich(
             record=self, verbosity=verbosity
         )
 
@@ -273,17 +279,21 @@ class NonTensorComparisonRecord(_BaseComparisonRecord):
             f"  target   = {self.target_value} ({self.target_type})"
         )
 
-    def _format_rich_body(self) -> RenderableType:
+    def _format_rich_body(self, verbosity: Verbosity = "normal") -> RenderableType:
         suffix: str = self._format_location_suffix()
+        name: str = escape(self.name)
+        baseline_val: str = escape(self.baseline_value)
+        target_val: str = escape(self.target_value)
+
         if self.values_equal:
             return (
-                f"═ {self.name}{suffix} = {self.baseline_value} "
+                f"═ {name}{suffix} = {baseline_val} "
                 f"({self.baseline_type}) [green]✓[/]"
             )
         return (
-            f"═ [bold red]{self.name}{suffix}[/]\n"
-            f"  baseline = {self.baseline_value} ({self.baseline_type})\n"
-            f"  target   = {self.target_value} ({self.target_type})"
+            f"═ [bold red]{name}{suffix}[/]\n"
+            f"  baseline = {baseline_val} ({self.baseline_type})\n"
+            f"  target   = {target_val} ({self.target_type})"
         )
 
 
@@ -309,7 +319,7 @@ class SummaryRecord(_OutputRecord):
             f"{self.skipped} skipped (total {self.total})"
         )
 
-    def _format_rich_body(self) -> RenderableType:
+    def _format_rich_body(self, verbosity: Verbosity = "normal") -> RenderableType:
         from rich.panel import Panel
 
         text: str = (
