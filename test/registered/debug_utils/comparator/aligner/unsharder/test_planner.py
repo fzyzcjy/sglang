@@ -41,11 +41,11 @@ class TestComputeUnsharderPlan:
 
     def test_missing_axis_in_all_parallel_infos_skipped(self) -> None:
         """Axis in dims but absent from all parallel_infos -> axis_size=1, auto-skip.
-        But CP is active and undeclared → raises undeclared error."""
+        CP is active and undeclared → treated as implicitly replicated (warning)."""
         dim_specs = parse_dims("h[tp]").dims
         parallel_infos = [{ParallelAxis.CP: AxisInfo(axis_rank=0, axis_size=2)}]
-        with pytest.raises(ValueError, match="not declared"):
-            compute_unsharder_plan(dim_specs, parallel_infos)
+        plans = compute_unsharder_plan(dim_specs, parallel_infos)
+        assert plans == []
 
     def test_empty_parallel_infos_raises(self) -> None:
         dim_specs = parse_dims("h[tp]").dims
@@ -593,8 +593,9 @@ class TestExplicitReplicatedAxes:
         assert isinstance(plans[0].params, PickParams)
         assert plans[0].groups == [[0, 1]]
 
-    def test_undeclared_active_axis_raises(self) -> None:
-        """Active axis not declared as sharded or replicated raises ValueError."""
+    def test_undeclared_active_axis_implicitly_replicated(self) -> None:
+        """Active axis not declared as sharded or replicated is treated as
+        implicitly replicated (warning emitted). Only CP is sharded here."""
         dim_specs = parse_dims("b s[cp] d").dims
         parallel_infos: list[dict[ParallelAxis, AxisInfo]] = [
             {
@@ -614,8 +615,9 @@ class TestExplicitReplicatedAxes:
                 ParallelAxis.TP: AxisInfo(axis_rank=1, axis_size=2),
             },
         ]
-        with pytest.raises(ValueError, match="tp.*not declared"):
-            compute_unsharder_plan(dim_specs, parallel_infos)
+        plans = compute_unsharder_plan(dim_specs, parallel_infos)
+        assert len(plans) == 1
+        assert plans[0].axis == ParallelAxis.CP
 
     def test_replicated_not_in_parallel_infos_raises(self) -> None:
         """Declaring replicated axis not in parallel_infos raises ValueError."""
