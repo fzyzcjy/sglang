@@ -760,7 +760,7 @@ class TestFormatPlanSectionRich:
 
         # Shape change should appear
         target_line: str = lines[1]
-        assert "2×\\[2, 4096] → 1×\\[4, 4096]" in target_line
+        assert "2×[2, 4096] → 1×[4, 4096]" in target_line
 
     def test_with_token_aligner(self) -> None:
         plan: AlignerPlan = _make_simple_aligner_plan(with_token_aligner=True)
