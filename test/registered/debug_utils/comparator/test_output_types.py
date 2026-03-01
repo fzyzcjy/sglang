@@ -38,7 +38,7 @@ from sglang.srt.debug_utils.comparator.output_types import (
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci
-from test.registered.debug_utils.comparator.testing_helpers import (
+from registered.debug_utils.comparator.testing_helpers import (
     make_diff as _make_diff,
     make_stats as _make_stats,
     make_tensor_info as _make_tensor_info,
