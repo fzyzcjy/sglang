@@ -1,7 +1,8 @@
 import sys
-from unittest.mock import patch
 
 import pytest
+
+from sglang.srt.debug_utils.comparator.report_sink import _set_verbosity
 
 from sglang.srt.debug_utils.comparator.aligner.axis_aligner import AxisAlignerPlan
 from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
@@ -467,11 +468,8 @@ class TestFormatComparisonRichMinimal:
         record: TensorComparisonRecord = _make_comparison_record(
             diff=_make_diff(rel_diff=1e-4, passed=True),
         )
-        with patch(
-            "sglang.srt.debug_utils.comparator.tensor_comparator.formatter.get_verbosity",
-            return_value="minimal",
-        ):
-            result: str = format_comparison_rich(record)
+        _set_verbosity("minimal")
+        result: str = format_comparison_rich(record)
 
         assert result == (
             "[green]✅[/] [bold green]hidden_states                  [/] "
@@ -482,11 +480,8 @@ class TestFormatComparisonRichMinimal:
         record: TensorComparisonRecord = _make_comparison_record(
             diff=_make_diff(rel_diff=0.5, passed=False),
         )
-        with patch(
-            "sglang.srt.debug_utils.comparator.tensor_comparator.formatter.get_verbosity",
-            return_value="minimal",
-        ):
-            result: str = format_comparison_rich(record)
+        _set_verbosity("minimal")
+        result: str = format_comparison_rich(record)
 
         assert result == (
             "[red]❌[/] [bold red]hidden_states                  [/] "
@@ -497,11 +492,8 @@ class TestFormatComparisonRichMinimal:
         record: TensorComparisonRecord = _make_comparison_record(
             shape_mismatch=True,
         )
-        with patch(
-            "sglang.srt.debug_utils.comparator.tensor_comparator.formatter.get_verbosity",
-            return_value="minimal",
-        ):
-            result: str = format_comparison_rich(record)
+        _set_verbosity("minimal")
+        result: str = format_comparison_rich(record)
 
         assert result == (
             "[red]❌[/] [bold red]hidden_states                  [/] "
@@ -510,11 +502,8 @@ class TestFormatComparisonRichMinimal:
 
     def test_no_diff(self) -> None:
         record: TensorComparisonRecord = _make_comparison_record()
-        with patch(
-            "sglang.srt.debug_utils.comparator.tensor_comparator.formatter.get_verbosity",
-            return_value="minimal",
-        ):
-            result: str = format_comparison_rich(record)
+        _set_verbosity("minimal")
+        result: str = format_comparison_rich(record)
 
         assert result == ("[red]❌[/] [bold red]hidden_states                  [/]")
 
@@ -526,11 +515,8 @@ class TestFormatComparisonRichNormal:
         record: TensorComparisonRecord = _make_comparison_record(
             diff=_make_diff(rel_diff=1e-4, passed=True),
         )
-        with patch(
-            "sglang.srt.debug_utils.comparator.tensor_comparator.formatter.get_verbosity",
-            return_value="normal",
-        ):
-            result: str = format_comparison_rich(record)
+        _set_verbosity("normal")
+        result: str = format_comparison_rich(record)
 
         assert "[green]✅[/] [bold green]hidden_states[/]" in result
         assert "rel_diff=1.00e-04" in result
@@ -547,11 +533,8 @@ class TestFormatComparisonRichNormal:
                 rel_diff=0.5, max_abs_diff=1.0, mean_abs_diff=0.3, passed=False
             ),
         )
-        with patch(
-            "sglang.srt.debug_utils.comparator.tensor_comparator.formatter.get_verbosity",
-            return_value="normal",
-        ):
-            result: str = format_comparison_rich(record)
+        _set_verbosity("normal")
+        result: str = format_comparison_rich(record)
 
         assert "[red]❌[/] [bold red]hidden_states[/]" in result
         assert "[bold red]rel_diff=5.00e-01[/]" in result
@@ -563,11 +546,8 @@ class TestFormatComparisonRichNormal:
         record: TensorComparisonRecord = _make_comparison_record(
             shape_mismatch=True,
         )
-        with patch(
-            "sglang.srt.debug_utils.comparator.tensor_comparator.formatter.get_verbosity",
-            return_value="normal",
-        ):
-            result: str = format_comparison_rich(record)
+        _set_verbosity("normal")
+        result: str = format_comparison_rich(record)
 
         assert "[yellow]⚠ Shape mismatch[/]" in result
 
@@ -577,11 +557,8 @@ class TestFormatComparisonRichNormal:
             diff_downcast=_make_diff(rel_diff=1e-5, passed=True),
             downcast_dtype="torch.bfloat16",
         )
-        with patch(
-            "sglang.srt.debug_utils.comparator.tensor_comparator.formatter.get_verbosity",
-            return_value="normal",
-        ):
-            result: str = format_comparison_rich(record)
+        _set_verbosity("normal")
+        result: str = format_comparison_rich(record)
 
         assert "downcast to torch.bfloat16" in result
         assert "rel_diff=1.00e-05" in result
@@ -595,11 +572,8 @@ class TestFormatComparisonRichNormal:
             diff=_make_diff(passed=True),
             raw_bundle_info=bundle_info,
         )
-        with patch(
-            "sglang.srt.debug_utils.comparator.tensor_comparator.formatter.get_verbosity",
-            return_value="normal",
-        ):
-            result: str = format_comparison_rich(record)
+        _set_verbosity("normal")
+        result: str = format_comparison_rich(record)
 
         assert "[dim]Bundle[/]" in result
         assert "[cyan]2 files[/]" in result
@@ -610,11 +584,8 @@ class TestFormatComparisonRichNormal:
             diff=_make_diff(passed=True),
             aligner_plan=plan,
         )
-        with patch(
-            "sglang.srt.debug_utils.comparator.tensor_comparator.formatter.get_verbosity",
-            return_value="normal",
-        ):
-            result: str = format_comparison_rich(record)
+        _set_verbosity("normal")
+        result: str = format_comparison_rich(record)
 
         assert "[dim]Plan[/]" in result
         assert "[magenta]unsharder(tp)[/]" in result
@@ -628,11 +599,8 @@ class TestFormatComparisonRichVerbose:
             diff=_make_diff(rel_diff=1e-4, passed=True),
             sample="tensor([0.1, 0.2, ...])",
         )
-        with patch(
-            "sglang.srt.debug_utils.comparator.tensor_comparator.formatter.get_verbosity",
-            return_value="verbose",
-        ):
-            result: str = format_comparison_rich(record)
+        _set_verbosity("verbose")
+        result: str = format_comparison_rich(record)
 
         # Verbose always shows detail sections, even for passed
         assert "[dim]Abs Diff Percentiles[/]" in result
@@ -650,11 +618,8 @@ class TestFormatComparisonRichVerbose:
             diff=_make_diff(passed=True),
             raw_bundle_info=bundle_info,
         )
-        with patch(
-            "sglang.srt.debug_utils.comparator.tensor_comparator.formatter.get_verbosity",
-            return_value="verbose",
-        ):
-            result: str = format_comparison_rich(record)
+        _set_verbosity("verbose")
+        result: str = format_comparison_rich(record)
 
         assert "[dim]Bundle[/]" in result
         # Verbose shows per-file listing
@@ -673,11 +638,8 @@ class TestFormatComparisonRichVerbose:
             aligner_plan=plan,
             shape_traces=traces,
         )
-        with patch(
-            "sglang.srt.debug_utils.comparator.tensor_comparator.formatter.get_verbosity",
-            return_value="verbose",
-        ):
-            result: str = format_comparison_rich(record)
+        _set_verbosity("verbose")
+        result: str = format_comparison_rich(record)
 
         assert "[dim]Plan[/]" in result
         assert "→" in result  # shape change arrow
