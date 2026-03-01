@@ -26,7 +26,6 @@ if TYPE_CHECKING:
     )
     from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import AlignerPlan
     from sglang.srt.debug_utils.comparator.output_types import (
-        BaseLog,
         ConfigRecord,
         ErrorLog,
         InfoLog,
@@ -45,7 +44,9 @@ Verbosity = Literal["minimal", "normal", "verbose"]
 # ── Record-level rendering (body + logs) ─────────────────────────────
 
 
-def _render_record_rich(record: _OutputRecord, *, verbosity: Verbosity = "normal") -> RenderableType:
+def _render_record_rich(
+    record: _OutputRecord, *, verbosity: Verbosity = "normal"
+) -> RenderableType:
     body: RenderableType = record._format_rich_body(verbosity=verbosity)
 
     log_lines: list[str] = _format_log_lines_rich(
@@ -64,9 +65,7 @@ def _render_record_rich(record: _OutputRecord, *, verbosity: Verbosity = "normal
 def _render_record_text(record: _OutputRecord) -> str:
     body: str = record._format_body()
 
-    log_suffix: str = _format_log_lines_text(
-        errors=record.errors, infos=record.infos
-    )
+    log_suffix: str = _format_log_lines_text(errors=record.errors, infos=record.infos)
 
     if log_suffix:
         body += "\n" + log_suffix
@@ -87,9 +86,7 @@ def _format_log_lines_rich(
     return lines
 
 
-def _format_log_lines_text(
-    *, errors: list[ErrorLog], infos: list[InfoLog]
-) -> str:
+def _format_log_lines_text(*, errors: list[ErrorLog], infos: list[InfoLog]) -> str:
     lines: list[str] = []
 
     if errors:
