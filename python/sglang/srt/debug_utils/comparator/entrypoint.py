@@ -52,135 +52,6 @@ def main() -> None:
     sys.exit(run(args))
 
 
-def parse_args(argv: list[str]) -> argparse.Namespace:
-    """Parse CLI arguments from an argv list. Applies preset expansion."""
-    argv = expand_preset(argv, presets=PRESETS)
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--baseline-path", type=str)
-    parser.add_argument("--target-path", type=str)
-    parser.add_argument("--start-step", type=int, default=0)
-    parser.add_argument("--end-step", type=int, default=1000000)
-    parser.add_argument("--diff-threshold", type=float, default=1e-3)
-    parser.add_argument(
-        "--filter", type=str, default=None, help="Regex to filter filenames (include)"
-    )
-    parser.add_argument(
-        "--output-format",
-        type=str,
-        choices=["text", "json"],
-        default="text",
-        help="Output format: text (default) or json (JSONL, one JSON object per line)",
-    )
-    parser.add_argument(
-        "--verbosity",
-        type=str,
-        choices=["minimal", "normal", "verbose"],
-        default="normal",
-        help="Output verbosity: minimal (1 line per tensor), normal (compact lifecycle), "
-        "verbose (full detail). Default: normal",
-    )
-    parser.add_argument(
-        "--preset",
-        type=str,
-        choices=list(PRESETS.keys()),
-        default=None,
-        help="Preset configuration (expanded before parsing). "
-        f"Available: {list(PRESETS.keys())}",
-    )
-    parser.add_argument(
-        "--grouping-skip-keys",
-        nargs="*",
-        default=None,
-        help="Metadata keys to skip when grouping bundles (additive on top of "
-        "always-skipped dump_index and filename). "
-        "E.g. '--grouping-skip-keys rank step' skips rank and step.",
-    )
-    parser.add_argument(
-        "--token-aligner",
-        type=str,
-        choices=["smart", "concat_steps"],
-        default=None,
-        help="Token aligner mode: concat_steps (BS=1, no aux needed) or smart (BS>1, sequence matching). "
-        "Default None (per-step comparison).",
-    )
-    parser.add_argument(
-        "--tokenizer",
-        type=str,
-        default=None,
-        help="Tokenizer path for decoding input_ids (auto-discovered from dump metadata if not set)",
-    )
-    parser.add_argument(
-        "--viz-bundle-details",
-        action="store_true",
-        default=False,
-        help="Generate comparison heatmap/histogram PNG for each compared tensor",
-    )
-    parser.add_argument(
-        "--viz-output-dir",
-        type=str,
-        default="/tmp/comparator_viz/",
-        help="Output directory for visualization PNGs (default: /tmp/comparator_viz/)",
-    )
-    parser.add_argument(
-        "--visualize-per-token",
-        type=str,
-        default=None,
-        help="Output path for per-token relative difference heatmap PNG",
-    )
-
-    # Dims override
-    parser.add_argument(
-        "--override-dims",
-        action="append",
-        default=[],
-        help="Override dims for both sides: 'name:dims_string' (repeatable)",
-    )
-    parser.add_argument(
-        "--override-baseline-dims",
-        action="append",
-        default=[],
-        help="Override dims for baseline only: 'name:dims_string' (repeatable)",
-    )
-    parser.add_argument(
-        "--override-target-dims",
-        action="append",
-        default=[],
-        help="Override dims for target only: 'name:dims_string' (repeatable)",
-    )
-    parser.add_argument(
-        "--override-config",
-        type=str,
-        default=None,
-        help="Path to YAML override config file (dims overrides, etc.)",
-    )
-    parser.add_argument(
-        "--allow-skipped-pattern",
-        type=str,
-        default=".*",
-        help="Regex pattern for tensor names allowed to be skipped. "
-        "Default '.*' allows all skips. Use '^$' to forbid all skips.",
-    )
-    parser.add_argument(
-        "--allow-failed-pattern",
-        type=str,
-        default=None,
-        help="Regex pattern for tensor names allowed to fail without affecting exit code. "
-        "Default None (all failures affect exit code).",
-    )
-
-    # Report output
-    parser.add_argument(
-        "--report-path",
-        type=str,
-        default=None,
-        help="Path for JSONL report (default: <target-path>/comparator_report.jsonl). "
-        "Pass empty string '' to disable.",
-    )
-
-    return parser.parse_args(argv)
-
-
 def run(args: argparse.Namespace) -> int:
     report_sink.configure(
         output_format=args.output_format,
@@ -409,3 +280,132 @@ def _consume_comparison_records(
         )
 
     return summary, skipped_names, failed_names
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    """Parse CLI arguments from an argv list. Applies preset expansion."""
+    argv = expand_preset(argv, presets=PRESETS)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--baseline-path", type=str)
+    parser.add_argument("--target-path", type=str)
+    parser.add_argument("--start-step", type=int, default=0)
+    parser.add_argument("--end-step", type=int, default=1000000)
+    parser.add_argument("--diff-threshold", type=float, default=1e-3)
+    parser.add_argument(
+        "--filter", type=str, default=None, help="Regex to filter filenames (include)"
+    )
+    parser.add_argument(
+        "--output-format",
+        type=str,
+        choices=["text", "json"],
+        default="text",
+        help="Output format: text (default) or json (JSONL, one JSON object per line)",
+    )
+    parser.add_argument(
+        "--verbosity",
+        type=str,
+        choices=["minimal", "normal", "verbose"],
+        default="normal",
+        help="Output verbosity: minimal (1 line per tensor), normal (compact lifecycle), "
+        "verbose (full detail). Default: normal",
+    )
+    parser.add_argument(
+        "--preset",
+        type=str,
+        choices=list(PRESETS.keys()),
+        default=None,
+        help="Preset configuration (expanded before parsing). "
+        f"Available: {list(PRESETS.keys())}",
+    )
+    parser.add_argument(
+        "--grouping-skip-keys",
+        nargs="*",
+        default=None,
+        help="Metadata keys to skip when grouping bundles (additive on top of "
+        "always-skipped dump_index and filename). "
+        "E.g. '--grouping-skip-keys rank step' skips rank and step.",
+    )
+    parser.add_argument(
+        "--token-aligner",
+        type=str,
+        choices=["smart", "concat_steps"],
+        default=None,
+        help="Token aligner mode: concat_steps (BS=1, no aux needed) or smart (BS>1, sequence matching). "
+        "Default None (per-step comparison).",
+    )
+    parser.add_argument(
+        "--tokenizer",
+        type=str,
+        default=None,
+        help="Tokenizer path for decoding input_ids (auto-discovered from dump metadata if not set)",
+    )
+    parser.add_argument(
+        "--viz-bundle-details",
+        action="store_true",
+        default=False,
+        help="Generate comparison heatmap/histogram PNG for each compared tensor",
+    )
+    parser.add_argument(
+        "--viz-output-dir",
+        type=str,
+        default="/tmp/comparator_viz/",
+        help="Output directory for visualization PNGs (default: /tmp/comparator_viz/)",
+    )
+    parser.add_argument(
+        "--visualize-per-token",
+        type=str,
+        default=None,
+        help="Output path for per-token relative difference heatmap PNG",
+    )
+
+    # Dims override
+    parser.add_argument(
+        "--override-dims",
+        action="append",
+        default=[],
+        help="Override dims for both sides: 'name:dims_string' (repeatable)",
+    )
+    parser.add_argument(
+        "--override-baseline-dims",
+        action="append",
+        default=[],
+        help="Override dims for baseline only: 'name:dims_string' (repeatable)",
+    )
+    parser.add_argument(
+        "--override-target-dims",
+        action="append",
+        default=[],
+        help="Override dims for target only: 'name:dims_string' (repeatable)",
+    )
+    parser.add_argument(
+        "--override-config",
+        type=str,
+        default=None,
+        help="Path to YAML override config file (dims overrides, etc.)",
+    )
+    parser.add_argument(
+        "--allow-skipped-pattern",
+        type=str,
+        default=".*",
+        help="Regex pattern for tensor names allowed to be skipped. "
+        "Default '.*' allows all skips. Use '^$' to forbid all skips.",
+    )
+    parser.add_argument(
+        "--allow-failed-pattern",
+        type=str,
+        default=None,
+        help="Regex pattern for tensor names allowed to fail without affecting exit code. "
+        "Default None (all failures affect exit code).",
+    )
+
+    # Report output
+    parser.add_argument(
+        "--report-path",
+        type=str,
+        default=None,
+        help="Path for JSONL report (default: <target-path>/comparator_report.jsonl). "
+        "Pass empty string '' to disable.",
+    )
+
+    return parser.parse_args(argv)
