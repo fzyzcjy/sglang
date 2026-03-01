@@ -168,10 +168,6 @@ class ConfigRecord(_OutputRecord):
     type: Literal["config"] = "config"
     config: dict[str, Any]
 
-    @classmethod
-    def from_args(cls, args) -> "ConfigRecord":
-        return cls(config=vars(args))
-
     def _format_body(self) -> str:
         return f"Config: {self.config}"
 

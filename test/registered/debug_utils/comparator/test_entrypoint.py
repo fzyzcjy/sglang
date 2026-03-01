@@ -392,7 +392,7 @@ class TestEntrypointGroupingLogical:
             name="hidden",
             tp_size=2,
             shard_dim=1,
-            dims_str="b h(tp)",
+            dims_str="b h[tp]",
         )
         target_path = _create_tp_sharded_dumps(
             target_dir,
@@ -400,7 +400,7 @@ class TestEntrypointGroupingLogical:
             name="hidden",
             tp_size=2,
             shard_dim=1,
-            dims_str="b h(tp)",
+            dims_str="b h[tp]",
         )
 
         argv = _make_argv(baseline_path, target_path, diff_threshold=0.01)
@@ -429,7 +429,7 @@ class TestEntrypointGroupingLogical:
             name="hidden",
             tp_size=4,
             shard_dim=1,
-            dims_str="b h(tp)",
+            dims_str="b h[tp]",
         )
         target_path = _create_tp_sharded_dumps(
             target_dir,
@@ -437,7 +437,7 @@ class TestEntrypointGroupingLogical:
             name="hidden",
             tp_size=2,
             shard_dim=1,
-            dims_str="b h(tp)",
+            dims_str="b h[tp]",
         )
 
         argv = _make_argv(baseline_path, target_path, diff_threshold=0.01)
@@ -464,7 +464,7 @@ class TestEntrypointGroupingLogical:
             name="hidden",
             tp_size=2,
             shard_dim=1,
-            dims_str="b h(tp)",
+            dims_str="b h[tp]",
         )
 
         argv = _make_argv(baseline_path, target_path, diff_threshold=0.01)
@@ -524,7 +524,7 @@ class TestEntrypointGroupingLogical:
                 name=tensor_name,
                 tp_size=2,
                 shard_dim=1,
-                dims_str="b h(tp)",
+                dims_str="b h[tp]",
             )
             target_tensor = tensor + torch.randn_like(tensor) * 0.0001
             target_path = _create_tp_sharded_dumps(
@@ -533,7 +533,7 @@ class TestEntrypointGroupingLogical:
                 name=tensor_name,
                 tp_size=2,
                 shard_dim=1,
-                dims_str="b h(tp)",
+                dims_str="b h[tp]",
             )
 
         argv = _make_argv(baseline_path, target_path, diff_threshold=0.01)
@@ -560,7 +560,7 @@ class TestEntrypointGroupingLogical:
             name="hidden",
             tp_size=2,
             shard_dim=1,
-            dims_str="b h(tp)",
+            dims_str="b h[tp]",
             num_steps=2,
         )
         target_path = _create_tp_sharded_dumps(
@@ -569,7 +569,7 @@ class TestEntrypointGroupingLogical:
             name="hidden",
             tp_size=2,
             shard_dim=1,
-            dims_str="b h(tp)",
+            dims_str="b h[tp]",
             num_steps=2,
         )
 
@@ -611,7 +611,7 @@ class TestEntrypointGroupingLogical:
                     rank=cp_rank,
                     name="attn_out",
                     tensor=shards[cp_rank],
-                    dims="b s(cp) h",
+                    dims="b s[cp] h",
                     parallel_info={"cp_rank": cp_rank, "cp_size": 2},
                 )
 
@@ -641,7 +641,7 @@ class TestEntrypointGroupingLogical:
                 name=tensor_name,
                 tp_size=2,
                 shard_dim=1,
-                dims_str="b h(tp)",
+                dims_str="b h[tp]",
             )
             _create_tp_sharded_dumps(
                 target_dir,
@@ -649,7 +649,7 @@ class TestEntrypointGroupingLogical:
                 name=tensor_name,
                 tp_size=2,
                 shard_dim=1,
-                dims_str="b h(tp)",
+                dims_str="b h[tp]",
             )
 
         argv = _make_argv(
@@ -679,7 +679,7 @@ class TestEntrypointGroupingLogical:
             name="tensor_a",
             tp_size=2,
             shard_dim=1,
-            dims_str="b h(tp)",
+            dims_str="b h[tp]",
         )
         _create_tp_sharded_dumps(
             target_dir,
@@ -687,7 +687,7 @@ class TestEntrypointGroupingLogical:
             name="tensor_a",
             tp_size=2,
             shard_dim=1,
-            dims_str="b h(tp)",
+            dims_str="b h[tp]",
         )
 
         _create_rank_dump(baseline_dir, rank=0, name="tensor_b", tensor=single_tensor)
@@ -736,7 +736,7 @@ class TestEntrypointGroupingLogical:
                 tp_size=2,
                 seq_dim=1,
                 head_dim=2,
-                dims_str="b s(cp) h(tp)",
+                dims_str="b s[cp] h[tp]",
             )
 
         argv = _make_argv(
@@ -766,7 +766,7 @@ class TestEntrypointGroupingLogical:
             tp_size=2,
             seq_dim=1,
             head_dim=2,
-            dims_str="b s(cp) h(tp)",
+            dims_str="b s[cp] h[tp]",
         )
 
         _create_tp_sharded_dumps(
@@ -775,7 +775,7 @@ class TestEntrypointGroupingLogical:
             name="hidden",
             tp_size=4,
             shard_dim=2,
-            dims_str="b s h(tp)",
+            dims_str="b s h[tp]",
         )
 
         argv = _make_argv(
@@ -810,7 +810,7 @@ class TestEntrypointGroupingLogical:
                 expert_dim=1,
                 seq_dim=2,
                 head_dim=3,
-                dims_str="b e(ep) s(cp) h(tp)",
+                dims_str="b e[ep] s[cp] h[tp]",
             )
 
         argv = _make_argv(
@@ -844,7 +844,7 @@ class TestEntrypointGroupingLogical:
                 tp_size=1,
                 seq_dim=1,
                 head_dim=2,
-                dims_str="b s(cp:zigzag) h",
+                dims_str="b s[cp:zigzag] h",
             )
 
         argv = _make_argv(
@@ -878,7 +878,7 @@ class TestEntrypointGroupingLogical:
                 tp_size=2,
                 seq_dim=1,
                 head_dim=2,
-                dims_str="b s(cp:zigzag) h(tp)",
+                dims_str="b s[cp:zigzag] h[tp]",
             )
 
         argv = _make_argv(
@@ -968,14 +968,14 @@ class TestEntrypointGroupingLogical:
             full_tensor=full_baseline,
             name="attn_out",
             tp_size=2,
-            dims_str="b h(tp:partial)",
+            dims_str="b h[tp:partial]",
         )
         target_path = _create_tp_partial_dumps(
             target_dir,
             full_tensor=full_target,
             name="attn_out",
             tp_size=2,
-            dims_str="b h(tp:partial)",
+            dims_str="b h[tp:partial]",
         )
 
         argv = _make_argv(baseline_path, target_path, diff_threshold=0.01)
@@ -1006,7 +1006,7 @@ class TestEntrypointGroupingLogical:
             full_tensor=target_full,
             name="attn_out",
             tp_size=2,
-            dims_str="b h(tp:partial)",
+            dims_str="b h[tp:partial]",
         )
 
         argv = _make_argv(baseline_path, target_path, diff_threshold=0.01)
@@ -1035,7 +1035,7 @@ class TestEntrypointGroupingLogical:
                         rank=rank,
                         name="hidden",
                         tensor=cp_chunks[cp_rank] / 2,
-                        dims="b s(cp) h(tp:partial)",
+                        dims="b s[cp] h[tp:partial]",
                         parallel_info={
                             "cp_rank": cp_rank,
                             "cp_size": 2,
@@ -1074,7 +1074,7 @@ class TestEntrypointGroupingLogical:
                 name="hidden",
                 cp_size=2,
                 sp_size=2,
-                dims_str="b s(cp:zigzag,sp) h",
+                dims_str="b s[cp:zigzag,sp] h",
             )
 
         argv = _make_argv(
@@ -1124,7 +1124,7 @@ class TestEntrypointPerStepMode:
             name="hidden",
             tp_size=2,
             shard_dim=1,
-            dims_str="b h(tp)",
+            dims_str="b h[tp]",
             num_steps=2,
         )
         target_path = _create_tp_sharded_dumps(
@@ -1133,7 +1133,7 @@ class TestEntrypointPerStepMode:
             name="hidden",
             tp_size=2,
             shard_dim=1,
-            dims_str="b h(tp)",
+            dims_str="b h[tp]",
             num_steps=2,
         )
 
@@ -1265,7 +1265,7 @@ class TestEntrypointConcatMode:
             name="hidden",
             tp_size=2,
             shard_dim=1,
-            dims_str="b h(tp)",
+            dims_str="b h[tp]",
         )
         _create_multi_step_tp_sharded_dumps(
             target_dir,
@@ -1276,7 +1276,7 @@ class TestEntrypointConcatMode:
             name="hidden",
             tp_size=2,
             shard_dim=1,
-            dims_str="b h(tp)",
+            dims_str="b h[tp]",
         )
 
         argv = _make_argv(
@@ -1533,7 +1533,7 @@ class TestEntrypointConcatMode:
                     rank=cp_rank,
                     name="attn_out",
                     tensors_per_step=per_step_shards,
-                    dims="b s(cp) h",
+                    dims="b s[cp] h",
                     parallel_info={"cp_rank": cp_rank, "cp_size": 2},
                 )
 
@@ -1645,7 +1645,7 @@ class TestEntrypointAxisAligner:
         assert comp.target.shape == [4, 16, 8]
 
     def test_axis_swap_with_tp_unshard(self, tmp_path, capsys):
-        """Baseline TP=2 with dims 'b h(tp) d' vs target TP=2 with dims 'b d h(tp)': unshard + axis swap."""
+        """Baseline TP=2 with dims 'b h[tp] d' vs target TP=2 with dims 'b d h[tp]': unshard + axis swap."""
         torch.manual_seed(42)
         full_tensor = torch.randn(4, 8, 16)
 
@@ -1658,7 +1658,7 @@ class TestEntrypointAxisAligner:
             name="hidden",
             tp_size=2,
             shard_dim=1,
-            dims_str="b h(tp) d",
+            dims_str="b h[tp] d",
         )
         _create_tp_sharded_dumps(
             target_dir,
@@ -1666,7 +1666,7 @@ class TestEntrypointAxisAligner:
             name="hidden",
             tp_size=2,
             shard_dim=2,
-            dims_str="b d h(tp)",
+            dims_str="b d h[tp]",
         )
 
         argv = _make_argv(
@@ -1738,7 +1738,7 @@ class TestEntrypointReplicatedAxis:
                 cp_size=2,
                 tp_size=2,
                 seq_dim=1,
-                dims_str="b s(cp) d",
+                dims_str="b s[cp] d # tp:replicated",
             )
 
         argv = _make_argv(
@@ -1777,7 +1777,7 @@ class TestEntrypointReplicatedAxis:
                 cp_size=2,
                 tp_size=2,
                 seq_dim=1,
-                dims_str="b s(cp) d",
+                dims_str="b s[cp] d # tp:replicated",
                 tp_noise=0.5,
             )
 
@@ -1813,7 +1813,7 @@ class TestEntrypointReplicatedAxis:
             cp_size=2,
             tp_size=2,
             seq_dim=1,
-            dims_str="b s(cp) d",
+            dims_str="b s[cp] d # tp:replicated",
             tp_noise=0.5,
         )
         _create_replicated_tp_sharded_cp_dumps(
@@ -1823,7 +1823,7 @@ class TestEntrypointReplicatedAxis:
             cp_size=2,
             tp_size=2,
             seq_dim=1,
-            dims_str="b s(cp) d",
+            dims_str="b s[cp] d # tp:replicated",
             tp_noise=0.5,
         )
 
@@ -1862,7 +1862,7 @@ class TestEntrypointReplicatedAxis:
                 rank=0,
                 name="attn_out",
                 tensor=torch.randn(4, 4, 6),
-                dims="b s(cp) d",
+                dims="b s[cp] d # tp:replicated",
                 parallel_info={
                     "cp_rank": 0,
                     "cp_size": 2,
@@ -1876,7 +1876,7 @@ class TestEntrypointReplicatedAxis:
                 rank=1,
                 name="attn_out",
                 tensor=torch.randn(4, 4, 3),
-                dims="b s(cp) d",
+                dims="b s[cp] d # tp:replicated",
                 parallel_info={
                     "cp_rank": 0,
                     "cp_size": 2,
@@ -1890,7 +1890,7 @@ class TestEntrypointReplicatedAxis:
                 rank=2,
                 name="attn_out",
                 tensor=torch.randn(4, 4, 6),
-                dims="b s(cp) d",
+                dims="b s[cp] d # tp:replicated",
                 parallel_info={
                     "cp_rank": 1,
                     "cp_size": 2,
@@ -1904,7 +1904,7 @@ class TestEntrypointReplicatedAxis:
                 rank=3,
                 name="attn_out",
                 tensor=torch.randn(4, 4, 3),
-                dims="b s(cp) d",
+                dims="b s[cp] d # tp:replicated",
                 parallel_info={
                     "cp_rank": 1,
                     "cp_size": 2,
@@ -3006,7 +3006,7 @@ def _create_thd_cp_zigzag_dumps(
     seq_lens: list[int],
     cp_size: int,
     total_per_rank: int,
-    dims_str: str = "t(cp:zigzag)",
+    dims_str: str = "t[cp:zigzag]",
     num_steps: int = 1,
 ) -> Path:
     """Create THD CP-zigzag sharded dump files simulating Megatron forward.
@@ -3215,7 +3215,7 @@ class TestEntrypointThdCpZigzag:
                 rank=cp_rank,
                 name="hidden_states",
                 tensor=rank_hidden,
-                dims="t(cp:zigzag) h",
+                dims="t[cp:zigzag] h",
                 parallel_info={"cp_rank": cp_rank, "cp_size": cp_size},
                 framework="megatron",
                 extra_dumps=[
@@ -3439,7 +3439,7 @@ class TestEntrypointDpFilter:
                         rank=rank,
                         name="hidden",
                         tensor=tensor,
-                        dims="t h(tp)",
+                        dims="t h[tp]",
                         parallel_info={
                             "tp_rank": tp_rank,
                             "tp_size": 2,
@@ -3683,7 +3683,7 @@ class TestEntrypointMetaOverride:
         assert all(c.diff is not None and c.diff.passed for c in comparisons)
 
     def test_override_dims_fixes_wrong_dims(self, tmp_path: Path, capsys) -> None:
-        """Tensor dumped with wrong dims='h d' is fixed by --override-dims to 't h(tp)'."""
+        """Tensor dumped with wrong dims='h d' is fixed by --override-dims to 't h[tp]'."""
         torch.manual_seed(42)
 
         full_tensor: torch.Tensor = torch.randn(10, 8)
@@ -3697,7 +3697,7 @@ class TestEntrypointMetaOverride:
         baseline_dir.mkdir()
         target_dir.mkdir()
 
-        # Dump with WRONG dims "h d" instead of correct "t h(tp)"
+        # Dump with WRONG dims "h d" instead of correct "t h[tp]"
         for tp_rank in range(2):
             _create_rank_dump(
                 baseline_dir,
@@ -3719,7 +3719,7 @@ class TestEntrypointMetaOverride:
         argv = _make_argv(
             baseline_dir / _FIXED_EXP_NAME,
             target_dir / _FIXED_EXP_NAME,
-            override_dims=["hidden:t h(tp)"],
+            override_dims=["hidden:t h[tp]"],
         )
         self._assert_all_passed(_run_and_parse(argv, capsys)[0])
 
@@ -3885,8 +3885,8 @@ class TestEntrypointMetaOverride:
         argv = _make_argv(
             baseline_dir / _FIXED_EXP_NAME,
             target_dir / _FIXED_EXP_NAME,
-            override_baseline_dims=["hidden:t h(tp)"],
-            override_target_dims=["hidden:t h(ep)"],
+            override_baseline_dims=["hidden:t h[tp]"],
+            override_target_dims=["hidden:t h[ep]"],
         )
         self._assert_all_passed(_run_and_parse(argv, capsys)[0])
 
@@ -4361,6 +4361,102 @@ class TestEntrypointDpAttentionMissingAlias:
         assert comparison.shape_mismatch is True
         assert comparison.diff is None
         assert comparison.category == "failed"
+
+
+class TestEntrypointAutoDescend:
+    """Test auto-descend: --baseline-path / --target-path pointing to a parent
+    directory that contains a single subdirectory with .pt files."""
+
+    def test_auto_descend_single_engine(self, tmp_path: Path, capsys) -> None:
+        """Parent dir wrapping a single engine subdir is auto-descended and comparison succeeds."""
+        baseline_exp, target_exp = _create_dumps(tmp_path, ["tensor_a"])
+
+        baseline_wrapper: Path = tmp_path / "baseline_wrap"
+        target_wrapper: Path = tmp_path / "target_wrap"
+        baseline_wrapper.mkdir()
+        target_wrapper.mkdir()
+        baseline_exp.rename(baseline_wrapper / "engine_0")
+        target_exp.rename(target_wrapper / "engine_0")
+
+        argv = _make_argv(baseline_wrapper, target_wrapper, preset="raw")
+        records, exit_code = _run_and_parse(argv, capsys)
+
+        assert exit_code == 0
+        _assert_single_comparison_passed(records)
+
+    def test_no_descend_when_pt_at_root(self, tmp_path: Path, capsys) -> None:
+        """Direct .pt files — no descend needed, comparison still works."""
+        baseline_exp, target_exp = _create_dumps(tmp_path, ["tensor_a"])
+
+        argv = _make_argv(baseline_exp, target_exp, preset="raw")
+        records, exit_code = _run_and_parse(argv, capsys)
+
+        assert exit_code == 0
+        _assert_single_comparison_passed(records)
+
+    def test_auto_descend_emits_log_record(self, tmp_path: Path, capsys) -> None:
+        """Auto-descend emits a LogRecord with the info message."""
+        baseline_exp, target_exp = _create_dumps(tmp_path, ["tensor_a"])
+
+        wrapper: Path = tmp_path / "target_wrap"
+        wrapper.mkdir()
+        target_exp.rename(wrapper / "engine_0")
+
+        argv = _make_argv(baseline_exp, wrapper, preset="raw")
+        records, _ = _run_and_parse(argv, capsys)
+
+        log_records: list[LogRecord] = [r for r in records if isinstance(r, LogRecord)]
+        auto_descend_msgs: list[str] = [
+            info.message
+            for lr in log_records
+            for info in lr.infos
+            if "auto-descend" in info.message
+        ]
+        assert any("target_path" in m for m in auto_descend_msgs)
+
+    def test_auto_descend_single_nonempty_among_empty(
+        self, tmp_path: Path, capsys
+    ) -> None:
+        """Two subdirs but only one has .pt — auto-descend picks the non-empty one."""
+        baseline_exp, target_exp = _create_dumps(tmp_path, ["tensor_a"])
+
+        wrapper: Path = tmp_path / "target_wrap"
+        wrapper.mkdir()
+        target_exp.rename(wrapper / "engine_0")
+        (wrapper / "empty_subdir").mkdir()
+
+        argv = _make_argv(baseline_exp, wrapper, preset="raw")
+        records, exit_code = _run_and_parse(argv, capsys)
+
+        assert exit_code == 0
+        _assert_single_comparison_passed(records)
+
+    def test_error_multiple_nonempty_subdirs(self, tmp_path: Path) -> None:
+        """Two subdirs both with .pt — raises ValueError with clear message."""
+        baseline_exp, target_exp = _create_dumps(tmp_path, ["tensor_a"])
+
+        wrapper: Path = tmp_path / "target_wrap"
+        wrapper.mkdir()
+        target_exp.rename(wrapper / "engine_0")
+        engine_1: Path = wrapper / "engine_1"
+        engine_1.mkdir()
+        torch.save(torch.tensor([1.0]), engine_1 / "dummy.pt")
+
+        argv: list[str] = _make_argv(baseline_exp, wrapper, preset="raw")
+        with pytest.raises(ValueError, match="multiple subdirectories contain data"):
+            run(parse_args(argv))
+
+    def test_error_no_data_found(self, tmp_path: Path) -> None:
+        """No .pt files anywhere — raises ValueError."""
+        baseline_exp, _ = _create_dumps(tmp_path, ["tensor_a"])
+
+        empty_dir: Path = tmp_path / "empty_target"
+        empty_dir.mkdir()
+        (empty_dir / "subdir").mkdir()
+
+        argv: list[str] = _make_argv(baseline_exp, empty_dir, preset="raw")
+        with pytest.raises(ValueError, match="no .pt files found"):
+            run(parse_args(argv))
 
 
 if __name__ == "__main__":
