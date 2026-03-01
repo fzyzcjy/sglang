@@ -36,78 +36,15 @@ from sglang.srt.debug_utils.comparator.output_types import (
     _format_aligner_plan,
     _split_logs,
 )
-from sglang.srt.debug_utils.comparator.tensor_comparator.types import (
-    DiffInfo,
-    TensorInfo,
-    TensorStats,
-)
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci
+from test.registered.debug_utils.comparator.testing_helpers import (
+    make_diff as _make_diff,
+    make_stats as _make_stats,
+    make_tensor_info as _make_tensor_info,
+)
 
 register_cpu_ci(est_time=10, suite="default", nightly=True)
-
-
-# ---------------------------------------------------------------------------
-# Shared helpers
-# ---------------------------------------------------------------------------
-
-_DEFAULT_PERCENTILES: dict[int, float] = {
-    1: -1.8,
-    5: -1.5,
-    50: 0.0,
-    95: 1.5,
-    99: 1.8,
-}
-
-
-def _make_stats(
-    mean: float = 0.0,
-    abs_mean: float = 0.8,
-    std: float = 1.0,
-    min: float = -2.0,
-    max: float = 2.0,
-    percentiles: dict[int, float] | None = None,
-) -> TensorStats:
-    return TensorStats(
-        mean=mean,
-        abs_mean=abs_mean,
-        std=std,
-        min=min,
-        max=max,
-        percentiles=percentiles if percentiles is not None else _DEFAULT_PERCENTILES,
-    )
-
-
-def _make_diff(
-    rel_diff: float = 0.0001,
-    max_abs_diff: float = 0.0005,
-    mean_abs_diff: float = 0.0002,
-    passed: bool = True,
-) -> DiffInfo:
-    return DiffInfo(
-        rel_diff=rel_diff,
-        max_abs_diff=max_abs_diff,
-        mean_abs_diff=mean_abs_diff,
-        abs_diff_percentiles={1: 0.0001, 5: 0.0001, 50: 0.0002, 95: 0.0004, 99: 0.0005},
-        max_diff_coord=[2, 3],
-        baseline_at_max=1.0,
-        target_at_max=1.0005,
-        diff_threshold=1e-3,
-        passed=passed,
-    )
-
-
-def _make_tensor_info(
-    shape: list[int] | None = None,
-    dtype: str = "torch.float32",
-    sample: str | None = None,
-) -> TensorInfo:
-    return TensorInfo(
-        shape=shape if shape is not None else [4, 8],
-        dtype=dtype,
-        stats=_make_stats(),
-        sample=sample,
-    )
 
 
 def _render_rich(renderable: object) -> str:

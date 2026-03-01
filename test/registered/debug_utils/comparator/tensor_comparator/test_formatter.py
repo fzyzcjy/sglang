@@ -46,83 +46,13 @@ from sglang.srt.debug_utils.comparator.tensor_comparator.types import (
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci
+from test.registered.debug_utils.comparator.testing_helpers import (
+    make_diff as _make_diff,
+    make_stats as _make_stats,
+    make_tensor_info as _make_tensor_info,
+)
 
 register_cpu_ci(est_time=10, suite="default", nightly=True)
-
-
-_DEFAULT_PERCENTILES: dict[int, float] = {
-    1: -1.8,
-    5: -1.5,
-    50: 0.0,
-    95: 1.5,
-    99: 1.8,
-}
-
-
-def _make_stats(
-    mean: float = 0.0,
-    abs_mean: float = 0.8,
-    std: float = 1.0,
-    min: float = -2.0,
-    max: float = 2.0,
-    percentiles: dict[int, float] | None = None,
-) -> TensorStats:
-    return TensorStats(
-        mean=mean,
-        abs_mean=abs_mean,
-        std=std,
-        min=min,
-        max=max,
-        percentiles=percentiles if percentiles is not None else _DEFAULT_PERCENTILES,
-    )
-
-
-_DEFAULT_ABS_DIFF_PERCENTILES: dict[int, float] = {
-    1: 0.0001,
-    5: 0.0001,
-    50: 0.0002,
-    95: 0.0004,
-    99: 0.0005,
-}
-
-
-def _make_diff(
-    rel_diff: float = 0.0001,
-    max_abs_diff: float = 0.0005,
-    mean_abs_diff: float = 0.0002,
-    abs_diff_percentiles: dict[int, float] | None = None,
-    diff_threshold: float = 1e-3,
-    passed: bool = True,
-) -> DiffInfo:
-    return DiffInfo(
-        rel_diff=rel_diff,
-        max_abs_diff=max_abs_diff,
-        mean_abs_diff=mean_abs_diff,
-        abs_diff_percentiles=(
-            abs_diff_percentiles
-            if abs_diff_percentiles is not None
-            else _DEFAULT_ABS_DIFF_PERCENTILES
-        ),
-        max_diff_coord=[2, 3],
-        baseline_at_max=1.0,
-        target_at_max=1.0005,
-        diff_threshold=diff_threshold,
-        passed=passed,
-    )
-
-
-def _make_tensor_info(
-    shape: list[int] | None = None,
-    dtype: str = "torch.float32",
-    stats: TensorStats | None = None,
-    sample: str | None = None,
-) -> TensorInfo:
-    return TensorInfo(
-        shape=shape if shape is not None else [4, 8],
-        dtype=dtype,
-        stats=stats if stats is not None else _make_stats(),
-        sample=sample,
-    )
 
 
 # Snapshot strings below are intentionally spelled out in full per test.
