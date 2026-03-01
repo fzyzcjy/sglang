@@ -800,7 +800,7 @@ class TestFormatStatsRich:
         assert "0.0000 vs     0.0001" in lines[0]
         assert "[blue]std" in lines[1]
         assert "[blue]range" in lines[2]
-        assert "\\[-2.0000, 2.0000]" in lines[2]
+        assert "[-2.0000, 2.0000]" in lines[2]
 
     def test_large_delta(self) -> None:
         baseline: TensorStats = _make_stats(mean=0.0)
