@@ -29,7 +29,6 @@ from sglang.srt.debug_utils.comparator.output_types import (
     StepShapeTrace,
     TensorComparisonRecord,
 )
-from sglang.srt.debug_utils.comparator.report_sink import _set_verbosity
 from sglang.srt.debug_utils.comparator.tensor_comparator.formatter import (
     _format_abs_diff_percentiles_rich,
     _format_bundle_section,
@@ -467,8 +466,7 @@ class TestFormatComparisonRichMinimal:
         record: TensorComparisonRecord = _make_comparison_record(
             diff=_make_diff(rel_diff=1e-4, passed=True),
         )
-        _set_verbosity("minimal")
-        result: str = format_comparison_rich(record)
+        result: str = format_comparison_rich(record, verbosity="minimal")
 
         assert result == (
             "[green]✅[/] [bold green]hidden_states                 [/] "
@@ -479,8 +477,7 @@ class TestFormatComparisonRichMinimal:
         record: TensorComparisonRecord = _make_comparison_record(
             diff=_make_diff(rel_diff=0.5, passed=False),
         )
-        _set_verbosity("minimal")
-        result: str = format_comparison_rich(record)
+        result: str = format_comparison_rich(record, verbosity="minimal")
 
         assert result == (
             "[red]❌[/] [bold red]hidden_states                 [/] "
@@ -491,8 +488,7 @@ class TestFormatComparisonRichMinimal:
         record: TensorComparisonRecord = _make_comparison_record(
             shape_mismatch=True,
         )
-        _set_verbosity("minimal")
-        result: str = format_comparison_rich(record)
+        result: str = format_comparison_rich(record, verbosity="minimal")
 
         assert result == (
             "[red]❌[/] [bold red]hidden_states                 [/] "
@@ -501,8 +497,7 @@ class TestFormatComparisonRichMinimal:
 
     def test_no_diff(self) -> None:
         record: TensorComparisonRecord = _make_comparison_record()
-        _set_verbosity("minimal")
-        result: str = format_comparison_rich(record)
+        result: str = format_comparison_rich(record, verbosity="minimal")
 
         assert result == ("[red]❌[/] [bold red]hidden_states                 [/]")
 
@@ -514,8 +509,7 @@ class TestFormatComparisonRichNormal:
         record: TensorComparisonRecord = _make_comparison_record(
             diff=_make_diff(rel_diff=1e-4, passed=True),
         )
-        _set_verbosity("normal")
-        result: str = format_comparison_rich(record)
+        result: str = format_comparison_rich(record, verbosity="normal")
 
         assert result == (
             "[green]✅[/] [bold green]hidden_states[/] [dim cyan]── float32  [4, 8][/]\n"
@@ -534,8 +528,7 @@ class TestFormatComparisonRichNormal:
                 rel_diff=0.5, max_abs_diff=1.0, mean_abs_diff=0.3, passed=False
             ),
         )
-        _set_verbosity("normal")
-        result: str = format_comparison_rich(record)
+        result: str = format_comparison_rich(record, verbosity="normal")
 
         assert result == (
             "[red]❌[/] [bold red]hidden_states[/] [dim cyan]── float32  [4, 8][/]\n"
@@ -555,8 +548,7 @@ class TestFormatComparisonRichNormal:
         record: TensorComparisonRecord = _make_comparison_record(
             shape_mismatch=True,
         )
-        _set_verbosity("normal")
-        result: str = format_comparison_rich(record)
+        result: str = format_comparison_rich(record, verbosity="normal")
 
         assert result == (
             "[red]❌[/] [bold red]hidden_states[/] [dim cyan]── float32  [4, 8][/]\n"
@@ -575,8 +567,7 @@ class TestFormatComparisonRichNormal:
             diff_downcast=_make_diff(rel_diff=1e-5, passed=True),
             downcast_dtype="torch.bfloat16",
         )
-        _set_verbosity("normal")
-        result: str = format_comparison_rich(record)
+        result: str = format_comparison_rich(record, verbosity="normal")
 
         assert result == (
             "[red]❌[/] [bold red]hidden_states[/] [dim cyan]── float32  [4, 8][/]\n"
@@ -602,8 +593,7 @@ class TestFormatComparisonRichNormal:
             diff=_make_diff(passed=True),
             raw_bundle_info=bundle_info,
         )
-        _set_verbosity("normal")
-        result: str = format_comparison_rich(record)
+        result: str = format_comparison_rich(record, verbosity="normal")
 
         assert result == (
             "[green]✅[/] [bold green]hidden_states[/] [dim cyan]── float32  [4, 8][/]\n"
@@ -625,8 +615,7 @@ class TestFormatComparisonRichNormal:
             diff=_make_diff(passed=True),
             aligner_plan=plan,
         )
-        _set_verbosity("normal")
-        result: str = format_comparison_rich(record)
+        result: str = format_comparison_rich(record, verbosity="normal")
 
         assert result == (
             "[green]✅[/] [bold green]hidden_states[/] [dim cyan]── float32  [4, 8][/]\n"
@@ -651,8 +640,7 @@ class TestFormatComparisonRichVerbose:
             diff=_make_diff(rel_diff=1e-4, passed=True),
             sample="tensor([0.1, 0.2, ...])",
         )
-        _set_verbosity("verbose")
-        result: str = format_comparison_rich(record)
+        result: str = format_comparison_rich(record, verbosity="verbose")
 
         assert result == (
             "[green]✅[/] [bold green]hidden_states[/] [dim cyan]── float32  [4, 8][/]\n"
@@ -686,8 +674,7 @@ class TestFormatComparisonRichVerbose:
             diff=_make_diff(passed=True),
             raw_bundle_info=bundle_info,
         )
-        _set_verbosity("verbose")
-        result: str = format_comparison_rich(record)
+        result: str = format_comparison_rich(record, verbosity="verbose")
 
         assert result == (
             "[green]✅[/] [bold green]hidden_states[/] [dim cyan]── float32  [4, 8][/]\n"
@@ -727,8 +714,7 @@ class TestFormatComparisonRichVerbose:
             aligner_plan=plan,
             shape_traces=traces,
         )
-        _set_verbosity("verbose")
-        result: str = format_comparison_rich(record)
+        result: str = format_comparison_rich(record, verbosity="verbose")
 
         assert result == (
             "[green]✅[/] [bold green]hidden_states[/] [dim cyan]── float32  [4, 8][/]\n"

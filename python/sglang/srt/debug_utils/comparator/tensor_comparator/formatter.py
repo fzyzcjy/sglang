@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
 from rich.markup import escape
 
@@ -24,6 +24,8 @@ if TYPE_CHECKING:
         TensorComparisonRecord,
     )
     from sglang.srt.debug_utils.comparator.utils import Pair
+
+Verbosity = Literal["minimal", "normal", "verbose"]
 
 
 def _esc_shape(shape: Optional[list[int]]) -> str:
@@ -175,10 +177,10 @@ def _format_diff(diff: DiffInfo, prefix_text: str = "") -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def format_comparison_rich(record: TensorComparisonRecord) -> str:
-    from sglang.srt.debug_utils.comparator.report_sink import get_verbosity
-
-    verbosity: str = get_verbosity()
+def format_comparison_rich(
+    record: TensorComparisonRecord,
+    verbosity: Verbosity = "normal",
+) -> str:
     if verbosity == "minimal":
         return _format_comparison_minimal(record)
 

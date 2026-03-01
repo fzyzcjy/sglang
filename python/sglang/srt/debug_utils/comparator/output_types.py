@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
         AlignerPlan,
     )
+    from sglang.srt.debug_utils.comparator.report_sink import Verbosity
 
 
 class BaseLog(_StrictBase):
@@ -94,11 +95,11 @@ class _OutputRecord(_StrictBase):
     @abstractmethod
     def _format_body(self) -> str: ...
 
-    def _format_rich_body(self) -> RenderableType:
+    def _format_rich_body(self, verbosity: Verbosity = "normal") -> RenderableType:
         return self._format_body()
 
-    def to_rich(self) -> RenderableType:
-        body: RenderableType = self._format_rich_body()
+    def to_rich(self, verbosity: Verbosity = "normal") -> RenderableType:
+        body: RenderableType = self._format_rich_body(verbosity=verbosity)
 
         log_lines: list[str] = []
         if self.errors:
@@ -237,12 +238,14 @@ class TensorComparisonRecord(TensorComparisonInfo, _BaseComparisonRecord):
             body += "\n" + _format_aligner_plan(self.aligner_plan)
         return body
 
-    def _format_rich_body(self) -> RenderableType:
+    def _format_rich_body(self, verbosity: Verbosity = "normal") -> RenderableType:
         from sglang.srt.debug_utils.comparator.tensor_comparator.formatter import (
             format_comparison_rich,
         )
 
-        return self._format_location_prefix() + format_comparison_rich(self)
+        return self._format_location_prefix() + format_comparison_rich(
+            record=self, verbosity=verbosity
+        )
 
 
 class NonTensorComparisonRecord(_BaseComparisonRecord):
