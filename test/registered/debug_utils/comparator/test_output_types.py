@@ -1,16 +1,111 @@
 import sys
+from io import StringIO
 
 import pytest
+from rich.console import Console, Group
+from rich.panel import Panel
 
+from sglang.srt.debug_utils.comparator.aligner.axis_aligner import AxisAlignerPlan
+from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
+    AlignerPerStepPlan,
+    AlignerPlan,
+)
+from sglang.srt.debug_utils.comparator.aligner.reorderer.types import (
+    ReordererPlan,
+    ZigzagToNaturalParams,
+)
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.smart.types import (
+    TokenAlignerPlan,
+    TokenLocator,
+)
+from sglang.srt.debug_utils.comparator.aligner.unsharder.types import (
+    ConcatParams,
+    UnsharderPlan,
+)
+from sglang.srt.debug_utils.comparator.dims_spec import ParallelAxis, TokenLayout
 from sglang.srt.debug_utils.comparator.output_types import (
+    ConfigRecord,
     ErrorLog,
     InfoLog,
     LogRecord,
+    NonTensorComparisonRecord,
+    RecordLocation,
+    SkipComparisonRecord,
+    SummaryRecord,
+    TensorComparisonRecord,
+    _format_aligner_plan,
     _split_logs,
 )
+from sglang.srt.debug_utils.comparator.tensor_comparator.types import (
+    DiffInfo,
+    TensorInfo,
+    TensorStats,
+)
+from sglang.srt.debug_utils.comparator.utils import Pair
 from sglang.test.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=10, suite="default", nightly=True)
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+_DEFAULT_PERCENTILES: dict[int, float] = {
+    1: -1.8, 5: -1.5, 50: 0.0, 95: 1.5, 99: 1.8,
+}
+
+
+def _make_stats(
+    mean: float = 0.0,
+    abs_mean: float = 0.8,
+    std: float = 1.0,
+    min: float = -2.0,
+    max: float = 2.0,
+    percentiles: dict[int, float] | None = None,
+) -> TensorStats:
+    return TensorStats(
+        mean=mean, abs_mean=abs_mean, std=std, min=min, max=max,
+        percentiles=percentiles if percentiles is not None else _DEFAULT_PERCENTILES,
+    )
+
+
+def _make_diff(
+    rel_diff: float = 0.0001,
+    max_abs_diff: float = 0.0005,
+    mean_abs_diff: float = 0.0002,
+    passed: bool = True,
+) -> DiffInfo:
+    return DiffInfo(
+        rel_diff=rel_diff, max_abs_diff=max_abs_diff, mean_abs_diff=mean_abs_diff,
+        abs_diff_percentiles={1: 0.0001, 5: 0.0001, 50: 0.0002, 95: 0.0004, 99: 0.0005},
+        max_diff_coord=[2, 3], baseline_at_max=1.0, target_at_max=1.0005,
+        diff_threshold=1e-3, passed=passed,
+    )
+
+
+def _make_tensor_info(
+    shape: list[int] | None = None,
+    dtype: str = "torch.float32",
+    sample: str | None = None,
+) -> TensorInfo:
+    return TensorInfo(
+        shape=shape if shape is not None else [4, 8],
+        dtype=dtype,
+        stats=_make_stats(),
+        sample=sample,
+    )
+
+
+def _render_rich(renderable: object) -> str:
+    buf: StringIO = StringIO()
+    Console(file=buf, force_terminal=False, width=120).print(renderable)
+    return buf.getvalue().rstrip("\n")
+
+
+# ---------------------------------------------------------------------------
+# Existing tests (preserved)
+# ---------------------------------------------------------------------------
 
 
 def test_split_logs_mixed_list() -> None:
@@ -38,6 +133,411 @@ def test_log_record_to_text_format() -> None:
     text: str = record.to_text()
     assert "✗ bad thing" in text
     assert "ℹ fyi" in text
+
+
+# ---------------------------------------------------------------------------
+# ConfigRecord
+# ---------------------------------------------------------------------------
+
+
+class TestConfigRecord:
+    def test_format_body(self) -> None:
+        record: ConfigRecord = ConfigRecord(config={"a": 1, "b": "two"})
+        assert record._format_body() == "Config: {'a': 1, 'b': 'two'}"
+
+    def test_format_rich_body(self) -> None:
+        record: ConfigRecord = ConfigRecord(config={"threshold": 0.001, "mode": "fast"})
+        body = record._format_rich_body()
+
+        assert isinstance(body, Panel)
+        assert body.title is not None
+        rendered: str = _render_rich(body)
+        assert "threshold" in rendered
+        assert "mode" in rendered
+
+    def test_to_text_with_errors(self) -> None:
+        record: ConfigRecord = ConfigRecord(
+            config={"x": 1},
+            errors=[ErrorLog(category="cfg", message="bad config")],
+        )
+        text: str = record.to_text()
+        assert text.startswith("Config: {'x': 1}")
+        assert "✗ bad config" in text
+
+
+# ---------------------------------------------------------------------------
+# SkipComparisonRecord
+# ---------------------------------------------------------------------------
+
+
+class TestSkipComparisonRecord:
+    def test_format_body_no_step(self) -> None:
+        record: SkipComparisonRecord = SkipComparisonRecord(
+            name="layer.weight", reason="zero-dim tensor",
+        )
+        assert record._format_body() == "Skip: layer.weight (zero-dim tensor)"
+
+    def test_format_body_with_step(self) -> None:
+        record: SkipComparisonRecord = SkipComparisonRecord(
+            name="layer.weight", reason="scalar",
+            location=RecordLocation(step=3),
+        )
+        assert record._format_body() == "Skip: layer.weight (step=3) (scalar)"
+
+    def test_format_rich_body(self) -> None:
+        record: SkipComparisonRecord = SkipComparisonRecord(
+            name="attn.qkv", reason="no baseline",
+        )
+        body: str = record._format_rich_body()
+        assert body == "[dim]⊘ attn.qkv ── skipped (no baseline)[/]"
+
+    def test_category_skipped(self) -> None:
+        record: SkipComparisonRecord = SkipComparisonRecord(
+            name="x", reason="r",
+        )
+        assert record.category == "skipped"
+
+    def test_category_failed(self) -> None:
+        record: SkipComparisonRecord = SkipComparisonRecord(
+            name="x", reason="r",
+            errors=[ErrorLog(category="e", message="boom")],
+        )
+        assert record.category == "failed"
+
+
+# ---------------------------------------------------------------------------
+# NonTensorComparisonRecord
+# ---------------------------------------------------------------------------
+
+
+class TestNonTensorComparisonRecord:
+    def test_format_body_equal(self) -> None:
+        record: NonTensorComparisonRecord = NonTensorComparisonRecord(
+            name="config.lr", baseline_value="0.001", target_value="0.001",
+            baseline_type="float", target_type="float", values_equal=True,
+        )
+        assert record._format_body() == "NonTensor: config.lr = 0.001 (float) [equal]"
+
+    def test_format_body_not_equal(self) -> None:
+        record: NonTensorComparisonRecord = NonTensorComparisonRecord(
+            name="config.lr", baseline_value="0.001", target_value="0.01",
+            baseline_type="float", target_type="float", values_equal=False,
+        )
+        assert record._format_body() == (
+            "NonTensor: config.lr\n"
+            "  baseline = 0.001 (float)\n"
+            "  target   = 0.01 (float)"
+        )
+
+    def test_format_rich_body_equal(self) -> None:
+        record: NonTensorComparisonRecord = NonTensorComparisonRecord(
+            name="config.lr", baseline_value="0.001", target_value="0.001",
+            baseline_type="float", target_type="float", values_equal=True,
+        )
+        assert record._format_rich_body() == (
+            "═ config.lr = 0.001 (float) [green]✓[/]"
+        )
+
+    def test_format_rich_body_not_equal(self) -> None:
+        record: NonTensorComparisonRecord = NonTensorComparisonRecord(
+            name="config.lr", baseline_value="0.001", target_value="0.01",
+            baseline_type="float", target_type="float", values_equal=False,
+        )
+        assert record._format_rich_body() == (
+            "═ [bold red]config.lr[/]\n"
+            "  baseline = 0.001 (float)\n"
+            "  target   = 0.01 (float)"
+        )
+
+    def test_with_step(self) -> None:
+        record: NonTensorComparisonRecord = NonTensorComparisonRecord(
+            name="bias", baseline_value="True", target_value="True",
+            baseline_type="bool", target_type="bool", values_equal=True,
+            location=RecordLocation(step=5),
+        )
+        assert "(step=5)" in record._format_body()
+
+    def test_category(self) -> None:
+        passed: NonTensorComparisonRecord = NonTensorComparisonRecord(
+            name="x", baseline_value="1", target_value="1",
+            baseline_type="int", target_type="int", values_equal=True,
+        )
+        failed: NonTensorComparisonRecord = NonTensorComparisonRecord(
+            name="x", baseline_value="1", target_value="2",
+            baseline_type="int", target_type="int", values_equal=False,
+        )
+        assert passed.category == "passed"
+        assert failed.category == "failed"
+
+
+# ---------------------------------------------------------------------------
+# SummaryRecord
+# ---------------------------------------------------------------------------
+
+
+class TestSummaryRecord:
+    def test_format_body(self) -> None:
+        record: SummaryRecord = SummaryRecord(
+            total=10, passed=7, failed=2, skipped=1,
+        )
+        assert record._format_body() == (
+            "Summary: 7 passed, 2 failed, 1 skipped (total 10)"
+        )
+
+    def test_format_rich_body(self) -> None:
+        record: SummaryRecord = SummaryRecord(
+            total=10, passed=7, failed=2, skipped=1,
+        )
+        body = record._format_rich_body()
+        assert isinstance(body, Panel)
+
+        rendered: str = _render_rich(body)
+        assert "7 passed" in rendered
+        assert "2 failed" in rendered
+        assert "1 skipped" in rendered
+
+    def test_validation_error(self) -> None:
+        with pytest.raises(ValueError, match="total=5 !="):
+            SummaryRecord(total=5, passed=1, failed=1, skipped=1)
+
+
+# ---------------------------------------------------------------------------
+# TensorComparisonRecord._format_body
+# ---------------------------------------------------------------------------
+
+
+class TestTensorComparisonRecordFormatBody:
+    def test_basic(self) -> None:
+        record: TensorComparisonRecord = TensorComparisonRecord(
+            name="hidden",
+            baseline=_make_tensor_info(),
+            target=_make_tensor_info(),
+            unified_shape=[4, 8],
+            shape_mismatch=False,
+            diff=_make_diff(),
+        )
+        body: str = record._format_body()
+
+        assert body.startswith("Raw ")
+        assert "rel_diff=0.0001" in body
+
+    def test_with_replicated_checks(self) -> None:
+        from sglang.srt.debug_utils.comparator.output_types import ReplicatedCheckResult
+
+        record: TensorComparisonRecord = TensorComparisonRecord(
+            name="hidden",
+            baseline=_make_tensor_info(),
+            target=_make_tensor_info(),
+            unified_shape=[4, 8],
+            shape_mismatch=False,
+            diff=_make_diff(),
+            replicated_checks=[
+                ReplicatedCheckResult(
+                    axis="tp", group_index=0, compared_index=1, baseline_index=0,
+                    passed=True, atol=1e-3,
+                    diff=_make_diff(rel_diff=1e-6, max_abs_diff=1e-5, mean_abs_diff=1e-6),
+                ),
+            ],
+        )
+        body: str = record._format_body()
+        assert "Replicated checks:" in body
+
+    def test_with_aligner_plan(self) -> None:
+        plan: AlignerPlan = AlignerPlan(
+            per_step_plans=Pair(x=[], y=[]),
+        )
+        record: TensorComparisonRecord = TensorComparisonRecord(
+            name="hidden",
+            baseline=_make_tensor_info(),
+            target=_make_tensor_info(),
+            unified_shape=[4, 8],
+            shape_mismatch=False,
+            diff=_make_diff(),
+            aligner_plan=plan,
+        )
+        body: str = record._format_body()
+        assert "Aligner Plan:" in body
+
+    def test_with_step(self) -> None:
+        record: TensorComparisonRecord = TensorComparisonRecord(
+            name="hidden",
+            baseline=_make_tensor_info(),
+            target=_make_tensor_info(),
+            unified_shape=[4, 8],
+            shape_mismatch=False,
+            diff=_make_diff(),
+            location=RecordLocation(step=2),
+        )
+        body: str = record._format_body()
+        assert body.startswith("[step=2] ")
+
+
+# ---------------------------------------------------------------------------
+# _format_aligner_plan
+# ---------------------------------------------------------------------------
+
+
+class TestFormatAlignerPlan:
+    def test_passthrough(self) -> None:
+        plan: AlignerPlan = AlignerPlan(
+            per_step_plans=Pair(x=[], y=[]),
+        )
+        result: str = _format_aligner_plan(plan)
+
+        assert result == (
+            "Aligner Plan:\n"
+            "  baseline: (no steps)\n"
+            "  target: (no steps)"
+        )
+
+    def test_unsharder(self) -> None:
+        unsharder: UnsharderPlan = UnsharderPlan(
+            axis=ParallelAxis.TP,
+            params=ConcatParams(dim_name="h"),
+            groups=[[0, 1]],
+        )
+        plan: AlignerPlan = AlignerPlan(
+            per_step_plans=Pair(
+                x=[],
+                y=[AlignerPerStepPlan(step=0, input_object_indices=[0, 1], sub_plans=[unsharder])],
+            ),
+        )
+        result: str = _format_aligner_plan(plan)
+
+        assert result == (
+            "Aligner Plan:\n"
+            "  baseline: (no steps)\n"
+            "  target: [step=0: unsharder]"
+        )
+
+    def test_reorderer(self) -> None:
+        reorderer: ReordererPlan = ReordererPlan(
+            params=ZigzagToNaturalParams(dim_name="s", cp_size=2),
+        )
+        plan: AlignerPlan = AlignerPlan(
+            per_step_plans=Pair(
+                x=[],
+                y=[AlignerPerStepPlan(step=0, input_object_indices=[0], sub_plans=[reorderer])],
+            ),
+        )
+        result: str = _format_aligner_plan(plan)
+
+        assert "step=0: reorderer" in result
+
+    def test_multi_step(self) -> None:
+        unsharder: UnsharderPlan = UnsharderPlan(
+            axis=ParallelAxis.TP,
+            params=ConcatParams(dim_name="h"),
+            groups=[[0, 1]],
+        )
+        reorderer: ReordererPlan = ReordererPlan(
+            params=ZigzagToNaturalParams(dim_name="s", cp_size=2),
+        )
+        plan: AlignerPlan = AlignerPlan(
+            per_step_plans=Pair(
+                x=[],
+                y=[
+                    AlignerPerStepPlan(step=0, input_object_indices=[0, 1], sub_plans=[unsharder]),
+                    AlignerPerStepPlan(step=1, input_object_indices=[0], sub_plans=[reorderer]),
+                ],
+            ),
+        )
+        result: str = _format_aligner_plan(plan)
+
+        assert "target: [step=0: unsharder; step=1: reorderer]" in result
+
+    def test_with_token_aligner(self) -> None:
+        ta_plan: TokenAlignerPlan = TokenAlignerPlan(
+            locators=Pair(
+                x=TokenLocator(steps=[0, 0, 0], token_index_in_step=[0, 1, 2]),
+                y=TokenLocator(steps=[0, 0, 0], token_index_in_step=[0, 1, 2]),
+            ),
+            layouts=Pair(x=TokenLayout.T, y=TokenLayout.T),
+        )
+        plan: AlignerPlan = AlignerPlan(
+            per_step_plans=Pair(x=[], y=[]),
+            token_aligner_plan=ta_plan,
+        )
+        result: str = _format_aligner_plan(plan)
+
+        assert "token_aligner: 3 tokens aligned" in result
+
+    def test_with_axis_aligner(self) -> None:
+        aa_plan: AxisAlignerPlan = AxisAlignerPlan(
+            pattern=Pair(x="b s d -> s b d", y=None),
+        )
+        plan: AlignerPlan = AlignerPlan(
+            per_step_plans=Pair(x=[], y=[]),
+            axis_aligner_plan=aa_plan,
+        )
+        result: str = _format_aligner_plan(plan)
+
+        assert "axis_aligner: x: b s d -> s b d" in result
+
+
+# ---------------------------------------------------------------------------
+# _OutputRecord log attachment (to_text / to_rich)
+# ---------------------------------------------------------------------------
+
+
+class TestOutputRecordLogAttachment:
+    def test_to_text_no_logs(self) -> None:
+        record: ConfigRecord = ConfigRecord(config={"a": 1})
+        text: str = record.to_text()
+
+        assert text == "Config: {'a': 1}"
+
+    def test_to_text_errors_only(self) -> None:
+        record: ConfigRecord = ConfigRecord(
+            config={"a": 1},
+            errors=[ErrorLog(category="x", message="err1")],
+        )
+        text: str = record.to_text()
+
+        assert "Config: {'a': 1}" in text
+        assert "✗ err1" in text
+
+    def test_to_text_infos_only(self) -> None:
+        record: ConfigRecord = ConfigRecord(
+            config={"a": 1},
+            infos=[InfoLog(category="x", message="note1")],
+        )
+        text: str = record.to_text()
+
+        assert "ℹ note1" in text
+
+    def test_to_text_mixed(self) -> None:
+        record: ConfigRecord = ConfigRecord(
+            config={"a": 1},
+            errors=[ErrorLog(category="x", message="err1")],
+            infos=[InfoLog(category="y", message="note1")],
+        )
+        text: str = record.to_text()
+
+        assert "✗ err1" in text
+        assert "ℹ note1" in text
+
+    def test_to_rich_string_body(self) -> None:
+        record: SkipComparisonRecord = SkipComparisonRecord(
+            name="x", reason="r",
+            errors=[ErrorLog(category="e", message="oops")],
+        )
+        body = record.to_rich()
+
+        # String body + log block → concatenated string
+        assert isinstance(body, str)
+        assert "⊘ x" in body
+        assert "oops" in body
+
+    def test_to_rich_group_body(self) -> None:
+        record: ConfigRecord = ConfigRecord(
+            config={"a": 1},
+            errors=[ErrorLog(category="e", message="oops")],
+        )
+        body = record.to_rich()
+
+        # Panel body + log block → Group
+        assert isinstance(body, Group)
 
 
 if __name__ == "__main__":
