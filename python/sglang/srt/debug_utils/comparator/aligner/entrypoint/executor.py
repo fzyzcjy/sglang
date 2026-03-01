@@ -8,6 +8,12 @@ import torch
 from sglang.srt.debug_utils.comparator.aligner.axis_aligner import (
     execute_axis_aligner_plan,
 )
+from sglang.srt.debug_utils.comparator.aligner.entrypoint.traced_types import (
+    TracedAlignerPlan,
+    TracedSidePlan,
+    TracedStepPlan,
+    TracedSubPlan,
+)
 from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
     AlignerPerStepPlan,
     AlignerPerStepSubPlan,
@@ -31,8 +37,6 @@ from sglang.srt.debug_utils.comparator.aligner.unsharder.types import UnsharderP
 from sglang.srt.debug_utils.comparator.output_types import (
     ReplicatedCheckResult,
     ShapeSnapshot,
-    SideShapeTrace,
-    StepShapeTrace,
 )
 from sglang.srt.debug_utils.comparator.utils import Pair
 
@@ -40,7 +44,7 @@ from sglang.srt.debug_utils.comparator.utils import Pair
 class StepPlansResult(NamedTuple):
     tensors: dict[int, torch.Tensor]
     checks: list[ReplicatedCheckResult]
-    trace: SideShapeTrace
+    traced_side: TracedSidePlan
 
 
 class SubPlansResult(NamedTuple):
@@ -54,7 +58,7 @@ class AlignerResult:
     tensors: Optional[Pair[torch.Tensor]]
     failed_side_xy: Optional[str]  # "x" or "y"; None if success
     replicated_checks: list[ReplicatedCheckResult] = field(default_factory=list)
-    shape_traces: Optional[Pair[SideShapeTrace]] = None
+    traced_plan: Optional[TracedAlignerPlan] = None
 
 
 def execute_aligner_plan(
@@ -76,7 +80,10 @@ def execute_aligner_plan(
     )
     all_checks.extend(result_y.checks)
 
-    shape_traces: Pair[SideShapeTrace] = Pair(x=result_x.trace, y=result_y.trace)
+    traced_plan: TracedAlignerPlan = TracedAlignerPlan(
+        plan=plan,
+        per_side=Pair(x=result_x.traced_side, y=result_y.traced_side),
+    )
 
     if not result_x.tensors or not result_y.tensors:
         failed_side_xy: str = "x" if not result_x.tensors else "y"
@@ -84,7 +91,7 @@ def execute_aligner_plan(
             tensors=None,
             failed_side_xy=failed_side_xy,
             replicated_checks=all_checks,
-            shape_traces=shape_traces,
+            traced_plan=traced_plan,
         )
 
     # Cross-side: token alignment (or direct extraction for single-step)
@@ -118,7 +125,7 @@ def execute_aligner_plan(
         tensors=combined,
         failed_side_xy=None,
         replicated_checks=all_checks,
-        shape_traces=shape_traces,
+        traced_plan=traced_plan,
     )
 
 
@@ -128,7 +135,7 @@ def _execute_step_plans(
 ) -> StepPlansResult:
     result: dict[int, torch.Tensor] = {}
     all_checks: list[ReplicatedCheckResult] = []
-    step_traces: list[StepShapeTrace] = []
+    traced_steps: list[TracedStepPlan] = []
 
     for step_plan in step_plans:
         step_tensors: list[torch.Tensor] = [
@@ -138,16 +145,26 @@ def _execute_step_plans(
             tensors=step_tensors, plans=step_plan.sub_plans
         )
         all_checks.extend(sub_result.checks)
-        step_traces.append(
-            StepShapeTrace(step=step_plan.step, snapshots=sub_result.snapshots)
+
+        traced_subs: list[TracedSubPlan] = [
+            TracedSubPlan(plan=sub_plan, snapshot=snapshot)
+            for sub_plan, snapshot in zip(step_plan.sub_plans, sub_result.snapshots)
+        ]
+        traced_steps.append(
+            TracedStepPlan(
+                step=step_plan.step,
+                input_object_indices=step_plan.input_object_indices,
+                sub_plans=traced_subs,
+            )
         )
+
         if sub_result.tensor is not None:
             result[step_plan.step] = sub_result.tensor
 
     return StepPlansResult(
         tensors=result,
         checks=all_checks,
-        trace=SideShapeTrace(step_traces=step_traces),
+        traced_side=TracedSidePlan(step_plans=traced_steps),
     )
 
 

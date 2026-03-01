@@ -10,6 +10,12 @@ from rich.console import Console, Group
 from rich.panel import Panel
 
 from sglang.srt.debug_utils.comparator.aligner.axis_aligner import AxisAlignerPlan
+from sglang.srt.debug_utils.comparator.aligner.entrypoint.traced_types import (
+    TracedAlignerPlan,
+    TracedSidePlan,
+    TracedStepPlan,
+    TracedSubPlan,
+)
 from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
     AlignerPerStepPlan,
     AlignerPlan,
@@ -407,6 +413,13 @@ class TestTensorComparisonRecordFormatBody:
         plan: AlignerPlan = AlignerPlan(
             per_step_plans=Pair(x=[], y=[]),
         )
+        traced: TracedAlignerPlan = TracedAlignerPlan(
+            plan=plan,
+            per_side=Pair(
+                x=TracedSidePlan(step_plans=[]),
+                y=TracedSidePlan(step_plans=[]),
+            ),
+        )
         record: TensorComparisonRecord = TensorComparisonRecord(
             name="hidden",
             baseline=_make_tensor_info(),
@@ -414,7 +427,7 @@ class TestTensorComparisonRecordFormatBody:
             unified_shape=[4, 8],
             shape_mismatch=False,
             diff=_make_diff(),
-            aligner_plan=plan,
+            traced_plan=traced,
         )
         body: str = record._format_body()
 
@@ -476,12 +489,39 @@ class TestTensorComparisonRecordFormatBody:
 # ---------------------------------------------------------------------------
 
 
+def _wrap_plan(plan: AlignerPlan) -> TracedAlignerPlan:
+    """Wrap an AlignerPlan into a TracedAlignerPlan with no snapshots."""
+    baseline_traced_steps: list[TracedStepPlan] = [
+        TracedStepPlan(
+            step=sp.step,
+            input_object_indices=sp.input_object_indices,
+            sub_plans=[TracedSubPlan(plan=sub) for sub in sp.sub_plans],
+        )
+        for sp in plan.per_step_plans.x
+    ]
+    target_traced_steps: list[TracedStepPlan] = [
+        TracedStepPlan(
+            step=sp.step,
+            input_object_indices=sp.input_object_indices,
+            sub_plans=[TracedSubPlan(plan=sub) for sub in sp.sub_plans],
+        )
+        for sp in plan.per_step_plans.y
+    ]
+    return TracedAlignerPlan(
+        plan=plan,
+        per_side=Pair(
+            x=TracedSidePlan(step_plans=baseline_traced_steps),
+            y=TracedSidePlan(step_plans=target_traced_steps),
+        ),
+    )
+
+
 class TestFormatAlignerPlan:
     def test_passthrough(self) -> None:
         plan: AlignerPlan = AlignerPlan(
             per_step_plans=Pair(x=[], y=[]),
         )
-        result: str = _format_aligner_plan(plan)
+        result: str = _format_aligner_plan(_wrap_plan(plan))
 
         assert result == (
             "Aligner Plan:\n" "  baseline: (no steps)\n" "  target: (no steps)"
@@ -503,7 +543,7 @@ class TestFormatAlignerPlan:
                 ],
             ),
         )
-        result: str = _format_aligner_plan(plan)
+        result: str = _format_aligner_plan(_wrap_plan(plan))
 
         assert result == (
             "Aligner Plan:\n" "  baseline: (no steps)\n" "  target: [step=0: unsharder]"
@@ -523,7 +563,7 @@ class TestFormatAlignerPlan:
                 ],
             ),
         )
-        result: str = _format_aligner_plan(plan)
+        result: str = _format_aligner_plan(_wrap_plan(plan))
 
         assert result == (
             "Aligner Plan:\n" "  baseline: (no steps)\n" "  target: [step=0: reorderer]"
@@ -551,7 +591,7 @@ class TestFormatAlignerPlan:
                 ],
             ),
         )
-        result: str = _format_aligner_plan(plan)
+        result: str = _format_aligner_plan(_wrap_plan(plan))
 
         assert result == (
             "Aligner Plan:\n"
@@ -571,7 +611,7 @@ class TestFormatAlignerPlan:
             per_step_plans=Pair(x=[], y=[]),
             token_aligner_plan=ta_plan,
         )
-        result: str = _format_aligner_plan(plan)
+        result: str = _format_aligner_plan(_wrap_plan(plan))
 
         assert result == (
             "Aligner Plan:\n"
@@ -588,7 +628,7 @@ class TestFormatAlignerPlan:
             per_step_plans=Pair(x=[], y=[]),
             axis_aligner_plan=aa_plan,
         )
-        result: str = _format_aligner_plan(plan)
+        result: str = _format_aligner_plan(_wrap_plan(plan))
 
         assert result == (
             "Aligner Plan:\n"

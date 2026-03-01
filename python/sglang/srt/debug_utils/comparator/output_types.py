@@ -32,8 +32,8 @@ from sglang.srt.debug_utils.comparator.tensor_comparator.types import (
 from sglang.srt.debug_utils.comparator.utils import Pair, _StrictBase
 
 if TYPE_CHECKING:
-    from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
-        AlignerPlan,
+    from sglang.srt.debug_utils.comparator.aligner.entrypoint.traced_types import (
+        TracedAlignerPlan,
     )
     from sglang.srt.debug_utils.comparator.report_sink import Verbosity
 
@@ -91,15 +91,6 @@ class BundleSideInfo(_StrictBase):
 class ShapeSnapshot(_StrictBase):
     input_shapes: list[list[int]]
     output_shapes: list[list[int]]
-
-
-class StepShapeTrace(_StrictBase):
-    step: int
-    snapshots: list[ShapeSnapshot]  # snapshots[i] corresponds to sub_plans[i]
-
-
-class SideShapeTrace(_StrictBase):
-    step_traces: list[StepShapeTrace]
 
 
 class _OutputRecord(_StrictBase):
@@ -222,10 +213,9 @@ class TensorComparisonRecord(TensorComparisonInfo, _BaseComparisonRecord):
     model_config = ConfigDict(extra="forbid", defer_build=True)
 
     type: Literal["comparison"] = "comparison"
-    aligner_plan: Optional[AlignerPlan] = None
+    traced_plan: Optional[TracedAlignerPlan] = None
     replicated_checks: list[ReplicatedCheckResult] = Field(default_factory=list)
     raw_bundle_info: Optional[Pair[BundleSideInfo]] = None
-    shape_traces: Optional[Pair[SideShapeTrace]] = None
 
     @property
     def category(self) -> str:

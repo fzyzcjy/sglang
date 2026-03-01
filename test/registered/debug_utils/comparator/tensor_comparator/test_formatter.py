@@ -8,6 +8,12 @@ from registered.debug_utils.comparator.testing_helpers import (
 )
 
 from sglang.srt.debug_utils.comparator.aligner.axis_aligner import AxisAlignerPlan
+from sglang.srt.debug_utils.comparator.aligner.entrypoint.traced_types import (
+    TracedAlignerPlan,
+    TracedSidePlan,
+    TracedStepPlan,
+    TracedSubPlan,
+)
 from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
     AlignerPerStepPlan,
     AlignerPlan,
@@ -30,8 +36,6 @@ from sglang.srt.debug_utils.comparator.output_types import (
     BundleSideInfo,
     ReplicatedCheckResult,
     ShapeSnapshot,
-    SideShapeTrace,
-    StepShapeTrace,
     TensorComparisonRecord,
 )
 from sglang.srt.debug_utils.comparator.tensor_comparator.formatter import (
@@ -268,8 +272,7 @@ def _make_comparison_record(
     downcast_dtype: str | None = None,
     replicated_checks: list[ReplicatedCheckResult] | None = None,
     raw_bundle_info: Pair[BundleSideInfo] | None = None,
-    aligner_plan: AlignerPlan | None = None,
-    shape_traces: Pair[SideShapeTrace] | None = None,
+    traced_plan: TracedAlignerPlan | None = None,
 ) -> TensorComparisonRecord:
     s: list[int] = shape if shape is not None else [4, 8]
     return TensorComparisonRecord(
@@ -283,8 +286,7 @@ def _make_comparison_record(
         downcast_dtype=downcast_dtype,
         replicated_checks=replicated_checks or [],
         raw_bundle_info=raw_bundle_info,
-        aligner_plan=aligner_plan,
-        shape_traces=shape_traces,
+        traced_plan=traced_plan,
     )
 
 
@@ -362,22 +364,47 @@ def _make_simple_aligner_plan(
     )
 
 
-def _make_shape_trace(
-    input_shapes: list[list[int]] | None = None,
-    output_shapes: list[list[int]] | None = None,
-) -> SideShapeTrace:
-    return SideShapeTrace(
-        step_traces=[
-            StepShapeTrace(
-                step=0,
-                snapshots=[
-                    ShapeSnapshot(
-                        input_shapes=input_shapes or [[2, 4096], [2, 4096]],
-                        output_shapes=output_shapes or [[4, 4096]],
-                    )
-                ],
+def _make_traced_plan(
+    plan: AlignerPlan,
+    *,
+    target_input_shapes: list[list[int]] | None = None,
+    target_output_shapes: list[list[int]] | None = None,
+) -> TracedAlignerPlan:
+    """Build a TracedAlignerPlan by attaching snapshots to target sub_plans."""
+    baseline_traced_steps: list[TracedStepPlan] = [
+        TracedStepPlan(
+            step=sp.step,
+            input_object_indices=sp.input_object_indices,
+            sub_plans=[TracedSubPlan(plan=sub) for sub in sp.sub_plans],
+        )
+        for sp in plan.per_step_plans.x
+    ]
+
+    target_traced_steps: list[TracedStepPlan] = []
+    for sp in plan.per_step_plans.y:
+        traced_subs: list[TracedSubPlan] = []
+        for sub in sp.sub_plans:
+            snapshot: ShapeSnapshot | None = None
+            if target_input_shapes is not None or target_output_shapes is not None:
+                snapshot = ShapeSnapshot(
+                    input_shapes=target_input_shapes or [[2, 4096], [2, 4096]],
+                    output_shapes=target_output_shapes or [[4, 4096]],
+                )
+            traced_subs.append(TracedSubPlan(plan=sub, snapshot=snapshot))
+        target_traced_steps.append(
+            TracedStepPlan(
+                step=sp.step,
+                input_object_indices=sp.input_object_indices,
+                sub_plans=traced_subs,
             )
-        ]
+        )
+
+    return TracedAlignerPlan(
+        plan=plan,
+        per_side=Pair(
+            x=TracedSidePlan(step_plans=baseline_traced_steps),
+            y=TracedSidePlan(step_plans=target_traced_steps),
+        ),
     )
 
 
@@ -540,7 +567,7 @@ class TestFormatComparisonRichNormal:
         plan: AlignerPlan = _make_simple_aligner_plan(with_unsharder=True)
         record: TensorComparisonRecord = _make_comparison_record(
             diff=_make_diff(passed=True),
-            aligner_plan=plan,
+            traced_plan=_make_traced_plan(plan),
         )
         result: str = format_comparison_rich(record, verbosity="normal")
 
@@ -632,14 +659,13 @@ class TestFormatComparisonRichVerbose:
 
     def test_with_plan_and_traces(self) -> None:
         plan: AlignerPlan = _make_simple_aligner_plan(with_unsharder=True)
-        traces: Pair[SideShapeTrace] = Pair(
-            x=SideShapeTrace(step_traces=[]),
-            y=_make_shape_trace(),
-        )
         record: TensorComparisonRecord = _make_comparison_record(
             diff=_make_diff(passed=True),
-            aligner_plan=plan,
-            shape_traces=traces,
+            traced_plan=_make_traced_plan(
+                plan,
+                target_input_shapes=[[2, 4096], [2, 4096]],
+                target_output_shapes=[[4, 4096]],
+            ),
         )
         result: str = format_comparison_rich(record, verbosity="verbose")
 
@@ -756,7 +782,8 @@ class TestFormatPlanSectionRich:
 
     def test_passthrough(self) -> None:
         plan: AlignerPlan = _make_simple_aligner_plan()
-        lines: list[str] = _format_plan_section_rich(plan=plan, shape_traces=None)
+        traced: TracedAlignerPlan = _make_traced_plan(plan)
+        lines: list[str] = _format_plan_section_rich(traced_plan=traced)
 
         assert lines == [
             "      baseline  [dim](passthrough)[/]",
@@ -765,7 +792,8 @@ class TestFormatPlanSectionRich:
 
     def test_unsharder_op(self) -> None:
         plan: AlignerPlan = _make_simple_aligner_plan(with_unsharder=True)
-        lines: list[str] = _format_plan_section_rich(plan=plan, shape_traces=None)
+        traced: TracedAlignerPlan = _make_traced_plan(plan)
+        lines: list[str] = _format_plan_section_rich(traced_plan=traced)
 
         assert lines == [
             "      baseline  [dim](passthrough)[/]",
@@ -774,7 +802,8 @@ class TestFormatPlanSectionRich:
 
     def test_reorderer_op(self) -> None:
         plan: AlignerPlan = _make_simple_aligner_plan(with_reorderer=True)
-        lines: list[str] = _format_plan_section_rich(plan=plan, shape_traces=None)
+        traced: TracedAlignerPlan = _make_traced_plan(plan)
+        lines: list[str] = _format_plan_section_rich(traced_plan=traced)
 
         assert lines == [
             "      baseline  [dim](passthrough)[/]",
@@ -783,14 +812,12 @@ class TestFormatPlanSectionRich:
 
     def test_with_shape_traces(self) -> None:
         plan: AlignerPlan = _make_simple_aligner_plan(with_unsharder=True)
-        traces: Pair[SideShapeTrace] = Pair(
-            x=SideShapeTrace(step_traces=[]),
-            y=_make_shape_trace(
-                input_shapes=[[2, 4096], [2, 4096]],
-                output_shapes=[[4, 4096]],
-            ),
+        traced: TracedAlignerPlan = _make_traced_plan(
+            plan,
+            target_input_shapes=[[2, 4096], [2, 4096]],
+            target_output_shapes=[[4, 4096]],
         )
-        lines: list[str] = _format_plan_section_rich(plan=plan, shape_traces=traces)
+        lines: list[str] = _format_plan_section_rich(traced_plan=traced)
 
         assert lines == [
             "      baseline  [dim](passthrough)[/]",
@@ -799,7 +826,8 @@ class TestFormatPlanSectionRich:
 
     def test_with_token_aligner(self) -> None:
         plan: AlignerPlan = _make_simple_aligner_plan(with_token_aligner=True)
-        lines: list[str] = _format_plan_section_rich(plan=plan, shape_traces=None)
+        traced: TracedAlignerPlan = _make_traced_plan(plan)
+        lines: list[str] = _format_plan_section_rich(traced_plan=traced)
 
         assert lines == [
             "      baseline  [dim](passthrough)[/]",
@@ -809,7 +837,8 @@ class TestFormatPlanSectionRich:
 
     def test_with_axis_aligner(self) -> None:
         plan: AlignerPlan = _make_simple_aligner_plan(with_axis_aligner=True)
-        lines: list[str] = _format_plan_section_rich(plan=plan, shape_traces=None)
+        traced: TracedAlignerPlan = _make_traced_plan(plan)
+        lines: list[str] = _format_plan_section_rich(traced_plan=traced)
 
         assert lines == [
             "      baseline  [dim](passthrough)[/]",
@@ -821,7 +850,8 @@ class TestFormatPlanSectionRich:
         plan: AlignerPlan = _make_simple_aligner_plan(
             with_axis_aligner=True, axis_aligner_noop=True
         )
-        lines: list[str] = _format_plan_section_rich(plan=plan, shape_traces=None)
+        traced: TracedAlignerPlan = _make_traced_plan(plan)
+        lines: list[str] = _format_plan_section_rich(traced_plan=traced)
 
         assert lines == [
             "      baseline  [dim](passthrough)[/]",

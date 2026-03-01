@@ -13,15 +13,13 @@ from sglang.srt.debug_utils.comparator.tensor_comparator.types import (
 )
 
 if TYPE_CHECKING:
-    from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
-        AlignerPlan,
+    from sglang.srt.debug_utils.comparator.aligner.entrypoint.traced_types import (
+        TracedAlignerPlan,
     )
     from sglang.srt.debug_utils.comparator.output_types import (
         BundleSideInfo,
         ReplicatedCheckResult,
         ShapeSnapshot,
-        SideShapeTrace,
-        StepShapeTrace,
         TensorComparisonRecord,
     )
     from sglang.srt.debug_utils.comparator.utils import Pair
@@ -286,12 +284,11 @@ def _format_comparison_normal_or_verbose(
         )
 
     # Plan section
-    if record.aligner_plan is not None:
+    if record.traced_plan is not None:
         lines.append("   [dim]Plan[/]")
         lines.extend(
             _format_plan_section_rich(
-                plan=record.aligner_plan,
-                shape_traces=record.shape_traces,
+                traced_plan=record.traced_plan,
                 verbose=verbose,
             )
         )
@@ -395,34 +392,28 @@ def _format_bundle_section(
 
 def _format_plan_section_rich(
     *,
-    plan: AlignerPlan,
-    shape_traces: Optional[Pair[SideShapeTrace]],
+    traced_plan: TracedAlignerPlan,
     verbose: bool = False,
 ) -> list[str]:
+    from sglang.srt.debug_utils.comparator.aligner.entrypoint.traced_types import (
+        TracedSidePlan,
+    )
+
     lines: list[str] = []
 
-    for side_label, side_plans, side_trace in [
-        ("baseline", plan.per_step_plans.x, shape_traces.x if shape_traces else None),
-        ("target", plan.per_step_plans.y, shape_traces.y if shape_traces else None),
+    for side_label, traced_side in [
+        ("baseline", traced_plan.per_side.x),
+        ("target", traced_plan.per_side.y),
     ]:
-        if not side_plans:
+        if not traced_side.step_plans:
             lines.append(f"      {side_label}  [dim](passthrough)[/]")
             continue
 
         parts: list[str] = []
-        for step_plan_idx, step_plan in enumerate(side_plans):
-            step_trace: Optional[StepShapeTrace] = (
-                side_trace.step_traces[step_plan_idx]
-                if side_trace and step_plan_idx < len(side_trace.step_traces)
-                else None
-            )
-
-            for sub_idx, sub in enumerate(step_plan.sub_plans):
-                snapshot: Optional[ShapeSnapshot] = (
-                    step_trace.snapshots[sub_idx]
-                    if step_trace and sub_idx < len(step_trace.snapshots)
-                    else None
-                )
+        for traced_step in traced_side.step_plans:
+            for traced_sub in traced_step.sub_plans:
+                sub = traced_sub.plan
+                snapshot: Optional[ShapeSnapshot] = traced_sub.snapshot
 
                 op_name: str = sub.type
                 axis_str: str = ""
@@ -449,6 +440,7 @@ def _format_plan_section_rich(
 
         lines.append(f"      {side_label}  " + " → ".join(parts))
 
+    plan = traced_plan.plan
     if plan.token_aligner_plan is not None:
         num_tokens: int = len(plan.token_aligner_plan.locators.x.steps)
         lines.append(f"      token_aligner  [dim]{num_tokens} tokens[/]")

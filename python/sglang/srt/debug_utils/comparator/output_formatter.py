@@ -19,8 +19,8 @@ from sglang.srt.debug_utils.comparator.tensor_comparator.formatter import (
 if TYPE_CHECKING:
     from rich.console import RenderableType
 
-    from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
-        AlignerPlan,
+    from sglang.srt.debug_utils.comparator.aligner.entrypoint.traced_types import (
+        TracedAlignerPlan,
     )
     from sglang.srt.debug_utils.comparator.output_types import (
         ConfigRecord,
@@ -99,8 +99,8 @@ def _format_tensor_comparison_body(record: TensorComparisonRecord) -> str:
     body: str = record._format_location_prefix() + format_comparison(record)
     if record.replicated_checks:
         body += "\n" + format_replicated_checks(record.replicated_checks)
-    if record.aligner_plan is not None:
-        body += "\n" + _format_aligner_plan(record.aligner_plan)
+    if record.traced_plan is not None:
+        body += "\n" + _format_aligner_plan(record.traced_plan)
     return body
 
 
@@ -182,26 +182,39 @@ def _format_log_body(record: LogRecord) -> str:
 # ── Standalone helpers ───────────────────────────────────────────────
 
 
-def _format_aligner_plan(plan: AlignerPlan) -> str:
+def _format_aligner_plan(traced_plan: TracedAlignerPlan) -> str:
     lines: list[str] = ["Aligner Plan:"]
 
-    for side_label, side_plans in [
-        ("baseline", plan.per_step_plans.x),
-        ("target", plan.per_step_plans.y),
+    for side_label, traced_side in [
+        ("baseline", traced_plan.per_side.x),
+        ("target", traced_plan.per_side.y),
     ]:
-        if not side_plans:
+        if not traced_side.step_plans:
             lines.append(f"  {side_label}: (no steps)")
             continue
 
         step_summaries: list[str] = []
-        for step_plan in side_plans:
+        for traced_step in traced_side.step_plans:
             sub_strs: list[str] = []
-            for sub in step_plan.sub_plans:
-                sub_strs.append(f"{sub.type}")
+            for traced_sub in traced_step.sub_plans:
+                sub_desc: str = f"{traced_sub.plan.type}"
+                if traced_sub.snapshot is not None:
+                    snap = traced_sub.snapshot
+                    in_count: int = len(snap.input_shapes)
+                    out_count: int = len(snap.output_shapes)
+                    in_shape: str = (
+                        str(snap.input_shapes[0]) if snap.input_shapes else "?"
+                    )
+                    out_shape: str = (
+                        str(snap.output_shapes[0]) if snap.output_shapes else "?"
+                    )
+                    sub_desc += f" {in_count}x{in_shape} -> {out_count}x{out_shape}"
+                sub_strs.append(sub_desc)
             summary: str = ", ".join(sub_strs) if sub_strs else "passthrough"
-            step_summaries.append(f"step={step_plan.step}: {summary}")
+            step_summaries.append(f"step={traced_step.step}: {summary}")
         lines.append(f"  {side_label}: [{'; '.join(step_summaries)}]")
 
+    plan = traced_plan.plan
     if plan.token_aligner_plan is not None:
         num_tokens: int = len(plan.token_aligner_plan.locators.x.steps)
         lines.append(f"  token_aligner: {num_tokens} tokens aligned")

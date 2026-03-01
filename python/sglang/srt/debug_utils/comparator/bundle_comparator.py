@@ -265,10 +265,9 @@ def _compare_bundle_pair_tensor_type(
     )
     record = TensorComparisonRecord(
         **info.model_dump(),
-        aligner_plan=plan,
+        traced_plan=aligner_result.traced_plan,
         replicated_checks=replicated_checks,
         raw_bundle_info=raw_bundle_info,
-        shape_traces=aligner_result.shape_traces,
     )
 
     if viz_output_dir is not None:
