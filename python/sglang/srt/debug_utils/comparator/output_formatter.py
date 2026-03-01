@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+from rich.console import Group
 from rich.markup import escape
 from rich.panel import Panel
 
@@ -25,16 +26,78 @@ if TYPE_CHECKING:
     )
     from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import AlignerPlan
     from sglang.srt.debug_utils.comparator.output_types import (
+        BaseLog,
         ConfigRecord,
+        ErrorLog,
+        InfoLog,
         LogRecord,
         NonTensorComparisonRecord,
         SkipComparisonRecord,
         SummaryRecord,
         TensorComparisonRecord,
+        _OutputRecord,
         _TableRecord,
     )
 
 Verbosity = Literal["minimal", "normal", "verbose"]
+
+
+# ── Record-level rendering (body + logs) ─────────────────────────────
+
+
+def _render_record_rich(record: _OutputRecord, *, verbosity: Verbosity = "normal") -> RenderableType:
+    body: RenderableType = record._format_rich_body(verbosity=verbosity)
+
+    log_lines: list[str] = _format_log_lines_rich(
+        errors=record.errors, infos=record.infos
+    )
+
+    if not log_lines:
+        return body
+
+    log_block: str = "\n".join(log_lines)
+    if isinstance(body, str):
+        return body + "\n" + log_block
+    return Group(body, log_block)
+
+
+def _render_record_text(record: _OutputRecord) -> str:
+    body: str = record._format_body()
+
+    log_suffix: str = _format_log_lines_text(
+        errors=record.errors, infos=record.infos
+    )
+
+    if log_suffix:
+        body += "\n" + log_suffix
+
+    return body
+
+
+def _format_log_lines_rich(
+    *, errors: list[ErrorLog], infos: list[InfoLog]
+) -> list[str]:
+    lines: list[str] = []
+
+    if errors:
+        lines.extend(f"  [red]✗ {e.to_text()}[/]" for e in errors)
+    if infos:
+        lines.extend(f"  [dim]ℹ {i.to_text()}[/]" for i in infos)
+
+    return lines
+
+
+def _format_log_lines_text(
+    *, errors: list[ErrorLog], infos: list[InfoLog]
+) -> str:
+    lines: list[str] = []
+
+    if errors:
+        lines.extend(f"  ✗ {e.to_text()}" for e in errors)
+    if infos:
+        lines.extend(f"  ℹ {i.to_text()}" for i in infos)
+
+    return "\n".join(lines)
 
 
 # ── ConfigRecord ──────────────────────────────────────────────────────

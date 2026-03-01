@@ -4,7 +4,7 @@ from abc import abstractmethod
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Optional, Union
 
 from pydantic import ConfigDict, Discriminator, Field, TypeAdapter, model_validator
-from rich.console import Group, RenderableType
+from rich.console import RenderableType
 from rich.markup import escape
 
 from sglang.srt.debug_utils.comparator.output_formatter import (  # noqa: F401 — re-export
@@ -24,6 +24,8 @@ from sglang.srt.debug_utils.comparator.output_formatter import (
     _format_table_rich_body,
     _format_tensor_comparison_body,
     _format_tensor_comparison_rich_body,
+    _render_record_rich,
+    _render_record_text,
 )
 from sglang.srt.debug_utils.comparator.tensor_comparator.types import (
     DiffInfo,
@@ -104,29 +106,10 @@ class _OutputRecord(_StrictBase):
         return self._format_body()
 
     def to_rich(self, verbosity: Verbosity = "normal") -> RenderableType:
-        body: RenderableType = self._format_rich_body(verbosity=verbosity)
-
-        log_lines: list[str] = []
-        if self.errors:
-            log_lines.extend(f"  [red]✗ {e.to_text()}[/]" for e in self.errors)
-        if self.infos:
-            log_lines.extend(f"  [dim]ℹ {i.to_text()}[/]" for i in self.infos)
-
-        if not log_lines:
-            return body
-
-        log_block: str = "\n".join(log_lines)
-        if isinstance(body, str):
-            return body + "\n" + log_block
-        return Group(body, log_block)
+        return _render_record_rich(self, verbosity=verbosity)
 
     def to_text(self) -> str:
-        body = self._format_body()
-        if self.errors:
-            body += "\n" + "\n".join(f"  ✗ {e.to_text()}" for e in self.errors)
-        if self.infos:
-            body += "\n" + "\n".join(f"  ℹ {i.to_text()}" for i in self.infos)
-        return body
+        return _render_record_text(self)
 
 
 class RecordLocation(_StrictBase):
