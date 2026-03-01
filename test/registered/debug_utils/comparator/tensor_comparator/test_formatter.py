@@ -588,7 +588,7 @@ class TestFormatComparisonRichNormal:
         result: str = format_comparison_rich(record)
 
         assert "[dim]Plan[/]" in result
-        assert "[magenta]unsharder(tp)[/]" in result
+        assert "[magenta]unsharder(ParallelAxis.TP)[/]" in result
 
 
 class TestFormatComparisonRichVerbose:
@@ -739,7 +739,7 @@ class TestFormatPlanSectionRich:
         lines: list[str] = _format_plan_section_rich(plan=plan, shape_traces=None)
 
         assert lines[0] == "      baseline  [dim](passthrough)[/]"
-        assert "[magenta]unsharder(tp)[/]" in lines[1]
+        assert "[magenta]unsharder(ParallelAxis.TP)[/]" in lines[1]
 
     def test_reorderer_op(self) -> None:
         plan: AlignerPlan = _make_simple_aligner_plan(with_reorderer=True)
