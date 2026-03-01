@@ -395,9 +395,6 @@ def _format_plan_section_rich(
     traced_plan: TracedAlignerPlan,
     verbose: bool = False,
 ) -> list[str]:
-    from sglang.srt.debug_utils.comparator.aligner.entrypoint.traced_types import (
-        TracedSidePlan,
-    )
 
     lines: list[str] = []
 
