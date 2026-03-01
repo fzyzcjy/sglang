@@ -372,7 +372,9 @@ def _make_bundle_side_info(
     s: list[int] = shape if shape is not None else [2, 4096]
     files: list[BundleFileInfo] = []
     for i in range(num_files):
-        par: dict[str, str] | None = {"tp": f"{i}/{num_files}"} if with_parallel_info else None
+        par: dict[str, str] | None = (
+            {"tp": f"{i}/{num_files}"} if with_parallel_info else None
+        )
         files.append(BundleFileInfo(shape=s, dtype=dtype, rank=i, parallel_info=par))
     return BundleSideInfo(num_files=num_files, files=files, dims=dims)
 
@@ -395,7 +397,9 @@ def _make_simple_aligner_plan(
             groups=[[0, 1]],
         )
         target_plans.append(
-            AlignerPerStepPlan(step=0, input_object_indices=[0, 1], sub_plans=[unsharder])
+            AlignerPerStepPlan(
+                step=0, input_object_indices=[0, 1], sub_plans=[unsharder]
+            )
         )
 
     if with_reorderer:
@@ -512,9 +516,7 @@ class TestFormatComparisonRichMinimal:
         ):
             result: str = format_comparison_rich(record)
 
-        assert result == (
-            "[red]❌[/] [bold red]hidden_states                  [/]"
-        )
+        assert result == ("[red]❌[/] [bold red]hidden_states                  [/]")
 
 
 class TestFormatComparisonRichNormal:
@@ -541,7 +543,9 @@ class TestFormatComparisonRichNormal:
 
     def test_failed(self) -> None:
         record: TensorComparisonRecord = _make_comparison_record(
-            diff=_make_diff(rel_diff=0.5, max_abs_diff=1.0, mean_abs_diff=0.3, passed=False),
+            diff=_make_diff(
+                rel_diff=0.5, max_abs_diff=1.0, mean_abs_diff=0.3, passed=False
+            ),
         )
         with patch(
             "sglang.srt.debug_utils.comparator.tensor_comparator.formatter.get_verbosity",
@@ -806,7 +810,9 @@ class TestFormatPlanSectionRich:
         plan: AlignerPlan = _make_simple_aligner_plan(with_axis_aligner=True)
         lines: list[str] = _format_plan_section_rich(plan=plan, shape_traces=None)
 
-        assert any("axis_aligner" in line and "x=b s d -> s b d" in line for line in lines)
+        assert any(
+            "axis_aligner" in line and "x=b s d -> s b d" in line for line in lines
+        )
 
     def test_axis_aligner_noop(self) -> None:
         plan: AlignerPlan = _make_simple_aligner_plan(
@@ -822,7 +828,9 @@ class TestFormatStatsRich:
 
     def test_basic(self) -> None:
         baseline: TensorStats = _make_stats(mean=0.0, std=1.0, min=-2.0, max=2.0)
-        target: TensorStats = _make_stats(mean=0.0001, std=1.0001, min=-2.0001, max=2.0001)
+        target: TensorStats = _make_stats(
+            mean=0.0001, std=1.0001, min=-2.0001, max=2.0001
+        )
         lines: list[str] = _format_stats_rich(baseline=baseline, target=target)
 
         assert len(lines) == 3  # mean, std, range
@@ -882,8 +890,7 @@ class TestFormatAbsDiffPercentilesRich:
         result: str = _format_abs_diff_percentiles_rich(diff)
 
         assert result == (
-            "p1=1.00e-04  p5=1.00e-04  p50=2.00e-04  "
-            "p95=4.00e-04  p99=5.00e-04"
+            "p1=1.00e-04  p5=1.00e-04  p50=2.00e-04  " "p95=4.00e-04  p99=5.00e-04"
         )
 
     def test_high_p99_coloring(self) -> None:
@@ -909,8 +916,12 @@ class TestFormatReplicatedChecks:
     def test_all_passed(self) -> None:
         checks: list[ReplicatedCheckResult] = [
             ReplicatedCheckResult(
-                axis="tp", group_index=0, compared_index=1, baseline_index=0,
-                passed=True, atol=1e-3,
+                axis="tp",
+                group_index=0,
+                compared_index=1,
+                baseline_index=0,
+                passed=True,
+                atol=1e-3,
                 diff=_make_diff(rel_diff=1e-6, max_abs_diff=1e-5, mean_abs_diff=1e-6),
             ),
         ]
@@ -925,8 +936,12 @@ class TestFormatReplicatedChecks:
     def test_one_failed(self) -> None:
         checks: list[ReplicatedCheckResult] = [
             ReplicatedCheckResult(
-                axis="tp", group_index=0, compared_index=1, baseline_index=0,
-                passed=False, atol=1e-3,
+                axis="tp",
+                group_index=0,
+                compared_index=1,
+                baseline_index=0,
+                passed=False,
+                atol=1e-3,
                 diff=_make_diff(rel_diff=0.5, max_abs_diff=1.0, mean_abs_diff=0.3),
             ),
         ]
@@ -938,8 +953,12 @@ class TestFormatReplicatedChecks:
     def test_no_diff(self) -> None:
         checks: list[ReplicatedCheckResult] = [
             ReplicatedCheckResult(
-                axis="tp", group_index=0, compared_index=1, baseline_index=0,
-                passed=True, atol=1e-3,
+                axis="tp",
+                group_index=0,
+                compared_index=1,
+                baseline_index=0,
+                passed=True,
+                atol=1e-3,
             ),
         ]
         result: str = format_replicated_checks(checks)

@@ -52,7 +52,11 @@ register_cpu_ci(est_time=10, suite="default", nightly=True)
 # ---------------------------------------------------------------------------
 
 _DEFAULT_PERCENTILES: dict[int, float] = {
-    1: -1.8, 5: -1.5, 50: 0.0, 95: 1.5, 99: 1.8,
+    1: -1.8,
+    5: -1.5,
+    50: 0.0,
+    95: 1.5,
+    99: 1.8,
 }
 
 
@@ -65,7 +69,11 @@ def _make_stats(
     percentiles: dict[int, float] | None = None,
 ) -> TensorStats:
     return TensorStats(
-        mean=mean, abs_mean=abs_mean, std=std, min=min, max=max,
+        mean=mean,
+        abs_mean=abs_mean,
+        std=std,
+        min=min,
+        max=max,
         percentiles=percentiles if percentiles is not None else _DEFAULT_PERCENTILES,
     )
 
@@ -77,10 +85,15 @@ def _make_diff(
     passed: bool = True,
 ) -> DiffInfo:
     return DiffInfo(
-        rel_diff=rel_diff, max_abs_diff=max_abs_diff, mean_abs_diff=mean_abs_diff,
+        rel_diff=rel_diff,
+        max_abs_diff=max_abs_diff,
+        mean_abs_diff=mean_abs_diff,
         abs_diff_percentiles={1: 0.0001, 5: 0.0001, 50: 0.0002, 95: 0.0004, 99: 0.0005},
-        max_diff_coord=[2, 3], baseline_at_max=1.0, target_at_max=1.0005,
-        diff_threshold=1e-3, passed=passed,
+        max_diff_coord=[2, 3],
+        baseline_at_max=1.0,
+        target_at_max=1.0005,
+        diff_threshold=1e-3,
+        passed=passed,
     )
 
 
@@ -173,33 +186,38 @@ class TestConfigRecord:
 class TestSkipComparisonRecord:
     def test_format_body_no_step(self) -> None:
         record: SkipComparisonRecord = SkipComparisonRecord(
-            name="layer.weight", reason="zero-dim tensor",
+            name="layer.weight",
+            reason="zero-dim tensor",
         )
         assert record._format_body() == "Skip: layer.weight (zero-dim tensor)"
 
     def test_format_body_with_step(self) -> None:
         record: SkipComparisonRecord = SkipComparisonRecord(
-            name="layer.weight", reason="scalar",
+            name="layer.weight",
+            reason="scalar",
             location=RecordLocation(step=3),
         )
         assert record._format_body() == "Skip: layer.weight (step=3) (scalar)"
 
     def test_format_rich_body(self) -> None:
         record: SkipComparisonRecord = SkipComparisonRecord(
-            name="attn.qkv", reason="no baseline",
+            name="attn.qkv",
+            reason="no baseline",
         )
         body: str = record._format_rich_body()
         assert body == "[dim]⊘ attn.qkv ── skipped (no baseline)[/]"
 
     def test_category_skipped(self) -> None:
         record: SkipComparisonRecord = SkipComparisonRecord(
-            name="x", reason="r",
+            name="x",
+            reason="r",
         )
         assert record.category == "skipped"
 
     def test_category_failed(self) -> None:
         record: SkipComparisonRecord = SkipComparisonRecord(
-            name="x", reason="r",
+            name="x",
+            reason="r",
             errors=[ErrorLog(category="e", message="boom")],
         )
         assert record.category == "failed"
@@ -213,15 +231,23 @@ class TestSkipComparisonRecord:
 class TestNonTensorComparisonRecord:
     def test_format_body_equal(self) -> None:
         record: NonTensorComparisonRecord = NonTensorComparisonRecord(
-            name="config.lr", baseline_value="0.001", target_value="0.001",
-            baseline_type="float", target_type="float", values_equal=True,
+            name="config.lr",
+            baseline_value="0.001",
+            target_value="0.001",
+            baseline_type="float",
+            target_type="float",
+            values_equal=True,
         )
         assert record._format_body() == "NonTensor: config.lr = 0.001 (float) [equal]"
 
     def test_format_body_not_equal(self) -> None:
         record: NonTensorComparisonRecord = NonTensorComparisonRecord(
-            name="config.lr", baseline_value="0.001", target_value="0.01",
-            baseline_type="float", target_type="float", values_equal=False,
+            name="config.lr",
+            baseline_value="0.001",
+            target_value="0.01",
+            baseline_type="float",
+            target_type="float",
+            values_equal=False,
         )
         assert record._format_body() == (
             "NonTensor: config.lr\n"
@@ -231,17 +257,23 @@ class TestNonTensorComparisonRecord:
 
     def test_format_rich_body_equal(self) -> None:
         record: NonTensorComparisonRecord = NonTensorComparisonRecord(
-            name="config.lr", baseline_value="0.001", target_value="0.001",
-            baseline_type="float", target_type="float", values_equal=True,
+            name="config.lr",
+            baseline_value="0.001",
+            target_value="0.001",
+            baseline_type="float",
+            target_type="float",
+            values_equal=True,
         )
-        assert record._format_rich_body() == (
-            "═ config.lr = 0.001 (float) [green]✓[/]"
-        )
+        assert record._format_rich_body() == ("═ config.lr = 0.001 (float) [green]✓[/]")
 
     def test_format_rich_body_not_equal(self) -> None:
         record: NonTensorComparisonRecord = NonTensorComparisonRecord(
-            name="config.lr", baseline_value="0.001", target_value="0.01",
-            baseline_type="float", target_type="float", values_equal=False,
+            name="config.lr",
+            baseline_value="0.001",
+            target_value="0.01",
+            baseline_type="float",
+            target_type="float",
+            values_equal=False,
         )
         assert record._format_rich_body() == (
             "═ [bold red]config.lr[/]\n"
@@ -251,20 +283,32 @@ class TestNonTensorComparisonRecord:
 
     def test_with_step(self) -> None:
         record: NonTensorComparisonRecord = NonTensorComparisonRecord(
-            name="bias", baseline_value="True", target_value="True",
-            baseline_type="bool", target_type="bool", values_equal=True,
+            name="bias",
+            baseline_value="True",
+            target_value="True",
+            baseline_type="bool",
+            target_type="bool",
+            values_equal=True,
             location=RecordLocation(step=5),
         )
         assert "(step=5)" in record._format_body()
 
     def test_category(self) -> None:
         passed: NonTensorComparisonRecord = NonTensorComparisonRecord(
-            name="x", baseline_value="1", target_value="1",
-            baseline_type="int", target_type="int", values_equal=True,
+            name="x",
+            baseline_value="1",
+            target_value="1",
+            baseline_type="int",
+            target_type="int",
+            values_equal=True,
         )
         failed: NonTensorComparisonRecord = NonTensorComparisonRecord(
-            name="x", baseline_value="1", target_value="2",
-            baseline_type="int", target_type="int", values_equal=False,
+            name="x",
+            baseline_value="1",
+            target_value="2",
+            baseline_type="int",
+            target_type="int",
+            values_equal=False,
         )
         assert passed.category == "passed"
         assert failed.category == "failed"
@@ -278,7 +322,10 @@ class TestNonTensorComparisonRecord:
 class TestSummaryRecord:
     def test_format_body(self) -> None:
         record: SummaryRecord = SummaryRecord(
-            total=10, passed=7, failed=2, skipped=1,
+            total=10,
+            passed=7,
+            failed=2,
+            skipped=1,
         )
         assert record._format_body() == (
             "Summary: 7 passed, 2 failed, 1 skipped (total 10)"
@@ -286,7 +333,10 @@ class TestSummaryRecord:
 
     def test_format_rich_body(self) -> None:
         record: SummaryRecord = SummaryRecord(
-            total=10, passed=7, failed=2, skipped=1,
+            total=10,
+            passed=7,
+            failed=2,
+            skipped=1,
         )
         body = record._format_rich_body()
         assert isinstance(body, Panel)
@@ -333,9 +383,15 @@ class TestTensorComparisonRecordFormatBody:
             diff=_make_diff(),
             replicated_checks=[
                 ReplicatedCheckResult(
-                    axis="tp", group_index=0, compared_index=1, baseline_index=0,
-                    passed=True, atol=1e-3,
-                    diff=_make_diff(rel_diff=1e-6, max_abs_diff=1e-5, mean_abs_diff=1e-6),
+                    axis="tp",
+                    group_index=0,
+                    compared_index=1,
+                    baseline_index=0,
+                    passed=True,
+                    atol=1e-3,
+                    diff=_make_diff(
+                        rel_diff=1e-6, max_abs_diff=1e-5, mean_abs_diff=1e-6
+                    ),
                 ),
             ],
         )
@@ -385,9 +441,7 @@ class TestFormatAlignerPlan:
         result: str = _format_aligner_plan(plan)
 
         assert result == (
-            "Aligner Plan:\n"
-            "  baseline: (no steps)\n"
-            "  target: (no steps)"
+            "Aligner Plan:\n" "  baseline: (no steps)\n" "  target: (no steps)"
         )
 
     def test_unsharder(self) -> None:
@@ -399,15 +453,17 @@ class TestFormatAlignerPlan:
         plan: AlignerPlan = AlignerPlan(
             per_step_plans=Pair(
                 x=[],
-                y=[AlignerPerStepPlan(step=0, input_object_indices=[0, 1], sub_plans=[unsharder])],
+                y=[
+                    AlignerPerStepPlan(
+                        step=0, input_object_indices=[0, 1], sub_plans=[unsharder]
+                    )
+                ],
             ),
         )
         result: str = _format_aligner_plan(plan)
 
         assert result == (
-            "Aligner Plan:\n"
-            "  baseline: (no steps)\n"
-            "  target: [step=0: unsharder]"
+            "Aligner Plan:\n" "  baseline: (no steps)\n" "  target: [step=0: unsharder]"
         )
 
     def test_reorderer(self) -> None:
@@ -417,7 +473,11 @@ class TestFormatAlignerPlan:
         plan: AlignerPlan = AlignerPlan(
             per_step_plans=Pair(
                 x=[],
-                y=[AlignerPerStepPlan(step=0, input_object_indices=[0], sub_plans=[reorderer])],
+                y=[
+                    AlignerPerStepPlan(
+                        step=0, input_object_indices=[0], sub_plans=[reorderer]
+                    )
+                ],
             ),
         )
         result: str = _format_aligner_plan(plan)
@@ -437,8 +497,12 @@ class TestFormatAlignerPlan:
             per_step_plans=Pair(
                 x=[],
                 y=[
-                    AlignerPerStepPlan(step=0, input_object_indices=[0, 1], sub_plans=[unsharder]),
-                    AlignerPerStepPlan(step=1, input_object_indices=[0], sub_plans=[reorderer]),
+                    AlignerPerStepPlan(
+                        step=0, input_object_indices=[0, 1], sub_plans=[unsharder]
+                    ),
+                    AlignerPerStepPlan(
+                        step=1, input_object_indices=[0], sub_plans=[reorderer]
+                    ),
                 ],
             ),
         )
@@ -519,7 +583,8 @@ class TestOutputRecordLogAttachment:
 
     def test_to_rich_string_body(self) -> None:
         record: SkipComparisonRecord = SkipComparisonRecord(
-            name="x", reason="r",
+            name="x",
+            reason="r",
             errors=[ErrorLog(category="e", message="oops")],
         )
         body = record.to_rich()

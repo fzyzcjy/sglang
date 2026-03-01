@@ -381,5 +381,3 @@ def _get_any_record_adapter() -> TypeAdapter:
 
 def parse_record_json(json_str: str | bytes) -> AnyRecord:
     return _get_any_record_adapter().validate_json(json_str)
-
-
