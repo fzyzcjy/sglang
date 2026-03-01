@@ -4250,7 +4250,7 @@ class TestReportOutput:
 
     def test_streaming_flush(self, tmp_path, capsys):
         """Report file is flushed after each record (readable before close)."""
-        from sglang.srt.debug_utils.comparator.output_types import report_sink
+        from sglang.srt.debug_utils.comparator.report_sink import report_sink
 
         report_file: Path = tmp_path / "stream_report.jsonl"
         report_sink.configure(

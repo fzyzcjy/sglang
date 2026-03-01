@@ -31,8 +31,8 @@ from sglang.srt.debug_utils.comparator.output_types import (
     SkipComparisonRecord,
     SummaryRecord,
     TensorComparisonRecord,
-    report_sink,
 )
+from sglang.srt.debug_utils.comparator.report_sink import report_sink
 from sglang.srt.debug_utils.comparator.per_token_visualizer import (
     generate_per_token_heatmap,
 )

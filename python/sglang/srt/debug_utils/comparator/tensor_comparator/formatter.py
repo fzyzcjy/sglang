@@ -176,7 +176,7 @@ def _format_diff(diff: DiffInfo, prefix_text: str = "") -> list[str]:
 
 
 def format_comparison_rich(record: TensorComparisonRecord) -> str:
-    from sglang.srt.debug_utils.comparator.output_types import get_verbosity
+    from sglang.srt.debug_utils.comparator.report_sink import get_verbosity
 
     verbosity: str = get_verbosity()
     if verbosity == "minimal":

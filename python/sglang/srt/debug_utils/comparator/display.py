@@ -11,8 +11,8 @@ import rich.table
 from sglang.srt.debug_utils.comparator.output_types import (
     InputIdsRecord,
     RankInfoRecord,
-    report_sink,
 )
+from sglang.srt.debug_utils.comparator.report_sink import report_sink
 from sglang.srt.debug_utils.dump_loader import LOAD_FAILED, ValueWithMeta
 
 _PARALLEL_INFO_KEYS: list[str] = ["sglang_parallel_info", "megatron_parallel_info"]

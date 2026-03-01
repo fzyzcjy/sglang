@@ -6,7 +6,7 @@ warnings.filterwarnings(
 
 import pytest
 
-from sglang.srt.debug_utils.comparator.output_types import report_sink
+from sglang.srt.debug_utils.comparator.report_sink import report_sink
 
 collect_ignore_glob: list[str] = []
 

@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import sys
 from abc import abstractmethod
-from pathlib import Path
-from typing import IO, TYPE_CHECKING, Annotated, Any, Literal, Optional, Union
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Optional, Union
 
 import polars as pl
 from pydantic import ConfigDict, Discriminator, Field, TypeAdapter, model_validator
-from rich.console import Console, Group, RenderableType
+from rich.console import Group, RenderableType
 
 from sglang.srt.debug_utils.comparator.tensor_comparator.formatter import (
     format_comparison,
@@ -23,27 +21,6 @@ if TYPE_CHECKING:
     from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import (
         AlignerPlan,
     )
-
-_CONSOLE: Optional[Console] = None
-_VERBOSITY: str = "normal"
-
-Verbosity = Literal["minimal", "normal", "verbose"]
-
-
-def _get_console() -> Console:
-    global _CONSOLE
-    if _CONSOLE is None:
-        _CONSOLE = Console()
-    return _CONSOLE
-
-
-def get_verbosity() -> str:
-    return _VERBOSITY
-
-
-def _set_verbosity(verbosity: str) -> None:
-    global _VERBOSITY
-    _VERBOSITY = verbosity
 
 
 class BaseLog(_StrictBase):
@@ -406,66 +383,3 @@ def parse_record_json(json_str: str | bytes) -> AnyRecord:
     return _get_any_record_adapter().validate_json(json_str)
 
 
-def _print_to_stdout(record: _OutputRecord, *, output_format: str) -> None:
-    if output_format == "json":
-        print(record.model_dump_json())
-    else:
-        console: Console = _get_console()
-        console.print(record.to_rich())
-        console.print()  # blank line between records
-
-
-class ReportSink:
-    """Unified entry point for all record output."""
-
-    def __init__(self) -> None:
-        self._output_format: str = "text"
-        self._report_file: Optional[IO[str]] = None
-        self._report_path: Optional[Path] = None
-
-    def configure(
-        self,
-        *,
-        output_format: str = "text",
-        report_path: Optional[Path] = None,
-        verbosity: str = "normal",
-    ) -> None:
-        self._output_format = output_format
-        _set_verbosity(verbosity)
-
-        if report_path is not None:
-            try:
-                report_path.parent.mkdir(parents=True, exist_ok=True)
-                self._report_file = open(report_path, "w", encoding="utf-8")
-                self._report_path = report_path
-            except OSError as exc:
-                print(
-                    f"Warning: cannot open report file {report_path}: {exc}",
-                    file=sys.stderr,
-                )
-
-    def add(self, record: _OutputRecord) -> None:
-        _print_to_stdout(record, output_format=self._output_format)
-
-        if self._report_file is not None:
-            self._report_file.write(record.model_dump_json())
-            self._report_file.write("\n")
-            self._report_file.flush()
-
-    def close(self) -> None:
-        if self._report_file is not None:
-            self._report_file.close()
-            self._report_file = None
-
-    @property
-    def report_path(self) -> Optional[Path]:
-        return self._report_path
-
-    def _reset(self) -> None:
-        self.close()
-        self._output_format = "text"
-        _set_verbosity("normal")
-        self._report_path = None
-
-
-report_sink = ReportSink()
