@@ -163,10 +163,17 @@ class TestConfigRecord:
         body = record._format_rich_body()
 
         assert isinstance(body, Panel)
-        assert body.title is not None
         rendered: str = _render_rich(body)
-        assert "threshold" in rendered
-        assert "mode" in rendered
+        assert rendered == (
+            "╭───────────────────────────────────────────────── Comparator Config "
+            "──────────────────────────────────────────────────╮\n"
+            "│   threshold : 0.001"
+            "                                                                                                  │\n"
+            "│   mode : fast"
+            "                                                                                                        │\n"
+            "╰──────────────────────────────────────────────────────────────────────"
+            "────────────────────────────────────────────────╯"
+        )
 
     def test_to_text_with_errors(self) -> None:
         record: ConfigRecord = ConfigRecord(
@@ -342,9 +349,14 @@ class TestSummaryRecord:
         assert isinstance(body, Panel)
 
         rendered: str = _render_rich(body)
-        assert "7 passed" in rendered
-        assert "2 failed" in rendered
-        assert "1 skipped" in rendered
+        assert rendered == (
+            "╭────────────────────────────────────────────────────── SUMMARY "
+            "───────────────────────────────────────────────────────╮\n"
+            "│ 7 passed │ 2 failed │ 1 skipped │ 10 total"
+            "                                                                           │\n"
+            "╰──────────────────────────────────────────────────────────────────────"
+            "────────────────────────────────────────────────╯"
+        )
 
     def test_validation_error(self) -> None:
         with pytest.raises(ValueError, match="total=5 !="):
@@ -368,8 +380,23 @@ class TestTensorComparisonRecordFormatBody:
         )
         body: str = record._format_body()
 
-        assert body.startswith("Raw ")
-        assert "rel_diff=0.0001" in body
+        assert body == (
+            "Raw [shape] [4, 8] vs [4, 8]\t[dtype] torch.float32 vs torch.float32\n"
+            "After unify [shape] [4, 8] vs [4, 8]\t[dtype] torch.float32 vs torch.float32\n"
+            "[mean] 0.0000 vs 0.0000 (diff: 0.0000)\n"
+            "[abs_mean] 0.8000 vs 0.8000 (diff: 0.0000)\n"
+            "[std] 1.0000 vs 1.0000 (diff: 0.0000)\n"
+            "[min] -2.0000 vs -2.0000 (diff: 0.0000)\n"
+            "[max] 2.0000 vs 2.0000 (diff: 0.0000)\n"
+            "[p1] -1.8000 vs -1.8000 (diff: 0.0000)\n"
+            "[p5] -1.5000 vs -1.5000 (diff: 0.0000)\n"
+            "[p50] 0.0000 vs 0.0000 (diff: 0.0000)\n"
+            "[p95] 1.5000 vs 1.5000 (diff: 0.0000)\n"
+            "[p99] 1.8000 vs 1.8000 (diff: 0.0000)\n"
+            "✅ rel_diff=0.0001\tmax_abs_diff=0.0005\tmean_abs_diff=0.0002\n"
+            "max_abs_diff happens at coord=[2, 3] with baseline=1.0 target=1.0005\n"
+            "[abs_diff] p1=0.0001 p5=0.0001 p50=0.0002 p95=0.0004 p99=0.0005"
+        )
 
     def test_with_replicated_checks(self) -> None:
         from sglang.srt.debug_utils.comparator.output_types import ReplicatedCheckResult
@@ -396,7 +423,27 @@ class TestTensorComparisonRecordFormatBody:
             ],
         )
         body: str = record._format_body()
-        assert "Replicated checks:" in body
+
+        assert body == (
+            "Raw [shape] [4, 8] vs [4, 8]\t[dtype] torch.float32 vs torch.float32\n"
+            "After unify [shape] [4, 8] vs [4, 8]\t[dtype] torch.float32 vs torch.float32\n"
+            "[mean] 0.0000 vs 0.0000 (diff: 0.0000)\n"
+            "[abs_mean] 0.8000 vs 0.8000 (diff: 0.0000)\n"
+            "[std] 1.0000 vs 1.0000 (diff: 0.0000)\n"
+            "[min] -2.0000 vs -2.0000 (diff: 0.0000)\n"
+            "[max] 2.0000 vs 2.0000 (diff: 0.0000)\n"
+            "[p1] -1.8000 vs -1.8000 (diff: 0.0000)\n"
+            "[p5] -1.5000 vs -1.5000 (diff: 0.0000)\n"
+            "[p50] 0.0000 vs 0.0000 (diff: 0.0000)\n"
+            "[p95] 1.5000 vs 1.5000 (diff: 0.0000)\n"
+            "[p99] 1.8000 vs 1.8000 (diff: 0.0000)\n"
+            "✅ rel_diff=0.0001\tmax_abs_diff=0.0005\tmean_abs_diff=0.0002\n"
+            "max_abs_diff happens at coord=[2, 3] with baseline=1.0 target=1.0005\n"
+            "[abs_diff] p1=0.0001 p5=0.0001 p50=0.0002 p95=0.0004 p99=0.0005\n"
+            "Replicated checks:\n"
+            "  ✅ axis=tp group=0 idx=1 vs 0: "
+            "rel_diff=1.000000e-06 max_abs_diff=1.000000e-05 mean_abs_diff=1.000000e-06"
+        )
 
     def test_with_aligner_plan(self) -> None:
         plan: AlignerPlan = AlignerPlan(
@@ -412,7 +459,27 @@ class TestTensorComparisonRecordFormatBody:
             aligner_plan=plan,
         )
         body: str = record._format_body()
-        assert "Aligner Plan:" in body
+
+        assert body == (
+            "Raw [shape] [4, 8] vs [4, 8]\t[dtype] torch.float32 vs torch.float32\n"
+            "After unify [shape] [4, 8] vs [4, 8]\t[dtype] torch.float32 vs torch.float32\n"
+            "[mean] 0.0000 vs 0.0000 (diff: 0.0000)\n"
+            "[abs_mean] 0.8000 vs 0.8000 (diff: 0.0000)\n"
+            "[std] 1.0000 vs 1.0000 (diff: 0.0000)\n"
+            "[min] -2.0000 vs -2.0000 (diff: 0.0000)\n"
+            "[max] 2.0000 vs 2.0000 (diff: 0.0000)\n"
+            "[p1] -1.8000 vs -1.8000 (diff: 0.0000)\n"
+            "[p5] -1.5000 vs -1.5000 (diff: 0.0000)\n"
+            "[p50] 0.0000 vs 0.0000 (diff: 0.0000)\n"
+            "[p95] 1.5000 vs 1.5000 (diff: 0.0000)\n"
+            "[p99] 1.8000 vs 1.8000 (diff: 0.0000)\n"
+            "✅ rel_diff=0.0001\tmax_abs_diff=0.0005\tmean_abs_diff=0.0002\n"
+            "max_abs_diff happens at coord=[2, 3] with baseline=1.0 target=1.0005\n"
+            "[abs_diff] p1=0.0001 p5=0.0001 p50=0.0002 p95=0.0004 p99=0.0005\n"
+            "Aligner Plan:\n"
+            "  baseline: (no steps)\n"
+            "  target: (no steps)"
+        )
 
     def test_with_step(self) -> None:
         record: TensorComparisonRecord = TensorComparisonRecord(
@@ -425,7 +492,25 @@ class TestTensorComparisonRecordFormatBody:
             location=RecordLocation(step=2),
         )
         body: str = record._format_body()
-        assert body.startswith("[step=2] ")
+
+        assert body == (
+            "[step=2] "
+            "Raw [shape] [4, 8] vs [4, 8]\t[dtype] torch.float32 vs torch.float32\n"
+            "After unify [shape] [4, 8] vs [4, 8]\t[dtype] torch.float32 vs torch.float32\n"
+            "[mean] 0.0000 vs 0.0000 (diff: 0.0000)\n"
+            "[abs_mean] 0.8000 vs 0.8000 (diff: 0.0000)\n"
+            "[std] 1.0000 vs 1.0000 (diff: 0.0000)\n"
+            "[min] -2.0000 vs -2.0000 (diff: 0.0000)\n"
+            "[max] 2.0000 vs 2.0000 (diff: 0.0000)\n"
+            "[p1] -1.8000 vs -1.8000 (diff: 0.0000)\n"
+            "[p5] -1.5000 vs -1.5000 (diff: 0.0000)\n"
+            "[p50] 0.0000 vs 0.0000 (diff: 0.0000)\n"
+            "[p95] 1.5000 vs 1.5000 (diff: 0.0000)\n"
+            "[p99] 1.8000 vs 1.8000 (diff: 0.0000)\n"
+            "✅ rel_diff=0.0001\tmax_abs_diff=0.0005\tmean_abs_diff=0.0002\n"
+            "max_abs_diff happens at coord=[2, 3] with baseline=1.0 target=1.0005\n"
+            "[abs_diff] p1=0.0001 p5=0.0001 p50=0.0002 p95=0.0004 p99=0.0005"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -482,7 +567,11 @@ class TestFormatAlignerPlan:
         )
         result: str = _format_aligner_plan(plan)
 
-        assert "step=0: reorderer" in result
+        assert result == (
+            "Aligner Plan:\n"
+            "  baseline: (no steps)\n"
+            "  target: [step=0: reorderer]"
+        )
 
     def test_multi_step(self) -> None:
         unsharder: UnsharderPlan = UnsharderPlan(
@@ -508,7 +597,11 @@ class TestFormatAlignerPlan:
         )
         result: str = _format_aligner_plan(plan)
 
-        assert "target: [step=0: unsharder; step=1: reorderer]" in result
+        assert result == (
+            "Aligner Plan:\n"
+            "  baseline: (no steps)\n"
+            "  target: [step=0: unsharder; step=1: reorderer]"
+        )
 
     def test_with_token_aligner(self) -> None:
         ta_plan: TokenAlignerPlan = TokenAlignerPlan(
@@ -524,7 +617,12 @@ class TestFormatAlignerPlan:
         )
         result: str = _format_aligner_plan(plan)
 
-        assert "token_aligner: 3 tokens aligned" in result
+        assert result == (
+            "Aligner Plan:\n"
+            "  baseline: (no steps)\n"
+            "  target: (no steps)\n"
+            "  token_aligner: 3 tokens aligned"
+        )
 
     def test_with_axis_aligner(self) -> None:
         aa_plan: AxisAlignerPlan = AxisAlignerPlan(
@@ -536,7 +634,12 @@ class TestFormatAlignerPlan:
         )
         result: str = _format_aligner_plan(plan)
 
-        assert "axis_aligner: x: b s d -> s b d" in result
+        assert result == (
+            "Aligner Plan:\n"
+            "  baseline: (no steps)\n"
+            "  target: (no steps)\n"
+            "  axis_aligner: x: b s d -> s b d"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -558,8 +661,7 @@ class TestOutputRecordLogAttachment:
         )
         text: str = record.to_text()
 
-        assert "Config: {'a': 1}" in text
-        assert "✗ err1" in text
+        assert text == "Config: {'a': 1}\n  ✗ err1"
 
     def test_to_text_infos_only(self) -> None:
         record: ConfigRecord = ConfigRecord(
@@ -568,7 +670,7 @@ class TestOutputRecordLogAttachment:
         )
         text: str = record.to_text()
 
-        assert "ℹ note1" in text
+        assert text == "Config: {'a': 1}\n  ℹ note1"
 
     def test_to_text_mixed(self) -> None:
         record: ConfigRecord = ConfigRecord(
@@ -578,8 +680,7 @@ class TestOutputRecordLogAttachment:
         )
         text: str = record.to_text()
 
-        assert "✗ err1" in text
-        assert "ℹ note1" in text
+        assert text == "Config: {'a': 1}\n  ✗ err1\n  ℹ note1"
 
     def test_to_rich_string_body(self) -> None:
         record: SkipComparisonRecord = SkipComparisonRecord(
@@ -589,10 +690,8 @@ class TestOutputRecordLogAttachment:
         )
         body = record.to_rich()
 
-        # String body + log block → concatenated string
         assert isinstance(body, str)
-        assert "⊘ x" in body
-        assert "oops" in body
+        assert body == "[dim]⊘ x ── skipped (r)[/]\n  [red]✗ oops[/]"
 
     def test_to_rich_group_body(self) -> None:
         record: ConfigRecord = ConfigRecord(
