@@ -41,11 +41,12 @@ class TestComputeUnsharderPlan:
 
     def test_missing_axis_in_all_parallel_infos_skipped(self) -> None:
         """Axis in dims but absent from all parallel_infos -> axis_size=1, auto-skip.
-        CP is active and undeclared → treated as implicitly replicated (warning)."""
+        CP is active and undeclared → implicitly replicated, but with only
+        1 rank for cp_size=2 the rank coverage is incomplete."""
         dim_specs = parse_dims("h[tp]").dims
         parallel_infos = [{ParallelAxis.CP: AxisInfo(axis_rank=0, axis_size=2)}]
-        plans = compute_unsharder_plan(dim_specs, parallel_infos)
-        assert plans == []
+        with pytest.raises(ValueError, match="axis_rank coverage for cp is incomplete"):
+            compute_unsharder_plan(dim_specs, parallel_infos)
 
     def test_empty_parallel_infos_raises(self) -> None:
         dim_specs = parse_dims("h[tp]").dims
@@ -595,7 +596,7 @@ class TestExplicitReplicatedAxes:
 
     def test_undeclared_active_axis_implicitly_replicated(self) -> None:
         """Active axis not declared as sharded or replicated is treated as
-        implicitly replicated (warning emitted). Only CP is sharded here."""
+        implicitly replicated (warning emitted). TP gets Pick, CP gets Concat."""
         dim_specs = parse_dims("b s[cp] d").dims
         parallel_infos: list[dict[ParallelAxis, AxisInfo]] = [
             {
@@ -616,8 +617,11 @@ class TestExplicitReplicatedAxes:
             },
         ]
         plans = compute_unsharder_plan(dim_specs, parallel_infos)
-        assert len(plans) == 1
-        assert plans[0].axis == ParallelAxis.CP
+        assert len(plans) == 2
+        assert plans[0].axis == ParallelAxis.TP
+        assert isinstance(plans[0].params, PickParams)
+        assert plans[1].axis == ParallelAxis.CP
+        assert isinstance(plans[1].params, ConcatParams)
 
     def test_replicated_not_in_parallel_infos_raises(self) -> None:
         """Declaring replicated axis not in parallel_infos raises ValueError."""
