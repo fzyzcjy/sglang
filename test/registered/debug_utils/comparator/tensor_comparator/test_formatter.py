@@ -32,10 +32,8 @@ from sglang.srt.debug_utils.comparator.output_types import (
 from sglang.srt.debug_utils.comparator.tensor_comparator.formatter import (
     _format_abs_diff_percentiles_rich,
     _format_bundle_section,
-    _format_bundle_section_verbose,
     _format_plan_section_rich,
     _format_stats_rich,
-    _format_stats_rich_verbose,
     format_comparison,
     format_comparison_rich,
     format_replicated_checks,
@@ -795,14 +793,14 @@ class TestFormatBundleSection:
 
 
 class TestFormatBundleSectionVerbose:
-    """_format_bundle_section_verbose() snapshot tests."""
+    """_format_bundle_section(verbose=True) snapshot tests."""
 
     def test_per_file_listing(self) -> None:
         bundle: Pair[BundleSideInfo] = Pair(
             x=_make_bundle_side_info(num_files=2, with_parallel_info=True),
             y=_make_bundle_side_info(num_files=2, with_parallel_info=True),
         )
-        lines: list[str] = _format_bundle_section_verbose(bundle)
+        lines: list[str] = _format_bundle_section(bundle, verbose=True)
 
         assert lines == [
             "      baseline  [cyan]2 files[/] float32",
@@ -816,7 +814,7 @@ class TestFormatBundleSectionVerbose:
     def test_no_files(self) -> None:
         empty: BundleSideInfo = BundleSideInfo(num_files=0, files=[])
         bundle: Pair[BundleSideInfo] = Pair(x=empty, y=empty)
-        lines: list[str] = _format_bundle_section_verbose(bundle)
+        lines: list[str] = _format_bundle_section(bundle, verbose=True)
 
         assert lines == [
             "      baseline  [dim](no files)[/]",
@@ -943,12 +941,12 @@ class TestFormatStatsRich:
 
 
 class TestFormatStatsRichVerbose:
-    """_format_stats_rich_verbose() snapshot tests."""
+    """_format_stats_rich(verbose=True) snapshot tests."""
 
     def test_all_stats_with_percentiles(self) -> None:
         baseline: TensorStats = _make_stats()
         target: TensorStats = _make_stats()
-        lines: list[str] = _format_stats_rich_verbose(baseline=baseline, target=target)
+        lines: list[str] = _format_stats_rich(baseline=baseline, target=target, verbose=True)
 
         assert lines == [
             "      [blue]mean      [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]",
@@ -966,7 +964,7 @@ class TestFormatStatsRichVerbose:
     def test_no_percentiles(self) -> None:
         baseline: TensorStats = _make_stats(percentiles={})
         target: TensorStats = _make_stats(percentiles={})
-        lines: list[str] = _format_stats_rich_verbose(baseline=baseline, target=target)
+        lines: list[str] = _format_stats_rich(baseline=baseline, target=target, verbose=True)
 
         assert lines == [
             "      [blue]mean      [/]     0.0000 vs     0.0000  Δ [dim]+0.00e+00[/]",

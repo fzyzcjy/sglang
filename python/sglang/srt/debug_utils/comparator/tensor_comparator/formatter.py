@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Literal, Optional
 
 from rich.markup import escape
 
+from sglang.srt.debug_utils.comparator.aligner.unsharder.types import UnsharderPlan
 from sglang.srt.debug_utils.comparator.tensor_comparator.types import (
     DiffInfo,
     TensorComparisonInfo,
@@ -32,6 +33,10 @@ def _esc_shape(shape: Optional[list[int]]) -> str:
     return escape(str(shape))
 
 
+def _strip_torch_prefix(dtype: str) -> str:
+    return dtype.replace("torch.", "")
+
+
 # ---------------------------------------------------------------------------
 # Number formatting
 # ---------------------------------------------------------------------------
@@ -46,6 +51,32 @@ def _fmt_diff_colored(diff: float, *, threshold: float = 1e-2) -> str:
     if abs(diff) >= threshold:
         return f"[yellow]{formatted}[/]"
     return f"[dim]{formatted}[/]"
+
+
+# ---------------------------------------------------------------------------
+# Passed / color / marker helper
+# ---------------------------------------------------------------------------
+
+
+def _category_marker(category: str) -> tuple[bool, str, str]:
+    passed: bool = category == "passed"
+    color: str = "green" if passed else "red"
+    marker: str = f"[{color}]✅[/]" if passed else f"[{color}]❌[/]"
+    return passed, color, marker
+
+
+# ---------------------------------------------------------------------------
+# Stats formatting helpers (shared between compact / verbose)
+# ---------------------------------------------------------------------------
+
+
+def _format_stat_line(
+    stat_name: str, val_b: float, val_t: float, diff: float
+) -> str:
+    return (
+        f"      [blue]{stat_name:10s}[/] {val_b:>10.4f} vs {val_t:>10.4f}"
+        f"  Δ {_fmt_diff_colored(diff)}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -191,9 +222,7 @@ def format_comparison_rich(
 
 
 def _format_comparison_minimal(record: TensorComparisonRecord) -> str:
-    passed: bool = record.category == "passed"
-    color: str = "green" if passed else "red"
-    marker: str = f"[{color}]✅[/]" if passed else f"[{color}]❌[/]"
+    passed, color, marker = _category_marker(record.category)
 
     name_part: str = f"[bold {color}]{escape(record.name):30s}[/]"
     if record.diff is not None:
@@ -209,14 +238,12 @@ def _format_comparison_normal_or_verbose(
     record: TensorComparisonRecord,
     verbose: bool,
 ) -> str:
-    passed: bool = record.category == "passed"
-    color: str = "green" if passed else "red"
-    marker: str = f"[{color}]✅[/]" if passed else f"[{color}]❌[/]"
+    passed, color, marker = _category_marker(record.category)
 
     baseline: TensorInfo = record.baseline
     target: TensorInfo = record.target
     aligned_shape: str = _esc_shape(record.unified_shape)
-    dtype_str: str = baseline.dtype.replace("torch.", "")
+    dtype_str: str = _strip_torch_prefix(baseline.dtype)
 
     lines: list[str] = []
 
@@ -256,10 +283,11 @@ def _format_comparison_normal_or_verbose(
     # Bundle section
     if record.raw_bundle_info is not None:
         lines.append("   [dim]Bundle[/]")
-        if verbose:
-            lines.extend(_format_bundle_section_verbose(record.raw_bundle_info))
-        else:
-            lines.extend(_format_bundle_section(record.raw_bundle_info))
+        lines.extend(
+            _format_bundle_section(
+                bundle_info=record.raw_bundle_info, verbose=verbose
+            )
+        )
 
     # Plan section
     if record.aligner_plan is not None:
@@ -281,20 +309,9 @@ def _format_comparison_normal_or_verbose(
 
     # Stats section
     lines.append("   [dim]Stats[/]")
-    if verbose:
-        lines.extend(
-            _format_stats_rich_verbose(
-                baseline=baseline.stats,
-                target=target.stats,
-            )
-        )
-    else:
-        lines.extend(
-            _format_stats_rich(
-                baseline=baseline.stats,
-                target=target.stats,
-            )
-        )
+    lines.extend(
+        _format_stats_rich(baseline=baseline.stats, target=target.stats, verbose=verbose)
+    )
 
     show_detail: bool = verbose or not passed
 
@@ -331,53 +348,48 @@ def _format_comparison_normal_or_verbose(
     return "\n".join(lines)
 
 
-def _format_bundle_section(bundle_info: Pair[BundleSideInfo]) -> list[str]:
+def _format_bundle_section(
+    bundle_info: Pair[BundleSideInfo], *, verbose: bool = False
+) -> list[str]:
     lines: list[str] = []
+
     for label, side in [("baseline", bundle_info.x), ("target", bundle_info.y)]:
         if not side.files:
             lines.append(f"      {label}  [dim](no files)[/]")
             continue
 
-        shapes: list[list[int]] = [f.shape for f in side.files]
-        unique_shapes: set[str] = {str(s) for s in shapes}
-        shape_desc: str
-        if len(unique_shapes) == 1:
-            shape_desc = _esc_shape(shapes[0])
-        else:
-            shape_desc = "mixed shapes"
+        dtype_desc: str = _strip_torch_prefix(side.files[0].dtype)
 
-        dtype_desc: str = side.files[0].dtype.replace("torch.", "")
-        dims_part: str = f"  [dim]dims: {side.dims}[/]" if side.dims else ""
-        lines.append(
-            f"      {label}  [cyan]{side.num_files} files[/]"
-            f" × {shape_desc} {dtype_desc}{dims_part}"
-        )
-    return lines
-
-
-def _format_bundle_section_verbose(bundle_info: Pair[BundleSideInfo]) -> list[str]:
-    lines: list[str] = []
-    for label, side in [("baseline", bundle_info.x), ("target", bundle_info.y)]:
-        if not side.files:
-            lines.append(f"      {label}  [dim](no files)[/]")
-            continue
-
-        dtype_desc: str = side.files[0].dtype.replace("torch.", "")
-        dims_part: str = f"  dims: {side.dims}" if side.dims else ""
-        lines.append(
-            f"      {label}  [cyan]{side.num_files} files[/]"
-            f" {dtype_desc}{dims_part}"
-        )
-
-        for idx, f in enumerate(side.files):
-            rank_part: str = f"rank={f.rank}" if f.rank is not None else ""
-            par_part: str = ""
-            if f.parallel_info:
-                par_part = " " + " ".join(
-                    f"{k}={v}" for k, v in f.parallel_info.items()
-                )
+        if verbose:
+            dims_part: str = f"  dims: {side.dims}" if side.dims else ""
             lines.append(
-                f"         [{idx}] {_esc_shape(f.shape)}" f"  {rank_part}{par_part}"
+                f"      {label}  [cyan]{side.num_files} files[/]"
+                f" {dtype_desc}{dims_part}"
+            )
+
+            for idx, f in enumerate(side.files):
+                rank_part: str = f"rank={f.rank}" if f.rank is not None else ""
+                par_part: str = ""
+                if f.parallel_info:
+                    par_part = " " + " ".join(
+                        f"{k}={v}" for k, v in f.parallel_info.items()
+                    )
+                lines.append(
+                    f"         [{idx}] {_esc_shape(f.shape)}  {rank_part}{par_part}"
+                )
+        else:
+            shapes: list[list[int]] = [f.shape for f in side.files]
+            unique_shapes: set[str] = {str(s) for s in shapes}
+            shape_desc: str
+            if len(unique_shapes) == 1:
+                shape_desc = _esc_shape(shapes[0])
+            else:
+                shape_desc = "mixed shapes"
+
+            dims_part = f"  [dim]dims: {side.dims}[/]" if side.dims else ""
+            lines.append(
+                f"      {label}  [cyan]{side.num_files} files[/]"
+                f" × {shape_desc} {dtype_desc}{dims_part}"
             )
 
     return lines
@@ -416,7 +428,7 @@ def _format_plan_section_rich(
 
                 op_name: str = sub.type
                 axis_str: str = ""
-                if hasattr(sub, "axis"):
+                if isinstance(sub, UnsharderPlan):
                     axis_str = f"({sub.axis})"
 
                 shape_change: str = ""
@@ -452,7 +464,7 @@ def _format_plan_section_rich(
         if parts_aa:
             lines.append(f"      axis_aligner  [dim]{', '.join(parts_aa)}[/]")
         else:
-            lines.append(f"      axis_aligner  [dim](no-op)[/]")
+            lines.append("      axis_aligner  [dim](no-op)[/]")
 
     return lines
 
@@ -461,54 +473,36 @@ def _format_stats_rich(
     *,
     baseline: TensorStats,
     target: TensorStats,
+    verbose: bool = False,
 ) -> list[str]:
     lines: list[str] = []
 
-    # Compact: mean, std, range (min/max combined)
-    for stat_name in ("mean", "std"):
-        val_b: float = getattr(baseline, stat_name)
-        val_t: float = getattr(target, stat_name)
-        diff: float = val_t - val_b
+    if verbose:
+        # All stat fields
+        for stat_name in TensorStats.model_fields:
+            if stat_name == "percentiles":
+                continue
+            val_b: float = getattr(baseline, stat_name)
+            val_t: float = getattr(target, stat_name)
+            lines.append(_format_stat_line(stat_name, val_b, val_t, val_t - val_b))
+
+        # Percentiles
+        for p in sorted(set(baseline.percentiles) & set(target.percentiles)):
+            val_b = baseline.percentiles[p]
+            val_t = target.percentiles[p]
+            lines.append(_format_stat_line(f"p{p}", val_b, val_t, val_t - val_b))
+    else:
+        # Compact: mean, std, range (min/max combined)
+        for stat_name in ("mean", "std"):
+            val_b = getattr(baseline, stat_name)
+            val_t = getattr(target, stat_name)
+            lines.append(_format_stat_line(stat_name, val_b, val_t, val_t - val_b))
+
+        # Range line: combine min/max (escape brackets to avoid Rich markup)
+        range_baseline: str = escape(f"[{baseline.min:.4f}, {baseline.max:.4f}]")
+        range_target: str = escape(f"[{target.min:.4f}, {target.max:.4f}]")
         lines.append(
-            f"      [blue]{stat_name:10s}[/] {val_b:>10.4f} vs {val_t:>10.4f}"
-            f"  Δ {_fmt_diff_colored(diff)}"
-        )
-
-    # Range line: combine min/max (escape brackets to avoid Rich markup)
-    range_baseline: str = escape(f"[{baseline.min:.4f}, {baseline.max:.4f}]")
-    range_target: str = escape(f"[{target.min:.4f}, {target.max:.4f}]")
-    lines.append(
-        f"      [blue]{'range':10s}[/]" f" {range_baseline}" f" vs {range_target}"
-    )
-
-    return lines
-
-
-def _format_stats_rich_verbose(
-    *,
-    baseline: TensorStats,
-    target: TensorStats,
-) -> list[str]:
-    lines: list[str] = []
-
-    for stat_name in TensorStats.model_fields:
-        if stat_name == "percentiles":
-            continue
-        val_b: float = getattr(baseline, stat_name)
-        val_t: float = getattr(target, stat_name)
-        diff: float = val_t - val_b
-        lines.append(
-            f"      [blue]{stat_name:10s}[/] {val_b:>10.4f} vs {val_t:>10.4f}"
-            f"  Δ {_fmt_diff_colored(diff)}"
-        )
-
-    for p in sorted(set(baseline.percentiles) & set(target.percentiles)):
-        val_b = baseline.percentiles[p]
-        val_t = target.percentiles[p]
-        diff = val_t - val_b
-        lines.append(
-            f"      [blue]{'p' + str(p):10s}[/] {val_b:>10.4f} vs {val_t:>10.4f}"
-            f"  Δ {_fmt_diff_colored(diff)}"
+            f"      [blue]{'range':10s}[/] {range_baseline} vs {range_target}"
         )
 
     return lines
