@@ -5,7 +5,7 @@ from typing import Optional
 import torch
 from einops import rearrange
 
-from sglang.srt.debug_utils.comparator.dims import (
+from sglang.srt.debug_utils.comparator.dims_spec import (
     _FUSED_NAME_SEP,
     DimSpec,
     _SingletonDimUtil,
@@ -76,7 +76,12 @@ def _semantic_names_match(specs_pair: Pair[list[DimSpec]]) -> bool:
 
 def _expand_and_skip_squeeze(specs: list[DimSpec]) -> list[str]:
     """Expand DimSpecs to flat semantic names, skipping squeeze dims."""
-    return [name for spec in specs if not _SingletonDimUtil.is_squeeze(spec) for name in spec.sub_dims]
+    return [
+        name
+        for spec in specs
+        if not _SingletonDimUtil.is_squeeze(spec)
+        for name in spec.sub_dims
+    ]
 
 
 def _build_canonical_order(specs_pair: Pair[list[DimSpec]]) -> Optional[list[str]]:
@@ -96,7 +101,9 @@ def _build_canonical_order(specs_pair: Pair[list[DimSpec]]) -> Optional[list[str
             placeholder: str = spec.sanitized_name
             siblings: frozenset[str] = frozenset(spec.sub_dims)
             for sub_name in spec.sub_dims:
-                existing: Optional[tuple[str, frozenset[str]]] = fused_lookup.get(sub_name)
+                existing: Optional[tuple[str, frozenset[str]]] = fused_lookup.get(
+                    sub_name
+                )
                 if existing is not None and existing[1] != siblings:
                     from sglang.srt.debug_utils.comparator.output_types import ErrorLog
 
@@ -144,9 +151,7 @@ def _build_side_pattern(
     stay as individual names on the LHS and become ``(a b)`` on the RHS (einops flatten).
     Squeeze dims (``1``) appear on the LHS but are dropped from the RHS.
     """
-    source_tokens: list[str] = [
-        spec.sanitized_name for spec in specs
-    ]
+    source_tokens: list[str] = [spec.sanitized_name for spec in specs]
 
     # Build per-side target: replace fused placeholders with ``(a b)`` only if this side
     # has the sub-dims as separate (non-fused) names in the source
@@ -154,9 +159,11 @@ def _build_side_pattern(
         spec.sanitized_name for spec in specs if spec.is_fused
     }
     target_tokens: list[str] = [
-        f"({t.replace(_FUSED_NAME_SEP, ' ')})"
-        if _FUSED_NAME_SEP in t and t not in fused_placeholders
-        else t
+        (
+            f"({t.replace(_FUSED_NAME_SEP, ' ')})"
+            if _FUSED_NAME_SEP in t and t not in fused_placeholders
+            else t
+        )
         for t in canonical_order
     ]
 
