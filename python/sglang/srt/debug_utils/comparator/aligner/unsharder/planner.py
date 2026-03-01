@@ -16,6 +16,8 @@ from sglang.srt.debug_utils.comparator.dims_spec import (
     ParallelAxis,
     ParallelModifier,
 )
+from sglang.srt.debug_utils.comparator.log_sink import log_sink
+from sglang.srt.debug_utils.comparator.output_types import InfoLog
 
 # _CoordsList[tensor_index][axis] =
 #     the axis_rank (shard position) of the tensor_index-th tensor along `axis`
@@ -64,12 +66,12 @@ def compute_unsharder_plan(
         explicit_replicated_axes | auto_replicated
     )
 
-    _validate_explicit_replicated(
+    implicit_replicated: frozenset[ParallelAxis] = _validate_explicit_replicated(
         explicit_replicated_axes=effective_replicated,
         sharded_axes=sharded_axes,
         all_axes=all_axes,
     )
-    replicated_axes: frozenset[ParallelAxis] = effective_replicated
+    replicated_axes: frozenset[ParallelAxis] = effective_replicated | implicit_replicated
 
     if not sharded_axes and not replicated_axes:
         return []
@@ -116,8 +118,12 @@ def _validate_explicit_replicated(
     explicit_replicated_axes: frozenset[ParallelAxis],
     sharded_axes: set[ParallelAxis],
     all_axes: set[ParallelAxis],
-) -> None:
-    """Validate explicit replicated declarations against sharded axes and parallel_infos."""
+) -> frozenset[ParallelAxis]:
+    """Validate explicit replicated declarations against sharded axes and parallel_infos.
+
+    Returns the set of implicitly-replicated axes (undeclared active axes treated as
+    replicated with a warning).
+    """
     invalid: frozenset[ParallelAxis] = explicit_replicated_axes - all_axes
     if invalid:
         invalid_names: str = ", ".join(sorted(a.value for a in invalid))
@@ -133,13 +139,21 @@ def _validate_explicit_replicated(
             f"Axes {{{conflict_names}}} declared as both sharded and replicated"
         )
 
-    undeclared: set[ParallelAxis] = all_axes - sharded_axes - explicit_replicated_axes
+    undeclared: frozenset[ParallelAxis] = frozenset(
+        all_axes - sharded_axes - explicit_replicated_axes
+    )
     if undeclared:
         undeclared_names: str = ", ".join(sorted(a.value for a in undeclared))
-        raise ValueError(
-            f"Axes {{{undeclared_names}}} are active (axis_size > 1) but not declared "
-            f"in dims. Annotate as sharded in dim spec or as '# axis:replicated'."
-        )
+        log_sink.add(InfoLog(
+            category="unsharder",
+            message=(
+                f"Axes {{{undeclared_names}}} are active (axis_size > 1) but not declared "
+                f"in dims. Treating as implicitly replicated. "
+                f"Consider annotating as sharded in dim spec or as '# axis:replicated'."
+            ),
+        ))
+
+    return undeclared
 
 
 def _validate(
