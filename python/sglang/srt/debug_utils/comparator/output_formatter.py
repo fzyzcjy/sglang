@@ -45,9 +45,7 @@ def _format_config_body(record: ConfigRecord) -> str:
 def _format_config_rich_body(
     record: ConfigRecord, verbosity: Verbosity = "normal"
 ) -> RenderableType:
-    lines: list[str] = [
-        f"  [bold]{k}[/] : {v}" for k, v in record.config.items()
-    ]
+    lines: list[str] = [f"  [bold]{k}[/] : {v}" for k, v in record.config.items()]
     return Panel("\n".join(lines), title="Comparator Config", border_style="cyan")
 
 
@@ -62,7 +60,9 @@ def _format_skip_rich_body(
     record: SkipComparisonRecord, verbosity: Verbosity = "normal"
 ) -> RenderableType:
     suffix: str = record._format_location_suffix()
-    return f"[dim]⊘ {escape(record.name)}{suffix} ── skipped ({escape(record.reason)})[/]"
+    return (
+        f"[dim]⊘ {escape(record.name)}{suffix} ── skipped ({escape(record.reason)})[/]"
+    )
 
 
 # ── _TableRecord ─────────────────────────────────────────────────────

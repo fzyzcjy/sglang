@@ -8,7 +8,7 @@ from rich.console import Group, RenderableType
 from rich.markup import escape
 
 from sglang.srt.debug_utils.comparator.output_formatter import (
-    _format_aligner_plan,
+    _format_aligner_plan as _format_aligner_plan,  # noqa: F401 — re-export
     _format_config_body,
     _format_config_rich_body,
     _format_log_body,
