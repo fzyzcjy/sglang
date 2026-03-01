@@ -568,9 +568,7 @@ class TestFormatAlignerPlan:
         result: str = _format_aligner_plan(plan)
 
         assert result == (
-            "Aligner Plan:\n"
-            "  baseline: (no steps)\n"
-            "  target: [step=0: reorderer]"
+            "Aligner Plan:\n" "  baseline: (no steps)\n" "  target: [step=0: reorderer]"
         )
 
     def test_multi_step(self) -> None:

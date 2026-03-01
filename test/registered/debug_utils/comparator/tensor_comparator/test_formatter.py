@@ -1062,8 +1062,7 @@ class TestFormatReplicatedChecks:
         result: str = format_replicated_checks(checks)
 
         assert result == (
-            "Replicated checks:\n"
-            "  ✅ axis=tp group=0 idx=1 vs 0: n/a diff"
+            "Replicated checks:\n" "  ✅ axis=tp group=0 idx=1 vs 0: n/a diff"
         )
 
 
