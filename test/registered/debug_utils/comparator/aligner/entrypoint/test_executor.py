@@ -103,7 +103,7 @@ class TestExecuteStepPlans:
 
         assert r.tensors == {}
         assert r.checks == []
-        assert len(r.trace.step_traces) == 1
+        assert len(r.traced_side.step_plans) == 1
 
     def test_single_step_passthrough(self) -> None:
         tensor: torch.Tensor = torch.tensor([1.0, 2.0])
@@ -121,8 +121,8 @@ class TestExecuteStepPlans:
         assert 5 in r.tensors
         assert torch.equal(r.tensors[5], tensor)
         assert r.checks == []
-        assert len(r.trace.step_traces) == 1
-        assert r.trace.step_traces[0].step == 5
+        assert len(r.traced_side.step_plans) == 1
+        assert r.traced_side.step_plans[0].step == 5
 
 
 class TestExecuteAlignerPlan:
