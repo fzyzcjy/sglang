@@ -129,45 +129,6 @@ def execute_aligner_plan(
     )
 
 
-def _execute_step_plans(
-    tensors: list[torch.Tensor],
-    step_plans: list[AlignerPerStepPlan],
-) -> StepPlansResult:
-    result: dict[int, torch.Tensor] = {}
-    all_checks: list[ReplicatedCheckResult] = []
-    traced_steps: list[TracedStepPlan] = []
-
-    for step_plan in step_plans:
-        step_tensors: list[torch.Tensor] = [
-            tensors[i] for i in step_plan.input_object_indices
-        ]
-        sub_result: SubPlansResult = execute_sub_plans(
-            tensors=step_tensors, plans=step_plan.sub_plans
-        )
-        all_checks.extend(sub_result.checks)
-
-        traced_subs: list[TracedSubPlan] = [
-            TracedSubPlan(plan=sub_plan, snapshot=snapshot)
-            for sub_plan, snapshot in zip(step_plan.sub_plans, sub_result.snapshots)
-        ]
-        traced_steps.append(
-            TracedStepPlan(
-                step=step_plan.step,
-                input_object_indices=step_plan.input_object_indices,
-                sub_plans=traced_subs,
-            )
-        )
-
-        if sub_result.tensor is not None:
-            result[step_plan.step] = sub_result.tensor
-
-    return StepPlansResult(
-        tensors=result,
-        checks=all_checks,
-        traced_side=TracedSidePlan(step_plans=traced_steps),
-    )
-
-
 def execute_sub_plans(
     tensors: list[torch.Tensor],
     plans: list[AlignerPerStepSubPlan],
@@ -210,3 +171,42 @@ def execute_sub_plan(
         return execute_reorderer_plan(plan, tensors), []
     else:
         raise NotImplementedError(f"Unknown {plan=}")
+
+
+def _execute_step_plans(
+    tensors: list[torch.Tensor],
+    step_plans: list[AlignerPerStepPlan],
+) -> StepPlansResult:
+    result: dict[int, torch.Tensor] = {}
+    all_checks: list[ReplicatedCheckResult] = []
+    traced_steps: list[TracedStepPlan] = []
+
+    for step_plan in step_plans:
+        step_tensors: list[torch.Tensor] = [
+            tensors[i] for i in step_plan.input_object_indices
+        ]
+        sub_result: SubPlansResult = execute_sub_plans(
+            tensors=step_tensors, plans=step_plan.sub_plans
+        )
+        all_checks.extend(sub_result.checks)
+
+        traced_subs: list[TracedSubPlan] = [
+            TracedSubPlan(plan=sub_plan, snapshot=snapshot)
+            for sub_plan, snapshot in zip(step_plan.sub_plans, sub_result.snapshots)
+        ]
+        traced_steps.append(
+            TracedStepPlan(
+                step=step_plan.step,
+                input_object_indices=step_plan.input_object_indices,
+                sub_plans=traced_subs,
+            )
+        )
+
+        if sub_result.tensor is not None:
+            result[step_plan.step] = sub_result.tensor
+
+    return StepPlansResult(
+        tensors=result,
+        checks=all_checks,
+        traced_side=TracedSidePlan(step_plans=traced_steps),
+    )

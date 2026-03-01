@@ -38,6 +38,18 @@ def emit_display_records(
         report_sink.add(InputIdsRecord(label=label, rows=input_ids_rows))
 
 
+def extract_parallel_info(row_data: dict[str, Any], info: dict[str, Any]) -> None:
+    if not info or info.get("error"):
+        return
+
+    for key in sorted(info.keys()):
+        if key.endswith("_rank"):
+            base: str = key[:-5]
+            size_key: str = f"{base}_size"
+            if size_key in info:
+                row_data[base] = f"{info[key]}/{info[size_key]}"
+
+
 def _render_polars_as_text(df: pl.DataFrame, *, title: Optional[str] = None) -> str:
     from rich.console import Console
     from rich.table import Table
@@ -131,15 +143,3 @@ def _collect_input_ids_and_positions(
         table_rows.append(row_data)
 
     return table_rows or None
-
-
-def extract_parallel_info(row_data: dict[str, Any], info: dict[str, Any]) -> None:
-    if not info or info.get("error"):
-        return
-
-    for key in sorted(info.keys()):
-        if key.endswith("_rank"):
-            base: str = key[:-5]
-            size_key: str = f"{base}_size"
-            if size_key in info:
-                row_data[base] = f"{info[key]}/{info[size_key]}"

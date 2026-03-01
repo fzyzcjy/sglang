@@ -46,37 +46,6 @@ from sglang.srt.debug_utils.dump_loader import LOAD_FAILED, ValueWithMeta
 _FAILED_SIDE_MAP: dict[str, str] = {"x": "baseline", "y": "target"}
 
 
-def _collect_bundle_side_info(
-    items: list[ValueWithMeta],
-    metas: list[dict[str, Any]],
-) -> BundleSideInfo:
-    from sglang.srt.debug_utils.comparator.display import (
-        PARALLEL_INFO_KEYS,
-        extract_parallel_info,
-    )
-
-    files: list[BundleFileInfo] = []
-    for item, meta in zip(items, metas):
-        assert isinstance(item.value, torch.Tensor)
-        tensor: torch.Tensor = item.value
-
-        parallel_info: dict[str, str] = {}
-        for key in PARALLEL_INFO_KEYS:
-            extract_parallel_info(row_data=parallel_info, info=meta.get(key, {}))
-
-        files.append(
-            BundleFileInfo(
-                shape=list(tensor.shape),
-                dtype=str(tensor.dtype),
-                rank=meta.get("rank"),
-                parallel_info=parallel_info if parallel_info else None,
-            )
-        )
-
-    dims: Optional[str] = metas[0].get("dims") if metas else None
-    return BundleSideInfo(num_files=len(files), files=files, dims=dims)
-
-
 def compare_bundle_pair(
     *,
     name: str,
@@ -279,6 +248,37 @@ def _compare_bundle_pair_tensor_type(
         )
 
     return record
+
+
+def _collect_bundle_side_info(
+    items: list[ValueWithMeta],
+    metas: list[dict[str, Any]],
+) -> BundleSideInfo:
+    from sglang.srt.debug_utils.comparator.display import (
+        PARALLEL_INFO_KEYS,
+        extract_parallel_info,
+    )
+
+    files: list[BundleFileInfo] = []
+    for item, meta in zip(items, metas):
+        assert isinstance(item.value, torch.Tensor)
+        tensor: torch.Tensor = item.value
+
+        parallel_info: dict[str, str] = {}
+        for key in PARALLEL_INFO_KEYS:
+            extract_parallel_info(row_data=parallel_info, info=meta.get(key, {}))
+
+        files.append(
+            BundleFileInfo(
+                shape=list(tensor.shape),
+                dtype=str(tensor.dtype),
+                rank=meta.get("rank"),
+                parallel_info=parallel_info if parallel_info else None,
+            )
+        )
+
+    dims: Optional[str] = metas[0].get("dims") if metas else None
+    return BundleSideInfo(num_files=len(files), files=files, dims=dims)
 
 
 def _try_generate_viz(

@@ -27,56 +27,8 @@ if TYPE_CHECKING:
 Verbosity = Literal["minimal", "normal", "verbose"]
 
 
-def _esc_shape(shape: Optional[list[int]]) -> str:
-    return escape(str(shape))
-
-
-def _strip_torch_prefix(dtype: str) -> str:
-    return dtype.replace("torch.", "")
-
-
 # ---------------------------------------------------------------------------
-# Number formatting
-# ---------------------------------------------------------------------------
-
-
-def _fmt_val(value: float) -> str:
-    return f"{value:.2e}"
-
-
-def _fmt_diff_colored(diff: float, *, threshold: float = 1e-2) -> str:
-    formatted: str = f"{diff:+.2e}"
-    if abs(diff) >= threshold:
-        return f"[yellow]{formatted}[/]"
-    return f"[dim]{formatted}[/]"
-
-
-# ---------------------------------------------------------------------------
-# Passed / color / marker helper
-# ---------------------------------------------------------------------------
-
-
-def _category_marker(category: str) -> tuple[bool, str, str]:
-    passed: bool = category == "passed"
-    color: str = "green" if passed else "red"
-    marker: str = f"[{color}]✅[/]" if passed else f"[{color}]❌[/]"
-    return passed, color, marker
-
-
-# ---------------------------------------------------------------------------
-# Stats formatting helpers (shared between compact / verbose)
-# ---------------------------------------------------------------------------
-
-
-def _format_stat_line(stat_name: str, val_b: float, val_t: float, diff: float) -> str:
-    return (
-        f"      [blue]{stat_name:10s}[/] {val_b:>10.4f} vs {val_t:>10.4f}"
-        f"  Δ {_fmt_diff_colored(diff)}"
-    )
-
-
-# ---------------------------------------------------------------------------
-# Old text-only formatters (kept for to_text() backward compatibility)
+# Public API
 # ---------------------------------------------------------------------------
 
 
@@ -153,6 +105,57 @@ def format_replicated_checks(checks: list[ReplicatedCheckResult]) -> str:
     return "\n".join(lines)
 
 
+def format_comparison_rich(
+    record: TensorComparisonRecord,
+    verbosity: Verbosity = "normal",
+) -> str:
+    if verbosity == "minimal":
+        return _format_comparison_minimal(record)
+
+    return _format_comparison_normal_or_verbose(
+        record=record,
+        verbose=(verbosity == "verbose"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+
+def _esc_shape(shape: Optional[list[int]]) -> str:
+    return escape(str(shape))
+
+
+def _strip_torch_prefix(dtype: str) -> str:
+    return dtype.replace("torch.", "")
+
+
+def _fmt_val(value: float) -> str:
+    return f"{value:.2e}"
+
+
+def _fmt_diff_colored(diff: float, *, threshold: float = 1e-2) -> str:
+    formatted: str = f"{diff:+.2e}"
+    if abs(diff) >= threshold:
+        return f"[yellow]{formatted}[/]"
+    return f"[dim]{formatted}[/]"
+
+
+def _category_marker(category: str) -> tuple[bool, str, str]:
+    passed: bool = category == "passed"
+    color: str = "green" if passed else "red"
+    marker: str = f"[{color}]✅[/]" if passed else f"[{color}]❌[/]"
+    return passed, color, marker
+
+
+def _format_stat_line(stat_name: str, val_b: float, val_t: float, diff: float) -> str:
+    return (
+        f"      [blue]{stat_name:10s}[/] {val_b:>10.4f} vs {val_t:>10.4f}"
+        f"  Δ {_fmt_diff_colored(diff)}"
+    )
+
+
 def _format_stats_comparison(baseline: TensorStats, target: TensorStats) -> list[str]:
     lines: list[str] = []
 
@@ -197,24 +200,6 @@ def _format_diff(diff: DiffInfo, prefix_text: str = "") -> list[str]:
         lines.append("[abs_diff] " + " ".join(quantile_parts))
 
     return lines
-
-
-# ---------------------------------------------------------------------------
-# New Rich markup formatters
-# ---------------------------------------------------------------------------
-
-
-def format_comparison_rich(
-    record: TensorComparisonRecord,
-    verbosity: Verbosity = "normal",
-) -> str:
-    if verbosity == "minimal":
-        return _format_comparison_minimal(record)
-
-    return _format_comparison_normal_or_verbose(
-        record=record,
-        verbose=(verbosity == "verbose"),
-    )
 
 
 def _format_comparison_minimal(record: TensorComparisonRecord) -> str:

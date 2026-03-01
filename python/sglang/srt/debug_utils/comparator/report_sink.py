@@ -10,31 +10,6 @@ from sglang.srt.debug_utils.comparator.output_types import _OutputRecord
 
 Verbosity = Literal["minimal", "normal", "verbose"]
 
-_CONSOLE: Optional[Console] = None
-
-
-def _get_console() -> Console:
-    global _CONSOLE
-    if _CONSOLE is None:
-        _CONSOLE = Console()
-    return _CONSOLE
-
-
-def _reset_console() -> None:
-    global _CONSOLE
-    _CONSOLE = None
-
-
-def _print_to_stdout(
-    record: _OutputRecord, *, output_format: str, verbosity: Verbosity
-) -> None:
-    if output_format == "json":
-        print(record.model_dump_json())
-    else:
-        console: Console = _get_console()
-        console.print(record.to_rich(verbosity=verbosity))
-        console.print()  # blank line between records
-
 
 class ReportSink:
     """Unified entry point for all record output."""
@@ -95,6 +70,32 @@ class ReportSink:
         self._verbosity = "normal"
         self._report_path = None
         _reset_console()
+
+
+_CONSOLE: Optional[Console] = None
+
+
+def _get_console() -> Console:
+    global _CONSOLE
+    if _CONSOLE is None:
+        _CONSOLE = Console()
+    return _CONSOLE
+
+
+def _reset_console() -> None:
+    global _CONSOLE
+    _CONSOLE = None
+
+
+def _print_to_stdout(
+    record: _OutputRecord, *, output_format: str, verbosity: Verbosity
+) -> None:
+    if output_format == "json":
+        print(record.model_dump_json())
+    else:
+        console: Console = _get_console()
+        console.print(record.to_rich(verbosity=verbosity))
+        console.print()  # blank line between records
 
 
 report_sink = ReportSink()
