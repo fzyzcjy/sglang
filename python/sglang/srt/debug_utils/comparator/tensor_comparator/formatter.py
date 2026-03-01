@@ -15,7 +15,9 @@ from sglang.srt.debug_utils.comparator.tensor_comparator.types import (
 if TYPE_CHECKING:
     from sglang.srt.debug_utils.comparator.aligner.entrypoint.traced_types import (
         TracedAlignerPlan,
+        TracedSubPlan,
     )
+    from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import AlignerPlan
     from sglang.srt.debug_utils.comparator.output_types import (
         BundleSideInfo,
         ReplicatedCheckResult,
@@ -380,7 +382,6 @@ def _format_plan_section_rich(
     traced_plan: TracedAlignerPlan,
     verbose: bool = False,
 ) -> list[str]:
-
     lines: list[str] = []
 
     for side_label, traced_side in [
@@ -391,50 +392,56 @@ def _format_plan_section_rich(
             lines.append(f"      {side_label}  [dim](passthrough)[/]")
             continue
 
-        parts: list[str] = []
-        for traced_step in traced_side.step_plans:
-            for traced_sub in traced_step.sub_plans:
-                sub = traced_sub.plan
-                snapshot: Optional[ShapeSnapshot] = traced_sub.snapshot
-
-                op_name: str = sub.type
-                axis_str: str = ""
-                if isinstance(sub, UnsharderPlan):
-                    axis_str = f"({sub.axis})"
-
-                shape_change: str = ""
-                if snapshot:
-                    in_count: int = len(snapshot.input_shapes)
-                    out_count: int = len(snapshot.output_shapes)
-                    in_shape: str = (
-                        _esc_shape(snapshot.input_shapes[0])
-                        if snapshot.input_shapes
-                        else "?"
-                    )
-                    out_shape: str = (
-                        _esc_shape(snapshot.output_shapes[0])
-                        if snapshot.output_shapes
-                        else "?"
-                    )
-                    shape_change = f" {in_count}×{in_shape} → {out_count}×{out_shape}"
-
-                parts.append(f"[magenta]{op_name}{axis_str}[/]{shape_change}")
-
+        parts: list[str] = [
+            _format_sub_plan_rich(traced_sub)
+            for traced_step in traced_side.step_plans
+            for traced_sub in traced_step.sub_plans
+        ]
         lines.append(f"      {side_label}  " + " → ".join(parts))
 
-    plan = traced_plan.plan
+    lines.extend(_format_cross_side_plan_rich(traced_plan.plan))
+    return lines
+
+
+def _format_sub_plan_rich(traced_sub: TracedSubPlan) -> str:
+    sub = traced_sub.plan
+    snapshot: Optional[ShapeSnapshot] = traced_sub.snapshot
+
+    op_name: str = sub.type
+    axis_str: str = ""
+    if isinstance(sub, UnsharderPlan):
+        axis_str = f"({sub.axis})"
+
+    shape_change: str = ""
+    if snapshot:
+        in_count: int = len(snapshot.input_shapes)
+        out_count: int = len(snapshot.output_shapes)
+        in_shape: str = (
+            _esc_shape(snapshot.input_shapes[0]) if snapshot.input_shapes else "?"
+        )
+        out_shape: str = (
+            _esc_shape(snapshot.output_shapes[0]) if snapshot.output_shapes else "?"
+        )
+        shape_change = f" {in_count}×{in_shape} → {out_count}×{out_shape}"
+
+    return f"[magenta]{op_name}{axis_str}[/]{shape_change}"
+
+
+def _format_cross_side_plan_rich(plan: AlignerPlan) -> list[str]:
+    lines: list[str] = []
+
     if plan.token_aligner_plan is not None:
         num_tokens: int = len(plan.token_aligner_plan.locators.x.steps)
         lines.append(f"      token_aligner  [dim]{num_tokens} tokens[/]")
 
     if plan.axis_aligner_plan is not None:
-        parts_aa: list[str] = []
+        parts: list[str] = []
         if plan.axis_aligner_plan.pattern.x:
-            parts_aa.append(f"x={plan.axis_aligner_plan.pattern.x}")
+            parts.append(f"x={plan.axis_aligner_plan.pattern.x}")
         if plan.axis_aligner_plan.pattern.y:
-            parts_aa.append(f"y={plan.axis_aligner_plan.pattern.y}")
-        if parts_aa:
-            lines.append(f"      axis_aligner  [dim]{', '.join(parts_aa)}[/]")
+            parts.append(f"y={plan.axis_aligner_plan.pattern.y}")
+        if parts:
+            lines.append(f"      axis_aligner  [dim]{', '.join(parts)}[/]")
         else:
             lines.append("      axis_aligner  [dim](no-op)[/]")
 

@@ -21,7 +21,9 @@ if TYPE_CHECKING:
 
     from sglang.srt.debug_utils.comparator.aligner.entrypoint.traced_types import (
         TracedAlignerPlan,
+        TracedSubPlan,
     )
+    from sglang.srt.debug_utils.comparator.aligner.entrypoint.types import AlignerPlan
     from sglang.srt.debug_utils.comparator.output_types import (
         ConfigRecord,
         LogRecord,
@@ -195,26 +197,35 @@ def _format_aligner_plan(traced_plan: TracedAlignerPlan) -> str:
 
         step_summaries: list[str] = []
         for traced_step in traced_side.step_plans:
-            sub_strs: list[str] = []
-            for traced_sub in traced_step.sub_plans:
-                sub_desc: str = f"{traced_sub.plan.type}"
-                if traced_sub.snapshot is not None:
-                    snap = traced_sub.snapshot
-                    in_count: int = len(snap.input_shapes)
-                    out_count: int = len(snap.output_shapes)
-                    in_shape: str = (
-                        str(snap.input_shapes[0]) if snap.input_shapes else "?"
-                    )
-                    out_shape: str = (
-                        str(snap.output_shapes[0]) if snap.output_shapes else "?"
-                    )
-                    sub_desc += f" {in_count}x{in_shape} -> {out_count}x{out_shape}"
-                sub_strs.append(sub_desc)
+            sub_strs: list[str] = [
+                _format_sub_plan_text(traced_sub)
+                for traced_sub in traced_step.sub_plans
+            ]
             summary: str = ", ".join(sub_strs) if sub_strs else "passthrough"
             step_summaries.append(f"step={traced_step.step}: {summary}")
         lines.append(f"  {side_label}: [{'; '.join(step_summaries)}]")
 
-    plan = traced_plan.plan
+    lines.extend(_format_cross_side_plan_text(traced_plan.plan))
+    return "\n".join(lines)
+
+
+def _format_sub_plan_text(traced_sub: TracedSubPlan) -> str:
+    sub_desc: str = f"{traced_sub.plan.type}"
+
+    if traced_sub.snapshot is not None:
+        snap = traced_sub.snapshot
+        in_count: int = len(snap.input_shapes)
+        out_count: int = len(snap.output_shapes)
+        in_shape: str = str(snap.input_shapes[0]) if snap.input_shapes else "?"
+        out_shape: str = str(snap.output_shapes[0]) if snap.output_shapes else "?"
+        sub_desc += f" {in_count}x{in_shape} -> {out_count}x{out_shape}"
+
+    return sub_desc
+
+
+def _format_cross_side_plan_text(plan: AlignerPlan) -> list[str]:
+    lines: list[str] = []
+
     if plan.token_aligner_plan is not None:
         num_tokens: int = len(plan.token_aligner_plan.locators.x.steps)
         lines.append(f"  token_aligner: {num_tokens} tokens aligned")
@@ -227,4 +238,4 @@ def _format_aligner_plan(traced_plan: TracedAlignerPlan) -> str:
             parts.append(f"y: {plan.axis_aligner_plan.pattern.y}")
         lines.append(f"  axis_aligner: {', '.join(parts)}")
 
-    return "\n".join(lines)
+    return lines
