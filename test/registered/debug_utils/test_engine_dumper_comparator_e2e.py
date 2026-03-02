@@ -58,7 +58,13 @@ MODEL_FP8 = "Qwen/Qwen3-30B-A3B-FP8"
 BASELINE_TP = 2
 TARGET_TP = 4
 EXP_NAME = "e2e_source_patcher"
-DUMPER_FILTER = "layer_id in [0, 1, 2]"
+# Only dump layer 0: its input is the embedding output, which is identical
+# across all parallel configurations.  This makes router_logits, topk_ids,
+# and gateup_output deterministic (no accumulated numerical drift).
+# Layer >= 1 accumulates BF16 drift from the previous layer's TP/EP
+# accumulation-order differences, which can flip routing decisions at
+# decision boundaries — making comparisons unreliable.
+DUMPER_FILTER = "layer_id == 0"
 
 _FIELDS_TO_VERIFY: list[str] = [
     # decoder layer level (aligned with miles)
@@ -487,8 +493,6 @@ class TestBF16:
             tmp_path=tmp_path,
             target_tp=TARGET_TP,
             target_extra_fields=_FIELDS_GATEUP,
-            diff_threshold=_DIFF_THRESHOLD_WITH_GATEUP,
-            allow_failed_pattern="gateup_output|moe_topk_ids",
         )
 
     def test_dp_attention(self, tmp_path: Path) -> None:
@@ -497,11 +501,11 @@ class TestBF16:
         In dp-attention mode (attn_tp_size=1, attn_dp_size=2), attention
         tensors are NOT TP-sharded and mlp_output is already all-reduced.
         A separate patch config with corrected dims is used for the target.
-
-        gateup_output is NOT compared here because dp-attention redistributes
-        tokens across DP ranks, causing dispatch-order intermediate results
-        to differ fundamentally even when the final MoE output matches.
         """
+        # dp-attention changes the attention computation path (attn_tp_size=1
+        # instead of 2), causing BF16 precision differences in attn_output
+        # that propagate to pre_mlp_residual -> router_logits -> topk
+        # decisions at decision boundaries, even in layer 0.
         _run_target_and_compare(
             model=MODEL_BF16,
             baseline_exp_dir=self._baseline_dir / "dump" / EXP_NAME,
@@ -519,10 +523,6 @@ class TestBF16:
         4 ranks via FusedMoE/Triton dispatch. Decoder-level tensors remain
         TP-sharded and should compare correctly after unsharding.
         The target uses EP-specific dims with moe_ep:replicated.
-
-        gateup_output is allowed to fail because EP changes which experts
-        each rank processes, causing BF16 accumulation order differences
-        that exceed the threshold in deeper layers.
         """
         _run_target_and_compare(
             model=MODEL_BF16,
@@ -532,9 +532,7 @@ class TestBF16:
             extra_target_server_args=["--ep-size", "4"],
             target_patch_config_yaml=PATCH_CONFIG_EP_YAML,
             allow_skipped_pattern=_ALLOW_SKIPPED_EP,
-            allow_failed_pattern="gateup_output|moe_topk_ids",
             target_extra_fields=_FIELDS_GATEUP,
-            diff_threshold=_DIFF_THRESHOLD_WITH_GATEUP,
         )
 
 
@@ -572,10 +570,6 @@ class TestFP8DeepEP:
         --moe-a2a-backend deepep automatically sets ep_size=tp_size=2.
         DeepEP bypasses forward_normal and uses forward_deepep, so MoE
         internals need a separate patch config targeting forward_deepep.
-
-        gateup_output may have larger numerical differences because DeepEP
-        changes expert-to-rank assignment, affecting FP8 GEMM accumulation
-        order (different expert grouping → different tiling).
         """
         _run_target_and_compare(
             model=MODEL_FP8,
@@ -593,9 +587,7 @@ class TestFP8DeepEP:
             ],
             target_patch_config_yaml=PATCH_CONFIG_DEEPEP_YAML,
             allow_skipped_pattern=_ALLOW_SKIPPED_DEEPEP,
-            allow_failed_pattern="gateup_output|moe_topk_ids",
             target_extra_fields=_FIELDS_GATEUP,
-            diff_threshold=_DIFF_THRESHOLD_WITH_GATEUP,
         )
 
     def test_ep_deepep_low_latency(self, tmp_path: Path) -> None:
@@ -605,10 +597,6 @@ class TestFP8DeepEP:
         --moe-a2a-backend deepep automatically sets ep_size=tp_size=2.
         DeepEP bypasses forward_normal and uses forward_deepep, so MoE
         internals need a separate patch config targeting forward_deepep.
-
-        gateup_output may have larger numerical differences because DeepEP
-        changes expert-to-rank assignment, affecting FP8 GEMM accumulation
-        order (different expert grouping → different tiling).
         """
         _run_target_and_compare(
             model=MODEL_FP8,
@@ -626,26 +614,24 @@ class TestFP8DeepEP:
             ],
             target_patch_config_yaml=PATCH_CONFIG_DEEPEP_YAML,
             allow_skipped_pattern=_ALLOW_SKIPPED_DEEPEP,
-            allow_failed_pattern="gateup_output|moe_topk_ids",
             target_extra_fields=_FIELDS_GATEUP,
-            diff_threshold=_DIFF_THRESHOLD_WITH_GATEUP,
         )
 
 
 # ================================== helpers ==================================
 
-# MoE intermediate (gateup_output) can have larger numerical differences
-# between TP configurations because the GEMM tiling differs (different N →
-# different BLOCK_SIZE), changing BF16 accumulation order. The per-element
-# outliers (rel_diff up to ~0.005) do not affect the final MoE output.
-_DIFF_THRESHOLD_WITH_GATEUP: float = 0.007
-
 _ALLOW_SKIPPED_BASE = ".*"
 
 _ALLOW_SKIPPED_EP = _ALLOW_SKIPPED_BASE
 
+# gateup_output is skipped (shape_mismatch) in DeepEP tests because the
+# ep_derouter cannot yet restore dispatch-order tensors for:
+# - Normal path: deep_gemm contiguous uses ep_scatter/output_index, not src2dst
+# - LL path: derouter triggers but produces wrong shape (implementation bug)
+# TODO: fix ep_derouter for both paths, then remove gateup_output from here
 _ALLOW_SKIPPED_DEEPEP = (
     _ALLOW_SKIPPED_BASE
+    + "|gateup_output"
     + "|deepep_normal_recv_topk_ids|deepep_normal_num_recv_tokens_per_expert"
     + "|deepep_normal_ep_num_tokens|deepep_normal_ep_top_k"
     + "|deepep_normal_src2dst"
