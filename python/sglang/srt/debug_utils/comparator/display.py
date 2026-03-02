@@ -54,7 +54,7 @@ def _render_polars_as_text(df: pl.DataFrame, *, title: Optional[str] = None) -> 
 
 def _render_polars_as_rich_table(
     df: pl.DataFrame, *, title: Optional[str] = None
-) -> "Table":
+) -> Any:
     from rich.table import Table
 
     table = Table(title=title)
