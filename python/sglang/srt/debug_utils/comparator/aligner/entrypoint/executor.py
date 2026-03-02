@@ -68,6 +68,9 @@ def execute_aligner_plan(
     *,
     tensors_pair: Pair[list[torch.Tensor]],
     plan: AlignerPlan,
+    num_token_non_padded_by_step_pair: Pair[Optional[dict[int, int]]] = Pair(
+        x=None, y=None
+    ),
 ) -> AlignerResult:
     """Execute unified unshard/reorder + token-align."""
     all_checks: list[ReplicatedCheckResult] = []
@@ -102,19 +105,19 @@ def execute_aligner_plan(
         x=result_x.tensors, y=result_y.tensors
     )
 
-    # Strip EP padding tokens before alignment
-    if plan.num_token_non_padded_by_step_pair.x is not None:
+    # Strip EP padding tokens before token alignment
+    if num_token_non_padded_by_step_pair.x is not None:
         step_pair = Pair(
             x=strip_padding_from_step_tensors(
-                step_pair.x, plan.num_token_non_padded_by_step_pair.x
+                step_pair.x, num_token_non_padded_by_step_pair.x
             ),
             y=step_pair.y,
         )
-    if plan.num_token_non_padded_by_step_pair.y is not None:
+    if num_token_non_padded_by_step_pair.y is not None:
         step_pair = Pair(
             x=step_pair.x,
             y=strip_padding_from_step_tensors(
-                step_pair.y, plan.num_token_non_padded_by_step_pair.y
+                step_pair.y, num_token_non_padded_by_step_pair.y
             ),
         )
 

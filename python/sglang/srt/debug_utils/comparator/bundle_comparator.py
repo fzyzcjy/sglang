@@ -88,7 +88,9 @@ def compare_bundle_pair(
     thd_seq_lens_by_step_pair: Pair[Optional[dict[int, list[int]]]] = Pair(
         x=None, y=None
     ),
-    num_token_non_padded_by_step_pair: Pair[Optional[dict[int, int]]] = Pair(x=None, y=None),
+    num_token_non_padded_by_step_pair: Pair[Optional[dict[int, int]]] = Pair(
+        x=None, y=None
+    ),
     viz_output_dir: Optional[Path] = None,
     compute_per_token: bool = False,
     meta_overrider: Optional[MetaOverrider] = None,
@@ -123,7 +125,9 @@ def _compare_bundle_pair_inner(
     thd_seq_lens_by_step_pair: Pair[Optional[dict[int, list[int]]]] = Pair(
         x=None, y=None
     ),
-    num_token_non_padded_by_step_pair: Pair[Optional[dict[int, int]]] = Pair(x=None, y=None),
+    num_token_non_padded_by_step_pair: Pair[Optional[dict[int, int]]] = Pair(
+        x=None, y=None
+    ),
     viz_output_dir: Optional[Path] = None,
     compute_per_token: bool = False,
     meta_overrider: Optional[MetaOverrider] = None,
@@ -205,7 +209,9 @@ def _compare_bundle_pair_tensor_type(
     thd_seq_lens_by_step_pair: Pair[Optional[dict[int, list[int]]]] = Pair(
         x=None, y=None
     ),
-    num_token_non_padded_by_step_pair: Pair[Optional[dict[int, int]]] = Pair(x=None, y=None),
+    num_token_non_padded_by_step_pair: Pair[Optional[dict[int, int]]] = Pair(
+        x=None, y=None
+    ),
     viz_output_dir: Optional[Path] = None,
     compute_per_token: bool = False,
 ) -> Union[ComparisonTensorRecord, ComparisonSkipRecord]:
@@ -222,7 +228,6 @@ def _compare_bundle_pair_tensor_type(
         token_aligner_mode=token_aligner_mode,
         token_aligner_plan=token_aligner_plan,
         thd_seq_lens_by_step_pair=thd_seq_lens_by_step_pair,
-        num_token_non_padded_by_step_pair=num_token_non_padded_by_step_pair,
     )
 
     # Collect raw bundle info before alignment
@@ -243,7 +248,9 @@ def _compare_bundle_pair_tensor_type(
         ),
     )
     aligner_result: AlignerResult = execute_aligner_plan(
-        tensors_pair=tensors_pair, plan=plan
+        tensors_pair=tensors_pair,
+        plan=plan,
+        num_token_non_padded_by_step_pair=num_token_non_padded_by_step_pair,
     )
     replicated_checks = aligner_result.replicated_checks
 
