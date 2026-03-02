@@ -60,14 +60,6 @@ def filter_to_non_empty_dp_rank(
         rank for rank, group in groups.items() if _group_has_data(group)
     ]
 
-    if len(non_empty_ranks) == len(groups):
-        # All DP ranks have data (replicated across dp_ranks).
-        # This happens in two cases:
-        #   1. fwd_bwd training mode — all ranks have training data
-        #   2. dp_attention inference FULL mode — MoE gathers tokens to all ranks
-        # Either way, all ranks hold identical data; pick rank 0.
-        return groups[min(non_empty_ranks)]
-
     assert len(non_empty_ranks) == 1, (
         f"Expected exactly 1 non-empty dp_rank, got {len(non_empty_ranks)}: "
         f"ranks={non_empty_ranks}"
