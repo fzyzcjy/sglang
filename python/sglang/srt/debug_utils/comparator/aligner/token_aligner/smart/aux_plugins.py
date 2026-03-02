@@ -158,9 +158,7 @@ class _SGLangPlugin(_AuxFrameworkPlugin):
         if num_non_padded is not None and num_non_padded < len(input_ids_list):
             input_ids_list = input_ids_list[:num_non_padded]
             positions_list = positions_list[:num_non_padded]
-            seq_lens_list = truncate_seq_lens(
-                seq_lens_list, num_tokens=num_non_padded
-            )
+            seq_lens_list = truncate_seq_lens(seq_lens_list, num_tokens=num_non_padded)
 
         num_seqs: int = len(seq_lens_list)
 

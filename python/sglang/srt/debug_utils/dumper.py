@@ -1303,8 +1303,14 @@ class _SGLangPlugin(_FrameworkPlugin):
 
     def core_fields(self) -> frozenset[str]:
         return frozenset(
-            {"input_ids", "positions", "seq_lens", "req_pool_indices", "rids",
-             "num_token_non_padded"}
+            {
+                "input_ids",
+                "positions",
+                "seq_lens",
+                "req_pool_indices",
+                "rids",
+                "num_token_non_padded",
+            }
         )
 
     def get_tokenizer_path(self) -> Optional[str]:

@@ -60,7 +60,9 @@ def compute_maybe_token_aligner_result(
 
     if token_aligner_mode is None:
         return TokenAlignerResult(
-            mode=None, plan=None, thd_seq_lens_by_step_pair=_NONE_THD,
+            mode=None,
+            plan=None,
+            thd_seq_lens_by_step_pair=_NONE_THD,
             num_token_non_padded_pair=ntp_pair,
         )
 
@@ -69,7 +71,9 @@ def compute_maybe_token_aligner_result(
             dir_pair=dir_pair, dfs=dfs
         )
         return TokenAlignerResult(
-            mode="concat_steps", plan=None, thd_seq_lens_by_step_pair=thd_pair,
+            mode="concat_steps",
+            plan=None,
+            thd_seq_lens_by_step_pair=thd_pair,
             num_token_non_padded_pair=ntp_pair,
         )
     elif token_aligner_mode == "smart":
@@ -81,7 +85,9 @@ def compute_maybe_token_aligner_result(
                 )
             )
             return TokenAlignerResult(
-                mode=None, plan=None, thd_seq_lens_by_step_pair=_NONE_THD,
+                mode=None,
+                plan=None,
+                thd_seq_lens_by_step_pair=_NONE_THD,
                 num_token_non_padded_pair=ntp_pair,
             )
 
