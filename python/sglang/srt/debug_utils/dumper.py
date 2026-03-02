@@ -1288,6 +1288,8 @@ class _SGLangPlugin(_FrameworkPlugin):
             }
             if value.rids is not None:
                 result["rids"] = value.rids
+            if value.num_token_non_padded_cpu is not None:
+                result["num_token_non_padded"] = value.num_token_non_padded_cpu
             return result
         if isinstance(value, self.PPProxyTensors):
             return {k: v for k, v in value.tensors.items()}
@@ -1301,7 +1303,8 @@ class _SGLangPlugin(_FrameworkPlugin):
 
     def core_fields(self) -> frozenset[str]:
         return frozenset(
-            {"input_ids", "positions", "seq_lens", "req_pool_indices", "rids"}
+            {"input_ids", "positions", "seq_lens", "req_pool_indices", "rids",
+             "num_token_non_padded"}
         )
 
     def get_tokenizer_path(self) -> Optional[str]:

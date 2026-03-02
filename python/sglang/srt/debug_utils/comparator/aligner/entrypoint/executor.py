@@ -26,6 +26,9 @@ from sglang.srt.debug_utils.comparator.aligner.reorderer.types import ReordererP
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.concat_steps import (
     execute_token_aligner_concat_steps,
 )
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.padding_utils import (
+    strip_padding_from_step_tensors,
+)
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.smart.executor import (
     execute_token_aligner,
 )
@@ -98,6 +101,23 @@ def execute_aligner_plan(
     step_pair: Pair[dict[int, torch.Tensor]] = Pair(
         x=result_x.tensors, y=result_y.tensors
     )
+
+    # Strip EP padding tokens before alignment
+    if plan.num_token_non_padded_pair.x is not None:
+        step_pair = Pair(
+            x=strip_padding_from_step_tensors(
+                step_pair.x, plan.num_token_non_padded_pair.x
+            ),
+            y=step_pair.y,
+        )
+    if plan.num_token_non_padded_pair.y is not None:
+        step_pair = Pair(
+            x=step_pair.x,
+            y=strip_padding_from_step_tensors(
+                step_pair.y, plan.num_token_non_padded_pair.y
+            ),
+        )
+
     combined: Pair[torch.Tensor]
     if plan.token_aligner_mode == "concat_steps":
         combined = execute_token_aligner_concat_steps(tensor_of_step_pair=step_pair)

@@ -5,6 +5,9 @@ from typing import Optional
 
 import torch
 
+from sglang.srt.debug_utils.comparator.aligner.token_aligner.padding_utils import (
+    truncate_seq_lens,
+)
 from sglang.srt.debug_utils.comparator.aligner.token_aligner.smart.types import (
     PositionalSeqId,
     SeqId,
@@ -87,7 +90,7 @@ class _SGLangPlugin(_AuxFrameworkPlugin):
 
     @property
     def non_tensor_names(self) -> frozenset[str]:
-        return frozenset({"rids"})
+        return frozenset({"rids", "num_token_non_padded"})
 
     @property
     def cp_sharded_names(self) -> frozenset[str]:
@@ -145,18 +148,31 @@ class _SGLangPlugin(_AuxFrameworkPlugin):
             seq_lens, torch.Tensor
         ), f"seq_lens: expected Tensor, got {type(seq_lens)}"
 
+        input_ids_list: list[int] = input_ids.tolist()
+        positions_list: list[int] = positions.tolist()
         seq_lens_list: list[int] = seq_lens.tolist()
+
+        num_non_padded: Optional[int] = _to_optional_int(
+            step_data.get("num_token_non_padded")
+        )
+        if num_non_padded is not None and num_non_padded < len(input_ids_list):
+            input_ids_list = input_ids_list[:num_non_padded]
+            positions_list = positions_list[:num_non_padded]
+            seq_lens_list = truncate_seq_lens(
+                seq_lens_list, num_tokens=num_non_padded
+            )
+
         num_seqs: int = len(seq_lens_list)
 
         seq_ids: list[SeqId]
         if rids_raw is not None and isinstance(rids_raw, (list, tuple)):
-            seq_ids = [SGLangSeqId(rid=str(r)) for r in rids_raw]
+            seq_ids = [SGLangSeqId(rid=str(r)) for r in rids_raw[:num_seqs]]
         else:
             seq_ids = [PositionalSeqId(step=step, seq_index=i) for i in range(num_seqs)]
 
         return TokenAlignerStepAux(
-            input_ids=input_ids.tolist(),
-            positions=positions.tolist(),
+            input_ids=input_ids_list,
+            positions=positions_list,
             seq_lens=seq_lens_list,
             seq_ids=seq_ids,
         )
@@ -290,3 +306,13 @@ AUX_NAMES: frozenset[str] = frozenset().union(*(p.all_names for p in _plugins))
 def _infer_positions(*, seq_lens: torch.Tensor) -> torch.Tensor:
     """Infer positions when position_ids is missing (THD only)."""
     return torch.cat([torch.arange(int(slen.item())) for slen in seq_lens])
+
+
+def _to_optional_int(value: object) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, torch.Tensor):
+        return int(value.item())
+    return int(value)

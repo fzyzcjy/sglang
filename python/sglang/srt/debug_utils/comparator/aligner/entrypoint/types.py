@@ -29,3 +29,4 @@ class AlignerPlan(_FrozenBase):
     token_aligner_mode: Optional[str] = None  # "concat_steps" | "smart" | None
     token_aligner_plan: Optional[TokenAlignerPlan] = None
     axis_aligner_plan: Optional[AxisAlignerPlan] = None
+    num_token_non_padded_pair: Pair[Optional[dict[int, int]]] = Pair(x=None, y=None)
