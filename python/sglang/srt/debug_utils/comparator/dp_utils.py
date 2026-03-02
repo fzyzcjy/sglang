@@ -60,6 +60,10 @@ def filter_to_non_empty_dp_rank(
         rank for rank, group in groups.items() if _group_has_data(group)
     ]
 
+    if len(non_empty_ranks) == len(groups):
+        # All DP ranks have data (e.g. fwd_bwd training mode) — no filtering needed
+        return items
+
     assert len(non_empty_ranks) == 1, (
         f"Expected exactly 1 non-empty dp_rank, got {len(non_empty_ranks)}: "
         f"ranks={non_empty_ranks}"
