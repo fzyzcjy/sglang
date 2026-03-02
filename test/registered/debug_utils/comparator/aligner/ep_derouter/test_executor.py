@@ -163,6 +163,55 @@ class TestExecuteDeRouterPlan:
         assert torch.allclose(result[2], torch.tensor([40.0, 41.0]))
         assert torch.allclose(result[3], torch.tensor([30.0, 31.0]))
 
+    def test_deepep_normal_output_index_dispatch(self) -> None:
+        """End-to-end: deepep_normal_output_index with output_index permutation."""
+        num_tokens: int = 4
+        top_k: int = 1
+        hidden_dim: int = 2
+
+        plan: DeRouterPlan = DeRouterPlan(dispatch_path="deepep_normal_output_index")
+
+        # output_index[tok][k] = dispatch_pos
+        # token 0 → dispatch 1, token 1 → dispatch 0,
+        # token 2 → dispatch 3, token 3 → dispatch 2
+        output_index: torch.Tensor = torch.tensor(
+            [[1], [0], [3], [2]], dtype=torch.long
+        )
+        loader = _FakeAuxLoader(
+            {
+                "deepep_normal_output_index": output_index,
+                **_make_ep_meta_tensors(
+                    "deepep_normal_output_index",
+                    num_tokens=num_tokens,
+                    top_k=top_k,
+                ),
+            }
+        )
+        # routed_tensor is in dispatch order: [dispatch0, dispatch1, dispatch2, dispatch3]
+        routed_tensor: torch.Tensor = torch.tensor(
+            [[10.0, 11.0], [20.0, 21.0], [30.0, 31.0], [40.0, 41.0]]
+        )
+
+        result: torch.Tensor = execute_de_router_plan(
+            plan=plan, tensor=routed_tensor, aux_loader=loader, meta=_FAKE_META
+        )
+
+        assert result.shape == (num_tokens * top_k, hidden_dim)
+        # forward_perm[dispatch_pos] = canonical_flat_idx (= tok*top_k + k)
+        # dispatch 0 ← token 1 (canonical 1)
+        # dispatch 1 ← token 0 (canonical 0)
+        # dispatch 2 ← token 3 (canonical 3)
+        # dispatch 3 ← token 2 (canonical 2)
+        # output[canonical] = routed[dispatch]:
+        #   canonical 0 = routed[1] = [20, 21]
+        #   canonical 1 = routed[0] = [10, 11]
+        #   canonical 2 = routed[3] = [40, 41]
+        #   canonical 3 = routed[2] = [30, 31]
+        assert torch.allclose(result[0], torch.tensor([20.0, 21.0]))
+        assert torch.allclose(result[1], torch.tensor([10.0, 11.0]))
+        assert torch.allclose(result[2], torch.tensor([40.0, 41.0]))
+        assert torch.allclose(result[3], torch.tensor([30.0, 31.0]))
+
     def test_deepep_ll_dispatch(self) -> None:
         """End-to-end: deepep_ll with 2-expert 3D tensor, verifies flatten + scatter."""
         num_tokens: int = 2

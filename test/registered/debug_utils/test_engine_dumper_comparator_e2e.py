@@ -409,6 +409,8 @@ patches:
           dumper.dump('deepep_normal_num_recv_tokens_per_expert', num_recv_tokens_per_expert, dims='num_experts')
           dumper.dump('deepep_normal_ep_num_tokens', torch.tensor(hidden_states.shape[0] if not isinstance(hidden_states, tuple) else hidden_states[0].shape[0]))
           dumper.dump('deepep_normal_ep_top_k', torch.tensor(topk_ids.shape[1]))
+          dumper.dump('deepep_normal_output_index_ep_num_tokens', torch.tensor(hidden_states.shape[0] if not isinstance(hidden_states, tuple) else hidden_states[0].shape[0]))
+          dumper.dump('deepep_normal_output_index_ep_top_k', torch.tensor(topk_ids.shape[1]))
 
   # --- DeepEP Normal: gate/up GEMM intermediate + src2dst for derouting ---
   # cutlass_w4a8 path (W4A8 models)
@@ -428,6 +430,7 @@ patches:
       - match: "silu_and_mul(gateup_output.view(-1, N), down_input)"
         prepend: |
           dumper.dump('gateup_output', gateup_output.view(all_tokens, 2, N // 2), dims='t_k[ep] gate_up h_inter # tp:replicated moe_ep:replicated')
+          dumper.dump('deepep_normal_output_index', running_state['output_index'])
 
   # --- DeepEP Low-Latency: dispatch metadata + masked GEMM intermediate ---
   - target: sglang.srt.layers.moe.token_dispatcher.deepep._DeepEPDispatcherImplLowLatency.dispatch_b
@@ -624,17 +627,13 @@ _ALLOW_SKIPPED_BASE = ".*"
 
 _ALLOW_SKIPPED_EP = _ALLOW_SKIPPED_BASE
 
-# gateup_output is skipped (shape_mismatch) in DeepEP tests because the
-# ep_derouter cannot yet restore dispatch-order tensors for:
-# - Normal path: deep_gemm contiguous uses ep_scatter/output_index, not src2dst
-# - LL path: derouter triggers but produces wrong shape (implementation bug)
-# TODO: fix ep_derouter for both paths, then remove gateup_output from here
 _ALLOW_SKIPPED_DEEPEP = (
     _ALLOW_SKIPPED_BASE
-    + "|gateup_output"
     + "|deepep_normal_recv_topk_ids|deepep_normal_num_recv_tokens_per_expert"
     + "|deepep_normal_ep_num_tokens|deepep_normal_ep_top_k"
     + "|deepep_normal_src2dst"
+    + "|deepep_normal_output_index"
+    + "|deepep_normal_output_index_ep_num_tokens|deepep_normal_output_index_ep_top_k"
     + "|deepep_ll_masked_m|deepep_ll_packed_recv_src_info"
     + "|deepep_ll_ep_num_tokens|deepep_ll_ep_top_k"
 )
