@@ -70,6 +70,7 @@ _FIELDS_TO_VERIFY: list[str] = [
     "attn_pre_o_proj",
     # moe internals
     "moe_router_logits",
+    "moe_topk_ids",
     "moe_expert_output",
 ]
 
@@ -123,6 +124,8 @@ patches:
     edits:
       - match: "router_logits, _ = self.gate(hidden_states)"
         append: "dumper.dump('moe_router_logits', router_logits, dims='t num_experts # tp:replicated moe_tp:replicated')"
+      - match: "topk_output = self.topk(hidden_states, router_logits)"
+        append: "dumper.dump('moe_topk_ids', topk_output.topk_ids, dims='t top_k # tp:replicated moe_tp:replicated')"
       - match: "final_hidden_states = self.experts(hidden_states, topk_output)"
         append: "dumper.dump('moe_expert_output', final_hidden_states, dims='t h[tp:partial] # moe_tp:replicated')"
 
@@ -204,6 +207,8 @@ patches:
     edits:
       - match: "router_logits, _ = self.gate(hidden_states)"
         append: "dumper.dump('moe_router_logits', router_logits, dims='t num_experts # tp:replicated moe_tp:replicated')"
+      - match: "topk_output = self.topk(hidden_states, router_logits)"
+        append: "dumper.dump('moe_topk_ids', topk_output.topk_ids, dims='t top_k # tp:replicated moe_tp:replicated')"
       - match: "final_hidden_states = self.experts(hidden_states, topk_output)"
         append: "dumper.dump('moe_expert_output', final_hidden_states, dims='t h[tp:partial] # moe_tp:replicated')"
 
@@ -279,6 +284,8 @@ patches:
     edits:
       - match: "router_logits, _ = self.gate(hidden_states)"
         append: "dumper.dump('moe_router_logits', router_logits, dims='t num_experts # tp:replicated moe_ep:replicated')"
+      - match: "topk_output = self.topk(hidden_states, router_logits)"
+        append: "dumper.dump('moe_topk_ids', topk_output.topk_ids, dims='t top_k # tp:replicated moe_ep:replicated')"
       - match: "final_hidden_states = self.experts(hidden_states, topk_output)"
         append: "dumper.dump('moe_expert_output', final_hidden_states, dims='t h[tp:partial] # moe_ep:replicated')"
 
@@ -370,6 +377,16 @@ patches:
     edits:
       - match: "router_logits, _ = self.gate(hidden_states)"
         append: "dumper.dump('moe_router_logits', router_logits, dims='t num_experts # tp:replicated moe_ep:replicated dp:=attn_dp')"
+      - match: |
+          topk_output = self.topk(
+              hidden_states,
+              router_logits,
+              num_token_non_padded=forward_batch.num_token_non_padded,
+              expert_location_dispatch_info=ExpertLocationDispatchInfo.init_new(
+                  layer_id=self.layer_id,
+              ),
+          )
+        append: "dumper.dump('moe_topk_ids', topk_output.topk_ids, dims='t top_k # tp:replicated moe_ep:replicated dp:=attn_dp')"
       - match: |
           final_hidden_states = self.experts(
               hidden_states=hidden_states,
@@ -471,6 +488,7 @@ class TestBF16:
             target_tp=TARGET_TP,
             target_extra_fields=_FIELDS_GATEUP,
             diff_threshold=_DIFF_THRESHOLD_WITH_GATEUP,
+            allow_failed_pattern="gateup_output|moe_topk_ids",
         )
 
     def test_dp_attention(self, tmp_path: Path) -> None:
@@ -491,7 +509,7 @@ class TestBF16:
             target_tp=BASELINE_TP,
             extra_target_server_args=["--dp", "2", "--enable-dp-attention"],
             target_patch_config_yaml=PATCH_CONFIG_DP_ATTENTION_YAML,
-            allow_failed_pattern="gateup_output",
+            allow_failed_pattern="gateup_output|moe_topk_ids",
         )
 
     def test_ep_fused_moe(self, tmp_path: Path) -> None:
@@ -514,7 +532,7 @@ class TestBF16:
             extra_target_server_args=["--ep-size", "4"],
             target_patch_config_yaml=PATCH_CONFIG_EP_YAML,
             allow_skipped_pattern=_ALLOW_SKIPPED_EP,
-            allow_failed_pattern="gateup_output",
+            allow_failed_pattern="gateup_output|moe_topk_ids",
             target_extra_fields=_FIELDS_GATEUP,
             diff_threshold=_DIFF_THRESHOLD_WITH_GATEUP,
         )
@@ -575,7 +593,7 @@ class TestFP8DeepEP:
             ],
             target_patch_config_yaml=PATCH_CONFIG_DEEPEP_YAML,
             allow_skipped_pattern=_ALLOW_SKIPPED_DEEPEP,
-            allow_failed_pattern="gateup_output",
+            allow_failed_pattern="gateup_output|moe_topk_ids",
             target_extra_fields=_FIELDS_GATEUP,
             diff_threshold=_DIFF_THRESHOLD_WITH_GATEUP,
         )
@@ -608,7 +626,7 @@ class TestFP8DeepEP:
             ],
             target_patch_config_yaml=PATCH_CONFIG_DEEPEP_YAML,
             allow_skipped_pattern=_ALLOW_SKIPPED_DEEPEP,
-            allow_failed_pattern="gateup_output",
+            allow_failed_pattern="gateup_output|moe_topk_ids",
             target_extra_fields=_FIELDS_GATEUP,
             diff_threshold=_DIFF_THRESHOLD_WITH_GATEUP,
         )
