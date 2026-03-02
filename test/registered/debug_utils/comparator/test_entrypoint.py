@@ -2155,6 +2155,160 @@ class TestEntrypointAlignment:
         assert summary.total == 2
         assert summary.passed == 2
 
+    def test_sglang_padding_stripped_smart(self, tmp_path, capsys):
+        """Target with EP padding tokens stripped via num_token_non_padded (smart mode)."""
+        torch.manual_seed(42)
+        hidden_dim = 8
+
+        # Baseline: 5 token prefill + 2 token decode (no padding)
+        hidden_step0 = torch.randn(5, hidden_dim)
+        hidden_step1 = torch.randn(2, hidden_dim)
+
+        # Target: 6 token prefill + 3 token decode (with padding)
+        hidden_step0_padded = torch.cat(
+            [hidden_step0, torch.zeros(1, hidden_dim)], dim=0
+        )  # [6, H]
+        hidden_step1_padded = torch.cat(
+            [hidden_step1, torch.zeros(1, hidden_dim)], dim=0
+        )  # [3, H]
+
+        # --- Baseline (no padding) ---
+        baseline_dir = tmp_path / "baseline"
+        baseline_dir.mkdir()
+        baseline_dumper = _Dumper(
+            config=DumperConfig(
+                enable=True,
+                dir=str(baseline_dir),
+                exp_name=_FIXED_EXP_NAME,
+            )
+        )
+
+        baseline_dumper.dump("input_ids", torch.tensor([10, 20, 30, 40, 50]))
+        baseline_dumper.dump("positions", torch.tensor([0, 1, 2, 0, 1]))
+        baseline_dumper.dump("seq_lens", torch.tensor([3, 2]))
+        baseline_dumper.dump("req_pool_indices", torch.tensor([7, 3]))
+        baseline_dumper.dump("rids", ["A", "B"])
+        baseline_dumper.dump("hidden_states", hidden_step0)
+        baseline_dumper.step()
+
+        baseline_dumper.dump("input_ids", torch.tensor([31, 51]))
+        baseline_dumper.dump("positions", torch.tensor([3, 2]))
+        baseline_dumper.dump("seq_lens", torch.tensor([1, 1]))
+        baseline_dumper.dump("req_pool_indices", torch.tensor([7, 3]))
+        baseline_dumper.dump("rids", ["A", "B"])
+        baseline_dumper.dump("hidden_states", hidden_step1)
+        baseline_dumper.step()
+
+        # --- Target (with EP padding) ---
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+        target_dumper = _Dumper(
+            config=DumperConfig(
+                enable=True,
+                dir=str(target_dir),
+                exp_name=_FIXED_EXP_NAME,
+            )
+        )
+
+        target_dumper.dump("input_ids", torch.tensor([10, 20, 30, 40, 50, 0]))
+        target_dumper.dump("positions", torch.tensor([0, 1, 2, 0, 1, 0]))
+        target_dumper.dump("seq_lens", torch.tensor([3, 2, 1]))
+        target_dumper.dump("req_pool_indices", torch.tensor([7, 3, 0]))
+        target_dumper.dump("rids", ["A", "B", "PAD"])
+        target_dumper.dump("num_token_non_padded", 5)
+        target_dumper.dump("hidden_states", hidden_step0_padded)
+        target_dumper.step()
+
+        target_dumper.dump("input_ids", torch.tensor([31, 51, 0]))
+        target_dumper.dump("positions", torch.tensor([3, 2, 0]))
+        target_dumper.dump("seq_lens", torch.tensor([1, 1, 1]))
+        target_dumper.dump("req_pool_indices", torch.tensor([7, 3, 0]))
+        target_dumper.dump("rids", ["A", "B", "PAD"])
+        target_dumper.dump("num_token_non_padded", 2)
+        target_dumper.dump("hidden_states", hidden_step1_padded)
+        target_dumper.step()
+
+        argv = _make_argv(
+            baseline_dir / _FIXED_EXP_NAME,
+            target_dir / _FIXED_EXP_NAME,
+            grouping_skip_keys=["rank", "step"],
+            token_aligner="smart",
+        )
+        records, exit_code = _run_and_parse(argv, capsys)
+
+        comparisons = _get_comparisons(records)
+        assert len(comparisons) == 1
+        assert comparisons[0].name == "hidden_states"
+        assert comparisons[0].diff is not None
+        assert comparisons[0].diff.passed
+
+        summary = records[-1]
+        assert isinstance(summary, SummaryRecord)
+        assert summary.passed == 1
+        assert summary.failed == 0
+        assert exit_code == 0
+
+    def test_sglang_padding_stripped_concat(self, tmp_path, capsys):
+        """Target with EP padding tokens stripped via num_token_non_padded (concat_steps mode)."""
+        torch.manual_seed(42)
+        hidden_dim = 8
+
+        # Baseline: 5 token prefill + 2 token decode (no padding)
+        hidden_step0 = torch.randn(5, hidden_dim)
+        hidden_step1 = torch.randn(2, hidden_dim)
+
+        # Target: 6 token prefill + 3 token decode (with padding)
+        hidden_step0_padded = torch.cat(
+            [hidden_step0, torch.zeros(1, hidden_dim)], dim=0
+        )
+        hidden_step1_padded = torch.cat(
+            [hidden_step1, torch.zeros(1, hidden_dim)], dim=0
+        )
+
+        for side_name, step0_data, step1_data, add_padding_meta in [
+            ("baseline", hidden_step0, hidden_step1, False),
+            ("target", hidden_step0_padded, hidden_step1_padded, True),
+        ]:
+            side_dir = tmp_path / side_name
+            side_dir.mkdir()
+            dumper = _Dumper(
+                config=DumperConfig(
+                    enable=True,
+                    dir=str(side_dir),
+                    exp_name=_FIXED_EXP_NAME,
+                )
+            )
+
+            dumper.dump("hidden_states", step0_data)
+            if add_padding_meta:
+                dumper.dump("num_token_non_padded", 5)
+            dumper.step()
+
+            dumper.dump("hidden_states", step1_data)
+            if add_padding_meta:
+                dumper.dump("num_token_non_padded", 2)
+            dumper.step()
+
+        argv = _make_argv(
+            tmp_path / "baseline" / _FIXED_EXP_NAME,
+            tmp_path / "target" / _FIXED_EXP_NAME,
+            grouping_skip_keys=["rank", "step"],
+            token_aligner="concat_steps",
+        )
+        records, exit_code = _run_and_parse(argv, capsys)
+
+        comparisons = _get_comparisons(records)
+        assert len(comparisons) == 1
+        assert comparisons[0].name == "hidden_states"
+        assert comparisons[0].diff is not None
+        assert comparisons[0].diff.passed
+
+        summary = records[-1]
+        assert isinstance(summary, SummaryRecord)
+        assert summary.passed == 1
+        assert summary.failed == 0
+        assert exit_code == 0
+
 
 class TestEntrypointNonTensorValues:
     """Test non-tensor value comparison through the full entrypoint pipeline."""

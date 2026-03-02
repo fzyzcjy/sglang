@@ -243,5 +243,115 @@ class TestInferCpShardedDims:
             _sglang_plugin.infer_cp_sharded_dims(name="input_ids", ndim=2)
 
 
+class TestNumTokenNonPadded:
+    """Tests for num_token_non_padded truncation in SGLang aux normalization."""
+
+    def test_strip_decode_padding(self) -> None:
+        """2 tokens with num_token_non_padded=1 → truncated to 1 token."""
+        step_data: dict = {
+            "input_ids": torch.tensor([31, 0]),
+            "positions": torch.tensor([3, 0]),
+            "seq_lens": torch.tensor([1, 1]),
+            "rids": ["A", "B"],
+            "num_token_non_padded": 1,
+        }
+
+        result: TokenAlignerStepAux = _sglang_plugin.compute_step_aux(
+            step_data, layout=TokenLayout.T, step=1
+        )
+
+        assert result.input_ids == [31]
+        assert result.positions == [3]
+        assert result.seq_lens == [1]
+        assert result.seq_ids == [SGLangSeqId(rid="A")]
+
+    def test_strip_prefill_padding(self) -> None:
+        """6 tokens with num_token_non_padded=5 → truncated to 5 tokens."""
+        step_data: dict = {
+            "input_ids": torch.tensor([10, 20, 30, 40, 50, 0]),
+            "positions": torch.tensor([0, 1, 2, 0, 1, 0]),
+            "seq_lens": torch.tensor([3, 2, 1]),
+            "rids": ["A", "B", "PAD"],
+            "num_token_non_padded": 5,
+        }
+
+        result: TokenAlignerStepAux = _sglang_plugin.compute_step_aux(
+            step_data, layout=TokenLayout.T, step=0
+        )
+
+        assert result.input_ids == [10, 20, 30, 40, 50]
+        assert result.positions == [0, 1, 2, 0, 1]
+        assert result.seq_lens == [3, 2]
+        assert result.seq_ids == [SGLangSeqId(rid="A"), SGLangSeqId(rid="B")]
+
+    def test_no_padding(self) -> None:
+        """num_token_non_padded == len(input_ids) → no truncation."""
+        step_data: dict = {
+            "input_ids": torch.tensor([10, 20, 30]),
+            "positions": torch.tensor([0, 1, 2]),
+            "seq_lens": torch.tensor([3]),
+            "rids": ["A"],
+            "num_token_non_padded": 3,
+        }
+
+        result: TokenAlignerStepAux = _sglang_plugin.compute_step_aux(
+            step_data, layout=TokenLayout.T, step=0
+        )
+
+        assert result.input_ids == [10, 20, 30]
+        assert result.positions == [0, 1, 2]
+        assert result.seq_lens == [3]
+        assert result.seq_ids == [SGLangSeqId(rid="A")]
+
+    def test_absent(self) -> None:
+        """No num_token_non_padded → no truncation."""
+        step_data: dict = {
+            "input_ids": torch.tensor([10, 20, 30]),
+            "positions": torch.tensor([0, 1, 2]),
+            "seq_lens": torch.tensor([3]),
+            "rids": ["A"],
+        }
+
+        result: TokenAlignerStepAux = _sglang_plugin.compute_step_aux(
+            step_data, layout=TokenLayout.T, step=0
+        )
+
+        assert result.input_ids == [10, 20, 30]
+        assert result.positions == [0, 1, 2]
+        assert result.seq_lens == [3]
+        assert result.seq_ids == [SGLangSeqId(rid="A")]
+
+
+class TestTruncateSeqLens:
+    """Tests for truncate_seq_lens utility."""
+
+    def test_exact_match(self) -> None:
+        """Sum equals num_tokens → no change."""
+        from sglang.srt.debug_utils.comparator.aligner.token_aligner.padding_utils import (
+            truncate_seq_lens,
+        )
+
+        result = truncate_seq_lens([3, 2], num_tokens=5)
+        assert result == [3, 2]
+
+    def test_truncate_last_seq(self) -> None:
+        """Last sequence shortened to fit."""
+        from sglang.srt.debug_utils.comparator.aligner.token_aligner.padding_utils import (
+            truncate_seq_lens,
+        )
+
+        result = truncate_seq_lens([3, 2, 1], num_tokens=4)
+        assert result == [3, 1]
+
+    def test_drop_trailing_seqs(self) -> None:
+        """Trailing sequences entirely in padding are dropped."""
+        from sglang.srt.debug_utils.comparator.aligner.token_aligner.padding_utils import (
+            truncate_seq_lens,
+        )
+
+        result = truncate_seq_lens([3, 2, 5], num_tokens=3)
+        assert result == [3]
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__]))
