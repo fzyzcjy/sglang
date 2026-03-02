@@ -88,7 +88,7 @@ def compare_bundle_pair(
     thd_seq_lens_by_step_pair: Pair[Optional[dict[int, list[int]]]] = Pair(
         x=None, y=None
     ),
-    num_token_non_padded_pair: Pair[Optional[dict[int, int]]] = Pair(x=None, y=None),
+    num_token_non_padded_by_step_pair: Pair[Optional[dict[int, int]]] = Pair(x=None, y=None),
     viz_output_dir: Optional[Path] = None,
     compute_per_token: bool = False,
     meta_overrider: Optional[MetaOverrider] = None,
@@ -102,7 +102,7 @@ def compare_bundle_pair(
             token_aligner_plan=token_aligner_plan,
             diff_threshold=diff_threshold,
             thd_seq_lens_by_step_pair=thd_seq_lens_by_step_pair,
-            num_token_non_padded_pair=num_token_non_padded_pair,
+            num_token_non_padded_by_step_pair=num_token_non_padded_by_step_pair,
             viz_output_dir=viz_output_dir,
             compute_per_token=compute_per_token,
             meta_overrider=meta_overrider,
@@ -123,7 +123,7 @@ def _compare_bundle_pair_inner(
     thd_seq_lens_by_step_pair: Pair[Optional[dict[int, list[int]]]] = Pair(
         x=None, y=None
     ),
-    num_token_non_padded_pair: Pair[Optional[dict[int, int]]] = Pair(x=None, y=None),
+    num_token_non_padded_by_step_pair: Pair[Optional[dict[int, int]]] = Pair(x=None, y=None),
     viz_output_dir: Optional[Path] = None,
     compute_per_token: bool = False,
     meta_overrider: Optional[MetaOverrider] = None,
@@ -179,7 +179,7 @@ def _compare_bundle_pair_inner(
         token_aligner_plan=token_aligner_plan,
         diff_threshold=diff_threshold,
         thd_seq_lens_by_step_pair=thd_seq_lens_by_step_pair,
-        num_token_non_padded_pair=num_token_non_padded_pair,
+        num_token_non_padded_by_step_pair=num_token_non_padded_by_step_pair,
         viz_output_dir=viz_output_dir,
         compute_per_token=compute_per_token,
     )
@@ -205,7 +205,7 @@ def _compare_bundle_pair_tensor_type(
     thd_seq_lens_by_step_pair: Pair[Optional[dict[int, list[int]]]] = Pair(
         x=None, y=None
     ),
-    num_token_non_padded_pair: Pair[Optional[dict[int, int]]] = Pair(x=None, y=None),
+    num_token_non_padded_by_step_pair: Pair[Optional[dict[int, int]]] = Pair(x=None, y=None),
     viz_output_dir: Optional[Path] = None,
     compute_per_token: bool = False,
 ) -> Union[ComparisonTensorRecord, ComparisonSkipRecord]:
@@ -222,7 +222,7 @@ def _compare_bundle_pair_tensor_type(
         token_aligner_mode=token_aligner_mode,
         token_aligner_plan=token_aligner_plan,
         thd_seq_lens_by_step_pair=thd_seq_lens_by_step_pair,
-        num_token_non_padded_pair=num_token_non_padded_pair,
+        num_token_non_padded_by_step_pair=num_token_non_padded_by_step_pair,
     )
 
     # Collect raw bundle info before alignment

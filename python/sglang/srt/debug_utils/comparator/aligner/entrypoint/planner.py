@@ -41,7 +41,7 @@ def compute_aligner_plan(
     thd_seq_lens_by_step_pair: Pair[Optional[dict[int, list[int]]]] = Pair(
         x=None, y=None
     ),
-    num_token_non_padded_pair: Pair[Optional[dict[int, int]]] = Pair(x=None, y=None),
+    num_token_non_padded_by_step_pair: Pair[Optional[dict[int, int]]] = Pair(x=None, y=None),
 ) -> AlignerPlan:
     dims_str_pair: Pair[Optional[str]] = metas_pair.map(
         lambda metas: metas[0].get("dims") if metas else None
@@ -64,7 +64,7 @@ def compute_aligner_plan(
         token_aligner_mode=token_aligner_mode,
         token_aligner_plan=token_aligner_plan,
         axis_aligner_plan=axis_aligner_plan,
-        num_token_non_padded_pair=num_token_non_padded_pair,
+        num_token_non_padded_by_step_pair=num_token_non_padded_by_step_pair,
     )
 
 

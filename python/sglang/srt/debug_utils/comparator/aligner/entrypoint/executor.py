@@ -103,18 +103,18 @@ def execute_aligner_plan(
     )
 
     # Strip EP padding tokens before alignment
-    if plan.num_token_non_padded_pair.x is not None:
+    if plan.num_token_non_padded_by_step_pair.x is not None:
         step_pair = Pair(
             x=strip_padding_from_step_tensors(
-                step_pair.x, plan.num_token_non_padded_pair.x
+                step_pair.x, plan.num_token_non_padded_by_step_pair.x
             ),
             y=step_pair.y,
         )
-    if plan.num_token_non_padded_pair.y is not None:
+    if plan.num_token_non_padded_by_step_pair.y is not None:
         step_pair = Pair(
             x=step_pair.x,
             y=strip_padding_from_step_tensors(
-                step_pair.y, plan.num_token_non_padded_pair.y
+                step_pair.y, plan.num_token_non_padded_by_step_pair.y
             ),
         )
 

@@ -45,7 +45,7 @@ class TokenAlignerResult:
     mode: Optional[TokenAlignerMode]
     plan: Optional[TokenAlignerPlan]
     thd_seq_lens_by_step_pair: Pair[Optional[dict[int, list[int]]]]
-    num_token_non_padded_pair: Pair[Optional[dict[int, int]]]
+    num_token_non_padded_by_step_pair: Pair[Optional[dict[int, int]]]
 
 
 def compute_maybe_token_aligner_result(
@@ -54,7 +54,7 @@ def compute_maybe_token_aligner_result(
     dfs: Pair[pl.DataFrame],
     token_aligner_mode: Optional[TokenAlignerMode],
 ) -> TokenAlignerResult:
-    ntp_pair: Pair[Optional[dict[int, int]]] = _load_num_token_non_padded_pair(
+    ntp_pair: Pair[Optional[dict[int, int]]] = _load_num_token_non_padded_by_step_pair(
         dir_pair=dir_pair, dfs=dfs
     )
 
@@ -63,7 +63,7 @@ def compute_maybe_token_aligner_result(
             mode=None,
             plan=None,
             thd_seq_lens_by_step_pair=_NONE_THD,
-            num_token_non_padded_pair=ntp_pair,
+            num_token_non_padded_by_step_pair=ntp_pair,
         )
 
     if token_aligner_mode == "concat_steps":
@@ -74,7 +74,7 @@ def compute_maybe_token_aligner_result(
             mode="concat_steps",
             plan=None,
             thd_seq_lens_by_step_pair=thd_pair,
-            num_token_non_padded_pair=ntp_pair,
+            num_token_non_padded_by_step_pair=ntp_pair,
         )
     elif token_aligner_mode == "smart":
         if not (has_aux_tensors(dfs.x) and has_aux_tensors(dfs.y)):
@@ -88,7 +88,7 @@ def compute_maybe_token_aligner_result(
                 mode=None,
                 plan=None,
                 thd_seq_lens_by_step_pair=_NONE_THD,
-                num_token_non_padded_pair=ntp_pair,
+                num_token_non_padded_by_step_pair=ntp_pair,
             )
 
         return _build_smart_result(dir_pair=dir_pair, dfs=dfs, ntp_pair=ntp_pair)
@@ -123,7 +123,7 @@ def _build_smart_result(
             mode=None,
             plan=None,
             thd_seq_lens_by_step_pair=thd_seq_lens_by_step_pair,
-            num_token_non_padded_pair=ntp_pair,
+            num_token_non_padded_by_step_pair=ntp_pair,
         )
 
     global_aux: Pair[TokenAlignerGlobalAux] = Pair(x=aux_pair.x, y=aux_pair.y)
@@ -137,7 +137,7 @@ def _build_smart_result(
         mode="smart",
         plan=plan,
         thd_seq_lens_by_step_pair=thd_seq_lens_by_step_pair,
-        num_token_non_padded_pair=ntp_pair,
+        num_token_non_padded_by_step_pair=ntp_pair,
     )
 
 
@@ -153,7 +153,7 @@ def _load_thd_seq_lens_pair(
     )
 
 
-def _load_num_token_non_padded_pair(
+def _load_num_token_non_padded_by_step_pair(
     *,
     dir_pair: Pair[Path],
     dfs: Pair[pl.DataFrame],
