@@ -64,9 +64,7 @@ class TestDeepEPNormalOutputIndexDeRouter:
         # output_index shape: [num_tokens, top_k]
         # token 0, k=0 → dispatch 3; token 0, k=1 → dispatch 1
         # token 1, k=0 → dispatch 0; token 1, k=1 → dispatch 2
-        output_index: torch.Tensor = torch.tensor(
-            [[3, 1], [0, 2]], dtype=torch.long
-        )
+        output_index: torch.Tensor = torch.tensor([[3, 1], [0, 2]], dtype=torch.long)
 
         plugin: DeepEPNormalOutputIndexDeRouter = DeepEPNormalOutputIndexDeRouter()
         perm: torch.Tensor = plugin.compute_forward_permutation(

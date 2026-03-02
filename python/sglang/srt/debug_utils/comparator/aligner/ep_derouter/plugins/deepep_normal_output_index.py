@@ -34,9 +34,7 @@ class DeepEPNormalOutputIndexDeRouter(DeRouterPlugin):
             (num_routed,), -1, dtype=torch.long, device=output_index.device
         )
 
-        tok_indices: torch.Tensor = torch.arange(
-            num_tokens, device=output_index.device
-        )
+        tok_indices: torch.Tensor = torch.arange(num_tokens, device=output_index.device)
         for k in range(top_k):
             canonical_flat: torch.Tensor = tok_indices * top_k + k
             dispatch_pos: torch.Tensor = output_index[:, k]
