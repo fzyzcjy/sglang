@@ -419,7 +419,7 @@ patches:
       - match: "silu_and_mul(c1, intermediate)"
         prepend: |
           _n2 = c1.shape[1]
-          dumper.dump('gateup_output', c1.view(m * topk, 2, _n2 // 2), dims='t_k[ep] gate_up h_inter # tp:replicated moe_tp:replicated moe_ep:replicated dp:=attn_dp')
+          dumper.dump('gateup_output', c1.view(m * topk, 2, _n2 // 2), dims='t_k[moe_ep] gate_up h_inter # tp:replicated moe_tp:replicated dp:=attn_dp')
           dumper.dump('deepep_normal_src2dst', src2dst)
 
   # deep_gemm contiguous path (FP8 models using DeepGEMM runner)
@@ -429,7 +429,7 @@ patches:
     edits:
       - match: "silu_and_mul(gateup_output.view(-1, N), down_input)"
         prepend: |
-          dumper.dump('gateup_output', gateup_output.view(all_tokens, 2, N // 2), dims='t_k[ep] gate_up h_inter # tp:replicated moe_ep:replicated')
+          dumper.dump('gateup_output', gateup_output.view(all_tokens, 2, N // 2), dims='t_k[moe_ep] gate_up h_inter # tp:replicated')
           dumper.dump('deepep_normal_output_index', running_state['output_index'])
 
   # --- DeepEP Low-Latency: dispatch metadata + masked GEMM intermediate ---
@@ -451,7 +451,7 @@ patches:
               (num_experts, m, n), device=a.device, dtype=torch.float8_e4m3fn
           )
         prepend: |
-          dumper.dump('gateup_output', c1.view(num_experts, m, 2, n), dims='num_experts expected_m gate_up h_inter[ep] # tp:replicated moe_tp:replicated moe_ep:replicated dp:=attn_dp')
+          dumper.dump('gateup_output', c1.view(num_experts, m, 2, n), dims='num_experts expected_m gate_up h_inter[moe_ep] # tp:replicated moe_tp:replicated dp:=attn_dp')
 
   # deep_gemm masked path (FP8 models using DeepGEMM runner)
   # No dp:=attn_dp here: after EP dispatch, both DP ranks have expert data.
@@ -459,7 +459,7 @@ patches:
     edits:
       - match: "# Act"
         prepend: |
-          dumper.dump('gateup_output', gateup_output.view(num_groups, m, 2, n // 2), dims='num_experts expected_m gate_up h_inter[ep] # tp:replicated moe_ep:replicated')
+          dumper.dump('gateup_output', gateup_output.view(num_groups, m, 2, n // 2), dims='num_experts expected_m gate_up h_inter[moe_ep] # tp:replicated')
 """
 
 
