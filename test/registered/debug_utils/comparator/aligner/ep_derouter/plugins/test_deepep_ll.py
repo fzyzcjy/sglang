@@ -166,6 +166,46 @@ class TestDeepEPLLDeRouter:
         # tok1 at expert1 → k=0 → slot 1*2+0 = 2
         assert torch.equal(perm, torch.tensor([0, 3, 1, 2], dtype=torch.long))
 
+    def test_ep_rank_offset(self) -> None:
+        """Local expert IDs are offset by ep_rank * num_local_experts for global lookup."""
+        num_tokens: int = 2
+        top_k: int = 2
+        num_local_experts: int = 2
+        expected_m: int = 2
+
+        packed_recv_src_info: torch.Tensor = torch.zeros(
+            num_local_experts, expected_m, dtype=torch.long
+        )
+        # local expert 0 gets token 0, local expert 1 gets token 1
+        packed_recv_src_info[0, 0] = 0
+        packed_recv_src_info[1, 0] = 1
+        masked_m: torch.Tensor = torch.tensor([1, 1], dtype=torch.long)
+
+        # topk_ids uses GLOBAL expert IDs
+        # token 0 → global experts [2, 5] (local 0 on ep_rank=1 → global 2)
+        # token 1 → global experts [3, 4] (local 1 on ep_rank=1 → global 3)
+        topk_ids: torch.Tensor = torch.tensor(
+            [[2, 5], [3, 4]], dtype=torch.long
+        )
+
+        aux: dict[str, torch.Tensor] = _make_aux(packed_recv_src_info, masked_m, topk_ids)
+        aux["_ep_rank"] = torch.tensor(1, dtype=torch.long)
+
+        plugin: DeepEPLLDeRouter = DeepEPLLDeRouter()
+        perm: torch.Tensor = plugin.compute_forward_permutation(
+            aux_tensors=aux,
+            num_tokens=num_tokens,
+            top_k=top_k,
+            num_routed=2,
+        )
+
+        assert perm.shape == (2,)
+        # local expert 0 + ep_rank=1 * 2 = global expert 2
+        # token 0, expert 2 → k=0 → slot 0*2+0 = 0
+        # local expert 1 + ep_rank=1 * 2 = global expert 3
+        # token 1, expert 3 → k=0 → slot 1*2+0 = 2
+        assert torch.equal(perm, torch.tensor([0, 2], dtype=torch.long))
+
     def test_resolve_num_tokens(self) -> None:
         """resolve_num_tokens infers correct token count from topk_ids shape."""
         packed_recv_src_info: torch.Tensor = torch.zeros(4, 8, dtype=torch.long)

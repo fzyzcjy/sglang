@@ -55,6 +55,9 @@ def execute_de_router_plan(
     num_tokens: int = int(aux_tensors.pop(f"{plan.dispatch_path}_ep_num_tokens").item())
     top_k: int = int(aux_tensors.pop(f"{plan.dispatch_path}_ep_top_k").item())
 
+    ep_rank: int = _extract_ep_rank(meta)
+    aux_tensors["_ep_rank"] = torch.tensor(ep_rank, dtype=torch.long)
+
     num_tokens = plugin.resolve_num_tokens(
         num_tokens=num_tokens, aux_tensors=aux_tensors
     )
@@ -74,6 +77,19 @@ def execute_de_router_plan(
         forward_perm=forward_perm,
         total_slots=num_tokens * top_k,
     )
+
+
+def _extract_ep_rank(meta: dict[str, Any]) -> int:
+    """Extract EP rank from dump metadata."""
+    parallel_info: dict[str, Any] | None = meta.get(
+        "sglang_parallel_info"
+    ) or meta.get("megatron_parallel_info")
+    if parallel_info is None:
+        return 0
+    for key in ("moe_ep_rank", "ep_rank"):
+        if key in parallel_info:
+            return int(parallel_info[key])
+    return 0
 
 
 def _load_aux_tensors(

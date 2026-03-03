@@ -80,6 +80,10 @@ class DeepEPLLDeRouter(DeRouterPlugin):
 
         expert_ids: torch.Tensor = _extract_expert_ids(masked_m)
 
+        ep_rank: int = int(aux_tensors.get("_ep_rank", torch.tensor(0)).item())
+        num_local_experts: int = masked_m.shape[0]
+        expert_ids = expert_ids + ep_rank * num_local_experts
+
         token_ids: torch.Tensor = flat_src_info.long() % num_tokens
 
         k_indices: torch.Tensor = _lookup_k_indices(
