@@ -56,9 +56,7 @@ def _make_meta(
 
 class TestComputePerStepSubPlans:
     def test_empty_metas(self) -> None:
-        result: list[AlignerPerStepSubPlan] = compute_per_step_sub_plans(
-            metas=[]
-        )
+        result: list[AlignerPerStepSubPlan] = compute_per_step_sub_plans(metas=[])
         assert result == []
 
     def test_single_meta(self) -> None:
@@ -113,9 +111,7 @@ class TestComputePerStepPlans:
             _make_meta(step=0, tp_rank=1, tp_size=2),
             _make_meta(step=1, tp_rank=0, tp_size=1),
         ]
-        result: list[AlignerPerStepPlan] = _compute_per_step_plans(
-            metas=metas
-        )
+        result: list[AlignerPerStepPlan] = _compute_per_step_plans(metas=metas)
 
         assert len(result) == 2
         assert result[0].step == 0
@@ -129,9 +125,7 @@ class TestComputePerStepPlans:
             _make_meta(step=0),
             _make_meta(step=1),
         ]
-        result: list[AlignerPerStepPlan] = _compute_per_step_plans(
-            metas=metas
-        )
+        result: list[AlignerPerStepPlan] = _compute_per_step_plans(metas=metas)
 
         steps: list[int] = [p.step for p in result]
         assert steps == [0, 1, 2]
@@ -141,9 +135,7 @@ class TestComputePerStepPlans:
             _make_meta(step=0),
             _make_meta(step=1),
         ]
-        result: list[AlignerPerStepPlan] = _compute_per_step_plans(
-            metas=metas
-        )
+        result: list[AlignerPerStepPlan] = _compute_per_step_plans(metas=metas)
 
         assert len(result) == 2
         assert all(plan.sub_plans == [] for plan in result)
@@ -155,7 +147,6 @@ class TestComputeAlignerPlan:
         metas_y: list[dict[str, Any]] = [_make_meta(step=0)]
 
         plan: AlignerPlan = compute_aligner_plan(
-
             metas_pair=Pair(x=metas_x, y=metas_y),
             token_aligner_mode=None,
             token_aligner_plan=None,
@@ -180,7 +171,6 @@ class TestComputeAlignerPlan:
         )
 
         plan: AlignerPlan = compute_aligner_plan(
-
             metas_pair=Pair(x=[_make_meta()], y=[_make_meta()]),
             token_aligner_mode="smart",
             token_aligner_plan=ta_plan,

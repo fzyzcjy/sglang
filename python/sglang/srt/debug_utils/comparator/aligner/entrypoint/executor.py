@@ -158,7 +158,9 @@ def execute_sub_plans(
             return None, []
         return tensors[0], []
 
-    effective_metas: list[dict[str, Any]] = metas if metas is not None else [{} for _ in tensors]
+    effective_metas: list[dict[str, Any]] = (
+        metas if metas is not None else [{} for _ in tensors]
+    )
 
     current: list[torch.Tensor] = tensors
     all_checks: list[ReplicatedCheckResult] = []

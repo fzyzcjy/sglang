@@ -46,9 +46,7 @@ def compute_aligner_plan(
     thd_seq_lens_by_step_pair: Pair[Optional[dict[int, list[int]]]] = Pair(
         x=None, y=None
     ),
-    available_aux_names_pair: Pair[frozenset[str]] = Pair(
-        x=frozenset(), y=frozenset()
-    ),
+    available_aux_names_pair: Pair[frozenset[str]] = Pair(x=frozenset(), y=frozenset()),
 ) -> AlignerPlan:
     dims_str_pair: Pair[Optional[str]] = metas_pair.map(
         lambda metas: metas[0].get("dims") if metas else None

@@ -9,7 +9,6 @@ from sglang.srt.debug_utils.comparator.aligner.ep_derouter.types import DeRouter
 from sglang.srt.debug_utils.comparator.dims_spec import (
     EP_LIKE_AXES,
     DimsSpec,
-    ParallelAxis,
 )
 
 
