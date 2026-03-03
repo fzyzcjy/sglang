@@ -32,6 +32,10 @@ class DeepEPLLDeRouter(DeRouterPlugin):
             }
         )
 
+    @property
+    def cross_rank_aux_names(self) -> frozenset[str]:
+        return frozenset({"deepep_ll_recv_topk_ids"})
+
     def resolve_num_tokens(
         self,
         num_tokens: int,

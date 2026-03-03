@@ -25,6 +25,16 @@ class DeRouterPlugin(ABC):
         """Dump tensor names that must be present in aux_tensors."""
         ...
 
+    @property
+    def cross_rank_aux_names(self) -> frozenset[str]:
+        """Aux names that may be loaded from any rank (not just the current one).
+
+        Override this when an auxiliary tensor is only dumped by a subset of
+        ranks (e.g. ``topk_ids`` in DP-attention, where only the token-owning
+        rank dumps it).  The executor will try all ranks for these names.
+        """
+        return frozenset()
+
     def flatten_routed_tensor(
         self,
         routed_tensor: torch.Tensor,

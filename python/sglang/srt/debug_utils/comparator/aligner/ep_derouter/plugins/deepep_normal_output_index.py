@@ -21,6 +21,10 @@ class DeepEPNormalOutputIndexDeRouter(DeRouterPlugin):
     def required_aux_dump_names(self) -> frozenset[str]:
         return frozenset({"deepep_normal_output_index", "deepep_normal_recv_topk_ids"})
 
+    @property
+    def cross_rank_aux_names(self) -> frozenset[str]:
+        return frozenset({"deepep_normal_recv_topk_ids"})
+
     def compute_forward_permutation(
         self,
         aux_tensors: dict[str, torch.Tensor],

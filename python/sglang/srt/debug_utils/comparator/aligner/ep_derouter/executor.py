@@ -47,6 +47,7 @@ def execute_de_router_plan(
 
     aux_tensors: dict[str, torch.Tensor] = _load_aux_tensors(
         required_names=all_required,
+        cross_rank_names=plugin.cross_rank_aux_names,
         aux_loader=aux_loader,
         meta=meta,
     )
@@ -78,6 +79,7 @@ def execute_de_router_plan(
 def _load_aux_tensors(
     *,
     required_names: frozenset[str],
+    cross_rank_names: frozenset[str],
     aux_loader: Optional[RawAuxLoader],
     meta: dict[str, Any],
 ) -> dict[str, torch.Tensor]:
@@ -98,15 +100,65 @@ def _load_aux_tensors(
         aux_names=required_names,
     )
 
+    missing: set[str] = set()
     for name in required_names:
         if name not in result:
-            raise ValueError(
-                f"De-router requires auxiliary tensor {name!r}, "
-                f"but it was not found in the dump. "
-                f"Available: {sorted(result.keys())}"
+            missing.add(name)
+
+    empty_cross_rank: set[str] = {
+        name
+        for name in cross_rank_names
+        if name in result and result[name].numel() == 0
+    }
+
+    cross_rank_needed: set[str] = (missing & cross_rank_names) | empty_cross_rank
+    if cross_rank_needed:
+        result.update(
+            _load_cross_rank(
+                names=frozenset(cross_rank_needed),
+                aux_loader=aux_loader,
+                meta=meta,
             )
+        )
+        missing -= set(result.keys())
+
+    if missing:
+        raise ValueError(
+            f"De-router requires auxiliary tensor(s) {sorted(missing)}, "
+            f"but they were not found in the dump. "
+            f"Available: {sorted(result.keys())}"
+        )
 
     return result
+
+
+def _load_cross_rank(
+    *,
+    names: frozenset[str],
+    aux_loader: RawAuxLoader,
+    meta: dict[str, Any],
+) -> dict[str, torch.Tensor]:
+    """Try loading aux tensors from any rank (for DP-attention scenarios)."""
+    step: int = int(meta["step"])
+    layer_id: int = int(meta["layer_id"])
+    world_size: int = int(meta.get("world_size", 1))
+
+    for rank in range(world_size):
+        result: dict[str, torch.Tensor] = aux_loader.load(
+            step=step,
+            rank=rank,
+            layer_id=layer_id,
+            aux_names=names,
+        )
+        found: dict[str, torch.Tensor] = {
+            name: tensor
+            for name, tensor in result.items()
+            if tensor.numel() > 0
+        }
+        if found:
+            return found
+
+    return {}
 
 
 def _apply_forward_permutation(
