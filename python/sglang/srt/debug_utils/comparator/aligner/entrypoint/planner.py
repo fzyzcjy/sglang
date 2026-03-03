@@ -48,30 +48,50 @@ def compute_aligner_plan(
     ),
     available_aux_names_pair: Pair[frozenset[str]] = Pair(x=frozenset(), y=frozenset()),
 ) -> AlignerPlan:
-    dims_str_pair: Pair[Optional[str]] = metas_pair.map(
-        lambda metas: metas[0].get("dims") if metas else None
-    )
-    axis_aligner_plan: Optional[AxisAlignerPlan] = compute_axis_aligner_plan(
-        dims_str_pair=dims_str_pair
+    per_step_plans: Pair[list[AlignerPerStepPlan]] = Pair(
+        x=_compute_per_step_plans(
+            metas=metas_pair.x,
+            thd_seq_lens_by_step=thd_seq_lens_by_step_pair.x,
+            available_aux_names=available_aux_names_pair.x,
+        ),
+        y=_compute_per_step_plans(
+            metas=metas_pair.y,
+            thd_seq_lens_by_step=thd_seq_lens_by_step_pair.y,
+            available_aux_names=available_aux_names_pair.y,
+        ),
     )
 
+    axis_aligner_plan: Optional[AxisAlignerPlan] = None
+    if not _has_de_router(per_step_plans):
+        dims_str_pair: Pair[Optional[str]] = metas_pair.map(
+            lambda metas: metas[0].get("dims") if metas else None
+        )
+        axis_aligner_plan = compute_axis_aligner_plan(
+            dims_str_pair=dims_str_pair
+        )
+
     return AlignerPlan(
-        per_step_plans=Pair(
-            x=_compute_per_step_plans(
-                metas=metas_pair.x,
-                thd_seq_lens_by_step=thd_seq_lens_by_step_pair.x,
-                available_aux_names=available_aux_names_pair.x,
-            ),
-            y=_compute_per_step_plans(
-                metas=metas_pair.y,
-                thd_seq_lens_by_step=thd_seq_lens_by_step_pair.y,
-                available_aux_names=available_aux_names_pair.y,
-            ),
-        ),
+        per_step_plans=per_step_plans,
         token_aligner_mode=token_aligner_mode,
         token_aligner_plan=token_aligner_plan,
         axis_aligner_plan=axis_aligner_plan,
     )
+
+
+def _has_de_router(per_step_plans: Pair[list[AlignerPerStepPlan]]) -> bool:
+    """Check if any side's per-step plans contain a de-router sub-plan.
+
+    When a de-router is present, the tensor dimensions change (e.g.
+    ``[num_experts, expected_m, ...]`` → ``[t_k, ...]``), so the axis aligner
+    should be skipped — it would see stale dim names from pre-deroute
+    annotations and emit a spurious ``axis_aligner_dim_mismatch`` error.
+    """
+    for plans in (per_step_plans.x, per_step_plans.y):
+        for step_plan in plans:
+            for sub_plan in step_plan.sub_plans:
+                if isinstance(sub_plan, DeRouterPlan):
+                    return True
+    return False
 
 
 def _compute_per_step_plans(
