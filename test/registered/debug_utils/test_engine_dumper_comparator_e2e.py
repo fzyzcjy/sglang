@@ -439,6 +439,7 @@ patches:
         prepend: |
           dumper.dump('deepep_ll_masked_m', masked_m, dims='num_experts')
           dumper.dump('deepep_ll_packed_recv_src_info', torch.stack(list(self.handle[0])), dims='num_experts expected_m')
+          dumper.dump('deepep_ll_recv_topk_ids', topk_ids, dims='t top_k')
           dumper.dump('deepep_ll_ep_num_tokens', torch.tensor(hidden_states.shape[0] if not isinstance(hidden_states, tuple) else hidden_states[0].shape[0]))
           dumper.dump('deepep_ll_ep_top_k', torch.tensor(topk_ids.shape[1]))
 
@@ -634,7 +635,7 @@ _ALLOW_SKIPPED_DEEPEP = (
     + "|deepep_normal_src2dst"
     + "|deepep_normal_output_index"
     + "|deepep_normal_output_index_ep_num_tokens|deepep_normal_output_index_ep_top_k"
-    + "|deepep_ll_masked_m|deepep_ll_packed_recv_src_info"
+    + "|deepep_ll_masked_m|deepep_ll_packed_recv_src_info|deepep_ll_recv_topk_ids"
     + "|deepep_ll_ep_num_tokens|deepep_ll_ep_top_k"
 )
 

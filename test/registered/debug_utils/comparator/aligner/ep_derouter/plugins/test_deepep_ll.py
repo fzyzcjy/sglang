@@ -11,6 +11,18 @@ from sglang.test.ci.ci_register import register_cpu_ci
 register_cpu_ci(est_time=10, suite="default", nightly=True)
 
 
+def _make_aux(
+    packed_recv_src_info: torch.Tensor,
+    masked_m: torch.Tensor,
+    recv_topk_ids: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+    return {
+        "deepep_ll_packed_recv_src_info": packed_recv_src_info,
+        "deepep_ll_masked_m": masked_m,
+        "deepep_ll_recv_topk_ids": recv_topk_ids,
+    }
+
+
 class TestDeepEPLLDeRouter:
     """Test flatten_routed_tensor and compute_forward_permutation."""
 
@@ -34,6 +46,7 @@ class TestDeepEPLLDeRouter:
             aux_tensors={
                 "deepep_ll_packed_recv_src_info": torch.zeros(2, 4),
                 "deepep_ll_masked_m": masked_m,
+                "deepep_ll_recv_topk_ids": torch.zeros(2, 2, dtype=torch.long),
             },
         )
 
@@ -44,7 +57,7 @@ class TestDeepEPLLDeRouter:
         assert torch.allclose(flat[3], torch.tensor([40.0, 41.0, 42.0]))
 
     def test_basic_permutation(self) -> None:
-        """Decode packed_recv_src_info to forward permutation."""
+        """Each token dispatched to one expert → k=0 for each."""
         num_tokens: int = 4
         top_k: int = 2
         num_experts: int = 2
@@ -53,26 +66,33 @@ class TestDeepEPLLDeRouter:
         packed_recv_src_info: torch.Tensor = torch.zeros(
             num_experts, expected_m, dtype=torch.long
         )
-        packed_recv_src_info[0, 0] = 0  # token 0
-        packed_recv_src_info[0, 1] = 1  # token 1
-        packed_recv_src_info[1, 0] = 2  # token 2
-        packed_recv_src_info[1, 1] = 3  # token 3
+        # expert 0 gets token 0 and token 1
+        packed_recv_src_info[0, 0] = 0
+        packed_recv_src_info[0, 1] = 1
+        # expert 1 gets token 2 and token 3
+        packed_recv_src_info[1, 0] = 2
+        packed_recv_src_info[1, 1] = 3
 
         masked_m: torch.Tensor = torch.tensor([2, 2], dtype=torch.long)
 
+        # topk_ids: each token's first expert matches where it was dispatched
+        # token 0 → experts [0, 5], token 1 → experts [0, 6]
+        # token 2 → experts [1, 7], token 3 → experts [1, 8]
+        topk_ids: torch.Tensor = torch.tensor(
+            [[0, 5], [0, 6], [1, 7], [1, 8]], dtype=torch.long
+        )
+
         plugin: DeepEPLLDeRouter = DeepEPLLDeRouter()
         perm: torch.Tensor = plugin.compute_forward_permutation(
-            aux_tensors={
-                "deepep_ll_packed_recv_src_info": packed_recv_src_info,
-                "deepep_ll_masked_m": masked_m,
-            },
+            aux_tensors=_make_aux(packed_recv_src_info, masked_m, topk_ids),
             num_tokens=num_tokens,
             top_k=top_k,
             num_routed=4,
         )
 
         assert perm.shape == (4,)
-        # token0,k=0→slot0; token1,k=0→slot2; token2,k=0→slot4; token3,k=0→slot6
+        # expert 0 matches k=0 for tokens 0,1; expert 1 matches k=0 for tokens 2,3
+        # token0,k=0→0; token1,k=0→2; token2,k=0→4; token3,k=0→6
         assert torch.equal(perm, torch.tensor([0, 2, 4, 6], dtype=torch.long))
 
     def test_padding_rows_ignored(self) -> None:
@@ -85,19 +105,17 @@ class TestDeepEPLLDeRouter:
         packed_recv_src_info: torch.Tensor = torch.zeros(
             num_experts, expected_m, dtype=torch.long
         )
-        packed_recv_src_info[0, 0] = 0  # valid: token 0
+        packed_recv_src_info[0, 0] = 0
         packed_recv_src_info[0, 1] = 999  # padding
-        packed_recv_src_info[1, 0] = 1  # valid: token 1
+        packed_recv_src_info[1, 0] = 1
         packed_recv_src_info[1, 1] = 999  # padding
 
         masked_m: torch.Tensor = torch.tensor([1, 1], dtype=torch.long)
+        topk_ids: torch.Tensor = torch.tensor([[0], [1]], dtype=torch.long)
 
         plugin: DeepEPLLDeRouter = DeepEPLLDeRouter()
         perm: torch.Tensor = plugin.compute_forward_permutation(
-            aux_tensors={
-                "deepep_ll_packed_recv_src_info": packed_recv_src_info,
-                "deepep_ll_masked_m": masked_m,
-            },
+            aux_tensors=_make_aux(packed_recv_src_info, masked_m, topk_ids),
             num_tokens=num_tokens,
             top_k=top_k,
             num_routed=2,
@@ -106,8 +124,8 @@ class TestDeepEPLLDeRouter:
         assert perm.shape == (2,)
         assert torch.equal(perm, torch.tensor([0, 1], dtype=torch.long))
 
-    def test_top_k_assignment(self) -> None:
-        """When a token appears in multiple experts, k-index increments."""
+    def test_top_k_assignment_via_topk_ids(self) -> None:
+        """When a token appears in multiple experts, k-index from topk_ids lookup."""
         num_tokens: int = 2
         top_k: int = 2
         num_experts: int = 2
@@ -116,27 +134,55 @@ class TestDeepEPLLDeRouter:
         packed_recv_src_info: torch.Tensor = torch.zeros(
             num_experts, expected_m, dtype=torch.long
         )
-        packed_recv_src_info[0, 0] = 0  # token 0, first appearance
-        packed_recv_src_info[0, 1] = 1  # token 1, first appearance
-        packed_recv_src_info[1, 0] = 0  # token 0, second appearance
-        packed_recv_src_info[1, 1] = 1  # token 1, second appearance
+        # expert 0 gets both tokens
+        packed_recv_src_info[0, 0] = 0
+        packed_recv_src_info[0, 1] = 1
+        # expert 1 gets both tokens
+        packed_recv_src_info[1, 0] = 0
+        packed_recv_src_info[1, 1] = 1
 
         masked_m: torch.Tensor = torch.tensor([2, 2], dtype=torch.long)
 
+        # token 0 → experts [0, 1] (expert 0 is k=0, expert 1 is k=1)
+        # token 1 → experts [1, 0] (expert 1 is k=0, expert 0 is k=1)
+        topk_ids: torch.Tensor = torch.tensor(
+            [[0, 1], [1, 0]], dtype=torch.long
+        )
+
         plugin: DeepEPLLDeRouter = DeepEPLLDeRouter()
         perm: torch.Tensor = plugin.compute_forward_permutation(
-            aux_tensors={
-                "deepep_ll_packed_recv_src_info": packed_recv_src_info,
-                "deepep_ll_masked_m": masked_m,
-            },
+            aux_tensors=_make_aux(packed_recv_src_info, masked_m, topk_ids),
             num_tokens=num_tokens,
             top_k=top_k,
             num_routed=4,
         )
 
         assert perm.shape == (4,)
-        # token0,k=0→slot0; token1,k=0→slot2; token0,k=1→slot1; token1,k=1→slot3
-        assert torch.equal(perm, torch.tensor([0, 2, 1, 3], dtype=torch.long))
+        # Flat order from _extract_valid_rows: expert0[0]=tok0, expert0[1]=tok1,
+        #   expert1[0]=tok0, expert1[1]=tok1
+        # tok0 at expert0 → k=0 → slot 0*2+0 = 0
+        # tok1 at expert0 → k=1 → slot 1*2+1 = 3
+        # tok0 at expert1 → k=1 → slot 0*2+1 = 1
+        # tok1 at expert1 → k=0 → slot 1*2+0 = 2
+        assert torch.equal(perm, torch.tensor([0, 3, 1, 2], dtype=torch.long))
+
+    def test_resolve_num_tokens(self) -> None:
+        """resolve_num_tokens infers correct token count from src_info."""
+        packed_recv_src_info: torch.Tensor = torch.zeros(4, 8, dtype=torch.long)
+        packed_recv_src_info[0, 0] = 0
+        packed_recv_src_info[1, 0] = 3
+        packed_recv_src_info[2, 0] = 2
+
+        masked_m: torch.Tensor = torch.tensor([1, 1, 1, 0], dtype=torch.long)
+        topk_ids: torch.Tensor = torch.zeros(4, 2, dtype=torch.long)
+
+        plugin: DeepEPLLDeRouter = DeepEPLLDeRouter()
+        result: int = plugin.resolve_num_tokens(
+            num_tokens=999,
+            aux_tensors=_make_aux(packed_recv_src_info, masked_m, topk_ids),
+        )
+
+        assert result == 4  # max(0, 3, 2) + 1
 
 
 if __name__ == "__main__":

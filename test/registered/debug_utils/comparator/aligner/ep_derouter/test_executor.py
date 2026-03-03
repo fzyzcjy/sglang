@@ -244,10 +244,16 @@ class TestExecuteDeRouterPlan:
         routed_tensor[1, 0] = torch.tensor([30.0, 31.0, 32.0])  # token 0, k=1
         routed_tensor[1, 1] = torch.tensor([40.0, 41.0, 42.0])  # token 1, k=1
 
+        # token 0 → experts [0, 1], token 1 → experts [0, 1]
+        recv_topk_ids: torch.Tensor = torch.tensor(
+            [[0, 1], [0, 1]], dtype=torch.long
+        )
+
         loader = _FakeAuxLoader(
             {
                 "deepep_ll_packed_recv_src_info": packed_recv_src_info,
                 "deepep_ll_masked_m": masked_m,
+                "deepep_ll_recv_topk_ids": recv_topk_ids,
                 **_make_ep_meta_tensors(
                     "deepep_ll", num_tokens=num_tokens, top_k=top_k
                 ),
