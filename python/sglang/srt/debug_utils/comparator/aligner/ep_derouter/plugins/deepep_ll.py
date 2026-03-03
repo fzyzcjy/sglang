@@ -41,25 +41,16 @@ class DeepEPLLDeRouter(DeRouterPlugin):
         num_tokens: int,
         aux_tensors: dict[str, torch.Tensor],
     ) -> int:
-        """Infer num_tokens from packed_recv_src_info valid entries.
+        """Infer num_tokens from recv_topk_ids shape.
 
         The dumped ``ep_num_tokens`` for the LL path is unreliable because
         ``hidden_states.shape[0]`` in ``dispatch_b`` equals ``num_experts``
         (post-dispatch shape), not the pre-dispatch token count.
 
-        We recover the true token count as ``max(valid_token_ids) + 1``.
+        We recover the true token count from ``recv_topk_ids.shape[0]``.
         """
-        packed: torch.Tensor = aux_tensors["deepep_ll_packed_recv_src_info"]
-        masked_m: torch.Tensor = aux_tensors["deepep_ll_masked_m"]
-
-        flat_src_info: torch.Tensor = _extract_valid_rows(
-            packed.unsqueeze(-1), masked_m
-        ).squeeze(-1)
-
-        if flat_src_info.numel() == 0:
-            return 0
-
-        return int(flat_src_info.long().max().item()) + 1
+        topk_ids: torch.Tensor = aux_tensors["deepep_ll_recv_topk_ids"]
+        return topk_ids.shape[0]
 
     def flatten_routed_tensor(
         self,

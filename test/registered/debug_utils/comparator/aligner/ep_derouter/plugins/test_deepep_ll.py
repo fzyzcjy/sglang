@@ -167,14 +167,10 @@ class TestDeepEPLLDeRouter:
         assert torch.equal(perm, torch.tensor([0, 3, 1, 2], dtype=torch.long))
 
     def test_resolve_num_tokens(self) -> None:
-        """resolve_num_tokens infers correct token count from src_info."""
+        """resolve_num_tokens infers correct token count from topk_ids shape."""
         packed_recv_src_info: torch.Tensor = torch.zeros(4, 8, dtype=torch.long)
-        packed_recv_src_info[0, 0] = 0
-        packed_recv_src_info[1, 0] = 3
-        packed_recv_src_info[2, 0] = 2
-
         masked_m: torch.Tensor = torch.tensor([1, 1, 1, 0], dtype=torch.long)
-        topk_ids: torch.Tensor = torch.zeros(4, 2, dtype=torch.long)
+        topk_ids: torch.Tensor = torch.zeros(5, 2, dtype=torch.long)
 
         plugin: DeepEPLLDeRouter = DeepEPLLDeRouter()
         result: int = plugin.resolve_num_tokens(
@@ -182,7 +178,7 @@ class TestDeepEPLLDeRouter:
             aux_tensors=_make_aux(packed_recv_src_info, masked_m, topk_ids),
         )
 
-        assert result == 4  # max(0, 3, 2) + 1
+        assert result == 5  # topk_ids.shape[0]
 
 
 if __name__ == "__main__":
