@@ -54,6 +54,10 @@ def execute_de_router_plan(
     num_tokens: int = int(aux_tensors.pop(f"{plan.dispatch_path}_ep_num_tokens").item())
     top_k: int = int(aux_tensors.pop(f"{plan.dispatch_path}_ep_top_k").item())
 
+    num_tokens = plugin.resolve_num_tokens(
+        num_tokens=num_tokens, aux_tensors=aux_tensors
+    )
+
     flat_tensor: torch.Tensor = plugin.flatten_routed_tensor(
         routed_tensor=tensor, aux_tensors=aux_tensors
     )

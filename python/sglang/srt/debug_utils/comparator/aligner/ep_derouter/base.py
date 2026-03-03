@@ -37,6 +37,20 @@ class DeRouterPlugin(ABC):
         """
         return routed_tensor
 
+    def resolve_num_tokens(
+        self,
+        num_tokens: int,
+        aux_tensors: dict[str, torch.Tensor],
+    ) -> int:
+        """Optionally override *num_tokens* using auxiliary data.
+
+        The default returns the value as-is.  Plugins may override this when
+        the dumped ``ep_num_tokens`` is unreliable (e.g. the DeepEP LL path
+        where ``hidden_states.shape[0]`` is ``num_experts`` rather than the
+        pre-dispatch token count).
+        """
+        return num_tokens
+
     @abstractmethod
     def compute_forward_permutation(
         self,

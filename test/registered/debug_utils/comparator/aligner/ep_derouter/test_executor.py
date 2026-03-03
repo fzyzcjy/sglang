@@ -177,9 +177,13 @@ class TestExecuteDeRouterPlan:
         output_index: torch.Tensor = torch.tensor(
             [[1], [0], [3], [2]], dtype=torch.long
         )
+        recv_topk_ids: torch.Tensor = torch.tensor(
+            [[10], [20], [30], [40]], dtype=torch.long
+        )
         loader = _FakeAuxLoader(
             {
                 "deepep_normal_output_index": output_index,
+                "deepep_normal_recv_topk_ids": recv_topk_ids,
                 **_make_ep_meta_tensors(
                     "deepep_normal_output_index",
                     num_tokens=num_tokens,
