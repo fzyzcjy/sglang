@@ -139,6 +139,8 @@ class SchedulerPPMixin:
 
                 self.pp_outputs = next_pp_outputs
 
+            self.maybe_send_health_check_signal()
+
             # When the server is idle, self-check and re-init some states
             if server_is_idle:
                 self.self_check_during_idle()
@@ -313,6 +315,8 @@ class SchedulerPPMixin:
                 consensus_bootstrapped_rids = next_consensus_bootstrapped_rids
 
                 self.running_batch.batch_is_full = False
+
+            self.maybe_send_health_check_signal()
 
             # When the server is idle, self-check and re-init some states
             if server_is_idle and len(self.disagg_prefill_inflight_queue) == 0:
@@ -503,6 +507,8 @@ class SchedulerPPMixin:
             )
             if self.server_args.disaggregation_decode_enable_offload_kvcache:
                 queue_size += len(self.decode_offload_manager.ongoing_offload)
+
+            self.maybe_send_health_check_signal()
 
             if server_is_idle and queue_size == 0:
                 self.self_check_during_idle()
@@ -1039,7 +1045,7 @@ class SchedulerPPMixin:
                     )
             if not mbs[next_mb_id].forward_mode.is_prebuilt():
                 with self.copy_stream_ctx:
-                    self.copy_stream.wait_stream(self.default_stream)
+                    self.copy_stream.wait_stream(self.schedule_stream)
                     batch_result = self._pp_prep_batch_result(
                         mbs[next_mb_id], mb_metadata[next_mb_id], next_pp_outputs
                     )
@@ -1057,7 +1063,7 @@ class SchedulerPPMixin:
     ):
         with torch.profiler.record_function("run_batch"):
             with self.forward_stream_ctx:
-                self.forward_stream.wait_stream(self.default_stream)
+                self.forward_stream.wait_stream(self.schedule_stream)
                 result = self.run_batch(self.cur_batch, pp_proxy_tensors)
                 mb_metadata[mb_id] = PPBatchMetadata(
                     can_run_cuda_graph=result.can_run_cuda_graph,
