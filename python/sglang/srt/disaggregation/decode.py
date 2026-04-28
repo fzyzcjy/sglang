@@ -62,6 +62,7 @@ from sglang.srt.mem_cache.memory_pool import (
 )
 from sglang.srt.mem_cache.swa_memory_pool import SWAKVPool
 from sglang.srt.tracing.trace import trace_event_batch, trace_slice_end
+from sglang.srt.utils import req_lifecycle as _hack_lc  # SGLANG_HACK_PRINT_REQ_LIFECYCLE
 from sglang.srt.utils import get_int_env_var
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
 
@@ -329,6 +330,10 @@ class DecodePreallocQueue:
 
     def add(self, req: Req, is_retracted: bool = False) -> None:
         """Add a request to the pending queue."""
+        _hack_lc.lc(req.rid, "decode_prealloc_add",
+                    is_retracted=is_retracted,
+                    bootstrap_room=getattr(req, "bootstrap_room", None),
+                    queue_len_before=len(self.queue))
         if self._check_if_req_exceed_kv_capacity(req):
             return
 
@@ -865,8 +870,10 @@ class SchedulerDisaggregationDecodeMixin:
     def event_loop_overlap_disagg_decode(self: Scheduler):
         self.result_queue = deque()
         self.last_batch: Optional[ScheduleBatch] = None
+        _hack_step_idx = 0
 
         while True:
+            _hack_step_idx += 1
             # Receive requests
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
@@ -894,6 +901,26 @@ class SchedulerDisaggregationDecodeMixin:
             # Run sample of the current batch
             # It depends on the result of the last batch (e.g., grammar), so we run it after the last batch is processed.
             self.launch_batch_sample_if_needed(batch_result)
+
+            # SGLANG_HACK_PRINT_REQ_LIFECYCLE: per-step batch summary (once per
+            # forward step, not per-rid). Tells us where 4096 in-flight reqs
+            # live — prealloc_q vs transfer_q vs waiting_q vs running.
+            if _hack_lc.is_on() and _hack_step_idx % max(1, self.server_args.decode_log_interval) == 0:
+                running_n = len(batch.reqs) if batch is not None else 0
+                pq = getattr(self, "disagg_decode_prealloc_queue", None)
+                tq = getattr(self, "disagg_decode_transfer_queue", None)
+                wq = getattr(self, "waiting_queue", None)
+                _hack_lc.lc(
+                    "STEP",
+                    "decode_step_summary",
+                    dp_rank=getattr(self, "dp_rank", "?"),
+                    step=_hack_step_idx,
+                    running=running_n,
+                    prealloc_q=len(pq.queue) if pq is not None and hasattr(pq, "queue") else "?",
+                    retracted_q=len(pq.retracted_queue) if pq is not None and hasattr(pq, "retracted_queue") else "?",
+                    transfer_q=len(tq.queue) if tq is not None and hasattr(tq, "queue") else "?",
+                    waiting_q=len(wq) if wq is not None else "?",
+                )
 
             # Update last_batch
             self.last_batch = batch
@@ -1024,8 +1051,20 @@ class SchedulerDisaggregationDecodeMixin:
 
         if self.polling_count % self.polling_interval == 0:
             req_conns, _ = self.disagg_decode_prealloc_queue.pop_preallocated()
+            if _hack_lc.is_on() and req_conns:
+                for rc in req_conns:
+                    _rid = getattr(getattr(rc, "req", None), "rid", None) or getattr(rc, "rid", "?")
+                    _hack_lc.lc(_rid, "decode_bootstrap_pop_to_transfer",
+                                bootstrap_room=getattr(getattr(rc, "req", None), "bootstrap_room", None))
             self.disagg_decode_transfer_queue.extend(req_conns)
+            if _hack_lc.is_on() and req_conns:
+                _hack_lc.lc("BATCH", "decode_transfer_queue_extend",
+                            n_added=len(req_conns), transfer_q_len=len(self.disagg_decode_transfer_queue.queue))
             alloc_reqs = (
                 self.disagg_decode_transfer_queue.pop_transferred()
             )  # the requests which kv has arrived
+            if _hack_lc.is_on() and alloc_reqs:
+                for r in alloc_reqs:
+                    _hack_lc.lc(getattr(r, "rid", "?"), "decode_kv_received_to_waiting",
+                                bootstrap_room=getattr(r, "bootstrap_room", None))
             self.waiting_queue.extend(alloc_reqs)

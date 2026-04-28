@@ -201,6 +201,7 @@ from sglang.srt.utils import (
     set_random_seed,
     suppress_other_loggers,
 )
+from sglang.srt.utils import req_lifecycle as _hack_lc  # SGLANG_HACK_PRINT_REQ_LIFECYCLE
 from sglang.srt.utils.hf_transformers_utils import (
     get_processor,
     get_tokenizer,
@@ -1283,6 +1284,16 @@ class Scheduler(
                 ):
                     trace_set_proc_propagate_context(req.rid, req.trace_context)
                     trace_slice_start("", req.rid, anonymous=True)
+        # SGLANG_HACK_PRINT_REQ_LIFECYCLE: emit unconditionally (independent
+        # of OTel tracing). Path A anchor — must always fire when env is on.
+        if _hack_lc.is_on():
+            for req in recv_reqs:
+                if isinstance(
+                    req, (TokenizedGenerateReqInput, TokenizedEmbeddingReqInput)
+                ):
+                    _hack_lc.lc(req.rid, "sched_zmq_recv_req",
+                                dp_rank=getattr(self, "dp_rank", "?"),
+                                bootstrap_room=getattr(req, "bootstrap_room", None))
 
         return recv_reqs
 
@@ -1432,6 +1443,9 @@ class Scheduler(
         self,
         recv_req: TokenizedGenerateReqInput,
     ):
+        _hack_lc.lc(recv_req.rid, "sched_handle_generate_enter",
+                    disagg_mode=str(self.disaggregation_mode),
+                    bootstrap_room=getattr(recv_req, "bootstrap_room", None))
         # Create a new request
         if (
             recv_req.session_params is None
@@ -1621,6 +1635,8 @@ class Scheduler(
                 return
             self._prefetch_kvcache(req)
             self.waiting_queue.append(req)
+            _hack_lc.lc(req.rid, "sched_added_to_waiting_queue",
+                        waiting_queue_len=len(self.waiting_queue))
             req.time_stats.wait_queue_entry_time = time.perf_counter()
             trace_slice_end(RequestStage.REQUEST_PROCESS, req.rid, auto_next_anon=True)
         elif self.disaggregation_mode == DisaggregationMode.PREFILL:
@@ -2301,6 +2317,12 @@ class Scheduler(
     ) -> Union[GenerationBatchResult, EmbeddingBatchResult]:
         """Run a batch."""
         self.forward_ct += 1
+        if _hack_lc.is_on():
+            for req in batch.reqs:
+                if not getattr(req, "_lc_first_run", False):
+                    req._lc_first_run = True
+                    _hack_lc.lc(req.rid, "sched_first_in_running",
+                                batch_size=len(batch.reqs))
 
         # Whether to run the profiler
         self._profile_batch_predicate(batch)
@@ -2468,6 +2490,11 @@ class Scheduler(
         batch: ScheduleBatch,
         result: Union[GenerationBatchResult, EmbeddingBatchResult],
     ):
+        if _hack_lc.is_on():
+            _hack_lc.lc("BATCH", "sched_batch_result_received",
+                        dp_rank=getattr(self, "dp_rank", "?"),
+                        forward_mode=str(batch.forward_mode),
+                        batch_size=len(batch.reqs))
         if batch.forward_mode.is_decode():
             self.process_batch_result_decode(batch, result)
             trace_slice_batch(RequestStage.DECODE_LOOP, batch.reqs)

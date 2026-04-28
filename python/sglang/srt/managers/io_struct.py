@@ -1011,6 +1011,9 @@ class BatchTokenIDOutput(
     load: GetLoadReqOutput = None
     # Customized info
     customized_info: Optional[Dict[str, List[Any]]] = None
+    # Hack: per-rank monotonic seq + sender_id, set by scheduler before send,
+    # read by TM after recv to localize ZMQ pipeline delay.
+    _debug_object_id: Optional[str] = None
 
 
 @dataclass

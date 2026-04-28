@@ -53,6 +53,7 @@ from sglang.srt.mem_cache.deepseekv4_memory_pool import DeepSeekV4TokenToKVPool
 from sglang.srt.mem_cache.memory_pool import HybridLinearKVPool, NSATokenToKVPool
 from sglang.srt.mem_cache.swa_memory_pool import SWAKVPool
 from sglang.srt.tracing.trace import trace_event_batch, trace_slice, trace_slice_end
+from sglang.srt.utils import req_lifecycle as _hack_lc  # SGLANG_HACK_PRINT_REQ_LIFECYCLE
 
 if TYPE_CHECKING:
     from torch.distributed import ProcessGroup
@@ -215,9 +216,14 @@ class PrefillBootstrapQueue:
             dest_tp_ranks=dest_tp_ranks,
             pp_rank=self.pp_rank,
         )
+        _hack_lc.lc(req.rid, "prefill_kv_sender_created",
+                    bootstrap_room=req.bootstrap_room)
         self._process_req(req)
         req.add_latency(RequestStage.PREFILL_PREPARE)
         self.queue.append(req)
+        _hack_lc.lc(req.rid, "prefill_bootstrap_queue_add",
+                    bootstrap_room=req.bootstrap_room,
+                    queue_len=len(self.queue))
         trace_slice_end(RequestStage.PREFILL_PREPARE, req.rid, auto_next_anon=True)
 
     def extend(self, reqs: List[Req], num_kv_heads: int) -> None:
@@ -378,8 +384,10 @@ class SchedulerDisaggregationPrefillMixin:
     @torch.no_grad()
     def event_loop_overlap_disagg_prefill(self: Scheduler) -> None:
         self.result_queue = deque()
+        _hack_step_idx = 0
 
         while True:
+            _hack_step_idx += 1
             # Receive requests
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
@@ -411,6 +419,22 @@ class SchedulerDisaggregationPrefillMixin:
             # Run sample of the current batch
             # It depends on the result of the last batch (e.g., grammar), so we run it after the last batch is processed.
             self.launch_batch_sample_if_needed(batch_result)
+
+            # SGLANG_HACK_PRINT_REQ_LIFECYCLE: per-step prefill batch summary.
+            if _hack_lc.is_on() and _hack_step_idx % max(1, self.server_args.decode_log_interval) == 0:
+                running_n = len(batch.reqs) if batch is not None else 0
+                bsq = getattr(self, "disagg_prefill_bootstrap_queue", None)
+                ifq = getattr(self, "disagg_prefill_inflight_queue", None)
+                _hack_lc.lc(
+                    "STEP",
+                    "prefill_step_summary",
+                    dp_rank=self.dp_rank,
+                    step=_hack_step_idx,
+                    running=running_n,
+                    bootstrap_q=len(bsq.queue) if bsq is not None and hasattr(bsq, "queue") else "?",
+                    inflight_q=len(ifq) if ifq is not None and hasattr(ifq, "__len__") else "?",
+                    waiting_q=len(self.waiting_queue),
+                )
 
             # Update last_batch
             self.last_batch = batch
@@ -673,6 +697,8 @@ class SchedulerDisaggregationPrefillMixin:
         """
         Send a prefilled chunk to the decode server
         """
+        _hack_lc.lc(req.rid, "prefill_send_kv_chunk_enter",
+                    bootstrap_room=req.bootstrap_room, last_chunk=last_chunk)
         page_size = self.token_to_kv_pool_allocator.page_size
         start_idx = req.start_send_idx
         end_idx = (

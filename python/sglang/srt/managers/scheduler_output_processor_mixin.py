@@ -8,6 +8,7 @@ import torch
 
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
+from sglang.srt.utils import req_lifecycle as _hack_lc  # SGLANG_HACK_PRINT_REQ_LIFECYCLE
 from sglang.srt.layers.attention.indexer_topk_capturer import (
     get_global_indexer_capturer,
 )
@@ -360,6 +361,9 @@ class SchedulerOutputProcessorMixin:
                 req.output_ids.append(next_token_id)
                 req.check_finished()
                 if req.finished():
+                    _hack_lc.lc(req.rid, "sched_req_finished",
+                                finish_reason=type(req.finished_reason).__name__ if req.finished_reason else "?",
+                                output_len=len(req.output_ids))
                     release_kv_cache(req, self.tree_cache)
                     req.time_stats.completion_time = time.perf_counter()
                     break
@@ -425,6 +429,9 @@ class SchedulerOutputProcessorMixin:
             req.check_finished(new_accepted_len)
 
             if req.finished():
+                _hack_lc.lc(req.rid, "sched_req_finished",
+                            finish_reason=type(req.finished_reason).__name__ if req.finished_reason else "?",
+                            output_len=len(req.output_ids))
                 self.maybe_collect_routed_experts(req)
                 self.maybe_collect_indexer_topk(req)
 
@@ -1092,8 +1099,36 @@ class SchedulerOutputProcessorMixin:
         if reqs or is_idle_batch:
             if self.model_config.is_multimodal_gen:
                 return
+            _debug_oid = None
+            if _hack_lc.is_on():
+                if not hasattr(self, "_lc_send_seq"):
+                    self._lc_send_seq = 0
+                self._lc_send_seq += 1
+                _debug_oid = (
+                    f"sched-DP{getattr(self, 'attn_dp_rank', '?')}"
+                    f"-TP{getattr(self, 'attn_tp_rank', '?')}"
+                    f"-{self._lc_send_seq}"
+                )
+                _finished_rids = ",".join(
+                    rid for rid, fr in zip(rids, finished_reasons) if fr is not None
+                )
+                _rids_compact = (
+                    ",".join(rids) if len(rids) <= 100
+                    else ",".join(rids[:50]) + ",..," + ",".join(rids[-50:])
+                )
+                _hack_lc.lc(
+                    "BATCH", "sched_send_batch",
+                    n=len(rids),
+                    n_finished=sum(1 for r in finished_reasons if r is not None),
+                    indexer_topk_is_none=(indexer_topk is None),
+                    debug_oid=_debug_oid,
+                    rids=_rids_compact,
+                    finished_rids=_finished_rids,
+                )
+                _t0 = time.time_ns()
             self.send_to_detokenizer.send_output(
                 BatchTokenIDOutput(
+                    _debug_object_id=_debug_oid,
                     rids=rids,
                     http_worker_ipcs=http_worker_ipcs,
                     spec_verify_ct=spec_verify_ct,
@@ -1137,6 +1172,12 @@ class SchedulerOutputProcessorMixin:
                     load=load,
                 )
             )
+            if _hack_lc.is_on():
+                _hack_lc.lc(
+                    "BATCH", "sched_send_batch_done",
+                    debug_oid=_debug_oid,
+                    duration_ns=time.time_ns() - _t0,
+                )
 
     def stream_output_embedding(self: Scheduler, reqs: List[Req]):
         rids = []

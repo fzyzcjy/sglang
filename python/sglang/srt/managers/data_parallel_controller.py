@@ -27,6 +27,7 @@ import setproctitle
 import zmq
 
 from sglang.srt.environ import envs
+from sglang.srt.utils import req_lifecycle as _hack_lc  # SGLANG_HACK_PRINT_REQ_LIFECYCLE
 from sglang.srt.layers.dp_attention import compute_dp_attention_world_info
 from sglang.srt.managers.io_struct import (
     ActiveRanksOutput,
@@ -489,6 +490,8 @@ class DataParallelController:
         while True:
             if self.status[self.round_robin_counter]:
                 logger.debug(f"Choose worker {self.round_robin_counter}")
+                _hack_lc.lc(getattr(req, "rid", "?"), "dpc_route_decided",
+                            dp_rank=self.round_robin_counter, policy="round_robin")
                 self.workers[self.round_robin_counter].send_pyobj(req)
                 self.round_robin_counter = (self.round_robin_counter + 1) % len(
                     self.workers
@@ -517,6 +520,9 @@ class DataParallelController:
             "prefill or decode instances; send to the router instead."
         )
         target_rank = req.bootstrap_room % len(self.workers)
+        _hack_lc.lc(getattr(req, "rid", "?"), "dpc_route_decided",
+                    dp_rank=target_rank, policy="follow_bootstrap_room",
+                    bootstrap_room=req.bootstrap_room)
         self.workers[target_rank].send_pyobj(req)
 
     def total_requests_scheduler(self, req: Req):
@@ -532,14 +538,34 @@ class DataParallelController:
         self.workers[target_worker].send_pyobj(req)
 
     def event_loop(self):
+        # SGLANG_HACK_PRINT_REQ_LIFECYCLE counters for per-batch summary.
+        _hack_recv_total = 0
+        _hack_step_idx = 0
         while True:
+            _hack_step_idx += 1
+            _hack_recv_in_step = 0
             while True:
                 self.soft_watchdog.feed()
                 try:
                     recv_req = self.recv_from_tokenizer.recv_pyobj(zmq.NOBLOCK)
                 except zmq.ZMQError:
                     break
+                # Per-rid recv (rid=trace_id, scalar). One print per req entering DPC.
+                if _hack_lc.is_on():
+                    _rid = getattr(recv_req, "rid", None) or getattr(recv_req, "request_id", None) or "?"
+                    _hack_lc.lc(_rid, "dpc_recv_req")
                 self._request_dispatcher(recv_req)
+                _hack_recv_in_step += 1
+                _hack_recv_total += 1
+            # Per-step batch summary (only when something happened, OR every 100 idle iters).
+            if _hack_lc.is_on() and (_hack_recv_in_step > 0 or _hack_step_idx % 1000 == 0):
+                _hack_lc.lc(
+                    "STEP",
+                    "dpc_step_summary",
+                    step=_hack_step_idx,
+                    recv_in_step=_hack_recv_in_step,
+                    recv_total=_hack_recv_total,
+                )
 
 
 def run_data_parallel_controller_process(

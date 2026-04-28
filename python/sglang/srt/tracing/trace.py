@@ -18,6 +18,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
+
+from sglang.srt.utils.req_lifecycle import lc as _hack_lc  # SGLANG_HACK_PRINT_REQ_LIFECYCLE
 import os
 import random
 import threading
@@ -439,6 +441,7 @@ def trace_req_start(
     role: Optional[str] = "null",
     external_trace_header: Optional[Dict[str, str]] = None,
 ):
+    _hack_lc(rid, "trace_req_start", role=role, bootstrap_room=bootstrap_room)
     if not tracing_enabled:
         return
 
@@ -516,6 +519,7 @@ def trace_req_start(
 def trace_req_finish(
     rid: str, ts: Optional[int] = None, attrs: Optional[Dict[str, Any]] = None
 ):
+    _hack_lc(rid, "trace_req_finish")
     if not tracing_enabled:
         return
 
@@ -548,6 +552,7 @@ def trace_slice_start(
     ts: Optional[int] = None,
     anonymous: bool = False,
 ):
+    _hack_lc(rid, f"slice_start_{name or 'anon'}")
     if not tracing_enabled:
         return
 
@@ -601,6 +606,7 @@ def trace_slice_end(
     auto_next_anon: bool = False,
     thread_finish_flag: bool = False,
 ):
+    _hack_lc(rid, f"slice_end_{name or 'anon'}")
     if not tracing_enabled:
         return
 
@@ -660,6 +666,7 @@ trace_slice = trace_slice_end
 def trace_event(
     name: str, rid: str, ts: Optional[int] = None, attrs: Dict[str, Any] = None
 ):
+    _hack_lc(rid, f"event_{name}")
     if not tracing_enabled:
         return
 

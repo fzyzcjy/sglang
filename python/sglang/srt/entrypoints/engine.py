@@ -194,6 +194,20 @@ class Engine(EngineBase):
                 thread_label = "Decode Tokenizer"
             trace_set_thread_info(thread_label)
 
+        # SGLANG_HACK_PRINT_REQ_LIFECYCLE: best-effort monkey-patch of dynamo
+        # Python handlers (DecodeWorkerHandler.generate, PrefillWorkerHandler.generate)
+        # to emit Path A entry / first / last / exit events without modifying
+        # dynamo source. Safe no-op when dynamo is not present.
+        try:
+            from sglang.srt.utils.req_lifecycle import is_on as _hack_lifecycle_is_on
+            if _hack_lifecycle_is_on():
+                from sglang.srt.utils.hack_dynamo_lifecycle import (
+                    patch_dynamo_lifecycle,
+                )
+                patch_dynamo_lifecycle()
+        except Exception as exc:
+            logger.warning(f"[REQ_LIFECYCLE] dynamo patch dispatch failed: {exc!r}")
+
         try:
             self.loop = asyncio.get_running_loop()
         except RuntimeError:

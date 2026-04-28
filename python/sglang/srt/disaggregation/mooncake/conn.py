@@ -17,6 +17,7 @@ import requests
 import zmq
 
 from sglang.srt.disaggregation.base.conn import KVArgs, KVPoll
+from sglang.srt.utils import req_lifecycle as _hack_lc  # SGLANG_HACK_PRINT_REQ_LIFECYCLE
 from sglang.srt.disaggregation.common.conn import (
     CommonKVBootstrapServer,
     CommonKVManager,
@@ -287,6 +288,10 @@ class MooncakeKVManager(CommonKVManager):
         Generic KV cache transfer supporting both MHA and MLA architectures.
         This method is used by both send_kvcache (full pool) and maybe_send_extra.
         """
+        _hack_lc.lc("?", "mooncake_send_kvcache_enter",
+                    mooncake_session_id=mooncake_session_id,
+                    n_layers=len(item_lens),
+                    n_src=int(len(prefill_data_indices)) if prefill_data_indices is not None else 0)
         # Group by indices for optimization
         prefill_kv_blocks, dst_kv_blocks = group_concurrent_contiguous(
             prefill_data_indices, dst_data_indices
@@ -1099,6 +1104,10 @@ class MooncakeKVManager(CommonKVManager):
         aux_index: Optional[int] = None,
         state_indices: Optional[List[int]] = None,
     ):
+        _hack_lc.lc("?", "mooncake_add_transfer_request",
+                    bootstrap_room=bootstrap_room,
+                    n_kv_indices=int(len(kv_indices)) if kv_indices is not None else 0,
+                    is_last=is_last)
         assert self.disaggregation_mode == DisaggregationMode.PREFILL
         assert not is_last or (is_last and aux_index is not None)
 
@@ -1139,6 +1148,16 @@ class MooncakeKVManager(CommonKVManager):
         return self.request_status[bootstrap_room]
 
     def update_status(self, bootstrap_room: int, status: KVPoll):
+        # Only print on status TRANSITION (not every poll-driven re-set) to
+        # avoid spam at 4096 reqs × N chunks. If never seen before -> first
+        # transition; else only if value changed.
+        if _hack_lc.is_on():
+            _prev = self.request_status.get(bootstrap_room)
+            if _prev is None or _prev != status:
+                _hack_lc.lc("?", "mooncake_update_status",
+                            bootstrap_room=bootstrap_room,
+                            status=str(status),
+                            prev=str(_prev) if _prev is not None else "None")
         if bootstrap_room not in self.request_status:
             self.request_status[bootstrap_room] = status
         else:
@@ -1362,6 +1381,9 @@ class MooncakeKVReceiver(CommonKVReceiver):
         aux_index: Optional[int] = None,
         state_indices: Optional[List[int]] = None,
     ):
+        _hack_lc.lc("?", "mooncake_sender_init",
+                    bootstrap_room=self.bootstrap_room,
+                    n_kv_indices=int(len(kv_indices)) if kv_indices is not None else 0)
         if self.bootstrap_infos is None:
             self.kv_mgr.record_failure(
                 self.bootstrap_room,

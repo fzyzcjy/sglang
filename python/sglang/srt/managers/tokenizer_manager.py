@@ -106,6 +106,7 @@ from sglang.srt.utils import (
     get_zmq_socket,
     kill_process_tree,
 )
+from sglang.srt.utils import req_lifecycle as _hack_lc  # SGLANG_HACK_PRINT_REQ_LIFECYCLE
 from sglang.srt.utils.aio_rwlock import RWLock
 from sglang.srt.utils.hf_transformers_utils import (
     get_processor,
@@ -488,6 +489,7 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
         obj: Union[GenerateReqInput, EmbeddingReqInput],
         request: Optional[fastapi.Request] = None,
     ):
+        _hack_lc.lc(getattr(obj, "rid", "?"), "tm_generate_request_enter")
         created_time = obj.received_time if obj.received_time else time.time()
         self.auto_create_handle_loop()
 
@@ -513,6 +515,7 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
             # Tokenize the request and send it to the scheduler
             if obj.is_single:
                 tokenized_obj = await self._tokenize_one_request(obj)
+                _hack_lc.lc(getattr(obj, "rid", "?"), "tm_tokenized")
                 state = self._send_one_request(obj, tokenized_obj, created_time)
                 async for response in self._wait_one_response(obj, state, request):
                     yield response
@@ -1059,6 +1062,7 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
     ):
         trace_slice_start(RequestStage.TOKENIZER_DISPATCH, obj.rid)
         tokenized_obj.trace_context = trace_get_proc_propagate_context(obj.rid)
+        _hack_lc.lc(obj.rid, "tm_send_to_scheduler")
         self.send_to_scheduler.send_pyobj(tokenized_obj)
         state = self.req_state_class(
             [], False, asyncio.Event(), obj, created_time=created_time
@@ -1100,6 +1104,7 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
         request: Optional[fastapi.Request] = None,
     ):
         """Wait for the response of one request."""
+        _hack_lc.lc(obj.rid, "tm_wait_response_enter")
         # Not all request types have `stream` (e.g., EmbeddingReqInput). Default to non-streaming.
         is_stream = getattr(obj, "stream", False)
         while True:
@@ -1121,6 +1126,7 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
                     )
                 continue
 
+            _hack_lc.lc(obj.rid, "tm_wait_response_event_fired", finished=state.finished)
             out = state.out_list[-1]
 
             state.out_list = []
@@ -1182,6 +1188,7 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
                             yield out
                             break
                 yield out
+                _hack_lc.lc(obj.rid, "tm_wait_response_exit", finished=True)
                 break
 
             state.event.clear()
@@ -1471,6 +1478,26 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
         while True:
             with self.soft_watchdog.disable():
                 recv_obj = await self.recv_from_detokenizer.recv_pyobj()
+            if _hack_lc.is_on():
+                _rids = list(getattr(recv_obj, "rids", []) or [])
+                _frs = list(getattr(recv_obj, "finished_reasons", None) or [])
+                _finished_rids = ",".join(
+                    _rids[i] for i, fr in enumerate(_frs) if fr is not None
+                )
+                _rids_compact = (
+                    ",".join(_rids) if len(_rids) <= 100
+                    else ",".join(_rids[:50]) + ",..," + ",".join(_rids[-50:])
+                )
+                _itk = getattr(recv_obj, "indexer_topk", "N/A")
+                _hack_lc.lc(
+                    "BATCH", "tm_handle_loop_recv",
+                    n_rids=len(_rids),
+                    obj_type=type(recv_obj).__name__,
+                    indexer_topk_is_none=(_itk is None) if _itk != "N/A" else "N/A",
+                    debug_oid=getattr(recv_obj, "_debug_object_id", None),
+                    rids=_rids_compact,
+                    finished_rids=_finished_rids,
+                )
             self._result_dispatcher(recv_obj)
             self.last_receive_tstamp = time.time()
             self.soft_watchdog.feed()
@@ -1484,6 +1511,10 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
             BatchTokenIDOutput,
         ],
     ):
+        if _hack_lc.is_on():
+            n_finished = sum(1 for r in (recv_obj.finished_reasons or []) if r is not None)
+            _hack_lc.lc("BATCH", "tm_handle_batch_output_summary",
+                        n_rids=len(recv_obj.rids), n_finished=n_finished)
         for i, rid in enumerate(recv_obj.rids):
             state = self.rid_to_state.get(rid, None)
             if state is None:
@@ -1586,6 +1617,8 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
 
             state.finished = recv_obj.finished_reasons[i] is not None
             if state.finished:
+                _hack_lc.lc(rid, "tm_handle_batch_output_finished_rid",
+                            finish_reason=str(recv_obj.finished_reasons[i]))
                 state.finished_time = time.time()
                 state.finished_time_perf = time.perf_counter()
                 meta_info["e2e_latency"] = state.finished_time - state.created_time
@@ -1614,6 +1647,10 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
             if self.crash_dump_folder and state.finished and state.obj.log_metrics:
                 self.record_request_for_crash_dump(state, out_dict)
 
+        if _hack_lc.is_on():
+            _hack_lc.lc("BATCH", "tm_handle_batch_output_done",
+                        n_rids=len(recv_obj.rids))
+
         # When skip_tokenizer_init is enabled, tokensizer_manager receives
         # BatchTokenIDOutput.
         if (
@@ -1622,7 +1659,13 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
             and recv_obj.load is not None
         ):
             load_update_req = WatchLoadUpdateReq(loads=[recv_obj.load])
-            self.send_to_scheduler.send_pyobj(load_update_req)
+            if _hack_lc.is_on():
+                _t0 = time.time_ns()
+                self.send_to_scheduler.send_pyobj(load_update_req)
+                _hack_lc.lc("BATCH", "tm_send_load_update",
+                            duration_ns=time.time_ns() - _t0)
+            else:
+                self.send_to_scheduler.send_pyobj(load_update_req)
 
     def add_logprob_to_meta_info(
         self,
