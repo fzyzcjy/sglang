@@ -872,18 +872,18 @@ class _Grafter:
         # Transform + copy_ are wrapped: a buggy user transform must NOT
         # crash the whole training/inference run. On error we log and skip
         # this graft point; downstream sees the recv side's original tensor.
-        target_info_before = get_tensor_info(value)
+        info_before_overriden = get_tensor_info(value)
         try:
-            transformed = self._apply_transform(
+            value_to_override = self._apply_transform(
                 tags=tags, received_list=sender_tensors, target=value
             )
-            value.copy_(transformed)
             _log(
                 f"[Grafter] recv role={role.value} dir={direction.value} "
                 f"tags={tags} n_senders={len(sender_tensors)} "
-                f"target_pre={target_info_before} "
-                f"transformed={get_tensor_info(transformed)}"
+                f"before_overriden={info_before_overriden} "
+                f"to_override={get_tensor_info(value_to_override)}"
             )
+            value.copy_(value_to_override)
         except Exception as e:
             _log(
                 f"[Grafter] recv role={role.value} dir={direction.value} "
