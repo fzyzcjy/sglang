@@ -2629,14 +2629,14 @@ class TestGrafterFilterMatching:
         grafter = _Grafter(
             config=DumperConfig(grafter_enable=False, grafter_b2t_filter="name == 'x'")
         )
-        grafter.maybe_intercept(name="x", value=torch.zeros(2))
+        grafter.maybe_intercept(value=torch.zeros(2), tags={"name": "x"})
         assert grafter._pg is None  # never initialized
 
     def test_non_tensor_value_skipped(self):
         grafter = _Grafter(
             config=DumperConfig(grafter_enable=True, grafter_b2t_filter="name == 'x'")
         )
-        grafter.maybe_intercept(name="x", value=42)
+        grafter.maybe_intercept(value=42, tags={"name": "x"})
         assert grafter._pg is None
 
     def test_unmatched_name_returns_silently(self):
@@ -2647,7 +2647,7 @@ class TestGrafterFilterMatching:
                 grafter_t2b_filter="name == 'y'",
             )
         )
-        grafter.maybe_intercept(name="z", value=torch.zeros(2))
+        grafter.maybe_intercept(value=torch.zeros(2), tags={"name": "z"})
         assert grafter._pg is None
 
     def test_overlap_filters_raise(self):
@@ -2661,7 +2661,7 @@ class TestGrafterFilterMatching:
         with pytest.raises(
             RuntimeError, match=r"matched BOTH grafter_b2t_filter and grafter_t2b_filter"
         ):
-            grafter.maybe_intercept(name="x", value=torch.zeros(2))
+            grafter.maybe_intercept(value=torch.zeros(2), tags={"name": "x"})
 
 
 def _reinit_role_default_pg(rank: int):
@@ -2735,10 +2735,10 @@ class TestGrafterDistributed:
         try:
             if rank == 0:
                 tensor = torch.tensor([1.0, 2.0, 3.0], device="cuda:0")
-                grafter.maybe_intercept(name="x", value=tensor)
+                grafter.maybe_intercept(value=tensor, tags={"name": "x"})
             else:
                 target = torch.zeros(3, device="cuda:1")
-                grafter.maybe_intercept(name="x", value=target)
+                grafter.maybe_intercept(value=target, tags={"name": "x"})
                 assert target.tolist() == [1.0, 2.0, 3.0], f"got {target.tolist()}"
         finally:
             if grafter._pg is not None:
@@ -2766,10 +2766,10 @@ class TestGrafterDistributed:
         try:
             if rank == 1:
                 tensor = torch.tensor([4.0, 5.0, 6.0], device="cuda:1")
-                grafter.maybe_intercept(name="x", value=tensor)
+                grafter.maybe_intercept(value=tensor, tags={"name": "x"})
             else:
                 target = torch.zeros(3, device="cuda:0")
-                grafter.maybe_intercept(name="x", value=target)
+                grafter.maybe_intercept(value=target, tags={"name": "x"})
                 assert target.tolist() == [4.0, 5.0, 6.0], f"got {target.tolist()}"
         finally:
             if grafter._pg is not None:
@@ -2778,7 +2778,7 @@ class TestGrafterDistributed:
     def test_recv_with_user_transform(self, tmp_path: Path):
         transform_file = tmp_path / "graft_transform.py"
         transform_file.write_text(
-            "def transform(name, received, target):\n"
+            "def transform(tags, received, target):\n"
             "    return received * 2\n"
         )
         graft_port = find_available_port(29610)
@@ -2803,10 +2803,10 @@ class TestGrafterDistributed:
         try:
             if rank == 0:
                 tensor = torch.tensor([1.0, 2.0, 3.0], device="cuda:0")
-                grafter.maybe_intercept(name="x", value=tensor)
+                grafter.maybe_intercept(value=tensor, tags={"name": "x"})
             else:
                 target = torch.zeros(3, device="cuda:1")
-                grafter.maybe_intercept(name="x", value=target)
+                grafter.maybe_intercept(value=target, tags={"name": "x"})
                 assert target.tolist() == [2.0, 4.0, 6.0], f"got {target.tolist()}"
         finally:
             if grafter._pg is not None:
@@ -2830,7 +2830,7 @@ class TestGrafterDistributed:
         )
         try:
             target = torch.tensor([7.0, 7.0, 7.0], device=f"cuda:{rank}")
-            grafter.maybe_intercept(name="other", value=target)
+            grafter.maybe_intercept(value=target, tags={"name": "other"})
             assert target.tolist() == [7.0, 7.0, 7.0], "tensor must not be modified"
             assert grafter._pg is None, "group must not init for unmatched name"
         finally:
@@ -2859,10 +2859,10 @@ class TestGrafterDistributed:
                     time.sleep(4)
                 tensor = torch.tensor([1.0, 2.0, 3.0], device=f"cuda:{rank}")
                 if rank == 0:
-                    grafter.maybe_intercept(name="x", value=tensor)
+                    grafter.maybe_intercept(value=tensor, tags={"name": "x"})
                 else:
                     target = torch.zeros(3, device=f"cuda:{rank}")
-                    grafter.maybe_intercept(name="x", value=target)
+                    grafter.maybe_intercept(value=target, tags={"name": "x"})
             output = captured.getvalue()
             if rank == 0:
                 assert "WARNING" in output, f"expected WARNING in rank 0 output: {output}"

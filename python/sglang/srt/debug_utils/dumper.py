@@ -158,6 +158,14 @@ class DumperConfig(_BaseConfig):
         # NOTE: should not be `SGLANG_DUMPER_`, otherwise it is weird when dumping Megatron in Miles
         return "DUMPER_"
 
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.grafter_enable:
+            assert self.grafter_role in ("baseline", "target"), (
+                f"grafter_role must be 'baseline' or 'target' when grafter_enable=True, "
+                f"got {self.grafter_role!r}"
+            )
+
     @property
     def server_port_parsed(self) -> Optional[Union[int, Literal["reuse"]]]:
         raw = self.server_port
@@ -445,7 +453,7 @@ class _Dumper:
 
         recompute_meta = recompute_status.to_pseudo_parallel_meta()
         value = _materialize_value(value)
-        self._grafter.maybe_intercept(name=name, value=value)
+        self._grafter.maybe_intercept(value=value, tags=tags)
 
         if enable_value:
             self._dump_single(
@@ -759,9 +767,6 @@ def _register_forward_hook_or_replace_fn(
 # -------------------------------------- grafter ------------------------------------------
 
 
-_VALID_ROLES = ("baseline", "target")
-
-
 class _Grafter:
     """Cross-system tensor transplant. Triggered silently from dumper.dump.
 
@@ -784,24 +789,23 @@ class _Grafter:
     def enabled(self) -> bool:
         return self._config.grafter_enable
 
-    def maybe_intercept(self, *, name: str, value: Any) -> None:
+    def maybe_intercept(self, *, value: Any, tags: dict) -> None:
         cfg = self._config
         if not cfg.grafter_enable:
             return
         if not isinstance(value, torch.Tensor):
             return
 
-        tags = {"name": name}
         match_b2t = self._match(cfg.grafter_b2t_filter, tags)
         match_t2b = self._match(cfg.grafter_t2b_filter, tags)
         if match_b2t and match_t2b:
             raise RuntimeError(
-                f"[Grafter] name={name!r} matched BOTH grafter_b2t_filter and grafter_t2b_filter"
+                f"[Grafter] tags={tags} matched BOTH grafter_b2t_filter and grafter_t2b_filter"
             )
         if not (match_b2t or match_t2b):
             return
 
-        role = self._validated_role()
+        role = cfg.grafter_role
         # baseline sends b2t names, recv t2b; target is the mirror image.
         is_send = (role == "baseline" and match_b2t) or (
             role == "target" and match_t2b
@@ -812,7 +816,7 @@ class _Grafter:
         action = "send" if is_send else "recv"
         print(
             f"[Grafter] role={role} action={action} direction={direction} "
-            f"name={name} local={get_tensor_info(value)}"
+            f"tags={tags} local={get_tensor_info(value)}"
         )
 
         src_rank = 0  # baseline rank 0 is always the b2t src; for t2b the src
@@ -826,10 +830,10 @@ class _Grafter:
 
         received = torch.empty_like(value)
         dist.broadcast(received, src=src_rank, group=self._pg)
-        print(f"[Grafter] received_raw name={name} {get_tensor_info(received)}")
-        transformed = self._apply_transform(name, received, value)
+        print(f"[Grafter] received_raw tags={tags} {get_tensor_info(received)}")
+        transformed = self._apply_transform(tags=tags, received=received, target=value)
         print(
-            f"[Grafter] will_copy name={name} "
+            f"[Grafter] will_copy tags={tags} "
             f"transformed={get_tensor_info(transformed)} "
             f"into_target={get_tensor_info(value)}"
         )
@@ -841,52 +845,42 @@ class _Grafter:
             return False
         return _evaluate_filter(expr, tags)
 
-    def _validated_role(self) -> str:
-        role = self._config.grafter_role
-        if role not in _VALID_ROLES:
-            raise RuntimeError(
-                f"[Grafter] grafter_role must be one of {_VALID_ROLES}, got {role!r}"
-            )
-        return role
-
     def _ensure_group(self) -> None:
         if self._pg is not None:
             return
-        from sglang.srt.utils.common import init_custom_process_group
 
         cfg = self._config
         assert dist.is_initialized(), (
             "[Grafter] default torch.distributed must be initialized"
         )
-        role = self._validated_role()
         local_rank = dist.get_rank()
-        if role == "baseline":
+        if cfg.grafter_role == "baseline":
             my_rank = local_rank
         else:
             my_rank = cfg.grafter_baseline_world_size + local_rank
         total_world = cfg.grafter_baseline_world_size + cfg.grafter_target_world_size
         init_method = f"tcp://{cfg.grafter_master_address}:{cfg.grafter_master_port}"
         print(
-            f"[Grafter] init group: role={role} "
+            f"[Grafter] init group: role={cfg.grafter_role} "
             f"baseline_world={cfg.grafter_baseline_world_size} "
             f"target_world={cfg.grafter_target_world_size} "
             f"rank={my_rank} init_method={init_method} "
             f"backend={cfg.grafter_backend} name={cfg.grafter_group_name}"
         )
         self._pg = _collective_with_timeout(
-            lambda: init_custom_process_group(
+            lambda: _init_custom_process_group(
                 backend=cfg.grafter_backend,
                 init_method=init_method,
                 world_size=total_world,
                 rank=my_rank,
                 group_name=cfg.grafter_group_name,
             ),
-            operation_name="init_custom_process_group in _Grafter",
+            operation_name="_init_custom_process_group in _Grafter",
             timeout_seconds=cfg.grafter_timeout,
         )
 
     def _apply_transform(
-        self, name: str, received: torch.Tensor, target: torch.Tensor
+        self, *, tags: dict, received: torch.Tensor, target: torch.Tensor
     ) -> torch.Tensor:
         # TODO: integrate with dump_comparator unsharder annotations once
         # full inverse (sharded -> global -> sharded) transforms exist.
@@ -895,7 +889,7 @@ class _Grafter:
             return received
         if self._transform_fn is None:
             self._transform_fn = self._load_transform_fn(path)
-        return self._transform_fn(name, received, target)
+        return self._transform_fn(tags, received, target)
 
     @staticmethod
     def _load_transform_fn(path: str) -> Callable:
@@ -1333,6 +1327,57 @@ def _get_local_ip_by_remote() -> Optional[str]:
     except Exception:
         print("Can not get local ip by remote")
     return None
+
+
+def _init_custom_process_group(
+    *,
+    backend: str,
+    init_method: str,
+    world_size: int,
+    rank: int,
+    group_name: str,
+    timeout=None,
+):
+    """Build a fresh torch.distributed process group, separate from the default
+    one and any other custom groups (e.g. RLHF weight-update groups). Used by
+    the grafter to bridge baseline and target systems."""
+    from torch.distributed.distributed_c10d import (
+        Backend,
+        PrefixStore,
+        _new_process_group_helper,
+        _world,
+        default_pg_timeout,
+        rendezvous,
+    )
+
+    if timeout is None:
+        timeout = default_pg_timeout
+
+    rendezvous_iterator = rendezvous(init_method, rank, world_size, timeout=timeout)
+    store, rank, world_size = next(rendezvous_iterator)
+    store.set_timeout(timeout)
+    store = PrefixStore(group_name, store)
+
+    backend_obj = Backend(backend)
+    # PyTorch 2.6 renamed `pg_options` to `backend_options`.
+    torch_major_minor = tuple(
+        int(x) for x in torch.__version__.split("+")[0].split(".")[:2]
+    )
+    pg_options_param_name = (
+        "backend_options" if torch_major_minor >= (2, 6) else "pg_options"
+    )
+    pg, _ = _new_process_group_helper(
+        world_size,
+        rank,
+        [],
+        backend_obj,
+        store,
+        group_name=group_name,
+        **{pg_options_param_name: None},
+        timeout=timeout,
+    )
+    _world.pg_group_ranks[pg] = {i: i for i in range(world_size)}
+    return pg
 
 
 # -------------------------------------- framework plugins ------------------------------------------
