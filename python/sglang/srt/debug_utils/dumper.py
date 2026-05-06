@@ -7,6 +7,7 @@ import re
 import socket
 import threading
 import time
+import traceback
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -924,13 +925,11 @@ class _Grafter:
             )
             value.copy_(value_to_override)
         except Exception as e:
-            import traceback as _tb
-
             _log(
                 f"[Grafter] recv role={role.value} dir={direction.value} "
                 f"tags={tags} transform/copy_ raised {type(e).__name__}: {e}; "
                 f"skipping graft for this call (target tensor unchanged)\n"
-                f"{_tb.format_exc()}"
+                f"{traceback.format_exc()}"
             )
 
     def _classify_direction(self, tags: dict) -> Optional["_GraftDirection"]:

@@ -383,7 +383,8 @@ class TestTorchSave:
         _torch_save({"fn": lambda: None}, path)
 
         captured = capsys.readouterr()
-        assert "[Dumper] Observe error=" in captured.out
+        assert "[Dumper, rank=" in captured.out
+        assert "Observe error=" in captured.out
         assert "skip the tensor" in captured.out
 
 
