@@ -818,7 +818,6 @@ class _Grafter:
     def __init__(self, *, config: DumperConfig):
         self._config = config
         self._pg = None
-        self._transform_fn: Optional[Callable] = None
 
     @property
     def enabled(self) -> bool:
@@ -870,25 +869,31 @@ class _Grafter:
         ]
 
         # Transform + copy_ are wrapped: a buggy user transform must NOT
-        # crash the whole training/inference run. On error we log and skip
-        # this graft point; downstream sees the recv side's original tensor.
+        # crash the whole training/inference run. On error we log the full
+        # traceback and skip this graft point; downstream sees the recv
+        # side's original tensor unchanged.
         info_before_overriden = get_tensor_info(value)
         try:
             value_to_override = self._apply_transform(
                 tags=tags, received_list=sender_tensors, target=value
             )
+            diff = _compare_tensors_quick(value, value_to_override)
             _log(
                 f"[Grafter] recv role={role.value} dir={direction.value} "
                 f"tags={tags} n_senders={len(sender_tensors)} "
                 f"before_overriden={info_before_overriden} "
-                f"to_override={get_tensor_info(value_to_override)}"
+                f"to_override={get_tensor_info(value_to_override)} "
+                f"diff_pre_vs_new={diff}"
             )
             value.copy_(value_to_override)
         except Exception as e:
+            import traceback as _tb
+
             _log(
                 f"[Grafter] recv role={role.value} dir={direction.value} "
                 f"tags={tags} transform/copy_ raised {type(e).__name__}: {e}; "
-                f"skipping graft for this call (target tensor unchanged)"
+                f"skipping graft for this call (target tensor unchanged)\n"
+                f"{_tb.format_exc()}"
             )
 
     def _classify_direction(self, tags: dict) -> Optional["_GraftDirection"]:
@@ -933,10 +938,19 @@ class _Grafter:
             "[Grafter] default torch.distributed must be initialized"
         )
         role = _GraftRole(cfg.grafter_role)
+        local_world = dist.get_world_size()
         local_rank = dist.get_rank()
         if role == _GraftRole.BASELINE:
+            assert local_world == cfg.grafter_baseline_world_size, (
+                f"[Grafter] grafter_baseline_world_size={cfg.grafter_baseline_world_size} "
+                f"but dist.get_world_size()={local_world}; they must match on the baseline side"
+            )
             global_rank = local_rank
         else:
+            assert local_world == cfg.grafter_target_world_size, (
+                f"[Grafter] grafter_target_world_size={cfg.grafter_target_world_size} "
+                f"but dist.get_world_size()={local_world}; they must match on the target side"
+            )
             global_rank = cfg.grafter_baseline_world_size + local_rank
         total_world = cfg.grafter_baseline_world_size + cfg.grafter_target_world_size
         init_method = f"tcp://{cfg.grafter_master_address}:{cfg.grafter_master_port}"
@@ -965,13 +979,17 @@ class _Grafter:
         # TODO: integrate with dump_comparator unsharder annotations once
         # full inverse (sharded -> global -> sharded) transforms exist.
         path = self._config.grafter_transform_path
-        if path is None:
-            fn = self._default_transform
-        else:
-            if self._transform_fn is None:
-                self._transform_fn = self._load_transform_fn(path)
-            fn = self._transform_fn
+        fn = self._default_transform if path is None else self._load_transform_fn(path)
         return fn(tags, received_list, target)
+
+    @staticmethod
+    def _default_transform_error(detail: str) -> str:
+        return (
+            f"[Grafter] no grafter_transform_path set; default identity-by-rank "
+            f"{detail}. Provide a transform via "
+            f"DUMPER_GRAFTER_TRANSFORM_PATH=<my_transform.py> defining "
+            f"`transform(tags, received_list, target)`."
+        )
 
     @staticmethod
     def _default_transform(
@@ -984,23 +1002,24 @@ class _Grafter:
         recv_world_size = dist.get_world_size()
         if len(received_list) != recv_world_size:
             raise RuntimeError(
-                f"[Grafter] no grafter_transform_path set; default identity-by-rank "
-                f"requires #senders == #recvs but got #senders={len(received_list)} "
-                f"vs #recvs={recv_world_size}. Provide a transform via "
-                f"DUMPER_GRAFTER_TRANSFORM_PATH=<my_transform.py> defining "
-                f"`transform(tags, received_list, target)`."
+                _Grafter._default_transform_error(
+                    f"requires #senders == #recvs but got "
+                    f"#senders={len(received_list)} vs #recvs={recv_world_size}"
+                )
             )
         candidate = received_list[my_recv_rank]
         if candidate.shape != target.shape:
             raise RuntimeError(
-                f"[Grafter] no grafter_transform_path set; default identity-by-rank "
-                f"requires matching shapes but received_list[{my_recv_rank}].shape="
-                f"{tuple(candidate.shape)} != target.shape={tuple(target.shape)}. "
-                f"Provide a transform that handles the shape mismatch."
+                _Grafter._default_transform_error(
+                    f"requires matching shapes but "
+                    f"received_list[{my_recv_rank}].shape={tuple(candidate.shape)} "
+                    f"!= target.shape={tuple(target.shape)}"
+                )
             )
         return candidate
 
     @staticmethod
+    @functools.lru_cache(maxsize=None)
     def _load_transform_fn(path: str) -> Callable:
         import importlib.util
 
@@ -1138,6 +1157,27 @@ def _get_world_size():
 def _log(msg: str) -> None:
     """Print a log line tagged with the current rank and wall-clock time."""
     print(f"[Dumper, rank={_get_rank()}, t={time.time():.3f}] {msg}", flush=True)
+
+
+def _compare_tensors_quick(a: "torch.Tensor", b: "torch.Tensor") -> str:
+    """One-line summary of how close two tensors are. Inspired by
+    dump_comparator._compute_and_print_diff; intentionally inlined here to keep
+    dumper.py free of cross-file imports."""
+    if a.shape != b.shape or a.dtype != b.dtype:
+        return (
+            f"shape/dtype mismatch "
+            f"(a={tuple(a.shape)}/{a.dtype} vs b={tuple(b.shape)}/{b.dtype})"
+        )
+    if a.numel() == 0:
+        return "empty"
+    a_d = a.detach().to(torch.float64)
+    b_d = b.detach().to(torch.float64)
+    raw_abs = (a_d - b_d).abs()
+    max_abs = raw_abs.max().item()
+    mean_abs = raw_abs.mean().item()
+    denom = (a_d * a_d + b_d * b_d).sum().item()
+    rel_diff = 1.0 - (2.0 * (a_d * b_d).sum().item() / denom) if denom > 0 else 0.0
+    return f"rel_diff={rel_diff:.6g} max_abs={max_abs:.6g} mean_abs={mean_abs:.6g}"
 
 
 def _obj_to_dict(obj):

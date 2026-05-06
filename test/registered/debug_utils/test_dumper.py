@@ -16,12 +16,14 @@ import torch.distributed as dist
 from sglang.srt.debug_utils.dumper import (
     DumperConfig,
     _collective_with_timeout,
+    _compare_tensors_quick,
     _deepcopy_or_clone,
     _detect_recompute_status,
     _Dumper,
     _format_tags,
     _get_default_exp_name,
     _Grafter,
+    _log,
     _map_tensor,
     _materialize_value,
     _MegatronPlugin,
@@ -2679,6 +2681,47 @@ def _unit_grafter_config(**overrides) -> DumperConfig:
     return DumperConfig(**base)
 
 
+class TestLog:
+    def test_log_format(self):
+        with _capture_stdout() as captured:
+            _log("hello")
+        out = captured.getvalue()
+        assert "hello" in out, out
+        assert "[Dumper, rank=" in out, out
+        assert ", t=" in out, out
+
+
+class TestCompareTensorsQuick:
+    def test_identical(self):
+        a = torch.tensor([1.0, 2.0, 3.0])
+        s = _compare_tensors_quick(a, a.clone())
+        assert "rel_diff=0" in s, s
+        assert "max_abs=0" in s, s
+
+    def test_diverged(self):
+        a = torch.tensor([1.0, 2.0, 3.0])
+        b = torch.tensor([1.0, 2.0, 4.0])  # last element differs by 1
+        s = _compare_tensors_quick(a, b)
+        # rel_diff > 0 implies divergence; max_abs should equal 1.0
+        assert "max_abs=1" in s, s
+        assert "rel_diff=" in s, s
+
+    def test_shape_mismatch(self):
+        s = _compare_tensors_quick(torch.zeros(3), torch.zeros(4))
+        assert "shape/dtype mismatch" in s, s
+
+    def test_dtype_mismatch(self):
+        s = _compare_tensors_quick(
+            torch.zeros(3, dtype=torch.float32),
+            torch.zeros(3, dtype=torch.float64),
+        )
+        assert "shape/dtype mismatch" in s, s
+
+    def test_empty(self):
+        s = _compare_tensors_quick(torch.zeros(0), torch.zeros(0))
+        assert s == "empty"
+
+
 class TestGrafterFilterMatching:
     """Unit tests for the filter-matching short-circuit logic.
 
@@ -2870,8 +2913,11 @@ class TestGrafterDistributed:
                 grafter.maybe_intercept(value=tensor, tags={"name": "x"})
             else:
                 target = torch.zeros(3, device="cuda:1")
-                grafter.maybe_intercept(value=target, tags={"name": "x"})
+                with _capture_stdout() as captured:
+                    grafter.maybe_intercept(value=target, tags={"name": "x"})
                 assert target.tolist() == [1.0, 2.0, 3.0], f"got {target.tolist()}"
+                # Success log must include the pre/new diff summary.
+                assert "diff_pre_vs_new=" in captured.getvalue(), captured.getvalue()
         finally:
             if grafter._pg is not None:
                 dist.destroy_process_group(grafter._pg)
@@ -3038,10 +3084,12 @@ class TestGrafterDistributed:
                 assert target.tolist() == [9.0, 9.0, 9.0], (
                     f"target must be unchanged when transform throws, got {target.tolist()}"
                 )
-                assert "transform/copy_ raised RuntimeError" in captured.getvalue(), (
-                    captured.getvalue()
-                )
-                assert "intentional test error" in captured.getvalue(), captured.getvalue()
+                output = captured.getvalue()
+                assert "transform/copy_ raised RuntimeError" in output, output
+                assert "intentional test error" in output, output
+                # Full traceback must be included so the bug is debuggable.
+                assert "Traceback (most recent call last)" in output, output
+                assert "graft_transform_throws.py" in output, output
         finally:
             if grafter._pg is not None:
                 dist.destroy_process_group(grafter._pg)
