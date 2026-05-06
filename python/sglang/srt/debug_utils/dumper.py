@@ -1213,8 +1213,10 @@ def _compare_tensors_quick(a: "torch.Tensor", b: "torch.Tensor") -> str:
         )
     if a.numel() == 0:
         return "empty"
-    a_d = a.detach().to(torch.float64)
-    b_d = b.detach().to(torch.float64)
+    # fp32 is enough for the order-of-magnitude diff summary we log here
+    # (and ~2x faster than fp64 on GPU); we don't need bit-exact reductions.
+    a_d = a.detach().to(torch.float32)
+    b_d = b.detach().to(torch.float32)
     raw_abs = (a_d - b_d).abs()
     max_abs = raw_abs.max().item()
     mean_abs = raw_abs.mean().item()
