@@ -2710,14 +2710,16 @@ class TestCompareTensorsQuick:
 
     def test_shape_mismatch(self):
         s = _compare_tensors_quick(torch.zeros(3), torch.zeros(4))
-        assert "shape/dtype mismatch" in s, s
+        assert "shape mismatch" in s, s
 
-    def test_dtype_mismatch(self):
+    def test_dtype_unified(self):
+        # Different dtypes should NOT error — both are cast to fp32 internally.
         s = _compare_tensors_quick(
             torch.zeros(3, dtype=torch.float32),
             torch.zeros(3, dtype=torch.float64),
         )
-        assert "shape/dtype mismatch" in s, s
+        assert "rel_diff=" in s, s
+        assert "max_abs=" in s, s
 
     def test_empty(self):
         s = _compare_tensors_quick(torch.zeros(0), torch.zeros(0))

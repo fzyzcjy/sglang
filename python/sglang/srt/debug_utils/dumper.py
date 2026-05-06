@@ -1204,25 +1204,31 @@ def _log(msg: str) -> None:
 
 def _compare_tensors_quick(a: "torch.Tensor", b: "torch.Tensor") -> str:
     """One-line summary of how close two tensors are. Inspired by
-    dump_comparator._compute_and_print_diff; intentionally inlined here to keep
-    dumper.py free of cross-file imports."""
-    if a.shape != b.shape or a.dtype != b.dtype:
-        return (
-            f"shape/dtype mismatch "
-            f"(a={tuple(a.shape)}/{a.dtype} vs b={tuple(b.shape)}/{b.dtype})"
-        )
+    sglang.srt.debug_utils.dump_comparator._compute_and_print_diff;
+    intentionally inlined here to keep dumper.py free of cross-file imports.
+
+    Different dtypes are fine — we unify by casting both to fp32, which is
+    enough for the order-of-magnitude diff summary we log."""
+    if a.shape != b.shape:
+        return f"shape mismatch (a={tuple(a.shape)} vs b={tuple(b.shape)})"
     if a.numel() == 0:
         return "empty"
-    # fp32 is enough for the order-of-magnitude diff summary we log here
-    # (and ~2x faster than fp64 on GPU); we don't need bit-exact reductions.
-    a_d = a.detach().to(torch.float32)
-    b_d = b.detach().to(torch.float32)
-    raw_abs = (a_d - b_d).abs()
+    a_float = a.detach().to(torch.float32)
+    b_float = b.detach().to(torch.float32)
+    raw_abs = (a_float - b_float).abs()
     max_abs = raw_abs.max().item()
     mean_abs = raw_abs.mean().item()
-    denom = (a_d * a_d + b_d * b_d).sum().item()
-    rel_diff = 1.0 - (2.0 * (a_d * b_d).sum().item() / denom) if denom > 0 else 0.0
+    rel_diff = _calc_rel_diff(a_float, b_float).item()
     return f"rel_diff={rel_diff:.6g} max_abs={max_abs:.6g} mean_abs={mean_abs:.6g}"
+
+
+# Copied verbatim from sglang.srt.debug_utils.dump_comparator (originally from
+# DeepGEMM). Kept inline here so dumper.py has no cross-file imports.
+def _calc_rel_diff(x: "torch.Tensor", y: "torch.Tensor"):
+    x, y = x.double(), y.double()
+    denominator = (x * x + y * y).sum()
+    sim = 2 * (x * y).sum() / denominator
+    return 1 - sim
 
 
 def _obj_to_dict(obj):
@@ -1555,7 +1561,11 @@ def _init_custom_process_group(
 ):
     """Build a fresh torch.distributed process group, separate from the default
     one and any other custom groups (e.g. RLHF weight-update groups). Used by
-    the grafter to bridge baseline and target systems."""
+    the grafter to bridge baseline and target systems.
+
+    Adapted from sglang.srt.utils.common.init_custom_process_group; inlined
+    here to keep dumper.py free of cross-file imports.
+    """
     from torch.distributed.distributed_c10d import (
         Backend,
         PrefixStore,
