@@ -846,49 +846,54 @@ class _Grafter:
         self._ensure_group()
         role = _GraftRole(cfg.grafter_role)
         is_send = self._is_sender(role=role, direction=direction)
-        action = "send" if is_send else "recv"
-        _log(
-            f"[Grafter] role={role.value} direction={direction.value} action={action} "
-            f"tags={tags} local={get_tensor_info(value)}"
-        )
 
-        # all-gather over the graft world; every rank contributes its local
-        # tensor, every rank receives everyone else's. We use
-        # `all_gather_object` (pickle-routed) because tensor shapes may differ
-        # across ranks (e.g., sharded layouts on baseline vs target). Sender
-        # ranks discard the result; recv ranks extract the sender slice and
-        # run the user transform before copy_.
+        # all-gather over the graft world; sender ranks contribute their
+        # tensor, recv ranks contribute None (their local target is private
+        # and shouldn't leak). all_gather_object is pickle-routed, so tensor
+        # shapes may differ across sender ranks.
         total_world = cfg.grafter_baseline_world_size + cfg.grafter_target_world_size
+        my_contribution = value if is_send else None
         gathered: list = [None] * total_world
-        dist.all_gather_object(gathered, value, group=self._pg)
+        dist.all_gather_object(gathered, my_contribution, group=self._pg)
 
         if is_send:
+            _log(
+                f"[Grafter] send role={role.value} dir={direction.value} "
+                f"tags={tags} local={get_tensor_info(value)}"
+            )
             return
 
-        # Pickled CUDA tensors are restored on their original-device name; that
-        # may not match this process's local device, so normalize.
+        # Pickled CUDA tensors are restored on their original-device name;
+        # that may not match this process's local device, so normalize.
         sender_tensors = [
             t.to(value.device) if isinstance(t, torch.Tensor) else t
             for t in self._sender_slice(direction=direction, gathered=gathered)
         ]
-        _log(
-            f"[Grafter] recv tags={tags} got {len(sender_tensors)} sender tensor(s):"
-        )
-        for i, t in enumerate(sender_tensors):
-            _log(f"[Grafter]   [{i}] {get_tensor_info(t)}")
 
-        transformed = self._apply_transform(
-            tags=tags,
-            received_list=sender_tensors,
-            target=value,
-            direction=direction,
-        )
-        _log(
-            f"[Grafter] will_copy tags={tags} "
-            f"transformed={get_tensor_info(transformed)} "
-            f"into_target={get_tensor_info(value)}"
-        )
-        value.copy_(transformed)
+        # Transform + copy_ are wrapped: a buggy user transform must NOT
+        # crash the whole training/inference run. On error we log and skip
+        # this graft point; downstream sees the recv side's original tensor.
+        target_info_before = get_tensor_info(value)
+        try:
+            transformed = self._apply_transform(
+                tags=tags,
+                received_list=sender_tensors,
+                target=value,
+                direction=direction,
+            )
+            value.copy_(transformed)
+            _log(
+                f"[Grafter] recv role={role.value} dir={direction.value} "
+                f"tags={tags} n_senders={len(sender_tensors)} "
+                f"target_pre={target_info_before} "
+                f"transformed={get_tensor_info(transformed)}"
+            )
+        except Exception as e:
+            _log(
+                f"[Grafter] recv role={role.value} dir={direction.value} "
+                f"tags={tags} transform/copy_ raised {type(e).__name__}: {e}; "
+                f"skipping graft for this call (target tensor unchanged)"
+            )
 
     def _classify_direction(self, tags: dict) -> Optional["_GraftDirection"]:
         cfg = self._config

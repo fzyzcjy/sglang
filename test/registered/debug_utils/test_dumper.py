@@ -2611,8 +2611,17 @@ class TestGrafterConfig:
             assert DumperConfig.from_env().grafter_role == "baseline"
 
     def test_from_env_enable_flag(self):
-        # enable=True requires a valid role per DumperConfig.__post_init__.
-        with temp_set_env(DUMPER_GRAFTER_ENABLE="1", DUMPER_GRAFTER_ROLE="baseline"):
+        # enable=True requires all of role, master_address/port, world sizes,
+        # and at least one filter per DumperConfig.__post_init__.
+        with temp_set_env(
+            DUMPER_GRAFTER_ENABLE="1",
+            DUMPER_GRAFTER_ROLE="baseline",
+            DUMPER_GRAFTER_MASTER_ADDRESS="127.0.0.1",
+            DUMPER_GRAFTER_MASTER_PORT="29999",
+            DUMPER_GRAFTER_BASELINE_WORLD_SIZE="1",
+            DUMPER_GRAFTER_TARGET_WORLD_SIZE="1",
+            DUMPER_GRAFTER_B2T_FILTER="name == 'x'",
+        ):
             assert DumperConfig.from_env().grafter_enable is True
         with temp_set_env(DUMPER_GRAFTER_ENABLE="false"):
             assert DumperConfig.from_env().grafter_enable is False
@@ -2721,6 +2730,36 @@ class TestGrafterFilterMatching:
             RuntimeError, match=r"matched BOTH grafter_b2t_filter and grafter_t2b_filter"
         ):
             grafter.maybe_intercept(value=torch.zeros(2), tags={"name": "x"})
+
+    def test_filter_expression_uses_extra_tags(self):
+        """Filter expressions can reference any tag key, not just 'name'."""
+        grafter = _Grafter(
+            config=_unit_grafter_config(
+                grafter_b2t_filter="name == 'x' and layer_id < 3",
+                grafter_t2b_filter="name == 'x' and layer_id < 3",
+            )
+        )
+        # layer_id=1 → both filters match → overlap raise (proves filter saw layer_id).
+        with pytest.raises(RuntimeError, match=r"matched BOTH"):
+            grafter.maybe_intercept(
+                value=torch.zeros(2),
+                tags={"name": "x", "layer_id": 1},
+            )
+        # layer_id=5 → neither filter matches → silent skip.
+        grafter.maybe_intercept(
+            value=torch.zeros(2), tags={"name": "x", "layer_id": 5}
+        )
+        assert grafter._pg is None
+
+    def test_load_transform_fn_bad_path(self):
+        with pytest.raises((FileNotFoundError, IsADirectoryError, OSError)):
+            _Grafter._load_transform_fn("/no/such/path/transform.py")
+
+    def test_load_transform_fn_missing_attr(self, tmp_path: Path):
+        bad = tmp_path / "no_transform_attr.py"
+        bad.write_text("x = 1\n")  # no `transform` symbol
+        with pytest.raises(AttributeError):
+            _Grafter._load_transform_fn(str(bad))
 
 
 def _run_graft_test(worker_func, **kwargs):
@@ -2924,6 +2963,85 @@ class TestGrafterDistributed:
             grafter.maybe_intercept(value=target, tags={"name": "other"})
             assert target.tolist() == [7.0, 7.0, 7.0], "tensor must not be modified"
             assert grafter._pg is None, "group must not init for unmatched name"
+        finally:
+            if grafter._pg is not None:
+                dist.destroy_process_group(grafter._pg)
+
+    def test_default_fallback_shape_mismatch_does_not_crash(self):
+        """When sender shape != target shape, default identity fallback raises;
+        the grafter must catch it, log, and leave target unchanged."""
+        graft_port = find_available_port(29615)
+        _run_graft_test(
+            self._test_shape_mismatch_func,
+            graft_port=graft_port,
+            group_name="grafter_shape_mismatch",
+        )
+
+    @staticmethod
+    def _test_shape_mismatch_func(rank, graft_port, group_name):
+        grafter = _Grafter(
+            config=_make_grafter_test_config(
+                rank=rank, graft_port=graft_port, group_name=group_name
+            )
+        )
+        try:
+            if rank == 0:
+                # Baseline sends shape=(3,)
+                tensor = torch.tensor([1.0, 2.0, 3.0], device="cuda:0")
+                grafter.maybe_intercept(value=tensor, tags={"name": "x"})
+            else:
+                # Target's local target has shape=(4,) — mismatch with sender.
+                target = torch.tensor([7.0, 7.0, 7.0, 7.0], device="cuda:1")
+                # No exception should propagate; tensor must stay unchanged.
+                grafter.maybe_intercept(value=target, tags={"name": "x"})
+                assert target.tolist() == [7.0, 7.0, 7.0, 7.0], (
+                    f"target should be unchanged after shape-mismatch graft, got {target.tolist()}"
+                )
+        finally:
+            if grafter._pg is not None:
+                dist.destroy_process_group(grafter._pg)
+
+    def test_user_transform_exception_does_not_crash(self, tmp_path: Path):
+        """A user transform that raises must NOT bring down the system; the
+        grafter logs and skips the copy_, leaving target unchanged."""
+        transform_file = tmp_path / "graft_transform_throws.py"
+        transform_file.write_text(
+            "def transform(tags, received_list, target):\n"
+            "    raise RuntimeError('intentional test error from user transform')\n"
+        )
+        graft_port = find_available_port(29635)
+        _run_graft_test(
+            self._test_transform_throws_func,
+            graft_port=graft_port,
+            group_name="grafter_throws",
+            transform_path=str(transform_file),
+        )
+
+    @staticmethod
+    def _test_transform_throws_func(rank, graft_port, group_name, transform_path):
+        grafter = _Grafter(
+            config=_make_grafter_test_config(
+                rank=rank,
+                graft_port=graft_port,
+                group_name=group_name,
+                transform_path=transform_path,
+            )
+        )
+        try:
+            if rank == 0:
+                tensor = torch.tensor([1.0, 2.0, 3.0], device="cuda:0")
+                grafter.maybe_intercept(value=tensor, tags={"name": "x"})
+            else:
+                target = torch.tensor([9.0, 9.0, 9.0], device="cuda:1")
+                with _capture_stdout() as captured:
+                    grafter.maybe_intercept(value=target, tags={"name": "x"})
+                assert target.tolist() == [9.0, 9.0, 9.0], (
+                    f"target must be unchanged when transform throws, got {target.tolist()}"
+                )
+                assert "transform/copy_ raised RuntimeError" in captured.getvalue(), (
+                    captured.getvalue()
+                )
+                assert "intentional test error" in captured.getvalue(), captured.getvalue()
         finally:
             if grafter._pg is not None:
                 dist.destroy_process_group(grafter._pg)
