@@ -2866,6 +2866,89 @@ def _graft_worker_entry(rank, role_port, worker_func, result_queue, kwargs):
         dist.destroy_process_group()
 
 
+def _run_graft_test_split(
+    worker_baseline, worker_target, **kwargs
+) -> dict:
+    """Like `_run_graft_test`, but each role runs its OWN dedicated worker
+    function (no `if rank == 0:` branching) and stdout is captured per role.
+
+    Returns ``{"baseline": stdout_str, "target": stdout_str}`` so tests can
+    snapshot/assert on the per-role logs. Used by the E2E example for
+    educational clarity (each role's logic reads top-to-bottom) and to assert
+    the user-visible log output matches expectations.
+    """
+    import torch.multiprocessing as mp
+
+    role_ports = {
+        "baseline": find_available_port(29700),
+        "target": find_available_port(29800),
+    }
+
+    ctx = mp.get_context("spawn")
+    result_queue = ctx.Queue()
+    processes = []
+    for global_rank, (role, worker) in enumerate(
+        [("baseline", worker_baseline), ("target", worker_target)]
+    ):
+        p = ctx.Process(
+            target=_graft_split_worker_entry,
+            args=(global_rank, role, role_ports[role], worker, result_queue, kwargs),
+        )
+        p.start()
+        processes.append(p)
+
+    for p in processes:
+        p.join()
+
+    outputs: dict = {}
+    errors: list = []
+    for _ in range(2):
+        role, error, captured = result_queue.get()
+        outputs[role] = captured
+        if error:
+            errors.append(f"role={role}: {error}")
+    if errors:
+        raise AssertionError(
+            "\n".join(errors)
+            + "\nCaptured outputs:\n"
+            + f"--- baseline ---\n{outputs.get('baseline', '')}\n"
+            + f"--- target ---\n{outputs.get('target', '')}"
+        )
+    return outputs
+
+
+def _graft_split_worker_entry(
+    global_rank, role, role_port, worker_func, result_queue, kwargs
+):
+    import io
+    import traceback
+
+    captured = io.StringIO()
+    old_stdout = sys.stdout
+    sys.stdout = captured
+    error = None
+    try:
+        torch.cuda.set_device(global_rank)
+        dist.init_process_group(
+            backend="nccl",
+            init_method=f"tcp://127.0.0.1:{role_port}",
+            world_size=1,
+            rank=0,
+        )
+        try:
+            worker_func(**kwargs)
+        except Exception as e:
+            error = f"{e}\n{traceback.format_exc()}"
+        finally:
+            try:
+                dist.destroy_process_group()
+            except Exception:
+                pass
+    finally:
+        sys.stdout = old_stdout
+    result_queue.put((role, error, captured.getvalue()))
+
+
 def _run_graft_test_cpu_multi(
     worker_func, *, baseline_world: int, target_world: int, **kwargs
 ):
@@ -3383,46 +3466,82 @@ class TestGrafterE2eExample:
             DUMPER_GRAFTER_GROUP_NAME="grafter_e2e",
             DUMPER_GRAFTER_TIMEOUT="30",
         ):
-            _run_graft_test(self._worker)
+            outputs = _run_graft_test_split(
+                self._worker_baseline, self._worker_target
+            )
+
+        # ---- Snapshot-style assertions on the per-role log output. ----
+
+        # Baseline: receives `attn_input` (t->b) then sends `attn_output` (b->t).
+        baseline_log = outputs["baseline"]
+        assert "[Grafter] init group: role=baseline" in baseline_log, baseline_log
+        assert (
+            "[Grafter] recv role=baseline dir=t2b tags={'name': 'attn_input'}"
+            in baseline_log
+        ), baseline_log
+        assert (
+            "[Grafter] send role=baseline dir=b2t tags={'name': 'attn_output'}"
+            in baseline_log
+        ), baseline_log
+        # Recv side logs the diff summary between the pre-overwrite and the
+        # to-be-applied tensor — useful for spotting silent no-op grafts.
+        assert "diff_pre_vs_new=" in baseline_log, baseline_log
+
+        # Target: sends `attn_input` (t->b) then receives `attn_output` (b->t).
+        target_log = outputs["target"]
+        assert "[Grafter] init group: role=target" in target_log, target_log
+        assert (
+            "[Grafter] send role=target dir=t2b tags={'name': 'attn_input'}"
+            in target_log
+        ), target_log
+        assert (
+            "[Grafter] recv role=target dir=b2t tags={'name': 'attn_output'}"
+            in target_log
+        ), target_log
+        assert "diff_pre_vs_new=" in target_log, target_log
 
     @staticmethod
-    def _worker(rank):
-        # The only per-side env: ROLE.  Everything else inherited from parent.
-        role = "baseline" if rank == 0 else "target"
-        with temp_set_env(DUMPER_GRAFTER_ROLE=role):
+    def _worker_baseline():
+        with temp_set_env(DUMPER_GRAFTER_ROLE="baseline"):
             cfg = DumperConfig.from_env()
             d = _Dumper(config=cfg)
 
-            # ---- target's "buggy" attention call site, mirrored on baseline ----
-
-            # Step 1: graft input.  target sends its q to baseline; baseline
-            # overwrites its local q via .copy_() with target's q.
-            q = torch.tensor(
-                [1.0, 2.0, 3.0, 4.0] if role == "target" else [99.0] * 4,
-                device=f"cuda:{rank}",
-            )
+            # Step 1: graft input. target sends its q to baseline; baseline
+            # overwrites its local placeholder q via .copy_() with target's q.
+            q = torch.tensor([99.0, 99.0, 99.0, 99.0], device="cuda:0")
             d.dump("attn_input", q)
-            if role == "baseline":
-                assert q.tolist() == [1.0, 2.0, 3.0, 4.0], (
-                    f"baseline's q should be overwritten by target's via the t->b graft, "
-                    f"got {q.tolist()}"
-                )
+            assert q.tolist() == [1.0, 2.0, 3.0, 4.0], (
+                f"baseline's q should be overwritten by target's via the t->b graft, "
+                f"got {q.tolist()}"
+            )
 
-            # Step 2: each side runs its own kernel.  Baseline = known-good
-            # (returns q * 10); target = buggy under investigation (returns 0).
-            if role == "baseline":
-                attn_out = q * 10.0
-            else:
-                attn_out = torch.zeros_like(q)
+            # Step 2: baseline runs the known-good attention kernel.
+            attn_out = q * 10.0
 
-            # Step 3: graft output.  baseline sends attn_out to target; target
-            # overwrites its (buggy) output with baseline's via .copy_().
+            # Step 3: graft output. baseline sends attn_out to target.
             d.dump("attn_output", attn_out)
-            if role == "target":
-                assert attn_out.tolist() == [10.0, 20.0, 30.0, 40.0], (
-                    f"target's attn_out should be overwritten by baseline's via "
-                    f"the b->t graft, got {attn_out.tolist()}"
-                )
+
+    @staticmethod
+    def _worker_target():
+        with temp_set_env(DUMPER_GRAFTER_ROLE="target"):
+            cfg = DumperConfig.from_env()
+            d = _Dumper(config=cfg)
+
+            # Step 1: graft input. target sends its real q to baseline.
+            q = torch.tensor([1.0, 2.0, 3.0, 4.0], device="cuda:1")
+            d.dump("attn_input", q)
+
+            # Step 2: target runs the (suspected buggy) attention kernel —
+            # here it returns all zeros to mimic a broken implementation.
+            attn_out = torch.zeros_like(q)
+
+            # Step 3: graft output. baseline sends its attn_out to target;
+            # target overwrites its (buggy) output with baseline's via .copy_().
+            d.dump("attn_output", attn_out)
+            assert attn_out.tolist() == [10.0, 20.0, 30.0, 40.0], (
+                f"target's attn_out should be overwritten by baseline's via "
+                f"the b->t graft, got {attn_out.tolist()}"
+            )
 
 
 if __name__ == "__main__":
