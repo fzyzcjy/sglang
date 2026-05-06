@@ -141,13 +141,16 @@ class DumperConfig(_BaseConfig):
     non_intrusive_mode: str = "core"
     source_patcher_config: Optional[str] = None
     grafter_enable: bool = False
-    grafter_role: str = ""  # "baseline" or "target"
+    # Defaults below are deliberately absurd (-1 / empty) so that
+    # `grafter_enable=True` without explicit values fails loudly in
+    # __post_init__ rather than silently producing wrong behavior.
+    grafter_role: str = ""  # required if enabled: "baseline" or "target"
     grafter_b2t_filter: Optional[str] = None  # names flowing baseline -> target
     grafter_t2b_filter: Optional[str] = None  # names flowing target -> baseline
-    grafter_master_address: str = ""
-    grafter_master_port: int = 0
-    grafter_baseline_world_size: int = 0
-    grafter_target_world_size: int = 0
+    grafter_master_address: str = ""  # required if enabled
+    grafter_master_port: int = -1  # required if enabled (positive port)
+    grafter_baseline_world_size: int = -1  # required if enabled
+    grafter_target_world_size: int = -1  # required if enabled
     grafter_backend: str = "nccl"
     grafter_group_name: str = "graft"
     grafter_timeout: int = 300
@@ -164,6 +167,28 @@ class DumperConfig(_BaseConfig):
             assert self.grafter_role in ("baseline", "target"), (
                 f"grafter_role must be 'baseline' or 'target' when grafter_enable=True, "
                 f"got {self.grafter_role!r}"
+            )
+            assert self.grafter_master_address, (
+                "grafter_master_address must be set when grafter_enable=True"
+            )
+            assert self.grafter_master_port > 0, (
+                f"grafter_master_port must be a positive port when grafter_enable=True, "
+                f"got {self.grafter_master_port}"
+            )
+            assert self.grafter_baseline_world_size > 0, (
+                f"grafter_baseline_world_size must be > 0 when grafter_enable=True, "
+                f"got {self.grafter_baseline_world_size}"
+            )
+            assert self.grafter_target_world_size > 0, (
+                f"grafter_target_world_size must be > 0 when grafter_enable=True, "
+                f"got {self.grafter_target_world_size}"
+            )
+            assert (
+                self.grafter_b2t_filter is not None
+                or self.grafter_t2b_filter is not None
+            ), (
+                "grafter_enable=True but neither grafter_b2t_filter nor "
+                "grafter_t2b_filter is set; nothing would ever be grafted"
             )
 
     @property
@@ -827,17 +852,25 @@ class _Grafter:
             f"tags={tags} local={get_tensor_info(value)}"
         )
 
-        # all-gather: every rank contributes its local tensor; every rank also
-        # receives everyone else's. Sender ranks discard the result; recv ranks
-        # extract the sender slice and run the user transform before copy_.
+        # all-gather over the graft world; every rank contributes its local
+        # tensor, every rank receives everyone else's. We use
+        # `all_gather_object` (pickle-routed) because tensor shapes may differ
+        # across ranks (e.g., sharded layouts on baseline vs target). Sender
+        # ranks discard the result; recv ranks extract the sender slice and
+        # run the user transform before copy_.
         total_world = cfg.grafter_baseline_world_size + cfg.grafter_target_world_size
-        gathered = [torch.empty_like(value) for _ in range(total_world)]
-        dist.all_gather(gathered, value, group=self._pg)
+        gathered: list = [None] * total_world
+        dist.all_gather_object(gathered, value, group=self._pg)
 
         if is_send:
             return
 
-        sender_tensors = self._sender_slice(direction=direction, gathered=gathered)
+        # Pickled CUDA tensors are restored on their original-device name; that
+        # may not match this process's local device, so normalize.
+        sender_tensors = [
+            t.to(value.device) if isinstance(t, torch.Tensor) else t
+            for t in self._sender_slice(direction=direction, gathered=gathered)
+        ]
         _log(
             f"[Grafter] recv tags={tags} got {len(sender_tensors)} sender tensor(s):"
         )

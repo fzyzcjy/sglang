@@ -2617,36 +2617,74 @@ class TestGrafterConfig:
         with temp_set_env(DUMPER_GRAFTER_ENABLE="false"):
             assert DumperConfig.from_env().grafter_enable is False
 
-    def test_enable_without_role_raises(self):
-        with pytest.raises(AssertionError, match=r"grafter_role must be"):
+    def test_enable_without_required_fields_raises(self):
+        with pytest.raises(AssertionError, match=r"grafter_role"):
             DumperConfig(grafter_enable=True)
+        with pytest.raises(AssertionError, match=r"grafter_master_address"):
+            DumperConfig(grafter_enable=True, grafter_role="baseline")
+        with pytest.raises(AssertionError, match=r"grafter_master_port"):
+            DumperConfig(
+                grafter_enable=True,
+                grafter_role="baseline",
+                grafter_master_address="127.0.0.1",
+            )
+        with pytest.raises(AssertionError, match=r"grafter_baseline_world_size"):
+            DumperConfig(
+                grafter_enable=True,
+                grafter_role="baseline",
+                grafter_master_address="127.0.0.1",
+                grafter_master_port=12345,
+            )
+        with pytest.raises(AssertionError, match=r"neither grafter_b2t_filter nor"):
+            DumperConfig(
+                grafter_enable=True,
+                grafter_role="baseline",
+                grafter_master_address="127.0.0.1",
+                grafter_master_port=12345,
+                grafter_baseline_world_size=1,
+                grafter_target_world_size=1,
+            )
 
     def test_env_name_for_grafter_field(self):
         assert DumperConfig._env_name("grafter_b2t_filter") == "DUMPER_GRAFTER_B2T_FILTER"
 
 
+def _unit_grafter_config(**overrides) -> DumperConfig:
+    """Build a fully-valid DumperConfig for unit-test use.
+
+    All grafter_* required fields default to dummy values; overrides patch
+    individual fields (e.g., grafter_enable=False or filter strings).
+    Dummy values are never reached because these unit tests short-circuit
+    before _ensure_group runs.
+    """
+    base = dict(
+        grafter_enable=True,
+        grafter_role="baseline",
+        grafter_master_address="127.0.0.1",
+        grafter_master_port=12345,
+        grafter_baseline_world_size=1,
+        grafter_target_world_size=1,
+        grafter_b2t_filter="name == 'x'",
+    )
+    base.update(overrides)
+    return DumperConfig(**base)
+
+
 class TestGrafterFilterMatching:
     """Unit tests for the filter-matching short-circuit logic.
 
-    These don't initialize a process group, so role validation never fires.
+    These don't initialize a process group, so the network-related fields
+    are dummy values via _unit_grafter_config.
     """
 
     def test_disabled_returns_silently(self):
-        grafter = _Grafter(
-            config=DumperConfig(grafter_enable=False, grafter_b2t_filter="name == 'x'")
-        )
+        grafter = _Grafter(config=_unit_grafter_config(grafter_enable=False))
         grafter.maybe_intercept(value=torch.zeros(2), tags={"name": "x"})
         assert grafter._pg is None  # never initialized
 
     def test_unmatched_non_tensor_silent(self):
         """Non-tensor + unmatched name → silent skip, no print."""
-        grafter = _Grafter(
-            config=DumperConfig(
-                grafter_enable=True,
-                grafter_role="baseline",
-                grafter_b2t_filter="name == 'x'",
-            )
-        )
+        grafter = _Grafter(config=_unit_grafter_config())
         with _capture_stdout() as captured:
             grafter.maybe_intercept(value=42, tags={"name": "other"})
         assert grafter._pg is None
@@ -2657,37 +2695,24 @@ class TestGrafterFilterMatching:
 
         This catches misconfigured filters (e.g. matching a name that maps to a
         dict/list at some call sites) without silently masking the issue."""
-        grafter = _Grafter(
-            config=DumperConfig(
-                grafter_enable=True,
-                grafter_role="baseline",
-                grafter_b2t_filter="name == 'x'",
-            )
-        )
+        grafter = _Grafter(config=_unit_grafter_config())
         with _capture_stdout() as captured:
             grafter.maybe_intercept(value={"not": "a tensor"}, tags={"name": "x"})
         output = captured.getvalue()
         assert grafter._pg is None  # still no PG init
-        assert "matched a filter but value is not a torch.Tensor" in output, output
+        assert "value is not a torch.Tensor" in output, output
         assert "type=dict" in output, output
 
     def test_unmatched_name_returns_silently(self):
         grafter = _Grafter(
-            config=DumperConfig(
-                grafter_enable=True,
-                grafter_role="baseline",
-                grafter_b2t_filter="name == 'x'",
-                grafter_t2b_filter="name == 'y'",
-            )
+            config=_unit_grafter_config(grafter_t2b_filter="name == 'y'")
         )
         grafter.maybe_intercept(value=torch.zeros(2), tags={"name": "z"})
         assert grafter._pg is None
 
     def test_overlap_filters_raise(self):
         grafter = _Grafter(
-            config=DumperConfig(
-                grafter_enable=True,
-                grafter_role="baseline",
+            config=_unit_grafter_config(
                 grafter_b2t_filter="name == 'x'",
                 grafter_t2b_filter="name == 'x'",
             )
