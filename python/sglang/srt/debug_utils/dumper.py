@@ -243,7 +243,7 @@ class _Dumper:
         self._ensure_exp_name()
 
         self._state.step += 1
-        print(f"[Dumper] [{time.time()}] step={self._state.step}")
+        _log(f"step={self._state.step}")
 
     def dump(
         self,
@@ -361,7 +361,7 @@ class _Dumper:
         from sglang.srt.debug_utils.source_patcher import apply_patches_from_config
 
         yaml_content: str = Path(config_path).read_text()
-        print(f"[source_patcher] loading config from {config_path}")
+        _log(f"[source_patcher] loading config from {config_path}")
         apply_patches_from_config(
             yaml_content,
             extra_imports=["from sglang.srt.debug_utils.dumper import dumper"],
@@ -543,8 +543,8 @@ class _Dumper:
         path = Path(self._config.dir) / self._config.exp_name / full_filename
 
         if self._config.enable_output_console:
-            print(
-                f"[{tag}] [{rank}, {time.time()}] {path} "
+            _log(
+                f"[{tag}] {path} "
                 f"type={type(value)} "
                 f"shape={value.shape if isinstance(value, torch.Tensor) else None} "
                 f"dtype={value.dtype if isinstance(value, torch.Tensor) else None} "
@@ -592,7 +592,7 @@ class _Dumper:
                 timeout_seconds=self._config.collective_timeout
             )
             self.configure(exp_name=name)
-            print(f"[Dumper] Choose exp_name={name}")
+            _log(f"Choose exp_name={name}")
 
 
 # -------------------------------------- hook dumper ------------------------------------------
@@ -767,6 +767,16 @@ def _register_forward_hook_or_replace_fn(
 # -------------------------------------- grafter ------------------------------------------
 
 
+class _GraftRole(enum.Enum):
+    BASELINE = "baseline"
+    TARGET = "target"
+
+
+class _GraftDirection(enum.Enum):
+    B2T = "b2t"  # name flows baseline -> target
+    T2B = "t2b"  # name flows target -> baseline
+
+
 class _Grafter:
     """Cross-system tensor transplant. Triggered silently from dumper.dump.
 
@@ -794,58 +804,85 @@ class _Grafter:
         if not cfg.grafter_enable:
             return
 
+        direction = self._classify_direction(tags)
+        if direction is None:
+            return
+
+        if not isinstance(value, torch.Tensor):
+            _log(
+                f"[Grafter] tags={tags} matched grafter_{direction.value}_filter but "
+                f"value is not a torch.Tensor (got type={type(value).__name__}); "
+                f"skipping graft. Common cause: dumper.dump called with a non-tensor "
+                f"value (dict, list, ...) on this name. Either narrow the filter or "
+                f"wrap the value in a tensor."
+            )
+            return
+
+        self._ensure_group()
+        role = _GraftRole(cfg.grafter_role)
+        is_send = self._is_sender(role=role, direction=direction)
+        action = "send" if is_send else "recv"
+        _log(
+            f"[Grafter] role={role.value} direction={direction.value} action={action} "
+            f"tags={tags} local={get_tensor_info(value)}"
+        )
+
+        # all-gather: every rank contributes its local tensor; every rank also
+        # receives everyone else's. Sender ranks discard the result; recv ranks
+        # extract the sender slice and run the user transform before copy_.
+        total_world = cfg.grafter_baseline_world_size + cfg.grafter_target_world_size
+        gathered = [torch.empty_like(value) for _ in range(total_world)]
+        dist.all_gather(gathered, value, group=self._pg)
+
+        if is_send:
+            return
+
+        sender_tensors = self._sender_slice(direction=direction, gathered=gathered)
+        _log(
+            f"[Grafter] recv tags={tags} got {len(sender_tensors)} sender tensor(s):"
+        )
+        for i, t in enumerate(sender_tensors):
+            _log(f"[Grafter]   [{i}] {get_tensor_info(t)}")
+
+        transformed = self._apply_transform(
+            tags=tags,
+            received_list=sender_tensors,
+            target=value,
+            direction=direction,
+        )
+        _log(
+            f"[Grafter] will_copy tags={tags} "
+            f"transformed={get_tensor_info(transformed)} "
+            f"into_target={get_tensor_info(value)}"
+        )
+        value.copy_(transformed)
+
+    def _classify_direction(self, tags: dict) -> Optional["_GraftDirection"]:
+        cfg = self._config
         match_b2t = self._match(cfg.grafter_b2t_filter, tags)
         match_t2b = self._match(cfg.grafter_t2b_filter, tags)
         if match_b2t and match_t2b:
             raise RuntimeError(
                 f"[Grafter] tags={tags} matched BOTH grafter_b2t_filter and grafter_t2b_filter"
             )
-        if not (match_b2t or match_t2b):
-            return
+        if match_b2t:
+            return _GraftDirection.B2T
+        if match_t2b:
+            return _GraftDirection.T2B
+        return None
 
-        if not isinstance(value, torch.Tensor):
-            print(
-                f"[Grafter] tags={tags} matched a filter but value is not a "
-                f"torch.Tensor (got type={type(value).__name__}); skipping graft. "
-                f"Common cause: dumper.dump called with a non-tensor value (dict, "
-                f"list, ...) on this name. Either narrow the filter or wrap the "
-                f"value in a tensor."
-            )
-            return
+    @staticmethod
+    def _is_sender(*, role: "_GraftRole", direction: "_GraftDirection") -> bool:
+        # baseline is the sender for B2T names; target is the sender for T2B.
+        return (role == _GraftRole.BASELINE) == (direction == _GraftDirection.B2T)
 
-        role = cfg.grafter_role
-        # baseline sends b2t names, recv t2b; target is the mirror image.
-        is_send = (role == "baseline" and match_b2t) or (
-            role == "target" and match_t2b
-        )
-
-        self._ensure_group()
-        direction = "b2t" if match_b2t else "t2b"
-        action = "send" if is_send else "recv"
-        print(
-            f"[Grafter] role={role} action={action} direction={direction} "
-            f"tags={tags} local={get_tensor_info(value)}"
-        )
-
-        src_rank = 0  # baseline rank 0 is always the b2t src; for t2b the src
-        # is the first target rank, computed below.
-        if direction == "t2b":
-            src_rank = cfg.grafter_baseline_world_size
-
-        if is_send:
-            dist.broadcast(value, src=src_rank, group=self._pg)
-            return
-
-        received = torch.empty_like(value)
-        dist.broadcast(received, src=src_rank, group=self._pg)
-        print(f"[Grafter] received_raw tags={tags} {get_tensor_info(received)}")
-        transformed = self._apply_transform(tags=tags, received=received, target=value)
-        print(
-            f"[Grafter] will_copy tags={tags} "
-            f"transformed={get_tensor_info(transformed)} "
-            f"into_target={get_tensor_info(value)}"
-        )
-        value.copy_(transformed)
+    def _sender_slice(
+        self, *, direction: "_GraftDirection", gathered: list
+    ) -> list:
+        cfg = self._config
+        if direction == _GraftDirection.B2T:
+            return gathered[: cfg.grafter_baseline_world_size]
+        return gathered[cfg.grafter_baseline_world_size :]
 
     @staticmethod
     def _match(expr: Optional[str], tags: dict) -> bool:
@@ -861,15 +898,16 @@ class _Grafter:
         assert dist.is_initialized(), (
             "[Grafter] default torch.distributed must be initialized"
         )
+        role = _GraftRole(cfg.grafter_role)
         local_rank = dist.get_rank()
-        if cfg.grafter_role == "baseline":
+        if role == _GraftRole.BASELINE:
             my_rank = local_rank
         else:
             my_rank = cfg.grafter_baseline_world_size + local_rank
         total_world = cfg.grafter_baseline_world_size + cfg.grafter_target_world_size
         init_method = f"tcp://{cfg.grafter_master_address}:{cfg.grafter_master_port}"
-        print(
-            f"[Grafter] init group: role={cfg.grafter_role} "
+        _log(
+            f"[Grafter] init group: role={role.value} "
             f"baseline_world={cfg.grafter_baseline_world_size} "
             f"target_world={cfg.grafter_target_world_size} "
             f"rank={my_rank} init_method={init_method} "
@@ -888,16 +926,45 @@ class _Grafter:
         )
 
     def _apply_transform(
-        self, *, tags: dict, received: torch.Tensor, target: torch.Tensor
+        self, *, tags: dict, received_list: list, target: torch.Tensor
     ) -> torch.Tensor:
         # TODO: integrate with dump_comparator unsharder annotations once
         # full inverse (sharded -> global -> sharded) transforms exist.
         path = self._config.grafter_transform_path
         if path is None:
-            return received
-        if self._transform_fn is None:
-            self._transform_fn = self._load_transform_fn(path)
-        return self._transform_fn(tags, received, target)
+            fn = self._default_transform
+        else:
+            if self._transform_fn is None:
+                self._transform_fn = self._load_transform_fn(path)
+            fn = self._transform_fn
+        return fn(tags, received_list, target)
+
+    @staticmethod
+    def _default_transform(
+        tags: dict, received_list: list, target: torch.Tensor
+    ) -> torch.Tensor:
+        """Identity-by-rank fallback. Requires #senders == #recvs and
+        shape(received_list[my_recv_rank]) == shape(target). Otherwise raises
+        and asks the user for a transform."""
+        my_recv_rank = dist.get_rank()
+        recv_world_size = dist.get_world_size()
+        if len(received_list) != recv_world_size:
+            raise RuntimeError(
+                f"[Grafter] no grafter_transform_path set; default identity-by-rank "
+                f"requires #senders == #recvs but got #senders={len(received_list)} "
+                f"vs #recvs={recv_world_size}. Provide a transform via "
+                f"DUMPER_GRAFTER_TRANSFORM_PATH=<my_transform.py> defining "
+                f"`transform(tags, received_list, target)`."
+            )
+        candidate = received_list[my_recv_rank]
+        if candidate.shape != target.shape:
+            raise RuntimeError(
+                f"[Grafter] no grafter_transform_path set; default identity-by-rank "
+                f"requires matching shapes but received_list[{my_recv_rank}].shape="
+                f"{tuple(candidate.shape)} != target.shape={tuple(target.shape)}. "
+                f"Provide a transform that handles the shape mismatch."
+            )
+        return candidate
 
     @staticmethod
     def _load_transform_fn(path: str) -> Callable:
@@ -921,11 +988,11 @@ def _torch_save(value, path: str):
             if "not pickleable" in str(e):
                 stripped = _strip_parameter(value)
                 if stripped is not value:
-                    print(f"[Dumper] Observe error={e} and try pickling .data")
+                    _log(f"Observe error={e} and try pickling .data")
                     return _torch_save(stripped, path)
             raise
     except Exception as e:
-        print(f"[Dumper] Observe error={e} when saving data, skip the tensor")
+        _log(f"Observe error={e} when saving data, skip the tensor")
 
 
 def _map_tensor(value, fn: Callable[[torch.Tensor], torch.Tensor]):
@@ -959,11 +1026,10 @@ def _collective_with_timeout(fn, operation_name: str, timeout_seconds: int = 60)
 
     def watchdog():
         if not completed.wait(timeout=timeout_seconds):
-            print(
-                f"\n[Dumper] WARNING: '{operation_name}' has not completed after "
+            _log(
+                f"WARNING: '{operation_name}' has not completed after "
                 f"{timeout_seconds}s. This usually means not all ranks are "
-                f"participating in this collective operation.\n",
-                flush=True,
+                f"participating in this collective operation."
             )
 
     thread = threading.Thread(target=watchdog, daemon=True)
@@ -1012,7 +1078,7 @@ def _cleanup_old_dumps(base_dir: Path, exp_name: Optional[str] = None) -> None:
 
         for entry in targets:
             shutil.rmtree(entry)
-            print(f"[Dumper] Cleaned up {entry}")
+            _log(f"Cleaned up {entry}")
 
     if dist.is_initialized():
         _collective_with_timeout(
@@ -1033,6 +1099,11 @@ def _get_world_size():
         return dist.get_world_size()
     else:
         return 1
+
+
+def _log(msg: str) -> None:
+    """Print a log line tagged with the current rank and wall-clock time."""
+    print(f"[Dumper, rank={_get_rank()}, t={time.time():.3f}] {msg}", flush=True)
 
 
 def _obj_to_dict(obj):
@@ -1129,12 +1200,10 @@ class _DumperHttpManager:
             self._rpc_broadcast = rpc_broadcast
 
             if http_port == "reuse":
-                print(
-                    "[Dumper] Standalone HTTP server disabled, reusing existing ports"
-                )
+                _log("Standalone HTTP server disabled, reusing existing ports")
             else:
                 _start_http_server(prefix="/dumper/", target=self, http_port=http_port)
-                print(f"[Dumper] HTTP server started on port {http_port}")
+                _log(f"HTTP server started on port {http_port}")
 
     # ------------------------------- public ---------------------------------
 
@@ -1175,7 +1244,7 @@ def _make_http_handler(*, prefix: str, target):
             method = self.path[len(prefix) :]
             try:
                 req_body = self._get_request_body()
-                print(f"[Dumper#{_get_rank()}] HTTP {self.path} {req_body=}")
+                _log(f"HTTP {self.path} {req_body=}")
                 result = target.handle_request(method=method, body=req_body)
                 resp_body = json.dumps(result).encode()
                 self.send_response(200)
@@ -1220,13 +1289,13 @@ def _create_zmq_rpc_broadcast(
                 result = getattr(handler, req["method"])(*req["args"], **req["kwargs"])
                 resp = {"result": result, "error": None}
             except Exception as e:
-                print(f"[Dumper.ZmqRpc] error inside handler: {e}")
+                _log(f"[ZmqRpc] error inside handler: {e}")
                 resp = {"result": None, "error": str(e)}
             sock.send_pyobj(resp)
 
     thread = threading.Thread(target=serve_loop, daemon=True)
     thread.start()
-    print(f"[Dumper.ZmqRpc] rank={rank} server started at {local_addr}")
+    _log(f"[ZmqRpc] server started at {local_addr}")
 
     if dist.is_initialized():
         all_addresses = [None] * world_size
@@ -1237,7 +1306,7 @@ def _create_zmq_rpc_broadcast(
         )
     else:
         all_addresses = [local_addr]
-    print(f"[Dumper.ZmqRpc] rank={rank} all_addresses={all_addresses}")
+    _log(f"[ZmqRpc] all_addresses={all_addresses}")
 
     if rank == 0:
         handles = []
@@ -1333,7 +1402,7 @@ def _get_local_ip_by_remote() -> Optional[str]:
         s.connect(("2001:4860:4860::8888", 80))  # Doesn't need to be reachable
         return s.getsockname()[0]
     except Exception:
-        print("Can not get local ip by remote")
+        _log("Can not get local ip by remote")
     return None
 
 

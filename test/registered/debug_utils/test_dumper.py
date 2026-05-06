@@ -2682,22 +2682,57 @@ class TestGrafterFilterMatching:
             grafter.maybe_intercept(value=torch.zeros(2), tags={"name": "x"})
 
 
-def _reinit_role_default_pg(rank: int):
-    """Mirror production where each role has its own default PG.
+def _run_graft_test(worker_func, **kwargs):
+    """Spawn one process per role (rank 0 = baseline, rank 1 = target).
 
-    run_distributed_test sets up a single shared 2-rank PG; that doesn't match
-    production where baseline and target each have their own (independent) PG.
-    Re-init this process's default PG with world_size=1 so dist.get_rank()
-    returns 0, matching what the grafter code expects on each side.
+    Each process initializes its OWN default PG with world_size=1 from the
+    start, mirroring production where baseline and target are independently
+    launched and each have their own dist world.
+
+    Parent allocates per-role default-PG ports up-front so the children do
+    not race on `find_available_port`.
     """
-    dist.destroy_process_group()
-    port = find_available_port(29700 + rank * 100)
+    import torch.multiprocessing as mp
+
+    role_ports = [find_available_port(29700 + i * 100) for i in range(2)]
+
+    ctx = mp.get_context("spawn")
+    result_queue = ctx.Queue()
+    processes = []
+    for rank in range(2):
+        p = ctx.Process(
+            target=_graft_worker_entry,
+            args=(rank, role_ports[rank], worker_func, result_queue, kwargs),
+        )
+        p.start()
+        processes.append(p)
+
+    for p in processes:
+        p.join()
+
+    errors = [result_queue.get() for _ in range(2)]
+    errors = [e for e in errors if e]
+    if errors:
+        raise AssertionError("\n".join(errors))
+
+
+def _graft_worker_entry(rank, role_port, worker_func, result_queue, kwargs):
+    import traceback
+
+    torch.cuda.set_device(rank)
     dist.init_process_group(
         backend="nccl",
-        init_method=f"tcp://127.0.0.1:{port}",
+        init_method=f"tcp://127.0.0.1:{role_port}",
         world_size=1,
         rank=0,
     )
+    try:
+        worker_func(rank=rank, **kwargs)
+        result_queue.put(None)
+    except Exception as e:
+        result_queue.put(f"rank={rank}: {e}\n{traceback.format_exc()}")
+    finally:
+        dist.destroy_process_group()
 
 
 def _make_grafter_test_config(
@@ -2738,13 +2773,12 @@ class TestGrafterDistributed:
     def test_b2t_copy_roundtrip(self):
         """Baseline (rank 0) sends 'x' to target (rank 1), target.copy_'s it."""
         graft_port = find_available_port(29600)
-        run_distributed_test(
+        _run_graft_test(
             self._test_b2t_func, graft_port=graft_port, group_name="grafter_b2t"
         )
 
     @staticmethod
     def _test_b2t_func(rank, graft_port, group_name):
-        _reinit_role_default_pg(rank)
         grafter = _Grafter(
             config=_make_grafter_test_config(
                 rank=rank, graft_port=graft_port, group_name=group_name
@@ -2765,13 +2799,12 @@ class TestGrafterDistributed:
     def test_t2b_copy_roundtrip(self):
         """Target (rank 1) sends 'x' to baseline (rank 0), baseline.copy_'s it."""
         graft_port = find_available_port(29605)
-        run_distributed_test(
+        _run_graft_test(
             self._test_t2b_func, graft_port=graft_port, group_name="grafter_t2b"
         )
 
     @staticmethod
     def _test_t2b_func(rank, graft_port, group_name):
-        _reinit_role_default_pg(rank)
         grafter = _Grafter(
             config=_make_grafter_test_config(
                 rank=rank,
@@ -2796,11 +2829,12 @@ class TestGrafterDistributed:
     def test_recv_with_user_transform(self, tmp_path: Path):
         transform_file = tmp_path / "graft_transform.py"
         transform_file.write_text(
-            "def transform(tags, received, target):\n"
-            "    return received * 2\n"
+            "def transform(tags, received_list, target):\n"
+            "    # received_list has one entry per sender rank; multiply by 2\n"
+            "    return received_list[0] * 2\n"
         )
         graft_port = find_available_port(29610)
-        run_distributed_test(
+        _run_graft_test(
             self._test_user_transform_func,
             graft_port=graft_port,
             group_name="grafter_transform",
@@ -2809,7 +2843,6 @@ class TestGrafterDistributed:
 
     @staticmethod
     def _test_user_transform_func(rank, graft_port, group_name, transform_path):
-        _reinit_role_default_pg(rank)
         grafter = _Grafter(
             config=_make_grafter_test_config(
                 rank=rank,
@@ -2832,7 +2865,7 @@ class TestGrafterDistributed:
 
     def test_unmatched_name_skipped(self):
         graft_port = find_available_port(29620)
-        run_distributed_test(
+        _run_graft_test(
             self._test_unmatched_func,
             graft_port=graft_port,
             group_name="grafter_unmatched",
@@ -2840,7 +2873,6 @@ class TestGrafterDistributed:
 
     @staticmethod
     def _test_unmatched_func(rank, graft_port, group_name):
-        _reinit_role_default_pg(rank)
         grafter = _Grafter(
             config=_make_grafter_test_config(
                 rank=rank, graft_port=graft_port, group_name=group_name
@@ -2857,7 +2889,7 @@ class TestGrafterDistributed:
 
     def test_init_timeout_warns(self):
         graft_port = find_available_port(29630)
-        run_distributed_test(
+        _run_graft_test(
             self._test_init_timeout_func,
             graft_port=graft_port,
             group_name="grafter_timeout",
@@ -2865,7 +2897,6 @@ class TestGrafterDistributed:
 
     @staticmethod
     def _test_init_timeout_func(rank, graft_port, group_name):
-        _reinit_role_default_pg(rank)
         grafter = _Grafter(
             config=_make_grafter_test_config(
                 rank=rank, graft_port=graft_port, group_name=group_name, timeout=2
@@ -2891,76 +2922,88 @@ class TestGrafterDistributed:
 
 
 class TestGrafterE2eExample:
-    """End-to-end example showing the canonical grafter workflow.
+    """End-to-end example: target has a (suspected) buggy attention kernel.
 
-    Two systems run side-by-side. On each, the user instruments their code
-    with `dumper.dump(name, tensor)`. Both sides set the SAME b2t/t2b filters
-    (names that flow baseline -> target / target -> baseline); the only
-    per-side difference is `grafter_role`. The recv side's tensor is silently
-    overwritten in-place via `tensor.copy_()`. No call-site change beyond
-    the existing `dumper.dump`.
+    Story: target's attention kernel produces wrong outputs and we want to
+    test "if we replace target's attention with baseline's, does the rest of
+    the model converge?". The full graft wiring is:
+
+      - At the attention call site, target sends its inputs (q/k/v) to
+        baseline → baseline's local inputs are overwritten by target's, so
+        baseline runs its (known-good) attention against the same inputs.
+        This is a t->b graft on `attn_input`.
+      - Both sides run the kernel.
+      - Baseline sends its outputs back to target → target's outputs are
+        overwritten by baseline's, so target's downstream sees baseline's
+        attention result. This is a b->t graft on `attn_output`.
+
+    Net effect: target's attention is semantically replaced by baseline's,
+    without modifying target's source beyond inserting `dumper.dump` at the
+    input/output sites. The remaining call-site code is exactly:
+
+        dumper.dump("attn_input", q)         # t -> b
+        out = target_attention_kernel(q, ...)
+        dumper.dump("attn_output", out)      # b -> t
     """
 
-    def test_e2e_dumper_dump_replaces_target_tensor(self):
+    def test_e2e_buggy_attn_replaced_by_baseline(self):
         graft_port = find_available_port(29640)
-        run_distributed_test(self._worker, graft_port=graft_port)
+        # All env vars except ROLE are shared by both sides; we set them in
+        # the parent's temp_set_env so the spawned subprocesses inherit them.
+        with temp_set_env(
+            DUMPER_ENABLE="1",
+            DUMPER_ENABLE_OUTPUT_FILE="false",         # skip disk I/O for the test
+            DUMPER_ENABLE_OUTPUT_CONSOLE="false",
+            DUMPER_GRAFTER_ENABLE="1",
+            DUMPER_GRAFTER_MASTER_ADDRESS="127.0.0.1",
+            DUMPER_GRAFTER_MASTER_PORT=str(graft_port),
+            DUMPER_GRAFTER_BASELINE_WORLD_SIZE="1",
+            DUMPER_GRAFTER_TARGET_WORLD_SIZE="1",
+            DUMPER_GRAFTER_B2T_FILTER="name == 'attn_output'",
+            DUMPER_GRAFTER_T2B_FILTER="name == 'attn_input'",
+            DUMPER_GRAFTER_GROUP_NAME="grafter_e2e",
+            DUMPER_GRAFTER_TIMEOUT="30",
+        ):
+            _run_graft_test(self._worker)
 
     @staticmethod
-    def _worker(rank, graft_port):
-        # ---------------------------------------------------------------
-        # In real use, set env vars before running the program. Both sides
-        # share these:
-        #   DUMPER_ENABLE=1
-        #   DUMPER_GRAFTER_ENABLE=1
-        #   DUMPER_GRAFTER_MASTER_ADDRESS=10.0.0.1
-        #   DUMPER_GRAFTER_MASTER_PORT=29999
-        #   DUMPER_GRAFTER_BASELINE_WORLD_SIZE=8
-        #   DUMPER_GRAFTER_TARGET_WORLD_SIZE=8
-        #   DUMPER_GRAFTER_B2T_FILTER="name == 'attention_output'"
-        #   DUMPER_GRAFTER_T2B_FILTER="name == 'attention_input'"
-        # Only this differs per side:
-        #   DUMPER_GRAFTER_ROLE=baseline   # on baseline
-        #   DUMPER_GRAFTER_ROLE=target     # on target
-        # ---------------------------------------------------------------
-        _reinit_role_default_pg(rank)
+    def _worker(rank):
+        # The only per-side env: ROLE.  Everything else inherited from parent.
         role = "baseline" if rank == 0 else "target"
-        cfg = DumperConfig(
-            enable=True,                      # dumper itself must be on
-            enable_output_file=False,         # skip disk I/O for this test
-            enable_output_console=False,
-            grafter_enable=True,
-            grafter_role=role,
-            grafter_b2t_filter="name == 'attention_output'",
-            grafter_t2b_filter=None,          # only graft outputs in this demo
-            grafter_master_address="127.0.0.1",
-            grafter_master_port=graft_port,
-            grafter_baseline_world_size=1,
-            grafter_target_world_size=1,
-            grafter_group_name="grafter_e2e",
-            grafter_timeout=30,
-        )
-        d = _Dumper(config=cfg)
+        with temp_set_env(DUMPER_GRAFTER_ROLE=role):
+            cfg = DumperConfig.from_env()
+            d = _Dumper(config=cfg)
 
-        # User code: emit the tensor at the named instrumentation point.
-        # On baseline side: this tensor (e.g. baseline's attention output) is
-        # broadcast to target.
-        # On target side: this tensor's contents are silently overwritten via
-        # .copy_() with baseline's values. No code change beyond `d.dump`.
-        my_tensor = torch.tensor(
-            [100.0 if role == "baseline" else 999.0] * 4,
-            device=f"cuda:{rank}",
-        )
-        d.dump("attention_output", my_tensor)
+            # ---- target's "buggy" attention call site, mirrored on baseline ----
 
-        try:
-            if role == "target":
-                assert my_tensor.tolist() == [100.0] * 4, (
-                    f"target's tensor should be overwritten with baseline's "
-                    f"values, got {my_tensor.tolist()}"
+            # Step 1: graft input.  target sends its q to baseline; baseline
+            # overwrites its local q via .copy_() with target's q.
+            q = torch.tensor(
+                [1.0, 2.0, 3.0, 4.0] if role == "target" else [99.0] * 4,
+                device=f"cuda:{rank}",
+            )
+            d.dump("attn_input", q)
+            if role == "baseline":
+                assert q.tolist() == [1.0, 2.0, 3.0, 4.0], (
+                    f"baseline's q should be overwritten by target's via the t->b graft, "
+                    f"got {q.tolist()}"
                 )
-        finally:
-            if d._grafter._pg is not None:
-                dist.destroy_process_group(d._grafter._pg)
+
+            # Step 2: each side runs its own kernel.  Baseline = known-good
+            # (returns q * 10); target = buggy under investigation (returns 0).
+            if role == "baseline":
+                attn_out = q * 10.0
+            else:
+                attn_out = torch.zeros_like(q)
+
+            # Step 3: graft output.  baseline sends attn_out to target; target
+            # overwrites its (buggy) output with baseline's via .copy_().
+            d.dump("attn_output", attn_out)
+            if role == "target":
+                assert attn_out.tolist() == [10.0, 20.0, 30.0, 40.0], (
+                    f"target's attn_out should be overwritten by baseline's via "
+                    f"the b->t graft, got {attn_out.tolist()}"
+                )
 
 
 if __name__ == "__main__":
