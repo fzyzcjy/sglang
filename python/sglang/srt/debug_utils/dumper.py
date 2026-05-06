@@ -909,7 +909,7 @@ class _Grafter:
         # crash the whole training/inference run. On error we log the full
         # traceback and skip this graft point; downstream sees the recv
         # side's original tensor unchanged.
-        info_before_overriden = get_tensor_info(value)
+        info_before_overridden = get_tensor_info(value)
         try:
             value_to_override = self._apply_transform(
                 tags=tags,
@@ -922,7 +922,7 @@ class _Grafter:
                 f"[Grafter] recv role={role.value} dir={direction.value} "
                 f"tags={tags} n_senders={len(sender_tensors)} "
                 f"sender_extras={sender_extras} "
-                f"before_overriden={info_before_overriden} "
+                f"before_overridden={info_before_overridden} "
                 f"to_override={get_tensor_info(value_to_override)} "
                 f"diff_pre_vs_new={diff}"
             )
