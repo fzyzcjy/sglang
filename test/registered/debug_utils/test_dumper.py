@@ -2813,14 +2813,15 @@ class TestGrafterFilterMatching:
 
 
 def _run_graft_test(worker_func, **kwargs):
-    """Spawn one process per role (rank 0 = baseline, rank 1 = target).
+    """Spawn one GPU-using process per role (rank 0 = baseline, rank 1 = target).
 
-    Each process initializes its OWN default PG with world_size=1 from the
-    start, mirroring production where baseline and target are independently
-    launched and each have their own dist world.
+    Limited to 1+1 because CI machines we can rely on have only 2 GPUs.
+    Each process initializes its OWN default PG (nccl, world_size=1) from
+    the start, mirroring production where baseline and target are
+    independently launched.
 
-    Parent allocates per-role default-PG ports up-front so the children do
-    not race on `find_available_port`.
+    For asymmetric / multi-rank coverage that doesn't need GPU, see
+    `_run_graft_test_cpu_multi` below.
     """
     import torch.multiprocessing as mp
 
@@ -2861,6 +2862,86 @@ def _graft_worker_entry(rank, role_port, worker_func, result_queue, kwargs):
         result_queue.put(None)
     except Exception as e:
         result_queue.put(f"rank={rank}: {e}\n{traceback.format_exc()}")
+    finally:
+        dist.destroy_process_group()
+
+
+def _run_graft_test_cpu_multi(
+    worker_func, *, baseline_world: int, target_world: int, **kwargs
+):
+    """Spawn (baseline_world + target_world) CPU-only processes (gloo backend).
+
+    Used to exercise asymmetric multi-rank cases (e.g. 4 baseline ranks and
+    2 target ranks) that we can't run on the 2-GPU CI fleet. Each role gets
+    its OWN default PG (gloo, world=role_world); the graft cross-system PG
+    spans all ranks.
+
+    The worker function receives (role, local_rank, **kwargs).
+    """
+    import torch.multiprocessing as mp
+
+    # One default-PG port per role (baseline-side ranks share one PG, target
+    # ranks share another). Allocated up-front to avoid child races.
+    role_ports = {
+        "baseline": find_available_port(29800),
+        "target": find_available_port(29900),
+    }
+
+    ctx = mp.get_context("spawn")
+    result_queue = ctx.Queue()
+    processes = []
+    total = baseline_world + target_world
+    for global_rank in range(total):
+        if global_rank < baseline_world:
+            role = "baseline"
+            local_rank = global_rank
+            local_world = baseline_world
+        else:
+            role = "target"
+            local_rank = global_rank - baseline_world
+            local_world = target_world
+        p = ctx.Process(
+            target=_graft_cpu_worker_entry,
+            args=(
+                role,
+                local_rank,
+                local_world,
+                role_ports[role],
+                worker_func,
+                result_queue,
+                kwargs,
+            ),
+        )
+        p.start()
+        processes.append(p)
+
+    for p in processes:
+        p.join()
+
+    errors = [result_queue.get() for _ in range(total)]
+    errors = [e for e in errors if e]
+    if errors:
+        raise AssertionError("\n".join(errors))
+
+
+def _graft_cpu_worker_entry(
+    role, local_rank, local_world, port, worker_func, result_queue, kwargs
+):
+    import traceback
+
+    dist.init_process_group(
+        backend="gloo",
+        init_method=f"tcp://127.0.0.1:{port}",
+        world_size=local_world,
+        rank=local_rank,
+    )
+    try:
+        worker_func(role=role, local_rank=local_rank, **kwargs)
+        result_queue.put(None)
+    except Exception as e:
+        result_queue.put(
+            f"role={role} local_rank={local_rank}: {e}\n{traceback.format_exc()}"
+        )
     finally:
         dist.destroy_process_group()
 
@@ -3190,6 +3271,70 @@ class TestGrafterDistributed:
             if rank == 0:
                 assert "WARNING" in output, f"expected WARNING in rank 0 output: {output}"
                 assert "has not completed after 2s" in output, output
+        finally:
+            if grafter._pg is not None:
+                dist.destroy_process_group(grafter._pg)
+
+
+class TestGrafterMultiRankCpu:
+    """Coverage of asymmetric multi-rank cases via CPU/gloo (CI fleet has
+    only 2 GPUs, which is too few for these cases)."""
+
+    def test_4_baseline_2_target_b2t_with_user_transform(self, tmp_path: Path):
+        """4 baseline senders -> 2 target receivers via b2t graft.
+        The user transform asserts received_list has length 4 with each
+        sender's tensor matching its rank, then returns a marker tensor."""
+        module_name = "_xform_assert_4_senders"
+        (tmp_path / f"{module_name}.py").write_text(
+            "import torch\n"
+            "def transform(graft_input):\n"
+            "    rl = graft_input.received_list\n"
+            "    assert len(rl) == 4, f'expected 4 senders, got {len(rl)}'\n"
+            "    for i, t in enumerate(rl):\n"
+            "        v = float(t.flatten()[0].item())\n"
+            "        assert v == float(i), f'rl[{i}][0]={v}, want {float(i)}'\n"
+            "    return torch.full_like(graft_input.target, 999.0)\n"
+        )
+        graft_port = find_available_port(29655)
+        _run_graft_test_cpu_multi(
+            self._test_4b_2t_func,
+            baseline_world=4,
+            target_world=2,
+            graft_port=graft_port,
+            group_name="grafter_4b_2t",
+            transform_dir=str(tmp_path),
+            transform_path=f"{module_name}.transform",
+        )
+
+    @staticmethod
+    def _test_4b_2t_func(
+        role, local_rank, graft_port, group_name, transform_dir, transform_path
+    ):
+        sys.path.insert(0, transform_dir)
+        cfg = DumperConfig(
+            grafter_enable=True,
+            grafter_role=role,
+            grafter_b2t_filter="name == 'x'",
+            grafter_master_address="127.0.0.1",
+            grafter_master_port=graft_port,
+            grafter_baseline_world_size=4,
+            grafter_target_world_size=2,
+            grafter_backend="gloo",
+            grafter_group_name=group_name,
+            grafter_timeout=30,
+            grafter_transform_path=transform_path,
+        )
+        grafter = _Grafter(config=cfg)
+        try:
+            if role == "baseline":
+                # rank-i baseline contributes [i, i, i].
+                tensor = torch.full((3,), float(local_rank))
+                grafter.maybe_intercept(value=tensor, tags={"name": "x"})
+            else:
+                # Target's local tensor (will be overwritten with 999s by transform).
+                target = torch.full((3,), 99.0)
+                grafter.maybe_intercept(value=target, tags={"name": "x"})
+                assert target.tolist() == [999.0, 999.0, 999.0], target.tolist()
         finally:
             if grafter._pg is not None:
                 dist.destroy_process_group(grafter._pg)
