@@ -141,9 +141,6 @@ class DumperConfig(_BaseConfig):
     non_intrusive_mode: str = "core"
     source_patcher_config: Optional[str] = None
     grafter_enable: bool = False
-    # Defaults below are deliberately absurd (-1 / empty) so that
-    # `grafter_enable=True` without explicit values fails loudly in
-    # __post_init__ rather than silently producing wrong behavior.
     grafter_role: str = ""  # required if enabled: "baseline" or "target"
     grafter_b2t_filter: Optional[str] = None  # names flowing baseline -> target
     grafter_t2b_filter: Optional[str] = None  # names flowing target -> baseline
@@ -154,9 +151,8 @@ class DumperConfig(_BaseConfig):
     grafter_backend: str = "nccl"
     grafter_group_name: str = "graft"
     grafter_timeout: int = 300
-    # Fully-qualified Python path "pkg.subpkg.module.symbol" pointing at a
-    # callable `transform(tags, received_list, target) -> Tensor`. None ->
-    # use the default identity-by-rank fallback in _Grafter._default_transform.
+    # Fully-qualified Python path "pkg.subpkg.module.fn_name"
+    # None -> use the default identity-by-rank fallback in _Grafter._default_transform.
     grafter_transform_path: Optional[str] = None
 
     @classmethod
