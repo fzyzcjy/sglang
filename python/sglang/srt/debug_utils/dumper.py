@@ -852,9 +852,8 @@ class _Grafter:
         # and shouldn't leak). all_gather_object is pickle-routed, so tensor
         # shapes may differ across sender ranks.
         total_world = cfg.grafter_baseline_world_size + cfg.grafter_target_world_size
-        my_contribution = value if is_send else None
         gathered: list = [None] * total_world
-        dist.all_gather_object(gathered, my_contribution, group=self._pg)
+        dist.all_gather_object(gathered, value if is_send else None, group=self._pg)
 
         if is_send:
             _log(
@@ -876,10 +875,7 @@ class _Grafter:
         target_info_before = get_tensor_info(value)
         try:
             transformed = self._apply_transform(
-                tags=tags,
-                received_list=sender_tensors,
-                target=value,
-                direction=direction,
+                tags=tags, received_list=sender_tensors, target=value
             )
             value.copy_(transformed)
             _log(
