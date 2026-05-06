@@ -2611,10 +2611,15 @@ class TestGrafterConfig:
             assert DumperConfig.from_env().grafter_role == "baseline"
 
     def test_from_env_enable_flag(self):
-        with temp_set_env(DUMPER_GRAFTER_ENABLE="1"):
+        # enable=True requires a valid role per DumperConfig.__post_init__.
+        with temp_set_env(DUMPER_GRAFTER_ENABLE="1", DUMPER_GRAFTER_ROLE="baseline"):
             assert DumperConfig.from_env().grafter_enable is True
         with temp_set_env(DUMPER_GRAFTER_ENABLE="false"):
             assert DumperConfig.from_env().grafter_enable is False
+
+    def test_enable_without_role_raises(self):
+        with pytest.raises(AssertionError, match=r"grafter_role must be"):
+            DumperConfig(grafter_enable=True)
 
     def test_env_name_for_grafter_field(self):
         assert DumperConfig._env_name("grafter_b2t_filter") == "DUMPER_GRAFTER_B2T_FILTER"
@@ -2636,7 +2641,11 @@ class TestGrafterFilterMatching:
     def test_unmatched_non_tensor_silent(self):
         """Non-tensor + unmatched name → silent skip, no print."""
         grafter = _Grafter(
-            config=DumperConfig(grafter_enable=True, grafter_b2t_filter="name == 'x'")
+            config=DumperConfig(
+                grafter_enable=True,
+                grafter_role="baseline",
+                grafter_b2t_filter="name == 'x'",
+            )
         )
         with _capture_stdout() as captured:
             grafter.maybe_intercept(value=42, tags={"name": "other"})
@@ -2649,7 +2658,11 @@ class TestGrafterFilterMatching:
         This catches misconfigured filters (e.g. matching a name that maps to a
         dict/list at some call sites) without silently masking the issue."""
         grafter = _Grafter(
-            config=DumperConfig(grafter_enable=True, grafter_b2t_filter="name == 'x'")
+            config=DumperConfig(
+                grafter_enable=True,
+                grafter_role="baseline",
+                grafter_b2t_filter="name == 'x'",
+            )
         )
         with _capture_stdout() as captured:
             grafter.maybe_intercept(value={"not": "a tensor"}, tags={"name": "x"})
@@ -2662,6 +2675,7 @@ class TestGrafterFilterMatching:
         grafter = _Grafter(
             config=DumperConfig(
                 grafter_enable=True,
+                grafter_role="baseline",
                 grafter_b2t_filter="name == 'x'",
                 grafter_t2b_filter="name == 'y'",
             )
@@ -2673,6 +2687,7 @@ class TestGrafterFilterMatching:
         grafter = _Grafter(
             config=DumperConfig(
                 grafter_enable=True,
+                grafter_role="baseline",
                 grafter_b2t_filter="name == 'x'",
                 grafter_t2b_filter="name == 'x'",
             )
