@@ -2859,16 +2859,19 @@ class TestGrafterFilterMatching:
         with pytest.raises(SyntaxError):
             grafter.maybe_intercept(value=torch.zeros(2), tags={"name": "x"})
 
-    def test_filter_expression_name_error_raises(self):
+    def test_filter_expression_undefined_helper_raises(self):
         """Referencing an undefined helper inside a filter (e.g. a function
-        the user expected to be in scope) should raise NameError, not be
-        silently treated as False."""
+        the user expected to be in scope) should NOT be silently treated as
+        False. The filter namespace is a `_DefaultNoneDict` (unknown keys
+        resolve to None), so calling an undefined helper raises TypeError
+        (`'NoneType' object is not callable`) — loud enough to surface the
+        misconfiguration."""
         grafter = _Grafter(
             config=_unit_grafter_config(
                 grafter_b2t_filter="totally_undefined_helper(name)"
             ),
         )
-        with pytest.raises(NameError):
+        with pytest.raises(TypeError, match=r"NoneType.* not callable"):
             grafter.maybe_intercept(value=torch.zeros(2), tags={"name": "x"})
 
     def test_filter_can_use_re_search(self):
