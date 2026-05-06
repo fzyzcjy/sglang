@@ -1030,15 +1030,6 @@ class _Grafter:
         return fn(graft_input)
 
     @staticmethod
-    def _default_transform_error(detail: str) -> str:
-        return (
-            f"[Grafter] no grafter_transform_path set; default identity-by-rank "
-            f"{detail}. Provide a transform via "
-            f"DUMPER_GRAFTER_TRANSFORM_PATH=pkg.module.symbol defining "
-            f"`transform(graft_input: GraftTransformInput) -> Tensor`."
-        )
-
-    @staticmethod
     def _default_transform(graft_input: GraftTransformInput) -> torch.Tensor:
         """Identity-by-rank fallback. Requires #senders == #recvs and
         shape(received_list[my_recv_rank]) == shape(target). Otherwise raises
@@ -1064,6 +1055,15 @@ class _Grafter:
                 )
             )
         return candidate
+
+    @staticmethod
+    def _default_transform_error(detail: str) -> str:
+        return (
+            f"[Grafter] no grafter_transform_path set; default identity-by-rank "
+            f"{detail}. Provide a transform via "
+            f"DUMPER_GRAFTER_TRANSFORM_PATH=pkg.module.symbol defining "
+            f"`transform(graft_input: GraftTransformInput) -> Tensor`."
+        )
 
 
 
