@@ -140,6 +140,17 @@ class DumperConfig(_BaseConfig):
     server_port: str = "-1"
     non_intrusive_mode: str = "core"
     source_patcher_config: Optional[str] = None
+    grafter_enable: bool = False
+    grafter_send_filter: Optional[str] = None
+    grafter_recv_filter: Optional[str] = None
+    grafter_master_address: str = ""
+    grafter_master_port: int = 0
+    grafter_world_size: int = 0
+    grafter_rank_offset: int = 0
+    grafter_backend: str = "nccl"
+    grafter_group_name: str = "graft"
+    grafter_timeout: int = 300
+    grafter_transform_path: Optional[str] = None
 
     @classmethod
     def _env_prefix(cls) -> str:
@@ -155,25 +166,6 @@ class DumperConfig(_BaseConfig):
         if port <= 0:
             return None
         return port
-
-
-@dataclass(frozen=True)
-class GrafterConfig(_BaseConfig):
-    enable: bool = False
-    send_filter: Optional[str] = None
-    recv_filter: Optional[str] = None
-    master_address: str = ""
-    master_port: int = 0
-    world_size: int = 0
-    rank_offset: int = 0
-    backend: str = "nccl"
-    group_name: str = "graft"
-    timeout: int = 300
-    transform_path: Optional[str] = None
-
-    @classmethod
-    def _env_prefix(cls) -> str:
-        return "DUMPER_GRAFT_"
 
 
 # -------------------------------------- dumper core ------------------------------------------
@@ -222,7 +214,7 @@ class _Dumper:
         self._config = config
         self._state = _DumperState()
         self._non_intrusives: list["_NonIntrusiveDumper"] = []
-        self._grafter = _Grafter(GrafterConfig.from_env())
+        self._grafter = _Grafter(config=config)
 
     # ------------------------------- public :: core ---------------------------------
 
@@ -770,32 +762,33 @@ class _Grafter:
     """Cross-system tensor transplant. Triggered silently from dumper.dump.
 
     Convention: graft global rank 0 is always the send side's local rank 0.
-    The send side must occupy the low rank segment (rank_offset=0); the recv
-    side occupies the high segment (rank_offset=send_world_size). Both sides
-    broadcast with src=0 (= send side's rank 0).
+    The send side must occupy the low rank segment (grafter_rank_offset=0); the
+    recv side occupies the high segment (grafter_rank_offset=send_world_size).
+    Both sides broadcast with src=0 (= send side's rank 0).
     """
 
-    def __init__(self, config: GrafterConfig):
+    def __init__(self, *, config: DumperConfig):
         self._config = config
         self._pg = None
         self._transform_fn: Optional[Callable] = None
 
     @property
     def enabled(self) -> bool:
-        return self._config.enable
+        return self._config.grafter_enable
 
     def maybe_intercept(self, *, name: str, value: Any) -> None:
-        if not self._config.enable:
+        cfg = self._config
+        if not cfg.grafter_enable:
             return
         if not isinstance(value, torch.Tensor):
             return
 
         tags = {"name": name}
-        is_send = self._match(self._config.send_filter, tags)
-        is_recv = self._match(self._config.recv_filter, tags)
+        is_send = self._match(cfg.grafter_send_filter, tags)
+        is_recv = self._match(cfg.grafter_recv_filter, tags)
         if is_send and is_recv:
             raise RuntimeError(
-                f"[Grafter] name={name!r} matched BOTH send_filter and recv_filter"
+                f"[Grafter] name={name!r} matched BOTH grafter_send_filter and grafter_recv_filter"
             )
         if not (is_send or is_recv):
             return
@@ -834,29 +827,28 @@ class _Grafter:
             return
         from sglang.srt.utils.common import init_custom_process_group
 
+        cfg = self._config
         assert dist.is_initialized(), (
             "[Grafter] default torch.distributed must be initialized"
         )
         local_rank = dist.get_rank()
-        my_rank = self._config.rank_offset + local_rank
-        init_method = (
-            f"tcp://{self._config.master_address}:{self._config.master_port}"
-        )
+        my_rank = cfg.grafter_rank_offset + local_rank
+        init_method = f"tcp://{cfg.grafter_master_address}:{cfg.grafter_master_port}"
         print(
-            f"[Grafter] init group: world_size={self._config.world_size} "
+            f"[Grafter] init group: world_size={cfg.grafter_world_size} "
             f"rank={my_rank} init_method={init_method} "
-            f"backend={self._config.backend} name={self._config.group_name}"
+            f"backend={cfg.grafter_backend} name={cfg.grafter_group_name}"
         )
         self._pg = _collective_with_timeout(
             lambda: init_custom_process_group(
-                backend=self._config.backend,
+                backend=cfg.grafter_backend,
                 init_method=init_method,
-                world_size=self._config.world_size,
+                world_size=cfg.grafter_world_size,
                 rank=my_rank,
-                group_name=self._config.group_name,
+                group_name=cfg.grafter_group_name,
             ),
             operation_name="init_custom_process_group in _Grafter",
-            timeout_seconds=self._config.timeout,
+            timeout_seconds=cfg.grafter_timeout,
         )
 
     def _apply_transform(
@@ -864,10 +856,11 @@ class _Grafter:
     ) -> torch.Tensor:
         # TODO: integrate with dump_comparator unsharder annotations once
         # full inverse (sharded -> global -> sharded) transforms exist.
-        if self._config.transform_path is None:
+        path = self._config.grafter_transform_path
+        if path is None:
             return received
         if self._transform_fn is None:
-            self._transform_fn = self._load_transform_fn(self._config.transform_path)
+            self._transform_fn = self._load_transform_fn(path)
         return self._transform_fn(name, received, target)
 
     @staticmethod

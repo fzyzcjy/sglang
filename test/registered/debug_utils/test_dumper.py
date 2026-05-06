@@ -14,7 +14,6 @@ import torch.distributed as dist
 
 from sglang.srt.debug_utils.dumper import (
     DumperConfig,
-    GrafterConfig,
     _collective_with_timeout,
     _deepcopy_or_clone,
     _detect_recompute_status,
@@ -2583,91 +2582,118 @@ class TestRecomputeStatus:
 
 
 class TestGrafterConfig:
-    def test_from_env_defaults_match_dataclass_defaults(self):
-        assert GrafterConfig.from_env() == GrafterConfig()
-
     def test_from_env_parses_send_recv_filters(self):
         with temp_set_env(
-            DUMPER_GRAFT_SEND_FILTER="name == 'x'",
-            DUMPER_GRAFT_RECV_FILTER="name == 'y'",
+            DUMPER_GRAFTER_SEND_FILTER="name == 'x'",
+            DUMPER_GRAFTER_RECV_FILTER="name == 'y'",
         ):
-            cfg = GrafterConfig.from_env()
-            assert cfg.send_filter == "name == 'x'"
-            assert cfg.recv_filter == "name == 'y'"
+            cfg = DumperConfig.from_env()
+            assert cfg.grafter_send_filter == "name == 'x'"
+            assert cfg.grafter_recv_filter == "name == 'y'"
 
     def test_from_env_parses_int_fields(self):
         with temp_set_env(
-            DUMPER_GRAFT_WORLD_SIZE="16",
-            DUMPER_GRAFT_RANK_OFFSET="8",
-            DUMPER_GRAFT_MASTER_PORT="29999",
-            DUMPER_GRAFT_TIMEOUT="120",
+            DUMPER_GRAFTER_WORLD_SIZE="16",
+            DUMPER_GRAFTER_RANK_OFFSET="8",
+            DUMPER_GRAFTER_MASTER_PORT="29999",
+            DUMPER_GRAFTER_TIMEOUT="120",
         ):
-            cfg = GrafterConfig.from_env()
-            assert cfg.world_size == 16
-            assert type(cfg.world_size) is int
-            assert cfg.rank_offset == 8
-            assert cfg.master_port == 29999
-            assert cfg.timeout == 120
+            cfg = DumperConfig.from_env()
+            assert cfg.grafter_world_size == 16
+            assert type(cfg.grafter_world_size) is int
+            assert cfg.grafter_rank_offset == 8
+            assert cfg.grafter_master_port == 29999
+            assert cfg.grafter_timeout == 120
 
     def test_from_env_enable_flag(self):
-        with temp_set_env(DUMPER_GRAFT_ENABLE="1"):
-            assert GrafterConfig.from_env().enable is True
-        with temp_set_env(DUMPER_GRAFT_ENABLE="false"):
-            assert GrafterConfig.from_env().enable is False
+        with temp_set_env(DUMPER_GRAFTER_ENABLE="1"):
+            assert DumperConfig.from_env().grafter_enable is True
+        with temp_set_env(DUMPER_GRAFTER_ENABLE="false"):
+            assert DumperConfig.from_env().grafter_enable is False
 
-    def test_env_prefix_is_dumper_graft(self):
-        assert GrafterConfig._env_name("foo") == "DUMPER_GRAFT_FOO"
+    def test_env_name_for_grafter_field(self):
+        assert DumperConfig._env_name("grafter_send_filter") == "DUMPER_GRAFTER_SEND_FILTER"
 
 
 class TestGrafterFilterMatching:
     def test_disabled_returns_silently(self):
-        grafter = _Grafter(GrafterConfig(enable=False, send_filter="name == 'x'"))
+        grafter = _Grafter(
+            config=DumperConfig(grafter_enable=False, grafter_send_filter="name == 'x'")
+        )
         grafter.maybe_intercept(name="x", value=torch.zeros(2))
         assert grafter._pg is None  # never initialized
 
     def test_non_tensor_value_skipped(self):
-        grafter = _Grafter(GrafterConfig(enable=True, send_filter="name == 'x'"))
+        grafter = _Grafter(
+            config=DumperConfig(grafter_enable=True, grafter_send_filter="name == 'x'")
+        )
         grafter.maybe_intercept(name="x", value=42)
         assert grafter._pg is None
 
     def test_unmatched_name_returns_silently(self):
         grafter = _Grafter(
-            GrafterConfig(enable=True, send_filter="name == 'x'", recv_filter="name == 'y'")
+            config=DumperConfig(
+                grafter_enable=True,
+                grafter_send_filter="name == 'x'",
+                grafter_recv_filter="name == 'y'",
+            )
         )
         grafter.maybe_intercept(name="z", value=torch.zeros(2))
         assert grafter._pg is None
 
     def test_overlap_filters_raise(self):
         grafter = _Grafter(
-            GrafterConfig(
-                enable=True, send_filter="name == 'x'", recv_filter="name == 'x'"
+            config=DumperConfig(
+                grafter_enable=True,
+                grafter_send_filter="name == 'x'",
+                grafter_recv_filter="name == 'x'",
             )
         )
-        with pytest.raises(RuntimeError, match=r"matched BOTH send_filter and recv_filter"):
+        with pytest.raises(
+            RuntimeError, match=r"matched BOTH grafter_send_filter and grafter_recv_filter"
+        ):
             grafter.maybe_intercept(name="x", value=torch.zeros(2))
+
+
+def _make_grafter_test_config(
+    *,
+    rank: int,
+    graft_port: int,
+    group_name: str,
+    timeout: int = 30,
+    transform_path: Optional[str] = None,
+) -> DumperConfig:
+    """Helper for distributed grafter tests: rank 0 sends, rank 1 receives."""
+    return DumperConfig(
+        grafter_enable=True,
+        grafter_send_filter="name == 'x'" if rank == 0 else None,
+        grafter_recv_filter="name == 'x'" if rank == 1 else None,
+        grafter_master_address="127.0.0.1",
+        grafter_master_port=graft_port,
+        grafter_world_size=2,
+        grafter_rank_offset=0,
+        grafter_group_name=group_name,
+        grafter_timeout=timeout,
+        grafter_transform_path=transform_path if rank == 1 else None,
+    )
 
 
 class TestGrafterDistributed:
     def test_send_recv_copy_roundtrip(self):
         graft_port = find_available_port(29600)
         run_distributed_test(
-            self._test_send_recv_func, graft_port=graft_port, group_name="graft_roundtrip"
+            self._test_send_recv_func,
+            graft_port=graft_port,
+            group_name="grafter_roundtrip",
         )
 
     @staticmethod
     def _test_send_recv_func(rank, graft_port, group_name):
-        cfg = GrafterConfig(
-            enable=True,
-            send_filter="name == 'x'" if rank == 0 else None,
-            recv_filter="name == 'x'" if rank == 1 else None,
-            master_address="127.0.0.1",
-            master_port=graft_port,
-            world_size=2,
-            rank_offset=0,
-            group_name=group_name,
-            timeout=30,
+        grafter = _Grafter(
+            config=_make_grafter_test_config(
+                rank=rank, graft_port=graft_port, group_name=group_name
+            )
         )
-        grafter = _Grafter(cfg)
         try:
             if rank == 0:
                 tensor = torch.tensor([1.0, 2.0, 3.0], device=f"cuda:{rank}")
@@ -2690,25 +2716,20 @@ class TestGrafterDistributed:
         run_distributed_test(
             self._test_user_transform_func,
             graft_port=graft_port,
-            group_name="graft_transform",
+            group_name="grafter_transform",
             transform_path=str(transform_file),
         )
 
     @staticmethod
     def _test_user_transform_func(rank, graft_port, group_name, transform_path):
-        cfg = GrafterConfig(
-            enable=True,
-            send_filter="name == 'x'" if rank == 0 else None,
-            recv_filter="name == 'x'" if rank == 1 else None,
-            master_address="127.0.0.1",
-            master_port=graft_port,
-            world_size=2,
-            rank_offset=0,
-            group_name=group_name,
-            timeout=30,
-            transform_path=transform_path if rank == 1 else None,
+        grafter = _Grafter(
+            config=_make_grafter_test_config(
+                rank=rank,
+                graft_port=graft_port,
+                group_name=group_name,
+                transform_path=transform_path,
+            )
         )
-        grafter = _Grafter(cfg)
         try:
             if rank == 0:
                 tensor = torch.tensor([1.0, 2.0, 3.0], device=f"cuda:{rank}")
@@ -2726,28 +2747,21 @@ class TestGrafterDistributed:
         run_distributed_test(
             self._test_unmatched_func,
             graft_port=graft_port,
-            group_name="graft_unmatched",
+            group_name="grafter_unmatched",
         )
 
     @staticmethod
     def _test_unmatched_func(rank, graft_port, group_name):
-        cfg = GrafterConfig(
-            enable=True,
-            send_filter="name == 'x'" if rank == 0 else None,
-            recv_filter="name == 'x'" if rank == 1 else None,
-            master_address="127.0.0.1",
-            master_port=graft_port,
-            world_size=2,
-            rank_offset=0,
-            group_name=group_name,
-            timeout=30,
+        grafter = _Grafter(
+            config=_make_grafter_test_config(
+                rank=rank, graft_port=graft_port, group_name=group_name
+            )
         )
-        grafter = _Grafter(cfg)
         try:
             target = torch.tensor([7.0, 7.0, 7.0], device=f"cuda:{rank}")
             grafter.maybe_intercept(name="other", value=target)
             assert target.tolist() == [7.0, 7.0, 7.0], "tensor must not be modified"
-            assert grafter._pg is None, "group should not be initialized for unmatched name"
+            assert grafter._pg is None, "group must not init for unmatched name"
         finally:
             if grafter._pg is not None:
                 dist.destroy_process_group(grafter._pg)
@@ -2757,23 +2771,16 @@ class TestGrafterDistributed:
         run_distributed_test(
             self._test_init_timeout_func,
             graft_port=graft_port,
-            group_name="graft_timeout",
+            group_name="grafter_timeout",
         )
 
     @staticmethod
     def _test_init_timeout_func(rank, graft_port, group_name):
-        cfg = GrafterConfig(
-            enable=True,
-            send_filter="name == 'x'" if rank == 0 else None,
-            recv_filter="name == 'x'" if rank == 1 else None,
-            master_address="127.0.0.1",
-            master_port=graft_port,
-            world_size=2,
-            rank_offset=0,
-            group_name=group_name,
-            timeout=2,
+        grafter = _Grafter(
+            config=_make_grafter_test_config(
+                rank=rank, graft_port=graft_port, group_name=group_name, timeout=2
+            )
         )
-        grafter = _Grafter(cfg)
         try:
             with _capture_stdout() as captured:
                 if rank == 1:
@@ -2791,6 +2798,74 @@ class TestGrafterDistributed:
         finally:
             if grafter._pg is not None:
                 dist.destroy_process_group(grafter._pg)
+
+
+class TestGrafterE2eExample:
+    """End-to-end example showing the canonical grafter workflow.
+
+    Two systems run side-by-side. On each system, the user instruments their
+    code with `dumper.dump(name, tensor)`. By configuring DumperConfig (or
+    setting DUMPER_GRAFTER_* env vars), one side becomes the SEND side and the
+    other becomes the RECV side for a given name. The recv side's tensor is
+    silently overwritten in-place via `tensor.copy_()`. No call-site changes
+    are needed beyond the existing `dumper.dump`.
+    """
+
+    def test_e2e_dumper_dump_replaces_target_tensor(self):
+        graft_port = find_available_port(29640)
+        run_distributed_test(self._worker, graft_port=graft_port)
+
+    @staticmethod
+    def _worker(rank, graft_port):
+        # ---------------------------------------------------------------
+        # In real use, set env vars before running the program:
+        #   DUMPER_ENABLE=1
+        #   DUMPER_GRAFTER_ENABLE=1
+        #   DUMPER_GRAFTER_MASTER_ADDRESS=10.0.0.1
+        #   DUMPER_GRAFTER_MASTER_PORT=29999
+        #   DUMPER_GRAFTER_WORLD_SIZE=2
+        #   DUMPER_GRAFTER_RANK_OFFSET=0  # send side
+        #   DUMPER_GRAFTER_SEND_FILTER="name == 'attention_input'"
+        #   DUMPER_GRAFTER_RECV_FILTER="name == 'attention_output'"
+        # The recv side mirrors send/recv filters and uses RANK_OFFSET=N
+        # where N is the send side's world size.
+        # ---------------------------------------------------------------
+        cfg = DumperConfig(
+            enable=True,                      # dumper itself must be on
+            enable_output_file=False,         # skip disk I/O for this test
+            enable_output_console=False,
+            grafter_enable=True,
+            grafter_send_filter="name == 'attention_input'" if rank == 0 else None,
+            grafter_recv_filter="name == 'attention_input'" if rank == 1 else None,
+            grafter_master_address="127.0.0.1",
+            grafter_master_port=graft_port,
+            grafter_world_size=2,
+            grafter_rank_offset=0,
+            grafter_group_name="grafter_e2e",
+            grafter_timeout=30,
+        )
+        d = _Dumper(config=cfg)
+
+        # User code: emit tensor at the named instrumentation point.
+        # Before grafter intercept:
+        #   rank 0's tensor = [100, 100, 100, 100]
+        #   rank 1's tensor = [101, 101, 101, 101]
+        # After d.dump returns on rank 1: tensor has been overwritten via copy_()
+        # with rank 0's values. No code change beyond `d.dump(...)`.
+        my_tensor = torch.tensor(
+            [float(rank + 100)] * 4, device=f"cuda:{rank}"
+        )
+        d.dump("attention_input", my_tensor)
+
+        try:
+            if rank == 1:
+                assert my_tensor.tolist() == [100.0] * 4, (
+                    f"recv side tensor should be overwritten with sender's values, "
+                    f"got {my_tensor.tolist()}"
+                )
+        finally:
+            if d._grafter._pg is not None:
+                dist.destroy_process_group(d._grafter._pg)
 
 
 if __name__ == "__main__":
