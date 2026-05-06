@@ -15,6 +15,7 @@ import torch.distributed as dist
 
 from sglang.srt.debug_utils.dumper import (
     DumperConfig,
+    GraftTransformInput,
     _collective_with_timeout,
     _compare_tensors_quick,
     _deepcopy_or_clone,
@@ -23,6 +24,7 @@ from sglang.srt.debug_utils.dumper import (
     _format_tags,
     _get_default_exp_name,
     _Grafter,
+    _load_function,
     _log,
     _map_tensor,
     _materialize_value,
@@ -2794,15 +2796,18 @@ class TestGrafterFilterMatching:
         )
         assert grafter._pg is None
 
-    def test_load_transform_fn_bad_path(self):
-        with pytest.raises((FileNotFoundError, IsADirectoryError, OSError)):
-            _Grafter._load_transform_fn("/no/such/path/transform.py")
+    def test_load_function_bad_module(self):
+        with pytest.raises(ModuleNotFoundError):
+            _load_function("no_such_pkg.no_such_module.transform")
 
-    def test_load_transform_fn_missing_attr(self, tmp_path: Path):
-        bad = tmp_path / "no_transform_attr.py"
-        bad.write_text("x = 1\n")  # no `transform` symbol
+    def test_load_function_missing_attr(self):
+        # `os.path` exists but has no `definitely_no_such_attr`.
         with pytest.raises(AttributeError):
-            _Grafter._load_transform_fn(str(bad))
+            _load_function("os.path.definitely_no_such_attr")
+
+    def test_load_function_no_dotted_prefix(self):
+        with pytest.raises(ValueError, match=r"missing dotted prefix"):
+            _load_function("only_one_segment")
 
 
 def _run_graft_test(worker_func, **kwargs):
@@ -2953,22 +2958,27 @@ class TestGrafterDistributed:
                 dist.destroy_process_group(grafter._pg)
 
     def test_recv_with_user_transform(self, tmp_path: Path):
-        transform_file = tmp_path / "graft_transform.py"
-        transform_file.write_text(
-            "def transform(tags, received_list, target):\n"
-            "    # received_list has one entry per sender rank; multiply by 2\n"
-            "    return received_list[0] * 2\n"
+        # Write a tiny module that defines `transform(graft_input)`. The
+        # worker prepends tmp_path to sys.path so import_module sees it.
+        module_name = "_xform_user_basic"
+        (tmp_path / f"{module_name}.py").write_text(
+            "def transform(graft_input):\n"
+            "    return graft_input.received_list[0] * 2\n"
         )
         graft_port = find_available_port(29610)
         _run_graft_test(
             self._test_user_transform_func,
             graft_port=graft_port,
             group_name="grafter_transform",
-            transform_path=str(transform_file),
+            transform_dir=str(tmp_path),
+            transform_path=f"{module_name}.transform",
         )
 
     @staticmethod
-    def _test_user_transform_func(rank, graft_port, group_name, transform_path):
+    def _test_user_transform_func(
+        rank, graft_port, group_name, transform_dir, transform_path
+    ):
+        sys.path.insert(0, transform_dir)
         grafter = _Grafter(
             config=_make_grafter_test_config(
                 rank=rank,
@@ -3050,9 +3060,9 @@ class TestGrafterDistributed:
     def test_user_transform_exception_does_not_crash(self, tmp_path: Path):
         """A user transform that raises must NOT bring down the system; the
         grafter logs and skips the copy_, leaving target unchanged."""
-        transform_file = tmp_path / "graft_transform_throws.py"
-        transform_file.write_text(
-            "def transform(tags, received_list, target):\n"
+        module_name = "_xform_throws"
+        (tmp_path / f"{module_name}.py").write_text(
+            "def transform(graft_input):\n"
             "    raise RuntimeError('intentional test error from user transform')\n"
         )
         graft_port = find_available_port(29635)
@@ -3060,11 +3070,15 @@ class TestGrafterDistributed:
             self._test_transform_throws_func,
             graft_port=graft_port,
             group_name="grafter_throws",
-            transform_path=str(transform_file),
+            transform_dir=str(tmp_path),
+            transform_path=f"{module_name}.transform",
         )
 
     @staticmethod
-    def _test_transform_throws_func(rank, graft_port, group_name, transform_path):
+    def _test_transform_throws_func(
+        rank, graft_port, group_name, transform_dir, transform_path
+    ):
+        sys.path.insert(0, transform_dir)
         grafter = _Grafter(
             config=_make_grafter_test_config(
                 rank=rank,
@@ -3089,7 +3103,58 @@ class TestGrafterDistributed:
                 assert "intentional test error" in output, output
                 # Full traceback must be included so the bug is debuggable.
                 assert "Traceback (most recent call last)" in output, output
-                assert "graft_transform_throws.py" in output, output
+                assert f"{module_name}.py" in output, output
+        finally:
+            if grafter._pg is not None:
+                dist.destroy_process_group(grafter._pg)
+
+    def test_extras_flow_to_recv_transform(self, tmp_path: Path):
+        """Sender attaches per-call grafter_extras; recv transform reads them
+        and uses them to compute the override value."""
+        module_name = "_xform_uses_extras"
+        (tmp_path / f"{module_name}.py").write_text(
+            "import torch\n"
+            "def transform(graft_input):\n"
+            "    fill = graft_input.received_extras_list[0]['fill_value']\n"
+            "    return torch.full_like(graft_input.target, fill)\n"
+        )
+        graft_port = find_available_port(29645)
+        _run_graft_test(
+            self._test_extras_func,
+            graft_port=graft_port,
+            group_name="grafter_extras",
+            transform_dir=str(tmp_path),
+            transform_path=f"{module_name}.transform",
+        )
+
+    @staticmethod
+    def _test_extras_func(
+        rank, graft_port, group_name, transform_dir, transform_path
+    ):
+        sys.path.insert(0, transform_dir)
+        grafter = _Grafter(
+            config=_make_grafter_test_config(
+                rank=rank,
+                graft_port=graft_port,
+                group_name=group_name,
+                transform_path=transform_path,
+            )
+        )
+        try:
+            if rank == 0:
+                # Baseline (sender) attaches an extras dict.
+                tensor = torch.tensor([1.0, 2.0, 3.0], device="cuda:0")
+                grafter.maybe_intercept(
+                    value=tensor,
+                    tags={"name": "x"},
+                    extras={"fill_value": 42.0},
+                )
+            else:
+                target = torch.zeros(3, device="cuda:1")
+                grafter.maybe_intercept(value=target, tags={"name": "x"})
+                assert target.tolist() == [42.0, 42.0, 42.0], (
+                    f"target should be filled from sender extras, got {target.tolist()}"
+                )
         finally:
             if grafter._pg is not None:
                 dist.destroy_process_group(grafter._pg)

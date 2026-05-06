@@ -154,6 +154,9 @@ class DumperConfig(_BaseConfig):
     grafter_backend: str = "nccl"
     grafter_group_name: str = "graft"
     grafter_timeout: int = 300
+    # Fully-qualified Python path "pkg.subpkg.module.symbol" pointing at a
+    # callable `transform(tags, received_list, target) -> Tensor`. None ->
+    # use the default identity-by-rank fallback in _Grafter._default_transform.
     grafter_transform_path: Optional[str] = None
 
     @classmethod
@@ -277,6 +280,7 @@ class _Dumper:
         save: bool = True,
         dims: Optional[str] = None,
         dims_grad: Optional[str] = None,
+        grafter_extras: Optional[dict] = None,
         **kwargs,
     ) -> None:
         value_meta: dict = {}
@@ -300,6 +304,7 @@ class _Dumper:
             grad_tag="Dumper.Grad",
             value_meta_only_fields=value_meta,
             grad_meta_only_fields=grad_meta,
+            grafter_extras=grafter_extras,
         )
 
     def dump_model(
@@ -456,6 +461,7 @@ class _Dumper:
         grad_tag: str,
         value_meta_only_fields: Optional[dict] = None,
         grad_meta_only_fields: Optional[dict] = None,
+        grafter_extras: Optional[dict] = None,
     ) -> None:
         self._http_manager  # noqa: B018
 
@@ -478,7 +484,7 @@ class _Dumper:
 
         recompute_meta = recompute_status.to_pseudo_parallel_meta()
         value = _materialize_value(value)
-        self._grafter.maybe_intercept(value=value, tags=tags)
+        self._grafter.maybe_intercept(value=value, tags=tags, extras=grafter_extras)
 
         if enable_value:
             self._dump_single(
@@ -802,6 +808,29 @@ class _GraftDirection(enum.Enum):
     T2B = "t2b"  # name flows target -> baseline
 
 
+@dataclass
+class GraftTransformInput:
+    """Single argument passed to a user-supplied transform function.
+
+    User transforms have signature::
+
+        def transform(graft_input: GraftTransformInput) -> torch.Tensor: ...
+
+    The dataclass shape lets us add fields (e.g., direction, sender ranks)
+    later without breaking existing transforms.
+    """
+
+    # Full dumper.dump tags dict (name + recompute_status + extra_kwargs + ctx).
+    tags: "dict[str, Any]"
+    # One tensor per sender rank, in sender-rank order.
+    received_list: "list[torch.Tensor]"
+    # Parallel list of per-sender `grafter_extras` (the dict passed to
+    # dumper.dump on each sender; None if the sender omitted it).
+    received_extras_list: "list[Optional[dict]]"
+    # Recv side's local tensor that will be copy_'d into.
+    target: "torch.Tensor"
+
+
 class _Grafter:
     """Cross-system tensor transplant. Triggered silently from dumper.dump.
 
@@ -823,7 +852,12 @@ class _Grafter:
     def enabled(self) -> bool:
         return self._config.grafter_enable
 
-    def maybe_intercept(self, *, value: Any, tags: dict) -> None:
+    def maybe_intercept(
+        self, *, value: Any, tags: dict, extras: Optional[dict] = None
+    ) -> None:
+        """Intercept a dumper.dump call. `extras` is per-call auxiliary data
+        (e.g., shard layout, dtype hint) that the sender attaches and the
+        recv side's transform receives as `received_extras_list`."""
         cfg = self._config
         if not cfg.grafter_enable:
             return
@@ -846,27 +880,30 @@ class _Grafter:
         role = _GraftRole(cfg.grafter_role)
         is_send = self._is_sender(role=role, direction=direction)
 
-        # all-gather over the graft world; sender ranks contribute their
-        # tensor, recv ranks contribute None (their local target is private
-        # and shouldn't leak). all_gather_object is pickle-routed, so tensor
-        # shapes may differ across sender ranks.
+        # all-gather over the graft world; sender ranks contribute (value,
+        # extras) tuples, recv ranks contribute None (their local target is
+        # private and shouldn't leak). all_gather_object is pickle-routed,
+        # so tensor shapes may differ across sender ranks.
         total_world = cfg.grafter_baseline_world_size + cfg.grafter_target_world_size
+        my_contribution = (value, extras) if is_send else None
         gathered: list = [None] * total_world
-        dist.all_gather_object(gathered, value if is_send else None, group=self._pg)
+        dist.all_gather_object(gathered, my_contribution, group=self._pg)
 
         if is_send:
             _log(
                 f"[Grafter] send role={role.value} dir={direction.value} "
-                f"tags={tags} local={get_tensor_info(value)}"
+                f"tags={tags} extras={extras} local={get_tensor_info(value)}"
             )
             return
 
+        sender_contribs = self._sender_slice(direction=direction, gathered=gathered)
         # Pickled CUDA tensors are restored on their original-device name;
         # that may not match this process's local device, so normalize.
         sender_tensors = [
-            t.to(value.device) if isinstance(t, torch.Tensor) else t
-            for t in self._sender_slice(direction=direction, gathered=gathered)
+            (c[0].to(value.device) if isinstance(c[0], torch.Tensor) else c[0])
+            for c in sender_contribs
         ]
+        sender_extras = [c[1] for c in sender_contribs]
 
         # Transform + copy_ are wrapped: a buggy user transform must NOT
         # crash the whole training/inference run. On error we log the full
@@ -875,12 +912,16 @@ class _Grafter:
         info_before_overriden = get_tensor_info(value)
         try:
             value_to_override = self._apply_transform(
-                tags=tags, received_list=sender_tensors, target=value
+                tags=tags,
+                received_list=sender_tensors,
+                received_extras_list=sender_extras,
+                target=value,
             )
             diff = _compare_tensors_quick(value, value_to_override)
             _log(
                 f"[Grafter] recv role={role.value} dir={direction.value} "
                 f"tags={tags} n_senders={len(sender_tensors)} "
+                f"sender_extras={sender_extras} "
                 f"before_overriden={info_before_overriden} "
                 f"to_override={get_tensor_info(value_to_override)} "
                 f"diff_pre_vs_new={diff}"
@@ -974,30 +1015,41 @@ class _Grafter:
         )
 
     def _apply_transform(
-        self, *, tags: dict, received_list: list, target: torch.Tensor
+        self,
+        *,
+        tags: dict,
+        received_list: list,
+        received_extras_list: list,
+        target: torch.Tensor,
     ) -> torch.Tensor:
         # TODO: integrate with dump_comparator unsharder annotations once
         # full inverse (sharded -> global -> sharded) transforms exist.
+        graft_input = GraftTransformInput(
+            tags=tags,
+            received_list=received_list,
+            received_extras_list=received_extras_list,
+            target=target,
+        )
         path = self._config.grafter_transform_path
-        fn = self._default_transform if path is None else self._load_transform_fn(path)
-        return fn(tags, received_list, target)
+        fn = self._default_transform if path is None else _load_function(path)
+        return fn(graft_input)
 
     @staticmethod
     def _default_transform_error(detail: str) -> str:
         return (
             f"[Grafter] no grafter_transform_path set; default identity-by-rank "
             f"{detail}. Provide a transform via "
-            f"DUMPER_GRAFTER_TRANSFORM_PATH=<my_transform.py> defining "
-            f"`transform(tags, received_list, target)`."
+            f"DUMPER_GRAFTER_TRANSFORM_PATH=pkg.module.symbol defining "
+            f"`transform(graft_input: GraftTransformInput) -> Tensor`."
         )
 
     @staticmethod
-    def _default_transform(
-        tags: dict, received_list: list, target: torch.Tensor
-    ) -> torch.Tensor:
+    def _default_transform(graft_input: GraftTransformInput) -> torch.Tensor:
         """Identity-by-rank fallback. Requires #senders == #recvs and
         shape(received_list[my_recv_rank]) == shape(target). Otherwise raises
         and asks the user for a transform."""
+        received_list = graft_input.received_list
+        target = graft_input.target
         my_recv_rank = dist.get_rank()
         recv_world_size = dist.get_world_size()
         if len(received_list) != recv_world_size:
@@ -1018,15 +1070,6 @@ class _Grafter:
             )
         return candidate
 
-    @staticmethod
-    @functools.lru_cache(maxsize=None)
-    def _load_transform_fn(path: str) -> Callable:
-        import importlib.util
-
-        spec = importlib.util.spec_from_file_location("graft_transform", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module.transform
 
 
 # -------------------------------------- util fn ------------------------------------------
@@ -1478,6 +1521,25 @@ def _get_local_ip_by_remote() -> Optional[str]:
     except Exception:
         _log("Can not get local ip by remote")
     return None
+
+
+def _load_function(path: str) -> Callable:
+    """Resolve a fully-qualified Python path 'pkg.module.symbol' to its object.
+
+    Copied (verbatim, minus the function-registry branch) from
+    miles.utils.misc.load_function — kept inline so dumper.py has no
+    cross-package dependency.
+    """
+    import importlib
+
+    module_path, _, attr = path.rpartition(".")
+    if not module_path:
+        raise ValueError(
+            f"_load_function expects 'pkg.module.symbol', got {path!r} "
+            f"(missing dotted prefix)"
+        )
+    module = importlib.import_module(module_path)
+    return getattr(module, attr)
 
 
 def _init_custom_process_group(
