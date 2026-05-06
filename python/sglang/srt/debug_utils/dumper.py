@@ -168,9 +168,9 @@ class DumperConfig(_BaseConfig):
                 f"grafter_role must be 'baseline' or 'target' when grafter_enable=True, "
                 f"got {self.grafter_role!r}"
             )
-            assert self.grafter_master_address, (
-                "grafter_master_address must be set when grafter_enable=True"
-            )
+            assert (
+                self.grafter_master_address
+            ), "grafter_master_address must be set when grafter_enable=True"
             assert self.grafter_master_port > 0, (
                 f"grafter_master_port must be a positive port when grafter_enable=True, "
                 f"got {self.grafter_master_port}"
@@ -951,9 +951,7 @@ class _Grafter:
         # baseline is the sender for B2T names; target is the sender for T2B.
         return (role == _GraftRole.BASELINE) == (direction == _GraftDirection.B2T)
 
-    def _sender_slice(
-        self, *, direction: "_GraftDirection", gathered: list
-    ) -> list:
+    def _sender_slice(self, *, direction: "_GraftDirection", gathered: list) -> list:
         cfg = self._config
         if direction == _GraftDirection.B2T:
             return gathered[: cfg.grafter_baseline_world_size]
@@ -970,9 +968,9 @@ class _Grafter:
             return
 
         cfg = self._config
-        assert dist.is_initialized(), (
-            "[Grafter] default torch.distributed must be initialized"
-        )
+        assert (
+            dist.is_initialized()
+        ), "[Grafter] default torch.distributed must be initialized"
         role = _GraftRole(cfg.grafter_role)
         local_world = dist.get_world_size()
         local_rank = dist.get_rank()
@@ -1064,7 +1062,6 @@ class _Grafter:
             f"DUMPER_GRAFTER_TRANSFORM_PATH=pkg.module.symbol defining "
             f"`transform(graft_input: GraftTransformInput) -> Tensor`."
         )
-
 
 
 # -------------------------------------- util fn ------------------------------------------

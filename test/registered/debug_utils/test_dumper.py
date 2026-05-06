@@ -15,7 +15,6 @@ import torch.distributed as dist
 
 from sglang.srt.debug_utils.dumper import (
     DumperConfig,
-    GraftTransformInput,
     _collective_with_timeout,
     _compare_tensors_quick,
     _deepcopy_or_clone,
@@ -2660,7 +2659,9 @@ class TestGrafterConfig:
             )
 
     def test_env_name_for_grafter_field(self):
-        assert DumperConfig._env_name("grafter_b2t_filter") == "DUMPER_GRAFTER_B2T_FILTER"
+        assert (
+            DumperConfig._env_name("grafter_b2t_filter") == "DUMPER_GRAFTER_B2T_FILTER"
+        )
 
 
 def _unit_grafter_config(**overrides) -> DumperConfig:
@@ -2775,7 +2776,8 @@ class TestGrafterFilterMatching:
             )
         )
         with pytest.raises(
-            RuntimeError, match=r"matched BOTH grafter_b2t_filter and grafter_t2b_filter"
+            RuntimeError,
+            match=r"matched BOTH grafter_b2t_filter and grafter_t2b_filter",
         ):
             grafter.maybe_intercept(value=torch.zeros(2), tags={"name": "x"})
 
@@ -2794,9 +2796,7 @@ class TestGrafterFilterMatching:
                 tags={"name": "x", "layer_id": 1},
             )
         # layer_id=5 → neither filter matches → silent skip.
-        grafter.maybe_intercept(
-            value=torch.zeros(2), tags={"name": "x", "layer_id": 5}
-        )
+        grafter.maybe_intercept(value=torch.zeros(2), tags={"name": "x", "layer_id": 5})
         assert grafter._pg is None
 
     def test_load_function_bad_module(self):
@@ -2867,9 +2867,7 @@ def _graft_worker_entry(rank, role_port, worker_func, result_queue, kwargs):
         dist.destroy_process_group()
 
 
-def _run_graft_test_split(
-    worker_baseline, worker_target, **kwargs
-) -> dict:
+def _run_graft_test_split(worker_baseline, worker_target, **kwargs) -> dict:
     """Like `_run_graft_test`, but each role runs its OWN dedicated worker
     function (no `if rank == 0:` branching) and stdout is captured per role.
 
@@ -3217,9 +3215,12 @@ class TestGrafterDistributed:
                 target = torch.tensor([7.0, 7.0, 7.0, 7.0], device="cuda:1")
                 # No exception should propagate; tensor must stay unchanged.
                 grafter.maybe_intercept(value=target, tags={"name": "x"})
-                assert target.tolist() == [7.0, 7.0, 7.0, 7.0], (
-                    f"target should be unchanged after shape-mismatch graft, got {target.tolist()}"
-                )
+                assert target.tolist() == [
+                    7.0,
+                    7.0,
+                    7.0,
+                    7.0,
+                ], f"target should be unchanged after shape-mismatch graft, got {target.tolist()}"
         finally:
             if grafter._pg is not None:
                 dist.destroy_process_group(grafter._pg)
@@ -3262,9 +3263,11 @@ class TestGrafterDistributed:
                 target = torch.tensor([9.0, 9.0, 9.0], device="cuda:1")
                 with _capture_stdout() as captured:
                     grafter.maybe_intercept(value=target, tags={"name": "x"})
-                assert target.tolist() == [9.0, 9.0, 9.0], (
-                    f"target must be unchanged when transform throws, got {target.tolist()}"
-                )
+                assert target.tolist() == [
+                    9.0,
+                    9.0,
+                    9.0,
+                ], f"target must be unchanged when transform throws, got {target.tolist()}"
                 output = captured.getvalue()
                 assert "transform/copy_ raised RuntimeError" in output, output
                 assert "intentional test error" in output, output
@@ -3295,9 +3298,7 @@ class TestGrafterDistributed:
         )
 
     @staticmethod
-    def _test_extras_func(
-        rank, graft_port, group_name, transform_dir, transform_path
-    ):
+    def _test_extras_func(rank, graft_port, group_name, transform_dir, transform_path):
         sys.path.insert(0, transform_dir)
         grafter = _Grafter(
             config=_make_grafter_test_config(
@@ -3319,9 +3320,11 @@ class TestGrafterDistributed:
             else:
                 target = torch.zeros(3, device="cuda:1")
                 grafter.maybe_intercept(value=target, tags={"name": "x"})
-                assert target.tolist() == [42.0, 42.0, 42.0], (
-                    f"target should be filled from sender extras, got {target.tolist()}"
-                )
+                assert target.tolist() == [
+                    42.0,
+                    42.0,
+                    42.0,
+                ], f"target should be filled from sender extras, got {target.tolist()}"
         finally:
             if grafter._pg is not None:
                 dist.destroy_process_group(grafter._pg)
@@ -3353,7 +3356,9 @@ class TestGrafterDistributed:
                     grafter.maybe_intercept(value=target, tags={"name": "x"})
             output = captured.getvalue()
             if rank == 0:
-                assert "WARNING" in output, f"expected WARNING in rank 0 output: {output}"
+                assert (
+                    "WARNING" in output
+                ), f"expected WARNING in rank 0 output: {output}"
                 assert "has not completed after 2s" in output, output
         finally:
             if grafter._pg is not None:
@@ -3455,7 +3460,7 @@ class TestGrafterE2eExample:
         # the parent's temp_set_env so the spawned subprocesses inherit them.
         with temp_set_env(
             DUMPER_ENABLE="1",
-            DUMPER_ENABLE_OUTPUT_FILE="false",         # skip disk I/O for the test
+            DUMPER_ENABLE_OUTPUT_FILE="false",  # skip disk I/O for the test
             DUMPER_ENABLE_OUTPUT_CONSOLE="false",
             DUMPER_GRAFTER_ENABLE="1",
             DUMPER_GRAFTER_MASTER_ADDRESS="127.0.0.1",
@@ -3467,9 +3472,7 @@ class TestGrafterE2eExample:
             DUMPER_GRAFTER_GROUP_NAME="grafter_e2e",
             DUMPER_GRAFTER_TIMEOUT="30",
         ):
-            outputs = _run_graft_test_split(
-                self._worker_baseline, self._worker_target
-            )
+            outputs = _run_graft_test_split(self._worker_baseline, self._worker_target)
 
         # ---- Snapshot-style assertions on the per-role log output. ----
 
