@@ -3491,23 +3491,29 @@ class TestGrafterE2eExample:
         ):
             outputs = _run_graft_test_split(self._worker_baseline, self._worker_target)
 
+        self._assert_e2e_snapshot(outputs)
+
+    @staticmethod
+    def _assert_e2e_snapshot(outputs: dict) -> None:
+        """Snapshot of the FULL per-role log timeline.
+
+        Volatile fields (timestamps, ports, float diff values, tensor
+        min/max/mean/samples, struct addresses) are masked with ad-hoc regex
+        placeholders so the snapshot stays stable while still pinning
+        everything else. The snapshot doubles as documentation of the logs a
+        reader will see when running this E2E setup.
+
+        Captured logs are unconditionally printed before asserting so a
+        snapshot failure doesn't require a re-run.
+        """
         baseline_log = outputs["baseline"]
         target_log = outputs["target"]
 
-        # Always print captured logs so debugging a failed snapshot doesn't
-        # require a re-run with different assertions.
         print("\n=========== captured baseline log ===========")
         print(baseline_log)
         print("=========== captured target log ===========")
         print(target_log)
         print("===========================================")
-
-        # Snapshot of the FULL per-role log timeline. Volatile fields
-        # (timestamps, ports, exact float diff values, tensor min/max/mean/
-        # samples, struct addresses) are masked with ad-hoc regex
-        # placeholders so the snapshot stays stable while still pinning
-        # everything else. The snapshot doubles as documentation of the
-        # logs a reader will see when running this E2E setup.
 
         # Convenience tokens for verbose volatile substrings.
         prefix = r"\[Dumper, rank=\d+, t=\d+\.\d+\] "
@@ -3519,9 +3525,7 @@ class TestGrafterE2eExample:
             r"dtype=torch\.float32 device=cuda:\d stride=\(1,\) "
             r"req_grad=False .*"
         )
-        diff = (
-            r"rel_diff=[-\d.eE+]+ max_abs=[-\d.eE+]+ mean_abs=[-\d.eE+]+"
-        )
+        diff = r"rel_diff=[-\d.eE+]+ max_abs=[-\d.eE+]+ mean_abs=[-\d.eE+]+"
 
         baseline_pattern = (
             r"\A"
