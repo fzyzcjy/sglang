@@ -2632,12 +2632,30 @@ class TestGrafterFilterMatching:
         grafter.maybe_intercept(value=torch.zeros(2), tags={"name": "x"})
         assert grafter._pg is None  # never initialized
 
-    def test_non_tensor_value_skipped(self):
+    def test_unmatched_non_tensor_silent(self):
+        """Non-tensor + unmatched name → silent skip, no print."""
         grafter = _Grafter(
             config=DumperConfig(grafter_enable=True, grafter_b2t_filter="name == 'x'")
         )
-        grafter.maybe_intercept(value=42, tags={"name": "x"})
+        with _capture_stdout() as captured:
+            grafter.maybe_intercept(value=42, tags={"name": "other"})
         assert grafter._pg is None
+        assert "[Grafter]" not in captured.getvalue(), captured.getvalue()
+
+    def test_matched_non_tensor_prints_and_skips(self):
+        """Non-tensor that matches a filter → print explanation, then skip.
+
+        This catches misconfigured filters (e.g. matching a name that maps to a
+        dict/list at some call sites) without silently masking the issue."""
+        grafter = _Grafter(
+            config=DumperConfig(grafter_enable=True, grafter_b2t_filter="name == 'x'")
+        )
+        with _capture_stdout() as captured:
+            grafter.maybe_intercept(value={"not": "a tensor"}, tags={"name": "x"})
+        output = captured.getvalue()
+        assert grafter._pg is None  # still no PG init
+        assert "matched a filter but value is not a torch.Tensor" in output, output
+        assert "type=dict" in output, output
 
     def test_unmatched_name_returns_silently(self):
         grafter = _Grafter(

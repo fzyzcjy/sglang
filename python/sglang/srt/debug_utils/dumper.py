@@ -793,8 +793,6 @@ class _Grafter:
         cfg = self._config
         if not cfg.grafter_enable:
             return
-        if not isinstance(value, torch.Tensor):
-            return
 
         match_b2t = self._match(cfg.grafter_b2t_filter, tags)
         match_t2b = self._match(cfg.grafter_t2b_filter, tags)
@@ -803,6 +801,16 @@ class _Grafter:
                 f"[Grafter] tags={tags} matched BOTH grafter_b2t_filter and grafter_t2b_filter"
             )
         if not (match_b2t or match_t2b):
+            return
+
+        if not isinstance(value, torch.Tensor):
+            print(
+                f"[Grafter] tags={tags} matched a filter but value is not a "
+                f"torch.Tensor (got type={type(value).__name__}); skipping graft. "
+                f"Common cause: dumper.dump called with a non-tensor value (dict, "
+                f"list, ...) on this name. Either narrow the filter or wrap the "
+                f"value in a tensor."
+            )
             return
 
         role = cfg.grafter_role
