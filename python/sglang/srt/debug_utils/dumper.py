@@ -935,16 +935,16 @@ class _Grafter:
         role = _GraftRole(cfg.grafter_role)
         local_rank = dist.get_rank()
         if role == _GraftRole.BASELINE:
-            my_rank = local_rank
+            global_rank = local_rank
         else:
-            my_rank = cfg.grafter_baseline_world_size + local_rank
+            global_rank = cfg.grafter_baseline_world_size + local_rank
         total_world = cfg.grafter_baseline_world_size + cfg.grafter_target_world_size
         init_method = f"tcp://{cfg.grafter_master_address}:{cfg.grafter_master_port}"
         _log(
             f"[Grafter] init group: role={role.value} "
             f"baseline_world={cfg.grafter_baseline_world_size} "
             f"target_world={cfg.grafter_target_world_size} "
-            f"rank={my_rank} init_method={init_method} "
+            f"rank={global_rank} init_method={init_method} "
             f"backend={cfg.grafter_backend} name={cfg.grafter_group_name}"
         )
         self._pg = _collective_with_timeout(
@@ -952,7 +952,7 @@ class _Grafter:
                 backend=cfg.grafter_backend,
                 init_method=init_method,
                 world_size=total_world,
-                rank=my_rank,
+                rank=global_rank,
                 group_name=cfg.grafter_group_name,
             ),
             operation_name="_init_custom_process_group in _Grafter",
