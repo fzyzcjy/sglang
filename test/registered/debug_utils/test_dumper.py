@@ -6,6 +6,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Optional
 
 import pytest
 import requests
