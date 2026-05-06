@@ -141,12 +141,13 @@ class DumperConfig(_BaseConfig):
     non_intrusive_mode: str = "core"
     source_patcher_config: Optional[str] = None
     grafter_enable: bool = False
-    grafter_send_filter: Optional[str] = None
-    grafter_recv_filter: Optional[str] = None
+    grafter_role: str = ""  # "baseline" or "target"
+    grafter_b2t_filter: Optional[str] = None  # names flowing baseline -> target
+    grafter_t2b_filter: Optional[str] = None  # names flowing target -> baseline
     grafter_master_address: str = ""
     grafter_master_port: int = 0
-    grafter_world_size: int = 0
-    grafter_rank_offset: int = 0
+    grafter_baseline_world_size: int = 0
+    grafter_target_world_size: int = 0
     grafter_backend: str = "nccl"
     grafter_group_name: str = "graft"
     grafter_timeout: int = 300
@@ -758,13 +759,20 @@ def _register_forward_hook_or_replace_fn(
 # -------------------------------------- grafter ------------------------------------------
 
 
+_VALID_ROLES = ("baseline", "target")
+
+
 class _Grafter:
     """Cross-system tensor transplant. Triggered silently from dumper.dump.
 
-    Convention: graft global rank 0 is always the send side's local rank 0.
-    The send side must occupy the low rank segment (grafter_rank_offset=0); the
-    recv side occupies the high segment (grafter_rank_offset=send_world_size).
-    Both sides broadcast with src=0 (= send side's rank 0).
+    Both sides set the SAME grafter_b2t_filter (names that flow baseline ->
+    target) and grafter_t2b_filter (names that flow target -> baseline). The
+    only per-side difference is grafter_role ("baseline" | "target"), which
+    determines whether a name match means send or recv on this side.
+
+    Graft global rank layout: baseline occupies ranks 0..baseline_world-1;
+    target occupies ranks baseline_world..baseline_world+target_world-1. Each
+    side derives its own rank from its local default PG via dist.get_rank().
     """
 
     def __init__(self, *, config: DumperConfig):
@@ -784,23 +792,34 @@ class _Grafter:
             return
 
         tags = {"name": name}
-        is_send = self._match(cfg.grafter_send_filter, tags)
-        is_recv = self._match(cfg.grafter_recv_filter, tags)
-        if is_send and is_recv:
+        match_b2t = self._match(cfg.grafter_b2t_filter, tags)
+        match_t2b = self._match(cfg.grafter_t2b_filter, tags)
+        if match_b2t and match_t2b:
             raise RuntimeError(
-                f"[Grafter] name={name!r} matched BOTH grafter_send_filter and grafter_recv_filter"
+                f"[Grafter] name={name!r} matched BOTH grafter_b2t_filter and grafter_t2b_filter"
             )
-        if not (is_send or is_recv):
+        if not (match_b2t or match_t2b):
             return
 
-        self._ensure_group()
-        action = "send" if is_send else "recv"
-        print(
-            f"[Grafter] action={action} name={name} "
-            f"local={get_tensor_info(value)}"
+        role = self._validated_role()
+        # baseline sends b2t names, recv t2b; target is the mirror image.
+        is_send = (role == "baseline" and match_b2t) or (
+            role == "target" and match_t2b
         )
 
-        src_rank = 0
+        self._ensure_group()
+        direction = "b2t" if match_b2t else "t2b"
+        action = "send" if is_send else "recv"
+        print(
+            f"[Grafter] role={role} action={action} direction={direction} "
+            f"name={name} local={get_tensor_info(value)}"
+        )
+
+        src_rank = 0  # baseline rank 0 is always the b2t src; for t2b the src
+        # is the first target rank, computed below.
+        if direction == "t2b":
+            src_rank = cfg.grafter_baseline_world_size
+
         if is_send:
             dist.broadcast(value, src=src_rank, group=self._pg)
             return
@@ -822,6 +841,14 @@ class _Grafter:
             return False
         return _evaluate_filter(expr, tags)
 
+    def _validated_role(self) -> str:
+        role = self._config.grafter_role
+        if role not in _VALID_ROLES:
+            raise RuntimeError(
+                f"[Grafter] grafter_role must be one of {_VALID_ROLES}, got {role!r}"
+            )
+        return role
+
     def _ensure_group(self) -> None:
         if self._pg is not None:
             return
@@ -831,11 +858,18 @@ class _Grafter:
         assert dist.is_initialized(), (
             "[Grafter] default torch.distributed must be initialized"
         )
+        role = self._validated_role()
         local_rank = dist.get_rank()
-        my_rank = cfg.grafter_rank_offset + local_rank
+        if role == "baseline":
+            my_rank = local_rank
+        else:
+            my_rank = cfg.grafter_baseline_world_size + local_rank
+        total_world = cfg.grafter_baseline_world_size + cfg.grafter_target_world_size
         init_method = f"tcp://{cfg.grafter_master_address}:{cfg.grafter_master_port}"
         print(
-            f"[Grafter] init group: world_size={cfg.grafter_world_size} "
+            f"[Grafter] init group: role={role} "
+            f"baseline_world={cfg.grafter_baseline_world_size} "
+            f"target_world={cfg.grafter_target_world_size} "
             f"rank={my_rank} init_method={init_method} "
             f"backend={cfg.grafter_backend} name={cfg.grafter_group_name}"
         )
@@ -843,7 +877,7 @@ class _Grafter:
             lambda: init_custom_process_group(
                 backend=cfg.grafter_backend,
                 init_method=init_method,
-                world_size=cfg.grafter_world_size,
+                world_size=total_world,
                 rank=my_rank,
                 group_name=cfg.grafter_group_name,
             ),
