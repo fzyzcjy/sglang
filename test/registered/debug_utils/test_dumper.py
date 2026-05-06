@@ -14,14 +14,14 @@ import torch.distributed as dist
 
 from sglang.srt.debug_utils.dumper import (
     DumperConfig,
-    GraftConfig,
+    GrafterConfig,
     _collective_with_timeout,
     _deepcopy_or_clone,
     _detect_recompute_status,
     _Dumper,
     _format_tags,
     _get_default_exp_name,
-    _Graft,
+    _Grafter,
     _map_tensor,
     _materialize_value,
     _MegatronPlugin,
@@ -2582,16 +2582,16 @@ class TestRecomputeStatus:
         assert _detect_recompute_status() == _RecomputeStatus.DISABLED
 
 
-class TestGraftConfig:
+class TestGrafterConfig:
     def test_from_env_defaults_match_dataclass_defaults(self):
-        assert GraftConfig.from_env() == GraftConfig()
+        assert GrafterConfig.from_env() == GrafterConfig()
 
     def test_from_env_parses_send_recv_filters(self):
         with temp_set_env(
             DUMPER_GRAFT_SEND_FILTER="name == 'x'",
             DUMPER_GRAFT_RECV_FILTER="name == 'y'",
         ):
-            cfg = GraftConfig.from_env()
+            cfg = GrafterConfig.from_env()
             assert cfg.send_filter == "name == 'x'"
             assert cfg.recv_filter == "name == 'y'"
 
@@ -2602,7 +2602,7 @@ class TestGraftConfig:
             DUMPER_GRAFT_MASTER_PORT="29999",
             DUMPER_GRAFT_TIMEOUT="120",
         ):
-            cfg = GraftConfig.from_env()
+            cfg = GrafterConfig.from_env()
             assert cfg.world_size == 16
             assert type(cfg.world_size) is int
             assert cfg.rank_offset == 8
@@ -2611,43 +2611,43 @@ class TestGraftConfig:
 
     def test_from_env_enable_flag(self):
         with temp_set_env(DUMPER_GRAFT_ENABLE="1"):
-            assert GraftConfig.from_env().enable is True
+            assert GrafterConfig.from_env().enable is True
         with temp_set_env(DUMPER_GRAFT_ENABLE="false"):
-            assert GraftConfig.from_env().enable is False
+            assert GrafterConfig.from_env().enable is False
 
     def test_env_prefix_is_dumper_graft(self):
-        assert GraftConfig._env_name("foo") == "DUMPER_GRAFT_FOO"
+        assert GrafterConfig._env_name("foo") == "DUMPER_GRAFT_FOO"
 
 
-class TestGraftFilterMatching:
+class TestGrafterFilterMatching:
     def test_disabled_returns_silently(self):
-        graft = _Graft(GraftConfig(enable=False, send_filter="name == 'x'"))
-        graft.maybe_intercept(name="x", value=torch.zeros(2))
-        assert graft._pg is None  # never initialized
+        grafter = _Grafter(GrafterConfig(enable=False, send_filter="name == 'x'"))
+        grafter.maybe_intercept(name="x", value=torch.zeros(2))
+        assert grafter._pg is None  # never initialized
 
     def test_non_tensor_value_skipped(self):
-        graft = _Graft(GraftConfig(enable=True, send_filter="name == 'x'"))
-        graft.maybe_intercept(name="x", value=42)
-        assert graft._pg is None
+        grafter = _Grafter(GrafterConfig(enable=True, send_filter="name == 'x'"))
+        grafter.maybe_intercept(name="x", value=42)
+        assert grafter._pg is None
 
     def test_unmatched_name_returns_silently(self):
-        graft = _Graft(
-            GraftConfig(enable=True, send_filter="name == 'x'", recv_filter="name == 'y'")
+        grafter = _Grafter(
+            GrafterConfig(enable=True, send_filter="name == 'x'", recv_filter="name == 'y'")
         )
-        graft.maybe_intercept(name="z", value=torch.zeros(2))
-        assert graft._pg is None
+        grafter.maybe_intercept(name="z", value=torch.zeros(2))
+        assert grafter._pg is None
 
     def test_overlap_filters_raise(self):
-        graft = _Graft(
-            GraftConfig(
+        grafter = _Grafter(
+            GrafterConfig(
                 enable=True, send_filter="name == 'x'", recv_filter="name == 'x'"
             )
         )
         with pytest.raises(RuntimeError, match=r"matched BOTH send_filter and recv_filter"):
-            graft.maybe_intercept(name="x", value=torch.zeros(2))
+            grafter.maybe_intercept(name="x", value=torch.zeros(2))
 
 
-class TestGraftDistributed:
+class TestGrafterDistributed:
     def test_send_recv_copy_roundtrip(self):
         graft_port = find_available_port(29600)
         run_distributed_test(
@@ -2656,7 +2656,7 @@ class TestGraftDistributed:
 
     @staticmethod
     def _test_send_recv_func(rank, graft_port, group_name):
-        cfg = GraftConfig(
+        cfg = GrafterConfig(
             enable=True,
             send_filter="name == 'x'" if rank == 0 else None,
             recv_filter="name == 'x'" if rank == 1 else None,
@@ -2667,18 +2667,18 @@ class TestGraftDistributed:
             group_name=group_name,
             timeout=30,
         )
-        graft = _Graft(cfg)
+        grafter = _Grafter(cfg)
         try:
             if rank == 0:
                 tensor = torch.tensor([1.0, 2.0, 3.0], device=f"cuda:{rank}")
-                graft.maybe_intercept(name="x", value=tensor)
+                grafter.maybe_intercept(name="x", value=tensor)
             else:
                 target = torch.zeros(3, device=f"cuda:{rank}")
-                graft.maybe_intercept(name="x", value=target)
+                grafter.maybe_intercept(name="x", value=target)
                 assert target.tolist() == [1.0, 2.0, 3.0], f"got {target.tolist()}"
         finally:
-            if graft._pg is not None:
-                dist.destroy_process_group(graft._pg)
+            if grafter._pg is not None:
+                dist.destroy_process_group(grafter._pg)
 
     def test_recv_with_user_transform(self, tmp_path: Path):
         transform_file = tmp_path / "graft_transform.py"
@@ -2696,7 +2696,7 @@ class TestGraftDistributed:
 
     @staticmethod
     def _test_user_transform_func(rank, graft_port, group_name, transform_path):
-        cfg = GraftConfig(
+        cfg = GrafterConfig(
             enable=True,
             send_filter="name == 'x'" if rank == 0 else None,
             recv_filter="name == 'x'" if rank == 1 else None,
@@ -2708,18 +2708,18 @@ class TestGraftDistributed:
             timeout=30,
             transform_path=transform_path if rank == 1 else None,
         )
-        graft = _Graft(cfg)
+        grafter = _Grafter(cfg)
         try:
             if rank == 0:
                 tensor = torch.tensor([1.0, 2.0, 3.0], device=f"cuda:{rank}")
-                graft.maybe_intercept(name="x", value=tensor)
+                grafter.maybe_intercept(name="x", value=tensor)
             else:
                 target = torch.zeros(3, device=f"cuda:{rank}")
-                graft.maybe_intercept(name="x", value=target)
+                grafter.maybe_intercept(name="x", value=target)
                 assert target.tolist() == [2.0, 4.0, 6.0], f"got {target.tolist()}"
         finally:
-            if graft._pg is not None:
-                dist.destroy_process_group(graft._pg)
+            if grafter._pg is not None:
+                dist.destroy_process_group(grafter._pg)
 
     def test_unmatched_name_skipped(self):
         graft_port = find_available_port(29620)
@@ -2731,7 +2731,7 @@ class TestGraftDistributed:
 
     @staticmethod
     def _test_unmatched_func(rank, graft_port, group_name):
-        cfg = GraftConfig(
+        cfg = GrafterConfig(
             enable=True,
             send_filter="name == 'x'" if rank == 0 else None,
             recv_filter="name == 'x'" if rank == 1 else None,
@@ -2742,15 +2742,15 @@ class TestGraftDistributed:
             group_name=group_name,
             timeout=30,
         )
-        graft = _Graft(cfg)
+        grafter = _Grafter(cfg)
         try:
             target = torch.tensor([7.0, 7.0, 7.0], device=f"cuda:{rank}")
-            graft.maybe_intercept(name="other", value=target)
+            grafter.maybe_intercept(name="other", value=target)
             assert target.tolist() == [7.0, 7.0, 7.0], "tensor must not be modified"
-            assert graft._pg is None, "group should not be initialized for unmatched name"
+            assert grafter._pg is None, "group should not be initialized for unmatched name"
         finally:
-            if graft._pg is not None:
-                dist.destroy_process_group(graft._pg)
+            if grafter._pg is not None:
+                dist.destroy_process_group(grafter._pg)
 
     def test_init_timeout_warns(self):
         graft_port = find_available_port(29630)
@@ -2762,7 +2762,7 @@ class TestGraftDistributed:
 
     @staticmethod
     def _test_init_timeout_func(rank, graft_port, group_name):
-        cfg = GraftConfig(
+        cfg = GrafterConfig(
             enable=True,
             send_filter="name == 'x'" if rank == 0 else None,
             recv_filter="name == 'x'" if rank == 1 else None,
@@ -2773,24 +2773,24 @@ class TestGraftDistributed:
             group_name=group_name,
             timeout=2,
         )
-        graft = _Graft(cfg)
+        grafter = _Grafter(cfg)
         try:
             with _capture_stdout() as captured:
                 if rank == 1:
                     time.sleep(4)
                 tensor = torch.tensor([1.0, 2.0, 3.0], device=f"cuda:{rank}")
                 if rank == 0:
-                    graft.maybe_intercept(name="x", value=tensor)
+                    grafter.maybe_intercept(name="x", value=tensor)
                 else:
                     target = torch.zeros(3, device=f"cuda:{rank}")
-                    graft.maybe_intercept(name="x", value=target)
+                    grafter.maybe_intercept(name="x", value=target)
             output = captured.getvalue()
             if rank == 0:
                 assert "WARNING" in output, f"expected WARNING in rank 0 output: {output}"
                 assert "has not completed after 2s" in output, output
         finally:
-            if graft._pg is not None:
-                dist.destroy_process_group(graft._pg)
+            if grafter._pg is not None:
+                dist.destroy_process_group(grafter._pg)
 
 
 if __name__ == "__main__":
