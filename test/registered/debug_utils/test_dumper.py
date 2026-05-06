@@ -3840,41 +3840,24 @@ def _make_multi_rank_config(
 
 
 def _e2e_transform(graft_input):
-    """User transform used by the E2E example test, demonstrating two
-    real-world patterns reviewers should learn from:
+    """User transform used by the E2E example test. Demonstrates the two
+    customization hooks reviewers should learn from:
 
-      1. **Reading `tags` to dispatch by name.** A single transform module
-         is loaded for the whole graft session, but different `dumper.dump`
-         names need different override logic. The transform routes on
-         ``graft_input.tags['name']``.
+      1. The transform receives a `GraftTransformInput` and returns the
+         tensor that the recv side will `.copy_()` into its local target.
+      2. `graft_input.received_extras_list` carries whatever the sender
+         passed via `grafter_extras={...}` — useful for any per-call
+         metadata the recv side needs (layer ids, calibration knobs, ...).
 
-      2. **Reading `received_extras_list` to consume per-call metadata.**
-         The sender attaches ``grafter_extras={...}`` per dump; the recv
-         side reads those out and uses them to compute the override.
-
-    For ``attn_input`` the recv side is baseline; target's `q` is shipped
-    along with extras={"layer_id": 7}, and the transform asserts the layer
-    id matches before passing the tensor through unchanged. For
-    ``attn_output`` the recv side is target; baseline's good attention
-    output is shipped with extras={"scale": 0.5}, and the transform
-    multiplies before the .copy_() — so target's downstream sees a
-    SCALED version of baseline's output, not a raw copy.
+    Here we keep the example minimal: the sender attaches a single dummy
+    key/value so the recv side has something concrete to assert on, then
+    the transform is just identity. Real workflows would compute a
+    non-trivial override (scale, reshape, decode, ...) using the extras.
     """
-    name = graft_input.tags["name"]
-    if name == "attn_input":
-        # Showcase: extras as a verification handshake. In real graft
-        # workflows you'd assert e.g. that the model's layer numbering
-        # agrees on both sides before letting the override happen.
-        layer_id = graft_input.received_extras_list[0]["layer_id"]
-        assert layer_id == 7, f"expected layer 7, got {layer_id}"
-        return graft_input.received_list[0]
-    if name == "attn_output":
-        # Showcase: extras as a per-call configuration knob. Here the
-        # baseline tells the target "scale my output by this factor before
-        # you use it."
-        scale = graft_input.received_extras_list[0]["scale"]
-        return graft_input.received_list[0] * scale
-    raise RuntimeError(f"unexpected name in graft transform: {name!r}")
+    assert (
+        graft_input.received_extras_list[0]["my_extra_key"] == "my_extra_value"
+    ), graft_input.received_extras_list
+    return graft_input.received_list[0]
 
 
 class TestGrafterE2eExample:
@@ -3983,6 +3966,9 @@ class TestGrafterE2eExample:
             r"\{'name': 'attn_output', 'recompute_status': 'disabled'\}"
         )
 
+        # Same dummy extras dict travels in both directions.
+        extras_lit = r"\{'my_extra_key': 'my_extra_value'\}"
+
         baseline_pattern = (
             r"\A"
             f"{prefix}\\[Grafter\\] init group: role=baseline "
@@ -3991,12 +3977,12 @@ class TestGrafterE2eExample:
             r"name=grafter_e2e\n"
             f"{prefix}\\[Grafter\\] recv role=baseline dir=t2b "
             f"tags={attn_input_tags} n_senders=1 "
-            r"sender_extras=\[\{'layer_id': 7\}\] "
+            f"sender_extras=\\[{extras_lit}\\] "
             f"before_overridden={tinfo_f32_4} "
             f"to_override={tinfo_f32_4} "
             f"diff_pre_vs_new={diff}\n"
             f"{prefix}\\[Grafter\\] send role=baseline dir=b2t "
-            f"tags={attn_output_tags} extras=\\{{'scale': 0\\.5\\}} "
+            f"tags={attn_output_tags} extras={extras_lit} "
             f"local={tinfo_f32_4}\n"
             r"\Z"
         )
@@ -4007,11 +3993,11 @@ class TestGrafterE2eExample:
             r"init_method=tcp://127\.0\.0\.1:\d+ backend=nccl "
             r"name=grafter_e2e\n"
             f"{prefix}\\[Grafter\\] send role=target dir=t2b "
-            f"tags={attn_input_tags} extras=\\{{'layer_id': 7\\}} "
+            f"tags={attn_input_tags} extras={extras_lit} "
             f"local={tinfo_f32_4}\n"
             f"{prefix}\\[Grafter\\] recv role=target dir=b2t "
             f"tags={attn_output_tags} n_senders=1 "
-            r"sender_extras=\[\{'scale': 0\.5\}\] "
+            f"sender_extras=\\[{extras_lit}\\] "
             f"before_overridden={tinfo_f32_4} "
             f"to_override={tinfo_f32_4} "
             f"diff_pre_vs_new={diff}\n"
@@ -4036,9 +4022,9 @@ class TestGrafterE2eExample:
         # configures the global Grafter for them. We do the same here.
         from sglang.srt.debug_utils.dumper import dumper
 
-        # Step 1: graft input. target sends its q to baseline (along with
-        # extras={"layer_id": 7}); baseline's `_e2e_transform` reads those
-        # extras and asserts, then returns target's q so baseline's local
+        # Step 1: graft input. target sends its q to baseline; baseline's
+        # `_e2e_transform` runs on the recv side, asserts the dummy extras
+        # made it across, then returns target's q so baseline's local
         # placeholder is overwritten via .copy_().
         q = torch.tensor([99.0, 99.0, 99.0, 99.0], device="cuda:0")
         dumper.dump("attn_input", q)
@@ -4050,33 +4036,36 @@ class TestGrafterE2eExample:
         # Step 2: baseline runs the known-good attention kernel.
         attn_out = q * 10.0  # → [10, 20, 30, 40]
 
-        # Step 3: graft output. baseline sends attn_out to target with
-        # extras={"scale": 0.5}; target's recv-side transform reads the
-        # scale and applies it before copy_, so target ends up with
-        # 0.5 * baseline_out = [5, 10, 15, 20].
-        dumper.dump("attn_output", attn_out, grafter_extras={"scale": 0.5})
+        # Step 3: graft output. baseline sends attn_out to target with a
+        # dummy extras key the recv-side transform will assert on.
+        dumper.dump(
+            "attn_output", attn_out,
+            grafter_extras={"my_extra_key": "my_extra_value"},
+        )
 
     @staticmethod
     def _worker_target():
         from sglang.srt.debug_utils.dumper import dumper
 
         # Step 1: graft input. target sends its real q to baseline along
-        # with extras the recv-side transform will consume.
+        # with a dummy extras key the recv-side transform will assert on.
         q = torch.tensor([1.0, 2.0, 3.0, 4.0], device="cuda:1")
-        dumper.dump("attn_input", q, grafter_extras={"layer_id": 7})
+        dumper.dump(
+            "attn_input", q,
+            grafter_extras={"my_extra_key": "my_extra_value"},
+        )
 
         # Step 2: target runs the (suspected buggy) attention kernel —
         # here it returns all zeros to mimic a broken implementation.
         attn_out = torch.zeros_like(q)
 
         # Step 3: graft output. baseline sends its (good) attn_out to
-        # target; target's recv-side transform multiplies by scale=0.5
-        # before copy_(), so target's local attn_out ends up at
-        # 0.5 * [10, 20, 30, 40] = [5, 10, 15, 20].
+        # target; target's recv-side transform identity-passes it, so
+        # target's local attn_out ends up = baseline's [10, 20, 30, 40].
         dumper.dump("attn_output", attn_out)
-        assert attn_out.tolist() == [5.0, 10.0, 15.0, 20.0], (
-            f"target's attn_out should be 0.5 * baseline's via the "
-            f"`scale` extras + transform, got {attn_out.tolist()}"
+        assert attn_out.tolist() == [10.0, 20.0, 30.0, 40.0], (
+            f"target's attn_out should be overwritten by baseline's via "
+            f"the b->t graft, got {attn_out.tolist()}"
         )
 
 
