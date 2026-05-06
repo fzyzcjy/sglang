@@ -1,6 +1,7 @@
 import io
 import multiprocessing
 import os
+import re
 import sys
 import threading
 import time
@@ -2927,6 +2928,19 @@ def _graft_split_worker_entry(
     sys.stdout = captured
     error = None
     try:
+        # Set per-role env BEFORE we (re)build the module-level `dumper`. The
+        # parent left DUMPER_GRAFTER_ENABLE/ROLE unset because they vary per
+        # child; we set them here, then rebuild the global so that worker
+        # code can simply call `from sglang.srt.debug_utils.dumper import dumper`
+        # and get a properly-configured Grafter — exactly mirroring how
+        # production code uses the global.
+        os.environ["DUMPER_GRAFTER_ENABLE"] = "1"
+        os.environ["DUMPER_GRAFTER_ROLE"] = role
+        import sglang.srt.debug_utils.dumper as _dumper_module
+        _dumper_module.dumper = _dumper_module._Dumper(
+            config=_dumper_module.DumperConfig.from_env()
+        )
+
         torch.cuda.set_device(global_rank)
         dist.init_process_group(
             backend="nccl",
@@ -3240,11 +3254,12 @@ class TestGrafterDistributed:
             group_name="grafter_throws",
             transform_dir=str(tmp_path),
             transform_path=f"{module_name}.transform",
+            module_name=module_name,
         )
 
     @staticmethod
     def _test_transform_throws_func(
-        rank, graft_port, group_name, transform_dir, transform_path
+        rank, graft_port, group_name, transform_dir, transform_path, module_name
     ):
         sys.path.insert(0, transform_dir)
         grafter = _Grafter(
@@ -3456,13 +3471,15 @@ class TestGrafterE2eExample:
 
     def test_e2e_buggy_attn_replaced_by_baseline(self):
         graft_port = find_available_port(29640)
-        # All env vars except ROLE are shared by both sides; we set them in
-        # the parent's temp_set_env so the spawned subprocesses inherit them.
+        # All non-role env is shared by both sides; we set it in the parent
+        # so the spawned subprocesses inherit it. DUMPER_GRAFTER_ENABLE and
+        # DUMPER_GRAFTER_ROLE are deliberately *not* set here — they are set
+        # by `_run_graft_test_split` per-rank, after which the global
+        # `dumper` is rebuilt (so workers can use the global directly).
         with temp_set_env(
             DUMPER_ENABLE="1",
             DUMPER_ENABLE_OUTPUT_FILE="false",  # skip disk I/O for the test
             DUMPER_ENABLE_OUTPUT_CONSOLE="false",
-            DUMPER_GRAFTER_ENABLE="1",
             DUMPER_GRAFTER_MASTER_ADDRESS="127.0.0.1",
             DUMPER_GRAFTER_MASTER_PORT=str(graft_port),
             DUMPER_GRAFTER_BASELINE_WORLD_SIZE="1",
@@ -3474,78 +3491,125 @@ class TestGrafterE2eExample:
         ):
             outputs = _run_graft_test_split(self._worker_baseline, self._worker_target)
 
-        # ---- Snapshot-style assertions on the per-role log output. ----
-
-        # Baseline: receives `attn_input` (t->b) then sends `attn_output` (b->t).
         baseline_log = outputs["baseline"]
-        assert "[Grafter] init group: role=baseline" in baseline_log, baseline_log
-        assert (
-            "[Grafter] recv role=baseline dir=t2b tags={'name': 'attn_input'}"
-            in baseline_log
-        ), baseline_log
-        assert (
-            "[Grafter] send role=baseline dir=b2t tags={'name': 'attn_output'}"
-            in baseline_log
-        ), baseline_log
-        # Recv side logs the diff summary between the pre-overwrite and the
-        # to-be-applied tensor — useful for spotting silent no-op grafts.
-        assert "diff_pre_vs_new=" in baseline_log, baseline_log
-
-        # Target: sends `attn_input` (t->b) then receives `attn_output` (b->t).
         target_log = outputs["target"]
-        assert "[Grafter] init group: role=target" in target_log, target_log
-        assert (
-            "[Grafter] send role=target dir=t2b tags={'name': 'attn_input'}"
-            in target_log
-        ), target_log
-        assert (
-            "[Grafter] recv role=target dir=b2t tags={'name': 'attn_output'}"
-            in target_log
-        ), target_log
-        assert "diff_pre_vs_new=" in target_log, target_log
+
+        # Always print captured logs so debugging a failed snapshot doesn't
+        # require a re-run with different assertions.
+        print("\n=========== captured baseline log ===========")
+        print(baseline_log)
+        print("=========== captured target log ===========")
+        print(target_log)
+        print("===========================================")
+
+        # Snapshot of the FULL per-role log timeline. Volatile fields
+        # (timestamps, ports, exact float diff values, tensor min/max/mean/
+        # samples, struct addresses) are masked with ad-hoc regex
+        # placeholders so the snapshot stays stable while still pinning
+        # everything else. The snapshot doubles as documentation of the
+        # logs a reader will see when running this E2E setup.
+
+        # Convenience tokens for verbose volatile substrings.
+        prefix = r"\[Dumper, rank=\d+, t=\d+\.\d+\] "
+        # `get_tensor_info(t)` for our tensors expands to a long line; we
+        # match the leading struct fields verbatim and let the trailing
+        # min/max/mean/sample fields wildcard out.
+        tinfo_f32_4 = (
+            r"type=<class 'torch\.Tensor'> shape=torch\.Size\(\[4\]\) "
+            r"dtype=torch\.float32 device=cuda:\d stride=\(1,\) "
+            r"req_grad=False .*"
+        )
+        diff = (
+            r"rel_diff=[-\d.eE+]+ max_abs=[-\d.eE+]+ mean_abs=[-\d.eE+]+"
+        )
+
+        baseline_pattern = (
+            r"\A"
+            f"{prefix}\\[Grafter\\] init group: role=baseline "
+            r"baseline_world=1 target_world=1 rank=0 "
+            r"init_method=tcp://127\.0\.0\.1:\d+ backend=nccl "
+            r"name=grafter_e2e\n"
+            f"{prefix}\\[Grafter\\] recv role=baseline dir=t2b "
+            r"tags=\{'name': 'attn_input'\} n_senders=1 "
+            r"sender_extras=\[None\] "
+            f"before_overridden={tinfo_f32_4} "
+            f"to_override={tinfo_f32_4} "
+            f"diff_pre_vs_new={diff}\n"
+            f"{prefix}\\[Grafter\\] send role=baseline dir=b2t "
+            r"tags=\{'name': 'attn_output'\} extras=None "
+            f"local={tinfo_f32_4}\n"
+            r"\Z"
+        )
+        target_pattern = (
+            r"\A"
+            f"{prefix}\\[Grafter\\] init group: role=target "
+            r"baseline_world=1 target_world=1 rank=1 "
+            r"init_method=tcp://127\.0\.0\.1:\d+ backend=nccl "
+            r"name=grafter_e2e\n"
+            f"{prefix}\\[Grafter\\] send role=target dir=t2b "
+            r"tags=\{'name': 'attn_input'\} extras=None "
+            f"local={tinfo_f32_4}\n"
+            f"{prefix}\\[Grafter\\] recv role=target dir=b2t "
+            r"tags=\{'name': 'attn_output'\} n_senders=1 "
+            r"sender_extras=\[None\] "
+            f"before_overridden={tinfo_f32_4} "
+            f"to_override={tinfo_f32_4} "
+            f"diff_pre_vs_new={diff}\n"
+            r"\Z"
+        )
+
+        assert re.fullmatch(baseline_pattern, baseline_log, flags=re.DOTALL), (
+            f"baseline log did not match snapshot.\n"
+            f"--- pattern ---\n{baseline_pattern}\n"
+            f"--- actual ---\n{baseline_log}"
+        )
+        assert re.fullmatch(target_pattern, target_log, flags=re.DOTALL), (
+            f"target log did not match snapshot.\n"
+            f"--- pattern ---\n{target_pattern}\n"
+            f"--- actual ---\n{target_log}"
+        )
 
     @staticmethod
     def _worker_baseline():
-        with temp_set_env(DUMPER_GRAFTER_ROLE="baseline"):
-            cfg = DumperConfig.from_env()
-            d = _Dumper(config=cfg)
+        # In production code, callers just `from sglang.srt.debug_utils.dumper
+        # import dumper` and call `dumper.dump(name, value)` — the env
+        # configures the global Grafter for them. We do the same here.
+        from sglang.srt.debug_utils.dumper import dumper
 
-            # Step 1: graft input. target sends its q to baseline; baseline
-            # overwrites its local placeholder q via .copy_() with target's q.
-            q = torch.tensor([99.0, 99.0, 99.0, 99.0], device="cuda:0")
-            d.dump("attn_input", q)
-            assert q.tolist() == [1.0, 2.0, 3.0, 4.0], (
-                f"baseline's q should be overwritten by target's via the t->b graft, "
-                f"got {q.tolist()}"
-            )
+        # Step 1: graft input. target sends its q to baseline; baseline
+        # overwrites its local placeholder q via .copy_() with target's q.
+        q = torch.tensor([99.0, 99.0, 99.0, 99.0], device="cuda:0")
+        dumper.dump("attn_input", q)
+        assert q.tolist() == [1.0, 2.0, 3.0, 4.0], (
+            f"baseline's q should be overwritten by target's via the t->b graft, "
+            f"got {q.tolist()}"
+        )
 
-            # Step 2: baseline runs the known-good attention kernel.
-            attn_out = q * 10.0
+        # Step 2: baseline runs the known-good attention kernel.
+        attn_out = q * 10.0
 
-            # Step 3: graft output. baseline sends attn_out to target.
-            d.dump("attn_output", attn_out)
+        # Step 3: graft output. baseline sends attn_out to target.
+        dumper.dump("attn_output", attn_out)
 
     @staticmethod
     def _worker_target():
-        with temp_set_env(DUMPER_GRAFTER_ROLE="target"):
-            cfg = DumperConfig.from_env()
-            d = _Dumper(config=cfg)
+        from sglang.srt.debug_utils.dumper import dumper
 
-            # Step 1: graft input. target sends its real q to baseline.
-            q = torch.tensor([1.0, 2.0, 3.0, 4.0], device="cuda:1")
-            d.dump("attn_input", q)
+        # Step 1: graft input. target sends its real q to baseline.
+        q = torch.tensor([1.0, 2.0, 3.0, 4.0], device="cuda:1")
+        dumper.dump("attn_input", q)
 
-            # Step 2: target runs the (suspected buggy) attention kernel —
-            # here it returns all zeros to mimic a broken implementation.
-            attn_out = torch.zeros_like(q)
+        # Step 2: target runs the (suspected buggy) attention kernel —
+        # here it returns all zeros to mimic a broken implementation.
+        attn_out = torch.zeros_like(q)
 
-            # Step 3: graft output. baseline sends its attn_out to target;
-            # target overwrites its (buggy) output with baseline's via .copy_().
-            d.dump("attn_output", attn_out)
-            assert attn_out.tolist() == [10.0, 20.0, 30.0, 40.0], (
-                f"target's attn_out should be overwritten by baseline's via "
-                f"the b->t graft, got {attn_out.tolist()}"
-            )
+        # Step 3: graft output. baseline sends its attn_out to target;
+        # target overwrites its (buggy) output with baseline's via .copy_().
+        dumper.dump("attn_output", attn_out)
+        assert attn_out.tolist() == [10.0, 20.0, 30.0, 40.0], (
+            f"target's attn_out should be overwritten by baseline's via "
+            f"the b->t graft, got {attn_out.tolist()}"
+        )
 
 
 if __name__ == "__main__":
