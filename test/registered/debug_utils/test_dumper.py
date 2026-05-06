@@ -2813,6 +2813,82 @@ class TestGrafterFilterMatching:
         with pytest.raises(ValueError, match=r"missing dotted prefix"):
             _load_function("only_one_segment")
 
+    def test_load_function_non_callable_resolves_but_call_fails(self):
+        """`_load_function` itself only does attribute lookup — it doesn't
+        verify the result is callable. A non-callable target manifests at
+        call time as TypeError; we still want the failure to be debuggable."""
+        sep = _load_function("os.path.sep")  # str, not a callable
+        assert isinstance(sep, str)
+        with pytest.raises(TypeError):
+            sep()
+
+    def test_filter_expression_only_uses_non_name_tag(self):
+        """A filter that doesn't reference `name` at all is still valid; it
+        should match purely on the other tag(s)."""
+        grafter = _Grafter(
+            config=_unit_grafter_config(
+                grafter_b2t_filter=None,
+                grafter_t2b_filter="layer_id < 3",
+            )
+        )
+        # layer_id absent → resolves to None; `None < 3` raises TypeError in py3.
+        with pytest.raises(TypeError):
+            grafter.maybe_intercept(value=torch.zeros(2), tags={"name": "x"})
+
+    def test_filter_expression_unknown_tag_resolves_to_none(self):
+        """Unknown tag keys resolve to None inside filter expressions, so
+        `layer_id is None` works as an "absent" probe without raising."""
+        grafter = _Grafter(
+            config=_unit_grafter_config(
+                grafter_b2t_filter=None,
+                grafter_t2b_filter="layer_id is None and name == 'x'",
+            )
+        )
+        # No `layer_id` in tags → resolves to None → filter matches → tries
+        # to init the recv group (which we can't actually do here without a
+        # real PG, so we expect the assertion failure from _ensure_group).
+        with pytest.raises(AssertionError, match="default torch.distributed"):
+            grafter.maybe_intercept(value=torch.zeros(2), tags={"name": "x"})
+
+    def test_filter_expression_syntax_error_raises(self):
+        """A filter string that isn't valid Python should surface as a
+        SyntaxError so the misconfiguration is loud, not silent."""
+        grafter = _Grafter(
+            config=_unit_grafter_config(grafter_b2t_filter="name == "),
+        )
+        with pytest.raises(SyntaxError):
+            grafter.maybe_intercept(value=torch.zeros(2), tags={"name": "x"})
+
+    def test_filter_expression_name_error_raises(self):
+        """Referencing an undefined helper inside a filter (e.g. a function
+        the user expected to be in scope) should raise NameError, not be
+        silently treated as False."""
+        grafter = _Grafter(
+            config=_unit_grafter_config(
+                grafter_b2t_filter="totally_undefined_helper(name)"
+            ),
+        )
+        with pytest.raises(NameError):
+            grafter.maybe_intercept(value=torch.zeros(2), tags={"name": "x"})
+
+    def test_filter_can_use_re_search(self):
+        """`re.search` is exposed inside filter expressions as `search()`."""
+        grafter = _Grafter(
+            config=_unit_grafter_config(
+                grafter_b2t_filter="search(r'attn.*', name) is not None",
+                grafter_t2b_filter=None,
+            )
+        )
+        # name='attn_input' matches /attn.*/ → tries to init group (hits
+        # the no-default-PG assertion, proving the regex matched).
+        with pytest.raises(AssertionError, match="default torch.distributed"):
+            grafter.maybe_intercept(
+                value=torch.zeros(2), tags={"name": "attn_input"}
+            )
+        # name='other' does not match → silent skip.
+        grafter.maybe_intercept(value=torch.zeros(2), tags={"name": "other"})
+        assert grafter._pg is None
+
 
 def _run_graft_test(worker_func, **kwargs):
     """Spawn one GPU-using process per role (rank 0 = baseline, rank 1 = target).
@@ -3379,6 +3455,139 @@ class TestGrafterDistributed:
             if grafter._pg is not None:
                 dist.destroy_process_group(grafter._pg)
 
+    def test_extras_default_none_flow(self):
+        """When the sender omits `grafter_extras`, the recv transform sees a
+        list of Nones — but len(received_extras_list) still matches n_senders."""
+        graft_port = find_available_port(29650)
+        _run_graft_test(
+            self._test_extras_none_func,
+            graft_port=graft_port,
+            group_name="grafter_extras_none",
+        )
+
+    @staticmethod
+    def _test_extras_none_func(rank, graft_port, group_name):
+        grafter = _Grafter(
+            config=_make_grafter_test_config(
+                rank=rank, graft_port=graft_port, group_name=group_name
+            )
+        )
+        try:
+            if rank == 0:
+                tensor = torch.tensor([1.0, 2.0, 3.0], device="cuda:0")
+                # Note: extras kwarg omitted entirely → None on the wire.
+                grafter.maybe_intercept(value=tensor, tags={"name": "x"})
+            else:
+                target = torch.zeros(3, device="cuda:1")
+                with _capture_stdout() as captured:
+                    grafter.maybe_intercept(value=target, tags={"name": "x"})
+                # Default identity transform copies tensor through; recv log
+                # must reflect that received_extras_list == [None].
+                output = captured.getvalue()
+                assert "sender_extras=[None]" in output, output
+                assert target.tolist() == [1.0, 2.0, 3.0], target.tolist()
+        finally:
+            if grafter._pg is not None:
+                dist.destroy_process_group(grafter._pg)
+
+    def test_group_init_is_cached_across_calls(self):
+        """The graft process group is initialized lazily on the first
+        matched dump() and cached afterwards — subsequent dumps must reuse
+        the same `_pg` object, not re-init."""
+        graft_port = find_available_port(29660)
+        _run_graft_test(
+            self._test_group_cache_func,
+            graft_port=graft_port,
+            group_name="grafter_cache",
+        )
+
+    @staticmethod
+    def _test_group_cache_func(rank, graft_port, group_name):
+        grafter = _Grafter(
+            config=_make_grafter_test_config(
+                rank=rank, graft_port=graft_port, group_name=group_name
+            )
+        )
+        try:
+            if rank == 0:
+                t1 = torch.tensor([1.0, 2.0, 3.0], device="cuda:0")
+                t2 = torch.tensor([4.0, 5.0, 6.0], device="cuda:0")
+                grafter.maybe_intercept(value=t1, tags={"name": "x"})
+                pg_after_first = grafter._pg
+                assert pg_after_first is not None
+                grafter.maybe_intercept(value=t2, tags={"name": "x"})
+                assert grafter._pg is pg_after_first, (
+                    "_pg must be cached across calls, not re-initialized"
+                )
+            else:
+                target1 = torch.zeros(3, device="cuda:1")
+                target2 = torch.zeros(3, device="cuda:1")
+                grafter.maybe_intercept(value=target1, tags={"name": "x"})
+                pg_after_first = grafter._pg
+                assert pg_after_first is not None
+                grafter.maybe_intercept(value=target2, tags={"name": "x"})
+                assert grafter._pg is pg_after_first
+                assert target1.tolist() == [1.0, 2.0, 3.0]
+                assert target2.tolist() == [4.0, 5.0, 6.0]
+        finally:
+            if grafter._pg is not None:
+                dist.destroy_process_group(grafter._pg)
+
+    def test_copy_failure_does_not_crash(self, tmp_path: Path):
+        """If the user transform returns a tensor whose shape doesn't match
+        target, `value.copy_(value_to_override)` raises — and that error
+        must be caught, logged with traceback, and target left unchanged
+        (same robustness contract as transform-throws)."""
+        module_name = "_xform_returns_wrong_shape"
+        (tmp_path / f"{module_name}.py").write_text(
+            "import torch\n"
+            "def transform(graft_input):\n"
+            "    # Deliberately return a shape that copy_ will reject.\n"
+            "    return torch.zeros(99, device=graft_input.target.device)\n"
+        )
+        graft_port = find_available_port(29665)
+        _run_graft_test(
+            self._test_copy_failure_func,
+            graft_port=graft_port,
+            group_name="grafter_copy_fail",
+            transform_dir=str(tmp_path),
+            transform_path=f"{module_name}.transform",
+        )
+
+    @staticmethod
+    def _test_copy_failure_func(
+        rank, graft_port, group_name, transform_dir, transform_path
+    ):
+        sys.path.insert(0, transform_dir)
+        grafter = _Grafter(
+            config=_make_grafter_test_config(
+                rank=rank,
+                graft_port=graft_port,
+                group_name=group_name,
+                transform_path=transform_path,
+            )
+        )
+        try:
+            if rank == 0:
+                tensor = torch.tensor([1.0, 2.0, 3.0], device="cuda:0")
+                grafter.maybe_intercept(value=tensor, tags={"name": "x"})
+            else:
+                target = torch.tensor([7.0, 7.0, 7.0], device="cuda:1")
+                with _capture_stdout() as captured:
+                    grafter.maybe_intercept(value=target, tags={"name": "x"})
+                # target must be unchanged; error must be logged with traceback.
+                assert target.tolist() == [
+                    7.0,
+                    7.0,
+                    7.0,
+                ], f"target must be unchanged on copy_ failure, got {target.tolist()}"
+                output = captured.getvalue()
+                assert "transform/copy_ raised" in output, output
+                assert "Traceback (most recent call last)" in output, output
+        finally:
+            if grafter._pg is not None:
+                dist.destroy_process_group(grafter._pg)
+
 
 class TestGrafterMultiRankCpu:
     """Coverage of asymmetric multi-rank cases via CPU/gloo (CI fleet has
@@ -3415,18 +3624,14 @@ class TestGrafterMultiRankCpu:
         role, local_rank, graft_port, group_name, transform_dir, transform_path
     ):
         sys.path.insert(0, transform_dir)
-        cfg = DumperConfig(
-            grafter_enable=True,
-            grafter_role=role,
-            grafter_b2t_filter="name == 'x'",
-            grafter_master_address="127.0.0.1",
-            grafter_master_port=graft_port,
-            grafter_baseline_world_size=4,
-            grafter_target_world_size=2,
-            grafter_backend="gloo",
-            grafter_group_name=group_name,
-            grafter_timeout=30,
-            grafter_transform_path=transform_path,
+        cfg = _make_multi_rank_config(
+            role=role,
+            graft_port=graft_port,
+            group_name=group_name,
+            baseline_world=4,
+            target_world=2,
+            transform_path=transform_path,
+            direction="b2t",
         )
         grafter = _Grafter(config=cfg)
         try:
@@ -3442,6 +3647,196 @@ class TestGrafterMultiRankCpu:
         finally:
             if grafter._pg is not None:
                 dist.destroy_process_group(grafter._pg)
+
+    def test_2_target_4_baseline_t2b_with_user_transform(self, tmp_path: Path):
+        """Mirror image of the b2t case: 2 target senders -> 4 baseline
+        receivers via t2b graft. Confirms the (role, direction) algebra and
+        sender_slice work correctly when target is the SENDER side."""
+        module_name = "_xform_assert_2_senders_t2b"
+        (tmp_path / f"{module_name}.py").write_text(
+            "import torch\n"
+            "def transform(graft_input):\n"
+            "    rl = graft_input.received_list\n"
+            "    assert len(rl) == 2, f'expected 2 senders, got {len(rl)}'\n"
+            "    for i, t in enumerate(rl):\n"
+            "        v = float(t.flatten()[0].item())\n"
+            "        assert v == float(i + 100), (\n"
+            "            f'rl[{i}][0]={v}, want {float(i + 100)}'\n"
+            "        )\n"
+            "    return torch.full_like(graft_input.target, 7.0)\n"
+        )
+        graft_port = find_available_port(29670)
+        _run_graft_test_cpu_multi(
+            self._test_2t_4b_func,
+            baseline_world=4,
+            target_world=2,
+            graft_port=graft_port,
+            group_name="grafter_2t_4b",
+            transform_dir=str(tmp_path),
+            transform_path=f"{module_name}.transform",
+        )
+
+    @staticmethod
+    def _test_2t_4b_func(
+        role, local_rank, graft_port, group_name, transform_dir, transform_path
+    ):
+        sys.path.insert(0, transform_dir)
+        cfg = _make_multi_rank_config(
+            role=role,
+            graft_port=graft_port,
+            group_name=group_name,
+            baseline_world=4,
+            target_world=2,
+            transform_path=transform_path,
+            direction="t2b",
+        )
+        grafter = _Grafter(config=cfg)
+        try:
+            if role == "target":
+                # rank-i target contributes [i+100, i+100, i+100].
+                tensor = torch.full((3,), float(local_rank + 100))
+                grafter.maybe_intercept(value=tensor, tags={"name": "x"})
+            else:
+                target = torch.full((3,), 99.0)
+                grafter.maybe_intercept(value=target, tags={"name": "x"})
+                assert target.tolist() == [7.0, 7.0, 7.0], target.tolist()
+        finally:
+            if grafter._pg is not None:
+                dist.destroy_process_group(grafter._pg)
+
+    def test_default_transform_with_asymmetric_world_logs_and_skips(self):
+        """The default identity-by-rank fallback requires #senders == #recvs.
+        With baseline=4 and target=2 and no user transform, the recv side
+        must catch the RuntimeError, log it with traceback, and leave the
+        target unchanged."""
+        graft_port = find_available_port(29675)
+        _run_graft_test_cpu_multi(
+            self._test_default_asym_func,
+            baseline_world=4,
+            target_world=2,
+            graft_port=graft_port,
+            group_name="grafter_default_asym",
+        )
+
+    @staticmethod
+    def _test_default_asym_func(role, local_rank, graft_port, group_name):
+        cfg = _make_multi_rank_config(
+            role=role,
+            graft_port=graft_port,
+            group_name=group_name,
+            baseline_world=4,
+            target_world=2,
+            transform_path=None,  # default identity-by-rank fallback
+            direction="b2t",
+        )
+        grafter = _Grafter(config=cfg)
+        try:
+            if role == "baseline":
+                tensor = torch.full((3,), float(local_rank))
+                grafter.maybe_intercept(value=tensor, tags={"name": "x"})
+            else:
+                target = torch.full((3,), 42.0)
+                with _capture_stdout() as captured:
+                    grafter.maybe_intercept(value=target, tags={"name": "x"})
+                assert target.tolist() == [42.0, 42.0, 42.0], (
+                    f"target must be unchanged when default transform raises, "
+                    f"got {target.tolist()}"
+                )
+                output = captured.getvalue()
+                assert "transform/copy_ raised RuntimeError" in output, output
+                # The error message must explain WHY the default fell through.
+                assert "#senders=4" in output and "#recvs=2" in output, output
+                assert "Traceback (most recent call last)" in output, output
+        finally:
+            if grafter._pg is not None:
+                dist.destroy_process_group(grafter._pg)
+
+    def test_mixed_shape_senders_via_user_transform(self, tmp_path: Path):
+        """`all_gather_object` is pickle-routed, so sender ranks may
+        contribute tensors with DIFFERENT shapes. The user transform sees
+        the full list and is responsible for picking/reducing. Asserts that
+        rank-i baseline's tensor has shape (i+1,) and the transform
+        concatenates them on the recv side."""
+        module_name = "_xform_concat_mixed_shape"
+        (tmp_path / f"{module_name}.py").write_text(
+            "import torch\n"
+            "def transform(graft_input):\n"
+            "    rl = graft_input.received_list\n"
+            "    # Each baseline sent shape=(rank+1,) tensors filled with rank.\n"
+            "    expected_shapes = [(i + 1,) for i in range(len(rl))]\n"
+            "    actual_shapes = [tuple(t.shape) for t in rl]\n"
+            "    assert actual_shapes == expected_shapes, (\n"
+            "        f'shape mismatch: expected {expected_shapes}, got {actual_shapes}'\n"
+            "    )\n"
+            "    # Concat to length 1+2+3+4 = 10 == target's length.\n"
+            "    return torch.cat(rl)\n"
+        )
+        graft_port = find_available_port(29680)
+        _run_graft_test_cpu_multi(
+            self._test_mixed_shape_func,
+            baseline_world=4,
+            target_world=2,
+            graft_port=graft_port,
+            group_name="grafter_mixed_shape",
+            transform_dir=str(tmp_path),
+            transform_path=f"{module_name}.transform",
+        )
+
+    @staticmethod
+    def _test_mixed_shape_func(
+        role, local_rank, graft_port, group_name, transform_dir, transform_path
+    ):
+        sys.path.insert(0, transform_dir)
+        cfg = _make_multi_rank_config(
+            role=role,
+            graft_port=graft_port,
+            group_name=group_name,
+            baseline_world=4,
+            target_world=2,
+            transform_path=transform_path,
+            direction="b2t",
+        )
+        grafter = _Grafter(config=cfg)
+        try:
+            if role == "baseline":
+                # rank-i baseline contributes shape=(i+1,) filled with i.
+                tensor = torch.full((local_rank + 1,), float(local_rank))
+                grafter.maybe_intercept(value=tensor, tags={"name": "x"})
+            else:
+                # 1 + 2 + 3 + 4 = 10 elements after concat.
+                target = torch.zeros(10)
+                grafter.maybe_intercept(value=target, tags={"name": "x"})
+                expected = [0.0] + [1.0] * 2 + [2.0] * 3 + [3.0] * 4
+                assert target.tolist() == expected, target.tolist()
+        finally:
+            if grafter._pg is not None:
+                dist.destroy_process_group(grafter._pg)
+
+
+def _make_multi_rank_config(
+    *,
+    role: str,
+    graft_port: int,
+    group_name: str,
+    baseline_world: int,
+    target_world: int,
+    transform_path: Optional[str],
+    direction: str,
+) -> DumperConfig:
+    return DumperConfig(
+        grafter_enable=True,
+        grafter_role=role,
+        grafter_b2t_filter="name == 'x'" if direction == "b2t" else None,
+        grafter_t2b_filter="name == 'x'" if direction == "t2b" else None,
+        grafter_master_address="127.0.0.1",
+        grafter_master_port=graft_port,
+        grafter_baseline_world_size=baseline_world,
+        grafter_target_world_size=target_world,
+        grafter_backend="gloo",
+        grafter_group_name=group_name,
+        grafter_timeout=30,
+        grafter_transform_path=transform_path,
+    )
 
 
 class TestGrafterE2eExample:
