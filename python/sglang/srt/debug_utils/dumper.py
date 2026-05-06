@@ -839,6 +839,8 @@ class _Grafter:
     Graft global rank layout: baseline occupies ranks 0..baseline_world-1;
     target occupies ranks baseline_world..baseline_world+target_world-1. Each
     side derives its own rank from its local default PG via dist.get_rank().
+
+    Please refer to TestGrafterE2eExample in tests for an example.
     """
 
     def __init__(self, *, config: DumperConfig):
