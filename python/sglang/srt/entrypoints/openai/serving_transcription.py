@@ -215,7 +215,7 @@ class OpenAIServingTranscription(OpenAIServingBase):
             return Response(content=text, media_type="text/plain")
 
         if request.response_format == "verbose_json":
-            tokenizer = self.tokenizer_manager.tokenizer
+            tokenizer = self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer
             return self._adapter.build_verbose_response(
                 request, text, ret, tokenizer, usage
             )
