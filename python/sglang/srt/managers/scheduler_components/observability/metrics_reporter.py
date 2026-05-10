@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
-from sglang.srt.managers.scheduler import ScheduleBatch
+from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.managers.utils import GenerationBatchResult
 from sglang.srt.observability.metrics_collector import (
     DPCooperationInfo,
@@ -23,7 +23,7 @@ from sglang.srt.utils.scheduler_status_logger import SchedulerStatusLogger
 if TYPE_CHECKING:
     from sglang.srt.managers.schedule_batch import Req
     from sglang.srt.managers.schedule_policy import PrefillAdder
-    from sglang.srt.managers.scheduler import EmbeddingBatchResult, Scheduler
+    from sglang.srt.managers.scheduler import EmbeddingBatchResult
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +63,79 @@ class PrefillStats:
         )
 
 
-class SchedulerMetricsMixin:
-    def init_metrics(
-        self: Scheduler, tp_rank: int, pp_rank: int, dp_rank: Optional[int]
-    ):
+class SchedulerMetricsReporter:
+    """Prometheus / Stats hot-path. Composition target on Scheduler
+    (``self.metrics_reporter``)."""
+
+    def __init__(
+        self,
+        *,
+        ps,
+        server_args,
+        disaggregation_mode,
+        spec_algorithm,
+        max_running_requests: int,
+        max_total_num_tokens: int,
+        tp_rank: int,
+        pp_rank: int,
+        dp_rank,
+        attn_tp_rank: int,
+        moe_ep_rank: int,
+        device: str,
+        model_config,
+        max_running_requests_under_SLO,
+        waiting_queue,
+        grammar_manager,
+        mm_receiver,
+        tree_cache,
+        tp_worker,
+        draft_worker,
+        disagg_prefill_bootstrap_queue,
+        disagg_prefill_inflight_queue,
+        disagg_decode_prealloc_queue,
+        disagg_decode_transfer_queue,
+        kv_events_publisher,
+        pool_stats_observer,
+        get_running_batch,
+        get_forward_ct,
+        get_running_mbs,
+    ) -> None:
+        # Owned counters (ownership migration from Scheduler).
+        self.num_retracted_reqs: int = 0
+        self.num_paused_reqs: int = 0
+        # Stash deps + sisters + Callable getters.
+        self.ps = ps
+        self.server_args = server_args
+        self.disaggregation_mode = disaggregation_mode
+        self.spec_algorithm = spec_algorithm
+        self.max_running_requests = max_running_requests
+        self.max_total_num_tokens = max_total_num_tokens
+        self.device = device
+        self.model_config = model_config
+        self.max_running_requests_under_SLO = max_running_requests_under_SLO
+        self.waiting_queue = waiting_queue
+        self.grammar_manager = grammar_manager
+        self.mm_receiver = mm_receiver
+        self.tree_cache = tree_cache
+        self.tp_worker = tp_worker
+        self.draft_worker = draft_worker
+        self.disagg_prefill_bootstrap_queue = disagg_prefill_bootstrap_queue
+        self.disagg_prefill_inflight_queue = disagg_prefill_inflight_queue
+        self.disagg_decode_prealloc_queue = disagg_decode_prealloc_queue
+        self.disagg_decode_transfer_queue = disagg_decode_transfer_queue
+        self.kv_events_publisher = kv_events_publisher
+        self.pool_stats_observer = pool_stats_observer
+        self.get_running_batch = get_running_batch
+        self.get_forward_ct = get_forward_ct
+        self.get_running_mbs = get_running_mbs
+        # Run the original init_metrics body inline.
+        self.init_metrics(tp_rank, pp_rank, dp_rank)
+        # ``install_device_timer_on_runners`` was originally called
+        # from Scheduler.__init__ right after init_model_worker; we
+        # invoke it here so callers don't need a separate hook.
+        self.install_device_timer_on_runners()
+
+    def init_metrics(self, tp_rank: int, pp_rank: int, dp_rank: Optional[int]):
         # Basic stats
         self.forward_ct_decode = 0
         self.num_generated_tokens = 0
@@ -102,6 +171,7 @@ class SchedulerMetricsMixin:
             or self.server_args.enable_metrics_for_all_schedulers
         )
         self.enable_mfu_metrics = False
+        self.metrics_collector = None
 
         if self.enable_metrics:
             engine_type = DisaggregationMode.to_engine_type(
@@ -163,7 +233,7 @@ class SchedulerMetricsMixin:
             enable_metrics=self.enable_metrics
         )
 
-    def install_device_timer_on_runners(self: Scheduler):
+    def install_device_timer_on_runners(self):
         if self.forward_pass_device_timer is None:
             return
         timer = self.forward_pass_device_timer
@@ -176,14 +246,14 @@ class SchedulerMetricsMixin:
                 for r in getattr(dw, "draft_runner_list", []):
                     r.device_timer = timer
 
-    def update_spec_metrics(self: Scheduler, bs: int, num_accepted_drafts: int):
+    def update_spec_metrics(self, bs: int, num_accepted_drafts: int):
         self.spec_num_accepted_tokens += num_accepted_drafts + bs
         self.spec_num_forward_ct += bs
 
         # Bonus tokens updated elsewhere
         self.num_generated_tokens += num_accepted_drafts
 
-    def _init_estimated_perf_constants(self: Scheduler) -> None:
+    def _init_estimated_perf_constants(self) -> None:
         model_config = self.model_config
         hf_text_config = model_config.hf_text_config
 
@@ -265,9 +335,7 @@ class SchedulerMetricsMixin:
             num_attn_heads * head_dim * act_bytes * num_layers
         )
 
-    def _estimate_prefill_perf(
-        self: Scheduler, num_tokens: int
-    ) -> Tuple[float, float, float]:
+    def _estimate_prefill_perf(self, num_tokens: int) -> Tuple[float, float, float]:
         tokens = max(0, int(num_tokens))
         if tokens == 0:
             return 0.0, 0.0, 0.0
@@ -292,7 +360,7 @@ class SchedulerMetricsMixin:
         return flops, read_bytes, write_bytes
 
     def _estimate_decode_perf(
-        self: Scheduler, batch: ScheduleBatch, num_tokens: int
+        self, batch: ScheduleBatch, num_tokens: int
     ) -> Tuple[float, float, float]:
         tokens = max(0, int(num_tokens))
         if tokens == 0:
@@ -316,7 +384,7 @@ class SchedulerMetricsMixin:
         )
         return flops, read_bytes, write_bytes
 
-    def reset_metrics(self: Scheduler):
+    def reset_metrics(self):
         self.forward_ct_decode = 0
         self.num_generated_tokens = 0
         self.spec_num_accepted_tokens = 0
@@ -325,7 +393,7 @@ class SchedulerMetricsMixin:
         self.spec_total_num_forward_ct = 0
 
     def report_prefill_stats(
-        self: Scheduler,
+        self,
         batch: Optional[ScheduleBatch],
         prefill_stats: PrefillStats,
         can_run_cuda_graph: bool,
@@ -345,7 +413,7 @@ class SchedulerMetricsMixin:
         )
 
         pool_stats = self.pool_stats_observer.get_pool_stats(
-            last_batch=self.last_batch, running_batch=self.running_batch
+            last_batch=self.last_batch, running_batch=self.get_running_batch()
         )
         token_usage_msg = ", ".join(pool_stats.get_prefill_usage_msg_parts()) + ", "
 
@@ -353,7 +421,7 @@ class SchedulerMetricsMixin:
         batch_iter = (
             batch.forward_iter
             if batch is not None and batch.forward_iter is not None
-            else self.forward_ct
+            else self.get_forward_ct()
         )
         iter_msg = f" [{batch_iter}]" if LOG_FORWARD_ITERS else ""
 
@@ -451,9 +519,9 @@ class SchedulerMetricsMixin:
                 )
 
             # Utilization / LoRA / HiCache
-            self.calculate_utilization()
+            self._calculate_utilization()
             self.stats.fwd_occupancy = self.fwd_occupancy
-            self.update_lora_metrics()
+            self._update_lora_metrics()
             self._log_hicache_stats()
             self.metrics_collector.log_stats(self.stats)
             self.kv_events_publisher.emit_kv_metrics(
@@ -464,12 +532,12 @@ class SchedulerMetricsMixin:
         self.kv_events_publisher.publish_kv_events()
 
     def report_decode_stats(
-        self: Scheduler,
+        self,
         can_run_cuda_graph: bool,
         running_batch: ScheduleBatch = None,
         num_accepted_drafts: int = 0,
     ):
-        batch = running_batch or self.running_batch
+        batch = running_batch or self.get_running_batch()
 
         # Every-iteration work: realtime token counting + status logger
         if self.current_scheduler_metrics_enabled:
@@ -512,7 +580,7 @@ class SchedulerMetricsMixin:
         num_running_reqs = len(batch.reqs)
 
         pool_stats = self.pool_stats_observer.get_pool_stats(
-            last_batch=self.last_batch, running_batch=self.running_batch
+            last_batch=self.last_batch, running_batch=self.get_running_batch()
         )
         token_usage_msg = ", ".join(pool_stats.get_decode_usage_msg_parts()) + ", "
 
@@ -524,7 +592,7 @@ class SchedulerMetricsMixin:
         batch_iter = (
             batch.forward_iter
             if batch is not None and batch.forward_iter is not None
-            else self.forward_ct
+            else self.get_forward_ct()
         )
         iter_msg = f" [{batch_iter}]" if LOG_FORWARD_ITERS else ""
         msg = f"Decode batch{iter_msg}, #running-req: {num_running_reqs}, {token_usage_msg}"
@@ -643,7 +711,7 @@ class SchedulerMetricsMixin:
             )
             self.stats.streaming_session_held_tokens = (
                 self.pool_stats_observer.session_held_tokens(
-                    last_batch=self.last_batch, running_batch=self.running_batch
+                    last_batch=self.last_batch, running_batch=self.get_running_batch()
                 )
             )
 
@@ -661,9 +729,9 @@ class SchedulerMetricsMixin:
                 )
 
             # Utilization / LoRA / HiCache
-            self.calculate_utilization()
+            self._calculate_utilization()
             self.stats.fwd_occupancy = self.fwd_occupancy
-            self.update_lora_metrics()
+            self._update_lora_metrics()
             self._log_hicache_stats()
             self.metrics_collector.log_stats(self.stats)
             self.kv_events_publisher.emit_kv_metrics(
@@ -674,7 +742,7 @@ class SchedulerMetricsMixin:
         self.kv_events_publisher.publish_kv_events()
 
     def log_batch_result_stats(
-        self: Scheduler,
+        self,
         batch: ScheduleBatch,
         result: Union[GenerationBatchResult, EmbeddingBatchResult],
     ):
@@ -689,7 +757,7 @@ class SchedulerMetricsMixin:
                 balancedness=m.eplb_balancedness.item(),
             )
 
-    def _log_hicache_stats(self: Scheduler):
+    def _log_hicache_stats(self):
         """Populate HiCache host-tier stats on self.stats.
 
         These are pushed to Prometheus by SchedulerMetricsCollector.log_stats().
@@ -706,7 +774,7 @@ class SchedulerMetricsMixin:
         )
         self.stats.hicache_host_total_tokens = host_pool.size
 
-    def update_lora_metrics(self: Scheduler):
+    def _update_lora_metrics(self):
         """Update LoRA pool metrics for monitoring and autoscaling."""
         if not self.enable_lora:
             return
@@ -726,15 +794,15 @@ class SchedulerMetricsMixin:
 
             # For PP mode, check all running micro batches
             if self.server_args.pp_size > 1:
-                for batch in self.running_mbs:
+                for batch in self.get_running_mbs():
                     if batch and hasattr(batch, "reqs"):
                         for req in batch.reqs:
                             if hasattr(req, "lora_id") and req.lora_id is not None:
                                 active_lora_ids.add(req.lora_id)
             # For normal mode, check running_batch
-            elif self.running_batch:
-                if hasattr(self.running_batch, "reqs"):
-                    for req in self.running_batch.reqs:
+            elif self.get_running_batch():
+                if hasattr(self.get_running_batch(), "reqs"):
+                    for req in self.get_running_batch().reqs:
                         if hasattr(req, "lora_id") and req.lora_id is not None:
                             active_lora_ids.add(req.lora_id)
 
@@ -750,7 +818,7 @@ class SchedulerMetricsMixin:
         except Exception as e:
             logger.warning(f"Failed to update LoRA metrics: {e}")
 
-    def calculate_utilization(self: Scheduler):
+    def _calculate_utilization(self):
         if self.disaggregation_mode == DisaggregationMode.PREFILL:
             self.stats.utilization = -1
         else:
@@ -762,7 +830,7 @@ class SchedulerMetricsMixin:
                     self.stats.token_usage / 0.9,
                 )
 
-    def update_device_timer(self: Scheduler):
+    def update_device_timer(self):
         if not ENABLE_METRICS_DEVICE_TIMER:
             return
         self.forward_pass_device_timer._report()
@@ -786,7 +854,7 @@ class SchedulerMetricsMixin:
         ):
             self._device_timer_window_batch_count = 0
 
-    def reset_device_timer_window(self: Scheduler):
+    def reset_device_timer_window(self):
         if ENABLE_METRICS_DEVICE_TIMER:
             self._device_timer_window_batch_count = 0
             self.fwd_occupancy = float("nan")

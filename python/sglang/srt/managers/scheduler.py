@@ -180,6 +180,11 @@ from sglang.srt.managers.scheduler_components.observability.kv_events_publisher 
 from sglang.srt.managers.scheduler_components.observability.load_inquirer import (
     SchedulerLoadInquirer,
 )
+from sglang.srt.managers.scheduler_components.observability.metrics_reporter import (
+    RECORD_STEP_TIME,
+    PrefillStats,
+    SchedulerMetricsReporter,
+)
 from sglang.srt.managers.scheduler_components.observability.pool_stats_observer import (
     SchedulerPoolStatsObserver,
 )
@@ -206,11 +211,6 @@ from sglang.srt.observability.req_time_stats import (
     real_time,
     set_schedule_time_batch,
     set_time_batch,
-)
-from sglang.srt.observability.scheduler_metrics_mixin import (
-    RECORD_STEP_TIME,
-    PrefillStats,
-    SchedulerMetricsMixin,
 )
 from sglang.srt.observability.trace import process_tracing_init, trace_set_thread_info
 from sglang.srt.parser.reasoning_parser import ReasoningParser
@@ -360,7 +360,6 @@ def create_scheduler_watchdog(
 
 class Scheduler(
     SchedulerOutputProcessorMixin,
-    SchedulerMetricsMixin,
     SchedulerDisaggregationDecodeMixin,
     SchedulerDisaggregationPrefillMixin,
     SchedulerMultiplexMixin,
@@ -454,7 +453,21 @@ class Scheduler(
         self.init_model_config()
 
         # Init metrics stats
-        self.init_metrics(tp_rank, pp_rank, dp_rank)
+        # Computed early because init_ipc_channels reads it; the rest of
+        # init_metrics now runs inside the metrics_reporter ctor below.
+        self.enable_metrics = self.server_args.enable_metrics
+        self.is_stats_logging_rank = self.ps.attn_tp_rank == 0
+        self.current_scheduler_metrics_enabled = self.enable_metrics and (
+            self.is_stats_logging_rank
+            or self.server_args.enable_metrics_for_all_schedulers
+        )
+        # init_cache_with_memory_pool reads this before the
+        # kv_events_publisher is constructed.
+        self.enable_kv_cache_events = bool(
+            self.server_args.kv_events_config
+            and self.ps.attn_tp_rank == 0
+            and self.ps.attn_cp_rank == 0
+        )
 
         # Init inter-process communication
         self.init_ipc_channels(port_args)
@@ -474,7 +487,6 @@ class Scheduler(
 
         # Launch a model worker and draft model worker if using speculative decoding
         self.init_model_worker()
-        self.install_device_timer_on_runners()
 
         if (t := envs.SGLANG_TEST_STUCK_SCHEDULER_INIT.get()) > 0:
             time.sleep(t)
@@ -687,6 +699,54 @@ class Scheduler(
             send_metrics_from_scheduler=self.send_metrics_from_scheduler,
         )
 
+        self.metrics_reporter = SchedulerMetricsReporter(
+            ps=self.ps,
+            server_args=self.server_args,
+            disaggregation_mode=DisaggregationMode(
+                self.server_args.disaggregation_mode
+            ),
+            spec_algorithm=self.spec_algorithm,
+            max_running_requests=self.max_running_requests,
+            max_total_num_tokens=self.max_total_num_tokens,
+            tp_rank=self.ps.tp_rank,
+            pp_rank=self.ps.pp_rank,
+            dp_rank=self.ps.dp_rank,
+            attn_tp_rank=self.ps.attn_tp_rank,
+            moe_ep_rank=self.ps.moe_ep_rank,
+            device=getattr(self, "device", ""),
+            model_config=self.model_config,
+            max_running_requests_under_SLO=getattr(
+                self, "max_running_requests_under_SLO", None
+            ),
+            waiting_queue=self.waiting_queue,
+            grammar_manager=self.grammar_manager,
+            mm_receiver=getattr(self, "mm_receiver", None),
+            tree_cache=self.tree_cache,
+            tp_worker=self.tp_worker,
+            draft_worker=self.draft_worker,
+            disagg_prefill_bootstrap_queue=getattr(
+                self, "disagg_prefill_bootstrap_queue", None
+            ),
+            disagg_prefill_inflight_queue=getattr(
+                self, "disagg_prefill_inflight_queue", None
+            ),
+            disagg_decode_prealloc_queue=getattr(
+                self, "disagg_decode_prealloc_queue", None
+            ),
+            disagg_decode_transfer_queue=getattr(
+                self, "disagg_decode_transfer_queue", None
+            ),
+            kv_events_publisher=self.kv_events_publisher,
+            pool_stats_observer=self.pool_stats_observer,
+            get_running_batch=lambda: self.running_batch,
+            get_forward_ct=lambda: self.forward_ct,
+            get_running_mbs=lambda: getattr(self, "running_mbs", []),
+        )
+
+        # Aliases so call sites that historically read self.X (when init_metrics
+        # set those fields directly on Scheduler) still resolve.
+        self.stats = self.metrics_reporter.stats
+        self.metrics_collector = self.metrics_reporter.metrics_collector
         self.is_initializing = False
 
     def init_model_config(self):
@@ -995,8 +1055,6 @@ class Scheduler(
         self.forward_ct = 0
         self.return_health_check_ipcs: Deque[Optional[str]] = deque()
         self._pending_flush: Optional[Tuple[FlushCacheReqInput, float]] = None
-        self.num_retracted_reqs: int = 0
-        self.num_paused_reqs: int = 0
         self.session_controller = SessionController(self.tree_cache)
         self.forward_sleep_time = None
         self._engine_paused = False
@@ -1443,8 +1501,8 @@ class Scheduler(
                         running_batch=self.running_batch,
                         waiting_queue=self.waiting_queue,
                         stats=self.stats,
-                        spec_total_num_accepted_tokens=self.spec_total_num_accepted_tokens,
-                        spec_total_num_forward_ct=self.spec_total_num_forward_ct,
+                        spec_total_num_accepted_tokens=self.metrics_reporter.spec_total_num_accepted_tokens,
+                        spec_total_num_forward_ct=self.metrics_reporter.spec_total_num_forward_ct,
                         disagg_prefill_bootstrap_queue=getattr(
                             self, "disagg_prefill_bootstrap_queue", None
                         ),
@@ -2704,7 +2762,7 @@ class Scheduler(
                 else None
             )
 
-            self.num_retracted_reqs = len(retracted_reqs)
+            self.metrics_reporter.num_retracted_reqs = len(retracted_reqs)
             if self.enable_metrics and len(retracted_reqs) > 0:
                 self.metrics_collector.increment_retracted_reqs(
                     num_retracted_reqs=len(retracted_reqs),
@@ -2956,10 +3014,10 @@ class Scheduler(
         elif batch.forward_mode.is_idle():
             self.process_batch_result_idle(batch, result)
 
-        self.log_batch_result_stats(batch, result)
+        self.metrics_reporter.log_batch_result_stats(batch, result)
         self._maybe_clear_mm_inputs(batch)
         self.maybe_send_health_check_signal()
-        self.update_device_timer()
+        self.metrics_reporter.update_device_timer()
 
     def maybe_send_health_check_signal(self):
         if self.return_health_check_ipcs:
@@ -3134,7 +3192,7 @@ class Scheduler(
         self.new_token_ratio = self.init_new_token_ratio
 
         # reset device timer window so idle time isn't counted
-        self.reset_device_timer_window()
+        self.metrics_reporter.reset_device_timer_window()
 
         # sleep until next event
         self.maybe_sleep_on_idle()
@@ -3315,7 +3373,7 @@ class Scheduler(
             self.req_to_token_pool.clear()
             self.token_to_kv_pool_allocator.clear()
             self.grammar_manager.clear()
-            self.reset_metrics()
+            self.metrics_reporter.reset_metrics()
 
             if self.draft_worker:
                 self.draft_worker.clear_cache_pool()
@@ -3346,9 +3404,13 @@ class Scheduler(
         }
         ret["effective_max_running_requests_per_dp"] = self.max_running_requests
 
-        if not self.spec_algorithm.is_none() and self.spec_total_num_forward_ct > 0:
+        if (
+            not self.spec_algorithm.is_none()
+            and self.metrics_reporter.spec_total_num_forward_ct > 0
+        ):
             ret["avg_spec_accept_length"] = (
-                self.spec_total_num_accepted_tokens / self.spec_total_num_forward_ct
+                self.metrics_reporter.spec_total_num_accepted_tokens
+                / self.metrics_reporter.spec_total_num_forward_ct
             )
 
         if RECORD_STEP_TIME:
@@ -3385,12 +3447,18 @@ class Scheduler(
                 break
 
         if if_success:
-            if not self.spec_algorithm.is_none() and self.spec_total_num_forward_ct > 0:
+            if (
+                not self.spec_algorithm.is_none()
+                and self.metrics_reporter.spec_total_num_forward_ct > 0
+            ):
                 avg_spec_accept_length = (
-                    self.spec_total_num_accepted_tokens / self.spec_total_num_forward_ct
+                    self.metrics_reporter.spec_total_num_accepted_tokens
+                    / self.metrics_reporter.spec_total_num_forward_ct
                 )
                 logger.info(f"{avg_spec_accept_length=}")
-            self.spec_total_num_accepted_tokens = self.spec_total_num_forward_ct = 0
+            self.metrics_reporter.spec_total_num_accepted_tokens = (
+                self.metrics_reporter.spec_total_num_forward_ct
+            ) = 0
             for k, v in server_args_dict.items():
                 setattr(get_global_server_args(), k, v)
             logger.info(f"Global server args updated! {get_global_server_args()=}")
