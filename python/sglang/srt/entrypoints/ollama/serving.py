@@ -77,10 +77,12 @@ class OllamaServing:
         ]
 
         # Apply chat template using tokenizer
-        prompt_ids = self.tokenizer_manager.tokenizer.apply_chat_template(
-            messages,
-            tokenize=True,
-            add_generation_prompt=True,
+        prompt_ids = (
+            self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.apply_chat_template(
+                messages,
+                tokenize=True,
+                add_generation_prompt=True,
+            )
         )
 
         # Convert options to sampling params
