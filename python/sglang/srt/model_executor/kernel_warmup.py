@@ -14,7 +14,7 @@ from sglang.srt.server_args import ServerArgs
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 
 
-def _should_run_flashinfer_autotune(
+def _should_run_run_flashinfer_autotune(
     *,
     server_args: ServerArgs,
     spec_algorithm: SpeculativeAlgorithm,
@@ -133,12 +133,12 @@ def kernel_warmup(
     if device != "cuda":
         return
 
-    if _should_run_flashinfer_autotune(
+    if _should_run_run_flashinfer_autotune(
         server_args=server_args,
         spec_algorithm=spec_algorithm,
         is_draft_worker=is_draft_worker,
     ):
-        _flashinfer_autotune(
+        _run_flashinfer_autotune(
             server_args=server_args,
             model_config=model_config,
             dtype=dtype,
@@ -156,7 +156,7 @@ def kernel_warmup(
         )
 
 
-def _flashinfer_autotune(
+def _run_flashinfer_autotune(
     *,
     server_args: ServerArgs,
     model_config: ModelConfig,
