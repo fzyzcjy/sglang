@@ -1228,7 +1228,7 @@ async def update_weights_from_ipc(obj: UpdateWeightsFromIPCReqInput, request: Re
 async def update_weight_version(obj: UpdateWeightVersionReqInput, request: Request):
     """Update the weight version. This operation requires no active requests."""
     if obj.abort_all_requests:
-        _global_state.tokenizer_manager.abort_request(abort_all=True)
+        _global_state.tokenizer_manager.pause_controller.abort_request(abort_all=True)
 
     # Use a simple approach without the complex lock mechanism for now
     # since weight_version update is a simple operation that doesn't affect model weights
@@ -1412,7 +1412,7 @@ async def configure_logging(obj: ConfigureLoggingReq, request: Request):
 async def abort_request(obj: AbortReq, request: Request):
     """Abort a request."""
     try:
-        _global_state.tokenizer_manager.abort_request(
+        _global_state.tokenizer_manager.pause_controller.abort_request(
             rid=obj.rid, abort_all=obj.abort_all
         )
         return Response(status_code=200)
