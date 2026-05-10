@@ -93,9 +93,7 @@ class DefaultPoolConfigurator(MemoryPoolConfigurator):
 
     def __init__(self, mr: ModelRunner):
         # Determine effective number of layers for KV cache
-        if mambaish := mambaish_config(
-            mr.model_config, is_draft_worker=mr.is_draft_worker
-        ):
+        if mambaish := mambaish_config(mr.model_config):
             effective_layer_ids = [
                 i
                 for i in mambaish.full_attention_layer_ids
