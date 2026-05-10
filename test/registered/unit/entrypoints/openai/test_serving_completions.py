@@ -84,14 +84,18 @@ class ServingCompletionTestCase(unittest.TestCase):
 
     def test_echo_with_token_ids_streaming(self):
         req = CompletionRequest(model="x", prompt=[1, 2, 3], max_tokens=1, echo=True)
-        self.sc.tokenizer_manager.tokenizer.decode.return_value = "decoded_prompt"
+        self.sc.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.decode.return_value = (
+            "decoded_prompt"
+        )
         self.assertEqual(self.sc._get_echo_text(req, 0), "decoded_prompt")
 
     def test_echo_with_multiple_token_ids_streaming(self):
         req = CompletionRequest(
             model="x", prompt=[[1, 2], [3, 4]], max_tokens=1, echo=True, n=1
         )
-        self.sc.tokenizer_manager.tokenizer.decode.return_value = "decoded"
+        self.sc.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.decode.return_value = (
+            "decoded"
+        )
         self.assertEqual(self.sc._get_echo_text(req, 0), "decoded")
 
     def test_prepare_echo_prompts_non_streaming(self):
@@ -105,7 +109,9 @@ class ServingCompletionTestCase(unittest.TestCase):
 
         # token IDs
         req = CompletionRequest(model="x", prompt=[1, 2, 3], echo=True)
-        self.sc.tokenizer_manager.tokenizer.decode.return_value = "decoded"
+        self.sc.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.decode.return_value = (
+            "decoded"
+        )
         self.assertEqual(self.sc._prepare_echo_prompts(req), ["decoded"])
 
     # ---------- response_format handling ----------
