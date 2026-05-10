@@ -43,7 +43,7 @@ class OpenAIServingTokenize(OpenAIServingBase):
         raw_request: Request,
     ) -> Union[TokenizeResponse, ErrorResponse]:
         try:
-            tokenizer = self.tokenizer_manager.tokenizer
+            tokenizer = self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer
             max_model_len = getattr(tokenizer, "model_max_length", -1)
 
             if request.messages is not None:
@@ -104,11 +104,11 @@ class OpenAIServingTokenize(OpenAIServingBase):
         ):
             return prompt_ids
         if isinstance(prompt_ids, str):
-            return self.tokenizer_manager.tokenizer.encode(
+            return self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.encode(
                 prompt_ids, add_special_tokens=False
             )
         if processed_messages.prompt:
-            return self.tokenizer_manager.tokenizer.encode(
+            return self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.encode(
                 processed_messages.prompt, add_special_tokens=False
             )
 
@@ -133,7 +133,7 @@ class OpenAIServingDetokenize(OpenAIServingBase):
         raw_request: Request,
     ) -> Union[DetokenizeResponse, ErrorResponse]:
         try:
-            tokenizer = self.tokenizer_manager.tokenizer
+            tokenizer = self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer
 
             if (
                 isinstance(request.tokens, list)

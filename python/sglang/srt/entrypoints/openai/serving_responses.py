@@ -185,7 +185,7 @@ class OpenAIServingResponses(OpenAIServingChat):
 
         try:
             model_name = request.model
-            tokenizer = self.tokenizer_manager.tokenizer
+            tokenizer = self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer
 
             if self.use_harmony:
                 messages, request_prompts, engine_prompts = (
