@@ -189,6 +189,9 @@ from sglang.srt.managers.scheduler_components.observability.pool_stats_observer 
 from sglang.srt.managers.scheduler_components.observability.profiler_manager import (
     SchedulerProfilerManager,
 )
+from sglang.srt.managers.scheduler_components.output.logprob_computer import (
+    SchedulerLogprobComputer,
+)
 from sglang.srt.managers.scheduler_components.scheduling.dp_attn_adapter import (
     SchedulerDPAttnAdapter,
 )
@@ -729,6 +732,11 @@ class Scheduler(
             get_running_batch=lambda: self.running_batch,
             get_forward_ct=lambda: self.forward_ct,
             get_running_mbs=lambda: getattr(self, "running_mbs", []),
+        )
+
+        self.logprob_computer = SchedulerLogprobComputer(
+            server_args=self.server_args,
+            model_config=self.model_config,
         )
 
         self.is_initializing = False
