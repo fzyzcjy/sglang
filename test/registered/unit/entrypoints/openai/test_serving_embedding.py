@@ -70,6 +70,9 @@ class _MockTokenizerManager:
 
         # Mock tokenizer
         self.tokenizer = Mock()
+        # raw_tokenizer_wrapper exposes the same Mock for the new owner-class accessor.
+        self.raw_tokenizer_wrapper = Mock()
+        self.raw_tokenizer_wrapper.tokenizer = self.tokenizer
         self.tokenizer.encode = Mock(return_value=[1, 2, 3, 4, 5])
         self.tokenizer.decode = Mock(return_value="Test embedding input")
         self.tokenizer.chat_template = None
@@ -200,12 +203,16 @@ class ServingEmbeddingTestCase(unittest.TestCase):
 
     def test_convert_multimodal_request_with_jinja_chat_template(self):
         """Multimodal embeddings should apply explicit/HF Jinja chat templates."""
-        self.tokenizer_manager.tokenizer.chat_template = "mock-template"
-        self.tokenizer_manager.tokenizer.apply_chat_template = Mock(
-            side_effect=[
-                "<prompt>Hello<image></prompt>",
-                "<prompt>World</prompt>",
-            ]
+        self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.chat_template = (
+            "mock-template"
+        )
+        self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.apply_chat_template = (
+            Mock(
+                side_effect=[
+                    "<prompt>Hello<image></prompt>",
+                    "<prompt>World</prompt>",
+                ]
+            )
         )
 
         adapted_request, _ = self.serving_embedding._convert_to_internal_request(
@@ -219,11 +226,12 @@ class ServingEmbeddingTestCase(unittest.TestCase):
         self.assertEqual(adapted_request.image_data[0], "base64_image_data")
         self.assertIsNone(adapted_request.image_data[1])
         self.assertEqual(
-            self.tokenizer_manager.tokenizer.apply_chat_template.call_count, 2
+            self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.apply_chat_template.call_count,
+            2,
         )
-        first_call = (
-            self.tokenizer_manager.tokenizer.apply_chat_template.call_args_list[0]
-        )
+        first_call = self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.apply_chat_template.call_args_list[
+            0
+        ]
         first_messages = first_call.args[0]
         self.assertEqual(first_messages[0]["role"], "user")
         self.assertEqual(first_messages[0]["content"][0]["type"], "image")
@@ -232,9 +240,9 @@ class ServingEmbeddingTestCase(unittest.TestCase):
         self.assertEqual(first_call.kwargs["tokenize"], False)
         self.assertEqual(first_call.kwargs["add_generation_prompt"], True)
 
-        second_call = (
-            self.tokenizer_manager.tokenizer.apply_chat_template.call_args_list[1]
-        )
+        second_call = self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.apply_chat_template.call_args_list[
+            1
+        ]
         second_messages = second_call.args[0]
         self.assertEqual(len(second_messages[0]["content"]), 1)
         self.assertEqual(second_messages[0]["content"][0]["type"], "text")
@@ -242,9 +250,11 @@ class ServingEmbeddingTestCase(unittest.TestCase):
 
     def test_convert_image_only_multimodal_request_with_jinja_chat_template(self):
         """Image-only requests should not inject literal padding into Jinja prompts."""
-        self.tokenizer_manager.tokenizer.chat_template = "mock-template"
-        self.tokenizer_manager.tokenizer.apply_chat_template = Mock(
-            return_value="<prompt><image></prompt>"
+        self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.chat_template = (
+            "mock-template"
+        )
+        self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.apply_chat_template = (
+            Mock(return_value="<prompt><image></prompt>")
         )
 
         adapted_request, _ = self.serving_embedding._convert_to_internal_request(
@@ -252,7 +262,9 @@ class ServingEmbeddingTestCase(unittest.TestCase):
         )
 
         self.assertEqual(adapted_request.text, "<prompt><image></prompt>")
-        first_call = self.tokenizer_manager.tokenizer.apply_chat_template.call_args
+        first_call = (
+            self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.apply_chat_template.call_args
+        )
         first_messages = first_call.args[0]
         self.assertEqual(first_messages[0]["role"], "user")
         self.assertEqual(len(first_messages[0]["content"]), 1)
@@ -260,9 +272,11 @@ class ServingEmbeddingTestCase(unittest.TestCase):
 
     def test_convert_video_multimodal_request_with_jinja_chat_template(self):
         """Video inputs should land in video_data and flow through the Jinja branch."""
-        self.tokenizer_manager.tokenizer.chat_template = "mock-template"
-        self.tokenizer_manager.tokenizer.apply_chat_template = Mock(
-            return_value="<prompt>Describe<video></prompt>"
+        self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.chat_template = (
+            "mock-template"
+        )
+        self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.apply_chat_template = (
+            Mock(return_value="<prompt>Describe<video></prompt>")
         )
 
         adapted_request, _ = self.serving_embedding._convert_to_internal_request(
@@ -272,15 +286,15 @@ class ServingEmbeddingTestCase(unittest.TestCase):
         self.assertEqual(adapted_request.text, "<prompt>Describe<video></prompt>")
         self.assertEqual(adapted_request.video_data, "base64_video_data")
         self.assertIsNone(adapted_request.image_data)
-        first_messages = (
-            self.tokenizer_manager.tokenizer.apply_chat_template.call_args.args[0]
-        )
+        first_messages = self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.apply_chat_template.call_args.args[
+            0
+        ]
         content = first_messages[0]["content"]
         self.assertEqual([c["type"] for c in content], ["video", "text"])
 
     def test_multimodal_request_falls_back_when_no_chat_template(self):
         """Without any chat template the raw-text fallback must run without raising."""
-        self.tokenizer_manager.tokenizer.chat_template = None
+        self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.chat_template = None
 
         adapted_request, _ = self.serving_embedding._convert_to_internal_request(
             self.image_only_multimodal_req
@@ -292,7 +306,7 @@ class ServingEmbeddingTestCase(unittest.TestCase):
 
     def test_multimodal_request_with_no_tokenizer_uses_fallback(self):
         """Missing tokenizer should not crash the Jinja branch check."""
-        self.tokenizer_manager.tokenizer = None
+        self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer = None
 
         adapted_request, _ = self.serving_embedding._convert_to_internal_request(
             self.multimodal_req
@@ -302,9 +316,11 @@ class ServingEmbeddingTestCase(unittest.TestCase):
 
     def test_jinja_template_errors_are_raised_as_value_error(self):
         """Template failures should be converted to ValueError for a 400 response."""
-        self.tokenizer_manager.tokenizer.chat_template = "mock-template"
-        self.tokenizer_manager.tokenizer.apply_chat_template = Mock(
-            side_effect=jinja2.TemplateError("bad template")
+        self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.chat_template = (
+            "mock-template"
+        )
+        self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.apply_chat_template = (
+            Mock(side_effect=jinja2.TemplateError("bad template"))
         )
 
         with self.assertRaisesRegex(ValueError, "bad template"):
@@ -315,8 +331,12 @@ class ServingEmbeddingTestCase(unittest.TestCase):
     def test_jinja_template_syntax_error_includes_location(self):
         """TemplateSyntaxError should surface template name and line number."""
         err = jinja2.TemplateSyntaxError("unexpected end", lineno=7, name="mock.jinja")
-        self.tokenizer_manager.tokenizer.chat_template = "mock-template"
-        self.tokenizer_manager.tokenizer.apply_chat_template = Mock(side_effect=err)
+        self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.chat_template = (
+            "mock-template"
+        )
+        self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.apply_chat_template = (
+            Mock(side_effect=err)
+        )
 
         with self.assertRaises(ValueError) as ctx:
             self.serving_embedding._convert_to_internal_request(
@@ -328,9 +348,11 @@ class ServingEmbeddingTestCase(unittest.TestCase):
 
     def test_non_jinja_template_errors_are_raised_as_value_error(self):
         """TypeError / KeyError from apply_chat_template should map to 400, not 500."""
-        self.tokenizer_manager.tokenizer.chat_template = "mock-template"
-        self.tokenizer_manager.tokenizer.apply_chat_template = Mock(
-            side_effect=KeyError("missing_field")
+        self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.chat_template = (
+            "mock-template"
+        )
+        self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.apply_chat_template = (
+            Mock(side_effect=KeyError("missing_field"))
         )
 
         with self.assertRaisesRegex(ValueError, "missing_field"):

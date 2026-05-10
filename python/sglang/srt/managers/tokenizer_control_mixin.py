@@ -165,7 +165,7 @@ class TokenizerControlMixin:
                 )
                 obj.token_chunks = list(
                     iter_external_corpus_chunks(
-                        obj.file_path, self.tokenizer, max_tokens
+                        obj.file_path, self.raw_tokenizer_wrapper.tokenizer, max_tokens
                     )
                 )
             elif obj.documents is not None:
@@ -183,7 +183,9 @@ class TokenizerControlMixin:
                     if not doc:
                         continue
                     token_ids = list(
-                        self.tokenizer.encode(doc, add_special_tokens=False)
+                        self.raw_tokenizer_wrapper.tokenizer.encode(
+                            doc, add_special_tokens=False
+                        )
                     )
                     if not token_ids:
                         continue
