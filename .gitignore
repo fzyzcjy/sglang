@@ -277,3 +277,9 @@ sgl-kernel/csrc/**/*_musa/
 *.npz
 artifacts/
 .claude/scheduled_tasks.lock
+
+# refactor_202605a: tokenizer manager owner-class subpackages
+!python/sglang/srt/managers/inputs/
+!python/sglang/srt/managers/inputs/**
+!python/sglang/srt/managers/outputs/
+!python/sglang/srt/managers/outputs/**
