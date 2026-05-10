@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 import torch
@@ -15,20 +16,12 @@ if TYPE_CHECKING:
     from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
 class NgramEmbeddingManager:
-
-    def __init__(
-        self,
-        *,
-        enabled: bool,
-        table: Optional[torch.Tensor],
-        n: int,
-        k: int,
-    ):
-        self.enabled = enabled
-        self.table = table
-        self.n = n
-        self.k = k
+    enabled: bool
+    table: Optional[torch.Tensor]
+    n: int
+    k: int
 
     @classmethod
     def from_model(
