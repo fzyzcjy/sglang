@@ -818,7 +818,6 @@ class Scheduler(
             hybrid_gdn_config(self.tp_worker.model_runner.model_config) is not None
             or mamba2_config(
                 self.tp_worker.model_runner.model_config,
-                is_draft_worker=self.tp_worker.model_runner.is_draft_worker,
             )
             is not None
             or _registry_needs_mamba
