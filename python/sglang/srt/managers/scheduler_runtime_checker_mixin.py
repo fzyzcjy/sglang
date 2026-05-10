@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-import time
 import warnings
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
-from sglang.srt.observability.metrics_collector import QueueCount
 from sglang.srt.utils.common import ceil_align, raise_error_or_warn
 from sglang.srt.utils.watchdog import WatchdogRaw
 
@@ -503,43 +501,6 @@ class SchedulerRuntimeCheckerMixin:
 
         return has_leak, messages
 
-    def _maybe_log_idle_metrics(self: Scheduler):
-        """Collect and log metrics every 30 seconds during idle."""
-        if (
-            not self.current_scheduler_metrics_enabled
-            or time.perf_counter() <= self.metrics_collector.last_log_time + 30
-        ):
-            return
-
-        self.get_pool_stats().update_scheduler_stats(self.stats)
-        self.stats.num_streaming_sessions = self._streaming_session_count()
-        self.stats.streaming_session_held_tokens = self._session_held_tokens()
-
-        priority_enabled = self.enable_priority_scheduling
-        self.stats.num_running_reqs = QueueCount.from_reqs(
-            self.running_batch.reqs, priority_enabled
-        )
-        self.stats.gen_throughput = 0
-        self.stats.num_queue_reqs = QueueCount.from_reqs(
-            self.waiting_queue, priority_enabled
-        )
-        self.stats.num_grammar_queue_reqs = len(self.grammar_manager)
-        if self.disaggregation_mode == DisaggregationMode.PREFILL:
-            self.stats.num_prefill_bootstrap_queue_reqs = QueueCount.from_reqs(
-                self.disagg_prefill_bootstrap_queue.queue, priority_enabled
-            )
-            self.stats.num_prefill_inflight_queue_reqs = QueueCount.from_reqs(
-                self.disagg_prefill_inflight_queue, priority_enabled
-            )
-        if self.disaggregation_mode == DisaggregationMode.DECODE:
-            self.stats.num_decode_prealloc_queue_reqs = QueueCount.from_reqs(
-                self.disagg_decode_prealloc_queue.queue, priority_enabled
-            )
-            self.stats.num_decode_transfer_queue_reqs = QueueCount.from_reqs(
-                self.disagg_decode_transfer_queue.queue, priority_enabled
-            )
-        self.metrics_collector.log_stats(self.stats)
-
     def _check_tree_cache(self: Scheduler):
         if (
             self.tree_cache.is_tree_cache()
@@ -547,37 +508,6 @@ class SchedulerRuntimeCheckerMixin:
             or (self.is_hybrid_ssm and self.tree_cache.supports_mamba())
         ):
             self.tree_cache.sanity_check()
-
-    def on_idle(self: Scheduler):
-        """Idle housekeeping: guard, check, metrics, reset, sleep."""
-        if not self.is_fully_idle():
-            return
-
-        # memory leak check (skipped for hisparse — pool counters intentionally
-        # diverge during host-backup, see _get_swa_token_info clamp).
-        if not self.enable_hisparse:
-            has_leak, messages = self._check_all_pools(self.get_pool_stats())
-            if has_leak:
-                self._report_leak("pool", "\n".join(messages))
-            self._check_req_pool()
-
-        # tree cache sanity check
-        self._check_tree_cache()
-
-        # metrics every 30s
-        self._maybe_log_idle_metrics()
-
-        # kv event publishing
-        self._publish_kv_events()
-
-        # reset token ratio
-        self.new_token_ratio = self.init_new_token_ratio
-
-        # reset device timer window so idle time isn't counted
-        self.reset_device_timer_window()
-
-        # sleep until next event
-        self.maybe_sleep_on_idle()
 
 
 def create_scheduler_watchdog(
