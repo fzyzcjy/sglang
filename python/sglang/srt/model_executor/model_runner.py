@@ -727,7 +727,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         self.init_indexer_capturer()
 
         # TODO: Refactor device-specific init branches into platform interface (separate PR).
-        # Must be called BEFORE init_device_graphs() so CUDA graph capture
+        # Must be called BEFORE create_device_graphs() so CUDA graph capture
         # runs with aux hidden state capture enabled.
         self.init_aux_hidden_state_capture()
 
@@ -775,19 +775,19 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                     host_to_device_ratio=hisparse_cfg.host_to_device_ratio,
                 )
             self._pre_initialize_flashinfer_allreduce_workspace()
-            self.graph_runner, self.graph_mem_usage = device_graphs.init_device_graphs(
-                self
+            self.graph_runner, self.graph_mem_usage = (
+                device_graphs.create_device_graphs(self)
             )
         elif self.device in ["npu", "cpu"]:
             self.init_attention_backend()
-            self.graph_runner, self.graph_mem_usage = device_graphs.init_device_graphs(
-                self
+            self.graph_runner, self.graph_mem_usage = (
+                device_graphs.create_device_graphs(self)
             )
         elif current_platform.is_out_of_tree():
             self.init_attention_backend()
             if current_platform.support_cuda_graph():
                 self.graph_runner, self.graph_mem_usage = (
-                    device_graphs.init_device_graphs(self)
+                    device_graphs.create_device_graphs(self)
                 )
             else:
                 self.graph_runner = None
@@ -801,7 +801,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             register_forward_hooks(self.model, server_args.forward_hooks)
 
         # Initialize piecewise CUDA graph
-        self.piecewise_cuda_graph_runner = device_graphs.init_piecewise_cuda_graphs(
+        self.piecewise_cuda_graph_runner = device_graphs.create_piecewise_cuda_graphs(
             self
         )
 
