@@ -2552,7 +2552,7 @@ class Scheduler(
         ret = self.maybe_prepare_mlp_sync_batch(ret, need_sync=need_mlp_sync)
 
         # Handle ngram embedding
-        ret = self.ngram_embedding_manager.maybe_prepare_ngram_embedding(ret)
+        ret = self.ngram_embedding_manager.prepare_for_forward(ret)
 
         if ret:
             set_schedule_time_batch(ret)
