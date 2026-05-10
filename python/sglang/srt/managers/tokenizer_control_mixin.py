@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
-import uuid
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -25,7 +23,6 @@ from sglang.srt.managers.io_struct import (
     CheckWeightsReqOutput,
     ClearHiCacheReqInput,
     ClearHiCacheReqOutput,
-    CloseSessionReqInput,
     DestroyWeightsUpdateGroupReqInput,
     DestroyWeightsUpdateGroupReqOutput,
     DetachHiCacheStorageReqInput,
@@ -54,7 +51,6 @@ from sglang.srt.managers.io_struct import (
     LoadLoRAAdapterReqInput,
     LoadLoRAAdapterReqOutput,
     LoRAUpdateOutput,
-    OpenSessionReqInput,
     ProfileReq,
     ProfileReqOutput,
     ProfileReqType,
@@ -848,40 +844,6 @@ class TokenizerControlMixin:
                         setattr(r, attr, None)
 
         return results
-
-    async def open_session(
-        self: TokenizerManager,
-        obj: OpenSessionReqInput,
-        request: Optional[fastapi.Request] = None,
-    ):
-        self.auto_create_handle_loop()
-        if obj.streaming:
-            if not self.server_args.enable_streaming_session:
-                raise ValueError(
-                    "Streaming sessions are disabled. "
-                    "Please relaunch with --enable-streaming-session."
-                )
-
-        if obj.session_id is None:
-            obj.session_id = uuid.uuid4().hex
-        elif obj.session_id in self.session_futures:
-            return None
-
-        future = asyncio.Future()
-        self.session_futures[obj.session_id] = future
-        self.send_to_scheduler.send_pyobj(obj)
-
-        try:
-            return await future
-        finally:
-            self.session_futures.pop(obj.session_id, None)
-
-    async def close_session(
-        self: TokenizerManager,
-        obj: CloseSessionReqInput,
-        request: Optional[fastapi.Request] = None,
-    ):
-        await self.send_to_scheduler.send_pyobj(obj)
 
     def _update_weight_version_if_provided(
         self: TokenizerManager, weight_version: Optional[str]
