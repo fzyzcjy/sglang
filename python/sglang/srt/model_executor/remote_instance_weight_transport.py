@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
+from typing import Any, Optional
 
 import torch
 
@@ -12,24 +14,19 @@ from sglang.srt.utils.network import NetworkAddress, get_local_ip_auto
 logger = logging.getLogger(__name__)
 
 
+# Lifecycle fields (engine / session_id / weight_info / _nixl_manager)
+# are written across multiple methods after construction — explicit R5
+# exception, hence `slots=True, kw_only=True` without `frozen=True`.
+@dataclass(slots=True, kw_only=True)
 class RemoteInstanceWeightTransport:
-
-    def __init__(
-        self,
-        *,
-        server_args: ServerArgs,
-        model: torch.nn.Module,
-        tp_rank: int,
-        gpu_id: int,
-    ):
-        self.server_args = server_args
-        self.model = model
-        self.tp_rank = tp_rank
-        self.gpu_id = gpu_id
-        self.engine = None
-        self.session_id = ""
-        self.weight_info = None
-        self._nixl_manager = None
+    server_args: ServerArgs
+    model: torch.nn.Module
+    tp_rank: int
+    gpu_id: int
+    engine: Optional[Any] = None
+    session_id: str = ""
+    weight_info: Optional[dict[str, tuple[int, int, int]]] = None
+    _nixl_manager: Optional[Any] = None
 
     def init_engine(self):
         try:
