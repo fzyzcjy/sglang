@@ -1051,7 +1051,9 @@ class Engine(EngineScoreMixin, EngineBase):
             load_format=load_format,
         )
         return self.loop.run_until_complete(
-            self.tokenizer_manager.load_lora_adapter_from_tensors(lora_req, None)
+            self.tokenizer_manager.lora_controller.load_lora_adapter_from_tensors(
+                lora_req, None
+            )
         )
 
     def load_lora_adapter(self, lora_name: str, lora_path: str, pinned: bool = False):
@@ -1064,7 +1066,7 @@ class Engine(EngineScoreMixin, EngineBase):
         )
 
         return self.loop.run_until_complete(
-            self.tokenizer_manager.load_lora_adapter(obj, None)
+            self.tokenizer_manager.lora_controller.load_lora_adapter(obj, None)
         )
 
     def unload_lora_adapter(self, lora_name: str):
@@ -1073,7 +1075,7 @@ class Engine(EngineScoreMixin, EngineBase):
         obj = UnloadLoRAAdapterReqInput(lora_name=lora_name)
 
         return self.loop.run_until_complete(
-            self.tokenizer_manager.unload_lora_adapter(obj, None)
+            self.tokenizer_manager.lora_controller.unload_lora_adapter(obj, None)
         )
 
     async def async_load_lora_adapter(
@@ -1091,7 +1093,7 @@ class Engine(EngineScoreMixin, EngineBase):
             pinned=pinned,
         )
 
-        return await self.tokenizer_manager.load_lora_adapter(obj, None)
+        return await self.tokenizer_manager.lora_controller.load_lora_adapter(obj, None)
 
     async def async_unload_lora_adapter(self, lora_name: str):
         """
@@ -1102,7 +1104,9 @@ class Engine(EngineScoreMixin, EngineBase):
 
         obj = UnloadLoRAAdapterReqInput(lora_name=lora_name)
 
-        return await self.tokenizer_manager.unload_lora_adapter(obj, None)
+        return await self.tokenizer_manager.lora_controller.unload_lora_adapter(
+            obj, None
+        )
 
     def release_memory_occupation(self, tags: Optional[List[str]] = None):
         obj = ReleaseMemoryOccupationReqInput(tags=tags)
