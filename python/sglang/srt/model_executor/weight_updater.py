@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import gc
 import logging
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Tuple, Union
 
 import torch
 
 from sglang.srt.configs.load_config import LoadConfig
+from sglang.srt.model_executor import device_graphs
+from sglang.srt.model_executor.cpu_graph_runner import CPUGraphRunner
+from sglang.srt.model_executor.cuda_graph_runner import CudaGraphRunner
+from sglang.srt.model_executor.npu_graph_runner import NPUGraphRunner
 from sglang.srt.model_loader.loader import DefaultModelLoader, get_model_loader
 from sglang.srt.model_loader.utils import set_default_torch_dtype
 from sglang.srt.model_loader.weight_utils import default_weight_loader
@@ -155,6 +160,18 @@ class WeightUpdater:
         self._mr.server_args.load_format = load_format
         self._mr.load_config = load_config
 
+        def _make_graph_runner():
+            if current_platform.is_out_of_tree():
+                return current_platform.get_graph_runner_cls()(self._mr)
+            graph_runners = defaultdict(
+                lambda: CudaGraphRunner,
+                {
+                    "cpu": CPUGraphRunner,
+                    "npu": NPUGraphRunner,
+                },
+            )
+            return graph_runners[self._mr.device](self._mr)
+
         if recapture_cuda_graph and (
             self._mr.device == "cuda"
             or self._mr.device == "musa"
@@ -163,7 +180,16 @@ class WeightUpdater:
                 and current_platform.support_cuda_graph()
             )
         ):
-            self._mr.init_device_graphs()
+            (
+                self._mr.graph_runner,
+                self._mr.graph_mem_usage,
+            ) = device_graphs.init_device_graphs(
+                is_generation=self._mr.is_generation,
+                server_args=self._mr.server_args,
+                device=self._mr.device,
+                gpu_id=self._mr.gpu_id,
+                make_graph_runner=_make_graph_runner,
+            )
 
         logger.info("Update weights end.")
         return True, "Succeeded to update model weights."
