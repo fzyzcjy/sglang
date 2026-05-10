@@ -194,6 +194,9 @@ from sglang.srt.managers.scheduler_components.observability.profiler_manager imp
 from sglang.srt.managers.scheduler_components.output.logprob_computer import (
     SchedulerLogprobComputer,
 )
+from sglang.srt.managers.scheduler_components.output.output_streamer import (
+    SchedulerOutputStreamer,
+)
 from sglang.srt.managers.scheduler_components.scheduling.dp_attn_adapter import (
     SchedulerDPAttnAdapter,
 )
@@ -634,7 +637,7 @@ class Scheduler(
             server_args=self.server_args,
             model_config=self.model_config,
             max_recv_per_poll=self.max_recv_per_poll,
-            stream_output=self.stream_output,
+            stream_output=lambda *a, **kw: self.output_streamer.stream_output(*a, **kw),
         )
 
         self.dp_attn_adapter = SchedulerDPAttnAdapter(
@@ -753,6 +756,21 @@ class Scheduler(
         self.logprob_computer = SchedulerLogprobComputer(
             server_args=self.server_args,
             model_config=self.model_config,
+        )
+
+        self.output_streamer = SchedulerOutputStreamer(
+            send_to_detokenizer=self.send_to_detokenizer,
+            tree_cache=self.tree_cache,
+            ps=self.ps,
+            server_args=self.server_args,
+            is_generation=self.is_generation,
+            stream_interval=self.stream_interval,
+            spec_algorithm=self.spec_algorithm,
+            disaggregation_mode=self.disaggregation_mode,
+            enable_hicache_storage=lambda: self.enable_hicache_storage,
+            load_inquirer_get_loads=lambda *a, **kw: self.load_inquirer.get_loads(
+                *a, **kw
+            ),
         )
 
         self.is_initializing = False
