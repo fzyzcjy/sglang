@@ -80,8 +80,6 @@ def hybrid_gdn_config(
 
 def mamba2_config(
     model_config: ModelConfig,
-    *,
-    is_draft_worker: bool,
 ) -> Optional[
     Union[
         FalconH1Config,
@@ -94,7 +92,7 @@ def mamba2_config(
     ]
 ]:
     config = model_config.hf_config
-    if isinstance(config, NemotronHConfig) and is_draft_worker:
+    if isinstance(config, NemotronHConfig) and model_config.is_draft_model:
         # NemotronH MTP draft models have no Mamba layers (pattern like "*E")
         # so they shouldn't use HybridLinearAttnBackend
         pattern = getattr(config, "mtp_hybrid_override_pattern", None)
@@ -134,11 +132,9 @@ def linear_attn_model_spec(model_config: ModelConfig) -> Optional[Any]:
 
 def mambaish_config(
     model_config: ModelConfig,
-    *,
-    is_draft_worker: bool,
 ) -> Optional[Any]:
     existing = (
-        mamba2_config(model_config, is_draft_worker=is_draft_worker)
+        mamba2_config(model_config)
         or hybrid_gdn_config(model_config)
         or kimi_linear_config(model_config)
         or hybrid_lightning_config(model_config)
