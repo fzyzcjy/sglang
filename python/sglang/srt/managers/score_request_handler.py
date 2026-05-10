@@ -1,13 +1,16 @@
+from __future__ import annotations
+
 import logging
 import math
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
 
-from sglang.srt.configs.model_config import is_cross_encoding_pooler_model
+from sglang.srt.configs.model_config import ModelConfig, is_cross_encoding_pooler_model
 from sglang.srt.managers.embed_types import PositionalEmbeds
 from sglang.srt.managers.io_struct import EmbeddingReqInput, GenerateReqInput
+from sglang.srt.managers.request_state import ReqState
 from sglang.srt.server_args import MIS_DELIMITER_TOKEN_ID
 
 logger = logging.getLogger(__name__)
@@ -25,7 +28,20 @@ class ScoreResult:
     pooled_hidden_states: Optional[List[Optional[torch.Tensor]]] = None
 
 
-class TokenizerManagerScoreMixin:
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ScoreRequestHandlerConfig:
+    is_generation: bool
+    enable_mis: bool
+    model_config: ModelConfig
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ScoreRequestHandler:
+    tokenizer: Optional[Any]
+    rid_to_state: Dict[str, ReqState]
+    generate_request: Callable[..., AsyncIterator[dict]]
+    config: ScoreRequestHandlerConfig
+
     async def score_prompts(
         self,
         prompts: Union[str, List[str], List[List[int]]],
@@ -261,7 +277,7 @@ class TokenizerManagerScoreMixin:
         has_phs = False
         prompt_tokens = 0
 
-        is_generation = self.is_generation
+        is_generation = self.config.is_generation
         if is_generation:
             for result in results:
                 # For single-item scoring, logprobs are in output_token_ids_logprobs
@@ -563,7 +579,7 @@ class TokenizerManagerScoreMixin:
                     return_pooled_hidden_states=True and the model supports it;
                     None otherwise.
         """
-        is_generation = self.is_generation
+        is_generation = self.config.is_generation
 
         if is_generation and label_token_ids is None:
             raise ValueError(
@@ -598,7 +614,7 @@ class TokenizerManagerScoreMixin:
                     )
 
         # Check if multi-item scoring is enabled
-        use_multi_item_scoring = self.server_args.enable_mis
+        use_multi_item_scoring = self.config.enable_mis
 
         input_ids = None
         text_prompts = None
@@ -676,7 +692,7 @@ class TokenizerManagerScoreMixin:
                     "It requires a model with a task-specific head "
                     "(e.g. SequenceClassification or RewardModel)."
                 )
-            model_config = self.model_config
+            model_config = self.config.model_config
             if model_config is not None:
                 archs = getattr(model_config.hf_config, "architectures", []) or []
                 if is_cross_encoding_pooler_model(archs):
