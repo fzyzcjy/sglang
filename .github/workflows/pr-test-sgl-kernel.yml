@@ -98,7 +98,7 @@ jobs:
       - name: Run test
         timeout-minutes: 30
         run: |
-          cd test/registered/mla
+          cd test/manual/mla
           python3 test_mla_deepseek_v3.py
 
   sgl-kernel-benchmark-test:
