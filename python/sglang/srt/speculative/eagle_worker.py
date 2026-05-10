@@ -980,7 +980,6 @@ class EAGLEWorker(TpModelWorker):
             hybrid_gdn_config(self.target_worker.model_runner.model_config) is not None
             or mamba2_config(
                 self.target_worker.model_runner.model_config,
-                is_draft_worker=self.target_worker.model_runner.is_draft_worker,
             )
             is not None
             or hybrid_lightning_config(self.target_worker.model_runner.model_config)
