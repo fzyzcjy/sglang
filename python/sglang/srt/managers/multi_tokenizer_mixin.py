@@ -467,7 +467,7 @@ class TokenizerWorker(TokenizerManager):
         if obj.mode == "abort":
             # Abort polling: only the originator checks its own lock state
             while True:
-                self.abort_request(abort_all=True)
+                self.pause_controller.abort_request(abort_all=True)
                 is_locked = await self.model_update_lock.is_locked()
                 if not is_locked:
                     break
@@ -486,12 +486,12 @@ class TokenizerWorker(TokenizerManager):
 
     async def _apply_pause_continue_broadcast(self, obj: PauseContinueBroadcast):
         """Apply pause/continue state under the condition lock."""
-        async with self.is_pause_cond:
+        async with self.pause_controller.is_pause_cond:
             if obj.is_pause:
-                self.is_pause = True
+                self.pause_controller.is_pause = True
             else:
-                self.is_pause = False
-                self.is_pause_cond.notify_all()
+                self.pause_controller.is_pause = False
+                self.pause_controller.is_pause_cond.notify_all()
 
         # Resolve the pending future if this worker initiated the pause/continue
         if self._pause_continue_future and not self._pause_continue_future.done():
