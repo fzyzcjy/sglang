@@ -17,6 +17,7 @@ from sglang.srt.configs.model_config import (
 from sglang.srt.distributed.parallel_state import get_world_group
 from sglang.srt.environ import envs
 from sglang.srt.layers.dp_attention import get_attention_tp_size
+from sglang.srt.mem_cache import kv_cache_dim
 from sglang.srt.mem_cache.allocator import (
     PagedTokenToKVPoolAllocator,
     TokenToKVPoolAllocator,
@@ -343,7 +344,11 @@ class ModelRunnerKVCacheMixin:
                     qk_rope_head_dim=self.model_config.qk_rope_head_dim,
                     layer_num=self.num_effective_layers,
                     device=self.device,
-                    kv_cache_dim=self.calculate_mla_kv_cache_dim(),
+                    kv_cache_dim=kv_cache_dim.calculate_mla_kv_cache_dim(
+                        model_config=self.model_config,
+                        kv_cache_dtype=self.kv_cache_dtype,
+                        server_args=self.server_args,
+                    ),
                     enable_memory_saver=self.server_args.enable_memory_saver,
                     start_layer=self.start_layer,
                     end_layer=self.end_layer,
@@ -476,7 +481,11 @@ class ModelRunnerKVCacheMixin:
                 qk_rope_head_dim=self.model_config.qk_rope_head_dim,
                 layer_num=self.num_effective_layers,
                 device=self.device,
-                kv_cache_dim=self.calculate_mla_kv_cache_dim(),
+                kv_cache_dim=kv_cache_dim.calculate_mla_kv_cache_dim(
+                    model_config=self.model_config,
+                    kv_cache_dtype=self.kv_cache_dtype,
+                    server_args=self.server_args,
+                ),
                 enable_memory_saver=self.server_args.enable_memory_saver,
                 start_layer=self.start_layer,
                 end_layer=self.end_layer,
