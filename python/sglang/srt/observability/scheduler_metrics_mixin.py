@@ -6,7 +6,6 @@ import time
 from collections import defaultdict
 from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
-from sglang.srt.disaggregation.kv_events import EventPublisherFactory, KVEventBatch
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
 from sglang.srt.managers.io_struct import (
@@ -71,18 +70,6 @@ class PrefillStats:
             num_new_seqs=len(adder.can_run_list),
             num_pending_tokens=num_pending_tokens,
         )
-
-
-@dataclasses.dataclass
-class KvMetrics:
-    request_active_slots: int = 0
-    request_total_slots: int = 0
-    kv_active_blocks: int = 0
-    kv_total_blocks: int = 0
-    num_requests_waiting: int = 0
-    gpu_cache_usage_perc: float = 0.0
-    gpu_prefix_cache_hit_rate: float = 0.0
-    data_parallel_rank: int = 0
 
 
 class SchedulerMetricsMixin:
@@ -175,7 +162,11 @@ class SchedulerMetricsMixin:
                 reporter=_wrap_execution_reporter,
             )
 
-        self.init_kv_events(self.server_args.kv_events_config)
+        self.enable_kv_cache_events = bool(
+            self.server_args.kv_events_config
+            and self.ps.attn_tp_rank == 0
+            and self.ps.attn_cp_rank == 0
+        )
 
         self.scheduler_status_logger = SchedulerStatusLogger.maybe_create(
             enable_metrics=self.enable_metrics
@@ -193,16 +184,6 @@ class SchedulerMetricsMixin:
                     dw.draft_runner.device_timer = timer
                 for r in getattr(dw, "draft_runner_list", []):
                     r.device_timer = timer
-
-    def init_kv_events(self: Scheduler, kv_events_config: Optional[str]):
-        self.enable_kv_cache_events = bool(
-            kv_events_config and self.ps.attn_tp_rank == 0 and self.ps.attn_cp_rank == 0
-        )
-
-        if self.enable_kv_cache_events:
-            self.kv_event_publisher = EventPublisherFactory.create(
-                kv_events_config, self.ps.attn_dp_rank
-            )
 
     def update_spec_metrics(self: Scheduler, bs: int, num_accepted_drafts: int):
         self.spec_num_accepted_tokens += num_accepted_drafts + bs
@@ -484,8 +465,12 @@ class SchedulerMetricsMixin:
             self.update_lora_metrics()
             self._log_hicache_stats()
             self.metrics_collector.log_stats(self.stats)
-            self._emit_kv_metrics()
-        self._publish_kv_events()
+            self.kv_events_publisher.emit_kv_metrics(
+                stats=self.stats,
+                max_running_requests=self.max_running_requests,
+                max_total_num_tokens=self.max_total_num_tokens,
+            )
+        self.kv_events_publisher.publish_kv_events()
 
     def report_decode_stats(
         self: Scheduler,
@@ -690,8 +675,12 @@ class SchedulerMetricsMixin:
             self.update_lora_metrics()
             self._log_hicache_stats()
             self.metrics_collector.log_stats(self.stats)
-            self._emit_kv_metrics()
-        self._publish_kv_events()
+            self.kv_events_publisher.emit_kv_metrics(
+                stats=self.stats,
+                max_running_requests=self.max_running_requests,
+                max_total_num_tokens=self.max_total_num_tokens,
+            )
+        self.kv_events_publisher.publish_kv_events()
 
     def log_batch_result_stats(
         self: Scheduler,
@@ -708,36 +697,6 @@ class SchedulerMetricsMixin:
                 forward_mode=batch.forward_mode.name.lower(),
                 balancedness=m.eplb_balancedness.item(),
             )
-
-    def _emit_kv_metrics(self: Scheduler):
-        if not self.enable_kv_cache_events:
-            return
-
-        kv_metrics = KvMetrics()
-        kv_metrics.request_active_slots = self.stats.num_running_reqs.total
-        kv_metrics.request_total_slots = self.max_running_requests
-        kv_metrics.kv_active_blocks = int(
-            self.stats.token_usage * self.max_total_num_tokens
-        )
-        kv_metrics.kv_total_blocks = self.max_total_num_tokens
-        kv_metrics.num_requests_waiting = self.stats.num_queue_reqs.total
-        kv_metrics.gpu_cache_usage_perc = self.stats.token_usage
-        kv_metrics.gpu_prefix_cache_hit_rate = self.stats.cache_hit_rate
-        kv_metrics.data_parallel_rank = (
-            self.ps.dp_rank if self.ps.dp_rank is not None else 0
-        )
-
-        if not self.send_metrics_from_scheduler.closed:
-            self.send_metrics_from_scheduler.send_pyobj(kv_metrics)
-
-    def _publish_kv_events(self: Scheduler):
-        if not self.enable_kv_cache_events:
-            return
-
-        events = self.tree_cache.take_events()
-        if events:
-            batch = KVEventBatch(ts=time.time(), events=events)
-            self.kv_event_publisher.publish(batch)
 
     def _log_hicache_stats(self: Scheduler):
         """Populate HiCache host-tier stats on self.stats.
