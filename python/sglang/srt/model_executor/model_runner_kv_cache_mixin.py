@@ -74,18 +74,13 @@ class ModelRunnerKVCacheMixin:
         rest_memory = post_model_load_memory - pre_model_load_memory * (
             1 - self.mem_fraction_static
         )
-        if (
-            mambaish_config(self.model_config, is_draft_worker=self.is_draft_worker)
-            is not None
-        ):
+        if mambaish_config(self.model_config) is not None:
             rest_memory = self.handle_max_mamba_cache(rest_memory)
 
         return int(rest_memory * (1 << 30))  # return in bytes
 
     def handle_max_mamba_cache(self: ModelRunner, total_rest_memory):
-        config = mambaish_config(
-            self.model_config, is_draft_worker=self.is_draft_worker
-        )
+        config = mambaish_config(self.model_config)
         server_args = self.server_args
         assert config is not None
 
@@ -183,9 +178,7 @@ class ModelRunnerKVCacheMixin:
                 pre_alloc_size = (
                     max_num_reqs * 2 if max_num_reqs <= 32 else pre_alloc_size
                 )
-                if config := mambaish_config(
-                    self.model_config, is_draft_worker=self.is_draft_worker
-                ):
+                if config := mambaish_config(self.model_config):
                     self.req_to_token_pool = HybridMambaDecodeReqToTokenPool(
                         size=max_num_reqs,
                         max_context_len=self.model_config.context_len
@@ -216,9 +209,7 @@ class ModelRunnerKVCacheMixin:
                         enable_memory_saver=self.server_args.enable_memory_saver,
                         pre_alloc_size=pre_alloc_size,
                     )
-            elif config := mambaish_config(
-                self.model_config, is_draft_worker=self.is_draft_worker
-            ):
+            elif config := mambaish_config(self.model_config):
                 self.req_to_token_pool = HybridReqToTokenPool(
                     size=max_num_reqs,
                     mamba_size=self.server_args.max_mamba_cache_size,
@@ -296,7 +287,7 @@ class ModelRunnerKVCacheMixin:
                 enable_hisparse=self.enable_hisparse,
             )
         elif current_platform.is_out_of_tree() and not mambaish_config(
-            self.model_config, is_draft_worker=self.is_draft_worker
+            self.model_config
         ):
             if self.use_mla_backend and is_nsa_model:
                 PoolCls = current_platform.get_nsa_kv_pool_cls()
@@ -352,7 +343,7 @@ class ModelRunnerKVCacheMixin:
                     end_layer=self.end_layer,
                 )
         elif self.server_args.attention_backend == "ascend" and not mambaish_config(
-            self.model_config, is_draft_worker=self.is_draft_worker
+            self.model_config
         ):
             if self.is_hybrid_swa:
                 from sglang.srt.hardware_backend.npu.memory_pool_npu import (
@@ -456,9 +447,7 @@ class ModelRunnerKVCacheMixin:
                 index_head_dim=get_nsa_index_head_dim(self.model_config.hf_config),
                 **pool_kwargs,
             )
-        elif self.use_mla_backend and not mambaish_config(
-            self.model_config, is_draft_worker=self.is_draft_worker
-        ):
+        elif self.use_mla_backend and not mambaish_config(self.model_config):
             assert not is_nsa_model
             if is_float4_e2m1fn_x2(self.kv_cache_dtype):
                 self.token_to_kv_pool = MLATokenToKVPoolFP4(
@@ -515,9 +504,7 @@ class ModelRunnerKVCacheMixin:
                     device=self.device,
                     **kwargs,
                 )
-            elif config := mambaish_config(
-                self.model_config, is_draft_worker=self.is_draft_worker
-            ):
+            elif config := mambaish_config(self.model_config):
                 extra_args = {}
                 if self.use_mla_backend:
                     extra_args = {
@@ -742,10 +729,7 @@ class ModelRunnerKVCacheMixin:
         else:
             max_num_reqs = min(estimated, token_capacity // 2)
 
-        if (
-            mambaish_config(self.model_config, is_draft_worker=self.is_draft_worker)
-            is not None
-        ):
+        if mambaish_config(self.model_config) is not None:
             ratio = self._calculate_mamba_ratio()
             max_num_reqs = min(
                 max_num_reqs, self.server_args.max_mamba_cache_size // ratio
