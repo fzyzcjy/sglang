@@ -15,7 +15,6 @@
 
 import asyncio
 import copy
-import dataclasses
 import json
 import logging
 import os
@@ -74,6 +73,7 @@ from sglang.srt.managers.io_struct import (
 )
 from sglang.srt.managers.mm_utils import TensorTransportMode, wrap_shm_features
 from sglang.srt.managers.multimodal_processor import get_mm_processor, import_processors
+from sglang.srt.managers.request_state import ReqState, init_req
 from sglang.srt.managers.schedule_batch import MultimodalDataItem
 from sglang.srt.managers.scheduler import is_health_check_generate_req
 from sglang.srt.managers.scheduler_input_blocker import input_blocker_guard_region
@@ -84,7 +84,6 @@ from sglang.srt.managers.tokenizer_manager_score_mixin import (
 from sglang.srt.observability.cpu_monitor import start_cpu_monitor_thread
 from sglang.srt.observability.metrics_collector import TokenizerMetricsCollector
 from sglang.srt.observability.req_time_stats import (
-    APIServerReqTimeStats,
     convert_time_to_realtime,
     real_time,
     set_time_batch,
@@ -92,7 +91,7 @@ from sglang.srt.observability.req_time_stats import (
 from sglang.srt.observability.request_metrics_exporter import (
     RequestMetricsExporterManager,
 )
-from sglang.srt.observability.trace import SpanAttributes, extract_trace_headers
+from sglang.srt.observability.trace import SpanAttributes
 from sglang.srt.sampling.sampling_params import SamplingParams
 from sglang.srt.server_args import (
     PortArgs,
@@ -129,71 +128,6 @@ _INCREMENTAL_STREAMING_META_INFO_KEYS = (
     "output_top_logprobs",
     "output_token_ids_logprobs",
 )
-
-
-@dataclasses.dataclass
-class ReqState:
-    """Store the state a request."""
-
-    out_list: List[Dict[Any, Any]]
-    finished: bool
-    event: asyncio.Event
-    obj: Union[GenerateReqInput, EmbeddingReqInput]
-
-    # For performance metrics
-    time_stats: APIServerReqTimeStats
-    last_completion_tokens: int = 1
-    ttft_observed: bool = False
-
-    # For streaming output
-    last_output_offset: int = 0
-
-    # Accumulate text lazily so incremental streaming can emit the incoming
-    # delta directly without rebuilding the full output prefix.
-    text: str = ""
-    text_chunks: List[str] = dataclasses.field(default_factory=list)
-
-    def append_text(self, chunk: str):
-        if chunk:
-            self.text_chunks.append(chunk)
-
-    def get_text(self) -> str:
-        if self.text_chunks:
-            self.text += "".join(self.text_chunks)
-            self.text_chunks.clear()
-        return self.text
-
-    def get_crash_dump_output(self) -> Dict[Any, Any]:
-        out = {}
-        if self.text or self.text_chunks:
-            out["text"] = self.get_text()
-        if self.output_ids:
-            out["output_ids"] = self.output_ids.copy()
-        return out
-
-    # For incremental state update.
-    # TODO(lianmin): do not initialize some lists if not needed.
-    output_ids: List[int] = dataclasses.field(default_factory=list)
-    input_token_logprobs_val: List[float] = dataclasses.field(default_factory=list)
-    input_token_logprobs_idx: List[int] = dataclasses.field(default_factory=list)
-    output_token_logprobs_val: List[float] = dataclasses.field(default_factory=list)
-    output_token_logprobs_idx: List[int] = dataclasses.field(default_factory=list)
-    input_top_logprobs_val: List[List[float]] = dataclasses.field(default_factory=list)
-    input_top_logprobs_idx: List[List[int]] = dataclasses.field(default_factory=list)
-    output_top_logprobs_val: List[List[float]] = dataclasses.field(default_factory=list)
-    output_top_logprobs_idx: List[List[int]] = dataclasses.field(default_factory=list)
-    input_token_ids_logprobs_val: List = dataclasses.field(default_factory=list)
-    input_token_ids_logprobs_idx: List = dataclasses.field(default_factory=list)
-    output_token_ids_logprobs_val: List = dataclasses.field(default_factory=list)
-    output_token_ids_logprobs_idx: List = dataclasses.field(default_factory=list)
-
-    # For detokenized logprobs
-    input_token_logprobs: List[Any] = dataclasses.field(default_factory=list)
-    output_token_logprobs: List[Any] = dataclasses.field(default_factory=list)
-    input_top_logprobs: List[Any] = dataclasses.field(default_factory=list)
-    output_top_logprobs: List[Any] = dataclasses.field(default_factory=list)
-    input_token_ids_logprobs: List[Any] = dataclasses.field(default_factory=list)
-    output_token_ids_logprobs: List[Any] = dataclasses.field(default_factory=list)
 
 
 def _slice_streaming_output_meta_info(
@@ -534,7 +468,13 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
                     f"routed_dp_rank={obj.routed_dp_rank} out of range [0, {dp_size})"
                 )
 
-        self._init_req_state(obj, request)
+        init_req(
+            self.rid_to_state,
+            obj=obj,
+            request=request,
+            enable_trace=self.server_args.enable_trace,
+            disagg_mode=self.disaggregation_mode,
+        )
         if self.server_args.language_only:
             self._handle_epd_disaggregation_encode_request(obj)
         if self.server_args.tokenizer_worker_num > 1:
@@ -1434,7 +1374,12 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
                 tokenized_obj.sampling_params = copy.copy(tokenized_obj.sampling_params)
                 tokenized_obj.sampling_params.max_new_tokens = 0
                 tokenized_obj.stream = False
-                self._init_req_state(tmp_obj)
+                init_req(
+                    self.rid_to_state,
+                    obj=tmp_obj,
+                    enable_trace=self.server_args.enable_trace,
+                    disagg_mode=self.disaggregation_mode,
+                )
                 self._send_one_request(tokenized_obj)
                 await self._wait_one_response(tmp_obj, request).__anext__()
 
@@ -1444,7 +1389,12 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
                     tmp_obj = copy.copy(objs[i])
                     tokenized_obj = copy.copy(tokenized_objs[i])
                     tokenized_obj.rid = tmp_obj.regenerate_rid()
-                    self._init_req_state(tmp_obj)
+                    init_req(
+                        self.rid_to_state,
+                        obj=tmp_obj,
+                        enable_trace=self.server_args.enable_trace,
+                        disagg_mode=self.disaggregation_mode,
+                    )
                     tokenized_obj.time_stats = self.rid_to_state[tmp_obj.rid].time_stats
                     self._send_one_request(tokenized_obj)
                     generators.append(self._wait_one_response(tmp_obj, request))
@@ -2537,51 +2487,6 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
             sub_obj.lora_id = (
                 obj.lora_id[i] if isinstance(obj.lora_id, list) else obj.lora_id
             )
-
-    def _init_req_state(
-        self,
-        obj: Union[GenerateReqInput, EmbeddingReqInput],
-        request: Optional[fastapi.Request] = None,
-    ):
-        created_time = obj.received_time
-
-        external_trace_header = None
-        if self.server_args.enable_trace:
-            if obj.external_trace_header:
-                # When the request comes from the rust grpc server or Engine there isn't a
-                # real request object but we still need to propagate the trace context from
-                # the trace context that is explicitly passed in
-                external_trace_header = obj.external_trace_header
-            elif request:
-                external_trace_header = extract_trace_headers(request.headers)
-                obj.external_trace_header = external_trace_header
-
-        # Normalize single/batch into a uniform list of (rid, sub_obj, bootstrap_room)
-        if not hasattr(obj, "is_single") or obj.is_single:
-            items = [(obj.rid, obj, getattr(obj, "bootstrap_room", None))]
-        else:
-            items = [
-                (
-                    obj.rid[i],
-                    obj[i],
-                    (
-                        obj.bootstrap_room[i]
-                        if hasattr(obj, "bootstrap_room") and obj.bootstrap_room
-                        else None
-                    ),
-                )
-                for i in range(len(obj.rid))
-            ]
-
-        for rid, sub_obj, bootstrap_room in items:
-            if rid in self.rid_to_state:
-                raise ValueError(f"Duplicate request ID detected: {rid}")
-            time_stats = APIServerReqTimeStats(disagg_mode=self.disaggregation_mode)
-            state = ReqState([], False, asyncio.Event(), sub_obj, time_stats)
-            self.rid_to_state[rid] = state
-            if self.server_args.enable_trace:
-                time_stats.init_trace_ctx(rid, bootstrap_room, external_trace_header)
-            time_stats.set_created_time(created_time)
 
     def _should_dispatch_to_encoder(
         self, obj: Union[GenerateReqInput, EmbeddingReqInput]
