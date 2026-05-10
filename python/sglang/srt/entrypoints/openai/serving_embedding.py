@@ -108,8 +108,12 @@ class OpenAIServingEmbedding(OpenAIServingBase):
                     for conv in convs:
                         generate_prompts.append(conv.get_prompt())
                 elif (
-                    self.tokenizer_manager.tokenizer is not None
-                    and getattr(self.tokenizer_manager.tokenizer, "chat_template", None)
+                    self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer is not None
+                    and getattr(
+                        self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer,
+                        "chat_template",
+                        None,
+                    )
                     is not None
                 ):
                     generate_prompts = self._apply_jinja_template_to_embedding_inputs(
@@ -217,7 +221,7 @@ class OpenAIServingEmbedding(OpenAIServingBase):
                 modalities=[],
             )
             try:
-                prompt = self.tokenizer_manager.tokenizer.apply_chat_template(
+                prompt = self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.apply_chat_template(
                     [processed_msg],
                     tokenize=False,
                     add_generation_prompt=True,

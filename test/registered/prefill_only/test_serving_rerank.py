@@ -67,7 +67,7 @@ class TestOpenAIServingRerankUnit(unittest.TestCase):
 
     def test_convert_to_internal_request_qwen3_template_returns_request(self):
         tm = _DummyTokenizerManager()
-        tm.tokenizer.chat_template = (
+        tm.raw_tokenizer_wrapper.tokenizer.chat_template = (
             '... Note that the answer can only be "yes" or "no". ...'
         )
         handler = OpenAIServingRerank(tm)
