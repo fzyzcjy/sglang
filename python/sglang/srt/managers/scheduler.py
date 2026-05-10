@@ -171,6 +171,9 @@ from sglang.srt.managers.scheduler_components.control.weight_updater import (
 from sglang.srt.managers.scheduler_components.ingress.request_receiver import (
     SchedulerRequestReceiver,
 )
+from sglang.srt.managers.scheduler_components.observability.invariant_checker import (
+    SchedulerInvariantChecker,
+)
 from sglang.srt.managers.scheduler_components.observability.pool_stats_observer import (
     SchedulerPoolStatsObserver,
 )
@@ -188,7 +191,6 @@ from sglang.srt.managers.scheduler_output_processor_mixin import (
 from sglang.srt.managers.scheduler_pp_mixin import SchedulerPPMixin
 from sglang.srt.managers.scheduler_recv_skipper import SchedulerRecvSkipper
 from sglang.srt.managers.scheduler_runtime_checker_mixin import (
-    SchedulerRuntimeCheckerMixin,
     create_scheduler_watchdog,
 )
 from sglang.srt.managers.utils import GenerationBatchResult, validate_input_length
@@ -323,13 +325,40 @@ def validate_dflash_request(req: Req) -> Optional[str]:
     return None
 
 
+def create_scheduler_watchdog(
+    scheduler: Scheduler, watchdog_timeout: float, soft: bool = False
+) -> WatchdogRaw:
+    def dump_info() -> str:
+        if scheduler.is_initializing:
+            return ""
+        _, messages = scheduler.invariant_checker._check_all_pools(
+            ps=scheduler.pool_stats_observer.get_pool_stats(
+                last_batch=scheduler.last_batch, running_batch=scheduler.running_batch
+            ),
+            last_batch=scheduler.last_batch,
+            running_batch=scheduler.running_batch,
+        )
+        return (
+            f"{scheduler.cur_batch.batch_size()=}\n"
+            f"{scheduler.cur_batch.reqs=}\n" + "\n".join(messages)
+        )
+
+    return WatchdogRaw(
+        debug_name="Scheduler",
+        get_counter=lambda: scheduler.forward_ct,
+        is_active=lambda: scheduler.is_initializing or scheduler.cur_batch is not None,
+        watchdog_timeout=watchdog_timeout,
+        soft=soft,
+        dump_info=dump_info,
+    )
+
+
 class Scheduler(
     SchedulerOutputProcessorMixin,
     SchedulerMetricsMixin,
     SchedulerDisaggregationDecodeMixin,
     SchedulerDisaggregationPrefillMixin,
     SchedulerMultiplexMixin,
-    SchedulerRuntimeCheckerMixin,
     SchedulerPPMixin,
     SchedulerDllmMixin,
     SchedulerMlxOverlapMixin,
@@ -614,6 +643,21 @@ class Scheduler(
             full_tokens_per_layer=self.full_tokens_per_layer,
             swa_tokens_per_layer=self.swa_tokens_per_layer,
             max_total_num_tokens=self.max_total_num_tokens,
+        )
+
+        self.invariant_checker = SchedulerInvariantChecker(
+            is_hybrid_swa=self.is_hybrid_swa,
+            is_hybrid_ssm=self.is_hybrid_ssm,
+            disaggregation_mode=self.disaggregation_mode,
+            page_size=self.page_size,
+            full_tokens_per_layer=self.full_tokens_per_layer,
+            swa_tokens_per_layer=self.swa_tokens_per_layer,
+            max_total_num_tokens=self.max_total_num_tokens,
+            server_args=self.server_args,
+            tree_cache=self.tree_cache,
+            token_to_kv_pool_allocator=self.token_to_kv_pool_allocator,
+            req_to_token_pool=self.req_to_token_pool,
+            pool_stats_observer=self.pool_stats_observer,
         )
 
         self.is_initializing = False
@@ -1458,7 +1502,9 @@ class Scheduler(
             # Update last_batch
             self.last_batch = batch
             if envs.SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_BUSY.get():
-                self.self_check_during_busy()
+                self.invariant_checker.self_check_during_busy(
+                    last_batch=self.last_batch, running_batch=self.running_batch
+                )
 
     @DynamicGradMode()
     def event_loop_overlap(self):
@@ -1518,7 +1564,9 @@ class Scheduler(
             self.last_batch = batch
 
             if envs.SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_BUSY.get():
-                self.self_check_during_busy()
+                self.invariant_checker.self_check_during_busy(
+                    last_batch=self.last_batch, running_batch=self.running_batch
+                )
 
     def is_disable_overlap_for_batch(self, batch: ScheduleBatch) -> bool:
         # For two consecutive prefill batches, we disable overlap to improve the TTFT of the first batch.
@@ -3012,17 +3060,19 @@ class Scheduler(
         # memory leak check (skipped for hisparse — pool counters intentionally
         # diverge during host-backup, see _get_swa_token_info clamp).
         if not self.enable_hisparse:
-            has_leak, messages = self._check_all_pools(
-                self.pool_stats_observer.get_pool_stats(
+            has_leak, messages = self.invariant_checker._check_all_pools(
+                ps=self.pool_stats_observer.get_pool_stats(
                     last_batch=self.last_batch, running_batch=self.running_batch
-                )
+                ),
+                last_batch=self.last_batch,
+                running_batch=self.running_batch,
             )
             if has_leak:
-                self._report_leak("pool", "\n".join(messages))
-            self._check_req_pool()
+                self.invariant_checker._report_leak("pool", "\n".join(messages))
+            self.invariant_checker._check_req_pool()
 
         # tree cache sanity check
-        self._check_tree_cache()
+        self.invariant_checker._check_tree_cache()
 
         # metrics every 30s
         self._maybe_log_idle_metrics()
