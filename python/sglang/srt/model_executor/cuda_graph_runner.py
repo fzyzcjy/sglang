@@ -595,16 +595,10 @@ class CudaGraphRunner:
         self.enable_two_batch_overlap = (
             model_runner.server_args.enable_two_batch_overlap
         )
-        self.use_ngram_embedding = (
-            model_runner.ngram_embedding_manager.use_ngram_embedding
-        )
+        self.use_ngram_embedding = model_runner.ngram_embedding_manager.enabled
         if self.use_ngram_embedding:
-            self.ngram_embedding_n = (
-                model_runner.ngram_embedding_manager.ngram_embedding_n
-            )
-            self.ngram_embedding_k = (
-                model_runner.ngram_embedding_manager.ngram_embedding_k
-            )
+            self.ngram_embedding_n = model_runner.ngram_embedding_manager.n
+            self.ngram_embedding_k = model_runner.ngram_embedding_manager.k
         self.speculative_algorithm = model_runner.server_args.speculative_algorithm
         self.enable_profile_cuda_graph = (
             model_runner.server_args.enable_profile_cuda_graph
@@ -717,7 +711,7 @@ class CudaGraphRunner:
             cache_loc_dtype=self._cache_loc_dtype(),
             enable_mamba_track=enable_mamba_track,
             ne_token_table=(
-                model_runner.ngram_embedding_manager.token_table
+                model_runner.ngram_embedding_manager.table
                 if self.use_ngram_embedding
                 else None
             ),

@@ -712,7 +712,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         self.init_memory_pool(pre_model_load_memory)
 
         # Init ngram embedding token table
-        self.ngram_embedding_manager = NgramEmbeddingManager.maybe_init_ngram_embedding(
+        self.ngram_embedding_manager = NgramEmbeddingManager.from_model(
             model=self.model,
             model_config=self.model_config,
             req_to_token_pool=self.req_to_token_pool,
@@ -2109,7 +2109,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 else forward_batch.seq_lens - 1
             ),
         )
-        self.ngram_embedding_manager.maybe_update_ngram_token_table(
+        self.ngram_embedding_manager.update_after_decode(
             next_token_ids=next_token_ids,
             forward_batch=forward_batch,
         )
