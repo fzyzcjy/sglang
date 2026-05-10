@@ -191,6 +191,9 @@ from sglang.srt.managers.scheduler_components.observability.pool_stats_observer 
 from sglang.srt.managers.scheduler_components.observability.profiler_manager import (
     SchedulerProfilerManager,
 )
+from sglang.srt.managers.scheduler_components.output.logprob_computer import (
+    SchedulerLogprobComputer,
+)
 from sglang.srt.managers.scheduler_components.scheduling.dp_attn_adapter import (
     SchedulerDPAttnAdapter,
 )
@@ -734,6 +737,11 @@ class Scheduler(
             tp_worker=self.tp_worker,
             token_to_kv_pool_allocator=self.token_to_kv_pool_allocator,
             spec_algorithm=self.spec_algorithm,
+        )
+
+        self.logprob_computer = SchedulerLogprobComputer(
+            server_args=self.server_args,
+            model_config=self.model_config,
         )
 
         self.is_initializing = False
