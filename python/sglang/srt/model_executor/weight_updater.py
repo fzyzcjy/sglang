@@ -165,7 +165,7 @@ class WeightUpdater:
             )
         ):
             self._mr.graph_runner, self._mr.graph_mem_usage = (
-                device_graphs.init_device_graphs(self._mr)
+                device_graphs.create_device_graphs(self._mr)
             )
 
         logger.info("Update weights end.")
