@@ -1038,6 +1038,8 @@ class Scheduler(
         self.waiting_queue: List[Req] = []
         # The running decoding batch for continuous batching
         self.running_batch: ScheduleBatch = ScheduleBatch(reqs=[], batch_is_full=False)
+        if self.server_args.pp_size > 1:
+            self.running_mbs: List[ScheduleBatch] = []
         # The current forward batch
         self.cur_batch: Optional[ScheduleBatch] = None
         # The last forward batch
