@@ -288,8 +288,14 @@ class OpenAIServingChat(OpenAIServingBase):
         Returns:
             Updated prompt_ids with assistant prefix appended
         """
-        encoded = self.tokenizer_manager.tokenizer.encode(assistant_prefix)
-        if encoded and encoded[0] == self.tokenizer_manager.tokenizer.bos_token_id:
+        encoded = self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.encode(
+            assistant_prefix
+        )
+        if (
+            encoded
+            and encoded[0]
+            == self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.bos_token_id
+        ):
             encoded = encoded[1:]
         return prompt_ids + encoded
 
@@ -306,8 +312,9 @@ class OpenAIServingChat(OpenAIServingBase):
             return "dsv4"
 
         has_chat_template = (
-            self.tokenizer_manager.tokenizer is not None
-            and self.tokenizer_manager.tokenizer.chat_template is not None
+            self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer is not None
+            and self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.chat_template
+            is not None
         )
         if "DeepseekV3" in arch and not has_chat_template:
             return "dsv32"
@@ -597,7 +604,9 @@ class OpenAIServingChat(OpenAIServingBase):
                 real_input = encoding_dsv32.encode_messages(
                     messages, thinking_mode=thinking_mode
                 )
-            prompt_ids = self.tokenizer_manager.tokenizer.encode(real_input)
+            prompt_ids = self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.encode(
+                real_input
+            )
 
             # Append assistant prefix if continue_final_message is enabled
             if assistant_prefix:
@@ -656,7 +665,7 @@ class OpenAIServingChat(OpenAIServingBase):
                 extra_template_kwargs.update(request.chat_template_kwargs)
 
             try:
-                prompt_ids = self.tokenizer_manager.tokenizer.apply_chat_template(
+                prompt_ids = self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.apply_chat_template(
                     openai_compatible_messages,
                     tokenize=True,
                     add_generation_prompt=True,
@@ -673,7 +682,7 @@ class OpenAIServingChat(OpenAIServingBase):
                     else None
                 )
                 try:
-                    prompt_ids = self.tokenizer_manager.tokenizer.apply_chat_template(
+                    prompt_ids = self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.apply_chat_template(
                         openai_compatible_messages,
                         tokenize=True,
                         add_generation_prompt=True,
@@ -693,7 +702,9 @@ class OpenAIServingChat(OpenAIServingBase):
                 )
 
             if is_multimodal:
-                prompt = self.tokenizer_manager.tokenizer.decode(prompt_ids)
+                prompt = self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.decode(
+                    prompt_ids
+                )
 
         stop = request.stop
         image_data = image_data if image_data else None
@@ -764,7 +775,9 @@ class OpenAIServingChat(OpenAIServingBase):
                 stop.extend(request.stop)
 
         if not is_multimodal:
-            prompt_ids = self.tokenizer_manager.tokenizer.encode(prompt)
+            prompt_ids = self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.encode(
+                prompt
+            )
 
         return MessageProcessingResult(
             prompt=prompt,
