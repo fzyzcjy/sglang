@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def init_device_graphs(model_runner: "ModelRunner") -> tuple[Any, float]:
+def create_device_graphs(model_runner: "ModelRunner") -> tuple[Any, float]:
     """Capture device graphs.
 
     Returns ``(graph_runner, graph_mem_usage)``. Both are ``None`` / ``0``
@@ -84,7 +84,7 @@ def init_device_graphs(model_runner: "ModelRunner") -> tuple[Any, float]:
     return graph_runner, graph_mem_usage
 
 
-def init_piecewise_cuda_graphs(model_runner: "ModelRunner") -> Any:
+def create_piecewise_cuda_graphs(model_runner: "ModelRunner") -> Any:
     """Initialize piecewise CUDA graph runner.
 
     Returns the constructed runner (or ``None`` on a bail). The caller
