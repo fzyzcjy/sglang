@@ -34,7 +34,6 @@ import torch.distributed as dist
 from torch import nn
 
 from sglang.jit_kernel.ngram_embedding import update_token_table
-from sglang.srt.configs import hybrid_arch
 from sglang.srt.configs.device_config import DeviceConfig
 from sglang.srt.configs.hybrid_arch import _UNSET
 from sglang.srt.configs.load_config import LoadConfig, LoadFormat
@@ -1712,36 +1711,6 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         )
 
         return result
-
-    @property
-    def qwen3_next_config(self):
-        return hybrid_arch.qwen3_next_config(self.model_config)
-
-    @property
-    def hybrid_lightning_config(self):
-        return hybrid_arch.hybrid_lightning_config(self.model_config)
-
-    @property
-    def hybrid_gdn_config(self):
-        return hybrid_arch.hybrid_gdn_config(self.model_config)
-
-    @property
-    def mamba2_config(self):
-        return hybrid_arch.mamba2_config(
-            self.model_config, is_draft_worker=self.is_draft_worker
-        )
-
-    @property
-    def kimi_linear_config(self):
-        return hybrid_arch.kimi_linear_config(self.model_config)
-
-    @property
-    def linear_attn_model_spec(self):
-        return hybrid_arch.linear_attn_model_spec(self)
-
-    @property
-    def mambaish_config(self):
-        return hybrid_arch.mambaish_config(self)
 
     def init_attention_backend(self):
         """Init attention kernel backend."""
