@@ -784,9 +784,7 @@ class OpenAIServingResponses(OpenAIServingChat):
             response.status = "cancelled"
 
         # The response_id is the same as the rid used when submitting the request
-        TokenizerManager.abort_request(
-            self.tokenizer_manager.pause_controller, rid=response_id
-        )
+        self.tokenizer_manager.pause_controller.abort_request(rid=response_id)
 
         if task := self.background_tasks.get(response_id):
             task.cancel()
