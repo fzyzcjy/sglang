@@ -416,11 +416,11 @@ class TokenizerControlMixin:
         ), "dp_size must be 1 or dp attention must be enabled for update weights from distributed"
 
         if obj.abort_all_requests:
-            self.abort_request(abort_all=True)
+            TokenizerManager.abort_request(self.pause_controller, abort_all=True)
 
         # Hold is_pause_cond while updating to prevent unpause from racing.
-        async with self.is_pause_cond:
-            is_paused = self.is_pause
+        async with self.pause_controller.is_pause_cond:
+            is_paused = self.pause_controller.is_pause
             if is_paused:
                 results = await self.update_weights_from_distributed_communicator(obj)
 
@@ -474,10 +474,10 @@ class TokenizerControlMixin:
         ), "dp_size must be 1 or dp attention must be enabled for update weights from tensor"
 
         if obj.abort_all_requests:
-            self.abort_request(abort_all=True)
+            TokenizerManager.abort_request(self.pause_controller, abort_all=True)
 
-        async with self.is_pause_cond:
-            is_paused = self.is_pause
+        async with self.pause_controller.is_pause_cond:
+            is_paused = self.pause_controller.is_pause
             if is_paused:
                 results = await self.update_weights_from_tensor_communicator(obj)
 
@@ -506,8 +506,8 @@ class TokenizerControlMixin:
             ), "dp_size must be 1 or dp attention must be enabled for update weights from IPC"
             logger.info("Starting IPC weight update")
 
-            async with self.is_pause_cond:
-                is_paused = self.is_pause
+            async with self.pause_controller.is_pause_cond:
+                is_paused = self.pause_controller.is_pause
                 if is_paused:
                     result = (await self.update_weights_from_ipc_communicator(obj))[0]
                     success, message = result.success, result.message
