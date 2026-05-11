@@ -44,7 +44,6 @@ from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
 from sglang.srt.lora.lora_registry import LoRARef, LoRARegistry
 from sglang.srt.managers import logprob_ops, request_tracing, spec_decoding_meta
-from sglang.srt.managers.async_dynamic_batch_tokenizer import AsyncDynamicbatchTokenizer
 from sglang.srt.managers.disagg_service import start_disagg_service
 from sglang.srt.managers.embed_types import PositionalEmbeds
 from sglang.srt.managers.io_struct import (
@@ -72,7 +71,7 @@ from sglang.srt.managers.io_struct import (
     WatchLoadUpdateReq,
 )
 from sglang.srt.managers.mm_utils import TensorTransportMode, wrap_shm_features
-from sglang.srt.managers.multimodal_processor import get_mm_processor, import_processors
+from sglang.srt.managers.raw_tokenizer_wrapper import RawTokenizerWrapper
 from sglang.srt.managers.request_state import ReqState, init_req
 from sglang.srt.managers.schedule_batch import MultimodalDataItem
 from sglang.srt.managers.scheduler import is_health_check_generate_req
@@ -109,8 +108,6 @@ from sglang.srt.utils import (
 from sglang.srt.utils.aio_rwlock import RWLock
 from sglang.srt.utils.hf_transformers_utils import (
     get_processor,
-    get_tokenizer,
-    get_tokenizer_from_processor,
 )
 from sglang.srt.utils.network import get_zmq_socket
 from sglang.srt.utils.request_logger import RequestLogger
@@ -122,14 +119,6 @@ asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 _REQUEST_STATE_WAIT_TIMEOUT = envs.SGLANG_REQUEST_STATE_WAIT_TIMEOUT.get()
 
 logger = logging.getLogger(__name__)
-
-
-class InputFormat(Enum):
-    """Input format types for tokenization handling."""
-
-    SINGLE_STRING = 1  # Regular single text like "Hello world"
-    BATCH_STRINGS = 2  # Regular batch like ["Hello", "World"]
-    CROSS_ENCODER_PAIRS = 3  # Cross-encoder pairs like [["query", "document"]]
 
 
 class TokenizerManager(TokenizerControlMixin):
@@ -150,8 +139,11 @@ class TokenizerManager(TokenizerControlMixin):
         # Init model config
         self.init_model_config()
 
-        # Initialize tokenizer and multimodalprocessor
-        self.init_tokenizer_and_processor()
+        # Initialize tokenizer and multimodal processor
+        self.raw_tokenizer_wrapper = RawTokenizerWrapper.from_server_args(
+            server_args=self.server_args,
+            model_config=self.model_config,
+        )
 
         # Init inter-process communication
         self.init_ipc_channels(port_args)
@@ -176,7 +168,7 @@ class TokenizerManager(TokenizerControlMixin):
 
         # Score request handler
         self.score_request_handler = ScoreRequestHandler(
-            tokenizer=self.tokenizer,
+            tokenizer=self.raw_tokenizer_wrapper.tokenizer,
             rid_to_state=self.rid_to_state,
             generate_request=self.generate_request,
             config=ScoreRequestHandlerConfig(
@@ -216,61 +208,6 @@ class TokenizerManager(TokenizerControlMixin):
         else:
             self.num_reserved_tokens = 0
         self.validate_total_tokens = True
-
-    def init_tokenizer_and_processor(self):
-        server_args = self.server_args
-
-        # Initialize tokenizer and processor
-        if self.model_config.is_multimodal:
-            import_processors("sglang.srt.multimodal.processors")
-            if mm_process_pkg := envs.SGLANG_EXTERNAL_MM_PROCESSOR_PACKAGE.get():
-                import_processors(mm_process_pkg, overwrite=True)
-            _processor = _get_processor_wrapper(server_args)
-            transport_mode = _determine_tensor_transport_mode(self.server_args)
-
-            # We want to parallelize the image pre-processing so we create an executor for it
-            # We create mm_processor for any skip_tokenizer_init to make sure we still encode
-            # images even with skip_tokenizer_init=False.
-            self.mm_processor = get_mm_processor(
-                self.model_config.hf_config,
-                server_args,
-                _processor,
-                transport_mode,
-                model_config=self.model_config,
-            )
-
-            if server_args.skip_tokenizer_init:
-                self.tokenizer = self.processor = None
-            else:
-                self.processor = _processor
-                self.tokenizer = get_tokenizer_from_processor(self.processor)
-                os.environ["TOKENIZERS_PARALLELISM"] = "false"
-        else:
-            self.mm_processor = self.processor = None
-
-            if server_args.skip_tokenizer_init:
-                self.tokenizer = None
-            else:
-                self.tokenizer = get_tokenizer(
-                    server_args.tokenizer_path,
-                    tokenizer_mode=server_args.tokenizer_mode,
-                    trust_remote_code=server_args.trust_remote_code,
-                    revision=server_args.revision,
-                    tokenizer_backend=server_args.tokenizer_backend,
-                )
-
-        # Initialize async dynamic batch tokenizer if enabled (common for both multimodal and non-multimodal)
-        if (
-            server_args.enable_dynamic_batch_tokenizer
-            and not server_args.skip_tokenizer_init
-        ):
-            self.async_dynamic_batch_tokenizer = AsyncDynamicbatchTokenizer(
-                self.tokenizer,
-                max_batch_size=server_args.dynamic_batch_tokenizer_batch_size,
-                batch_wait_timeout_s=server_args.dynamic_batch_tokenizer_batch_timeout,
-            )
-        else:
-            self.async_dynamic_batch_tokenizer = None
 
     def init_ipc_channels(self, port_args: PortArgs):
         context = zmq.asyncio.Context(2)
@@ -478,7 +415,9 @@ class TokenizerManager(TokenizerControlMixin):
             self._attach_multi_http_worker_info(obj)
 
         # Log the request
-        self.request_logger.log_received_request(obj, self.tokenizer, request)
+        self.request_logger.log_received_request(
+            obj, self.raw_tokenizer_wrapper.tokenizer, request
+        )
 
         async with self.is_pause_cond:
             await self.is_pause_cond.wait_for(lambda: not self.is_pause)
@@ -592,7 +531,7 @@ class TokenizerManager(TokenizerControlMixin):
 
             Note: token_type_ids is None unless is_cross_encoder=True.
         """
-        if not texts or self.tokenizer is None:
+        if not texts or self.raw_tokenizer_wrapper.tokenizer is None:
             raise ValueError("texts cannot be empty and tokenizer must be initialized")
 
         # Step 1: Detect input format and prepare for tokenization
@@ -607,14 +546,16 @@ class TokenizerManager(TokenizerControlMixin):
 
         # Step 3: Choose tokenization strategy
         use_async_tokenizer = (
-            self.async_dynamic_batch_tokenizer is not None
+            self.raw_tokenizer_wrapper.async_dynamic_batch_tokenizer is not None
             and input_format == InputFormat.SINGLE_STRING
         )
 
         if use_async_tokenizer:
             logger.debug("Using async dynamic batch tokenizer for single text")
-            result = await self.async_dynamic_batch_tokenizer.encode(
-                tokenizer_input[0], **tokenizer_kwargs
+            result = (
+                await self.raw_tokenizer_wrapper.async_dynamic_batch_tokenizer.encode(
+                    tokenizer_input[0], **tokenizer_kwargs
+                )
             )
             # Convert to batch format for consistency
             input_ids = [result["input_ids"]]
@@ -625,7 +566,9 @@ class TokenizerManager(TokenizerControlMixin):
             )
         else:
             logger.debug(f"Using regular tokenizer for {len(tokenizer_input)} inputs")
-            encoded = self.tokenizer(tokenizer_input, **tokenizer_kwargs)
+            encoded = self.raw_tokenizer_wrapper.tokenizer(
+                tokenizer_input, **tokenizer_kwargs
+            )
             input_ids = encoded["input_ids"]
             token_type_ids = encoded.get("token_type_ids") if is_cross_encoder else None
 
@@ -658,7 +601,7 @@ class TokenizerManager(TokenizerControlMixin):
         elif obj.input_ids is not None:
             input_ids = obj.input_ids
         else:
-            if self.tokenizer is None:
+            if self.raw_tokenizer_wrapper.tokenizer is None:
                 raise ValueError(
                     "The engine initialized with skip_tokenizer_init=True cannot "
                     "accept text prompts. Please provide input_ids or re-initialize "
@@ -667,7 +610,11 @@ class TokenizerManager(TokenizerControlMixin):
 
             # For audio-only requests (e.g., Whisper), text may be empty.
             # The multimodal processor will provide input_ids later.
-            if not input_text and self.mm_processor and obj.contains_mm_input():
+            if (
+                not input_text
+                and self.raw_tokenizer_wrapper.mm_processor
+                and obj.contains_mm_input()
+            ):
                 # Use empty placeholder - multimodal processor will override
                 input_ids = []
             else:
@@ -680,8 +627,9 @@ class TokenizerManager(TokenizerControlMixin):
             "MossVLForConditionalGeneration"
             in self.model_config.hf_config.architectures
         )
-        should_run_mm_processor = self.mm_processor is not None and (
-            contains_mm_input or is_mossvl
+        should_run_mm_processor = (
+            self.raw_tokenizer_wrapper.mm_processor is not None
+            and (contains_mm_input or is_mossvl)
         )
 
         if should_run_mm_processor:
@@ -704,12 +652,12 @@ class TokenizerManager(TokenizerControlMixin):
                 if self.server_args.language_only:
                     mm_inputs = await self.mm_receiver.recv_mm_data(
                         request_obj=obj,
-                        mm_processor=self.mm_processor,
+                        mm_processor=self.raw_tokenizer_wrapper.mm_processor,
                         prompt=(input_text or input_ids),
                         need_wait_for_mm_inputs=obj.need_wait_for_mm_inputs,
                     )
                 if mm_inputs is None:
-                    mm_inputs = await self.mm_processor.process_mm_data_async(
+                    mm_inputs = await self.raw_tokenizer_wrapper.mm_processor.process_mm_data_async(
                         image_data=obj.image_data,
                         audio_data=obj.audio_data,
                         input_text=(input_text or input_ids),
@@ -723,12 +671,14 @@ class TokenizerManager(TokenizerControlMixin):
             ):
                 # In language_only mode with zmq_to_scheduler, if we didn't dispatch
                 # to encoder (e.g., only one image), process locally like non-language_only mode
-                mm_inputs = await self.mm_processor.process_mm_data_async(
-                    image_data=obj.image_data,
-                    audio_data=obj.audio_data,
-                    input_text=(input_text or input_ids),
-                    request_obj=obj,
-                    max_req_input_len=self.max_req_input_len,
+                mm_inputs = (
+                    await self.raw_tokenizer_wrapper.mm_processor.process_mm_data_async(
+                        image_data=obj.image_data,
+                        audio_data=obj.audio_data,
+                        input_text=(input_text or input_ids),
+                        request_obj=obj,
+                        max_req_input_len=self.max_req_input_len,
+                    )
                 )
 
             if mm_inputs and mm_inputs.input_ids is not None:
@@ -914,7 +864,7 @@ class TokenizerManager(TokenizerControlMixin):
         else:
             sampling_kwargs = obj.sampling_params
         sampling_params = self.sampling_params_class(**sampling_kwargs)
-        sampling_params.normalize(self.tokenizer)
+        sampling_params.normalize(self.raw_tokenizer_wrapper.tokenizer)
         sampling_params.verify(self.model_config.vocab_size)
 
         # Build return object
@@ -1641,7 +1591,7 @@ class TokenizerManager(TokenizerControlMixin):
                     and not self.server_args.skip_tokenizer_init,
                     recv_obj=recv_obj,
                     recv_obj_index=i,
-                    tokenizer=self.tokenizer,
+                    tokenizer=self.raw_tokenizer_wrapper.tokenizer,
                 )
 
             if not isinstance(recv_obj, BatchEmbeddingOutput):
@@ -2148,7 +2098,7 @@ class TokenizerManager(TokenizerControlMixin):
                 token_ids_logprob=state.obj.token_ids_logprob,
                 return_text_in_logprobs=state.obj.return_text_in_logprobs
                 and not self.server_args.skip_tokenizer_init,
-                tokenizer=self.tokenizer,
+                tokenizer=self.raw_tokenizer_wrapper.tokenizer,
             )
 
         output_ids = state.output_ids
