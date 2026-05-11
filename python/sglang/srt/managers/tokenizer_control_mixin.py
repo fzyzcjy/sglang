@@ -416,7 +416,7 @@ class TokenizerControlMixin:
         ), "dp_size must be 1 or dp attention must be enabled for update weights from distributed"
 
         if obj.abort_all_requests:
-            TokenizerManager.abort_request(self.pause_controller, abort_all=True)
+            self.pause_controller.abort_request(abort_all=True)
 
         # Hold is_pause_cond while updating to prevent unpause from racing.
         async with self.pause_controller.is_pause_cond:
@@ -474,7 +474,7 @@ class TokenizerControlMixin:
         ), "dp_size must be 1 or dp attention must be enabled for update weights from tensor"
 
         if obj.abort_all_requests:
-            TokenizerManager.abort_request(self.pause_controller, abort_all=True)
+            self.pause_controller.abort_request(abort_all=True)
 
         async with self.pause_controller.is_pause_cond:
             is_paused = self.pause_controller.is_pause

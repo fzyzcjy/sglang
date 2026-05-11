@@ -49,14 +49,12 @@ from sglang.srt.managers.io_struct import (
     BatchTokenizedEmbeddingReqInput,
     BatchTokenizedGenerateReqInput,
     ConfigureLoggingReq,
-    ContinueGenerationReqInput,
     EmbeddingReqInput,
     FreezeGCReq,
     GenerateReqInput,
     HealthCheckOutput,
     LoadLoRAAdapterReqInput,
     OpenSessionReqOutput,
-    PauseGenerationReqInput,
     TokenizedEmbeddingReqInput,
     TokenizedGenerateReqInput,
     UpdateWeightFromDiskReqInput,
@@ -81,7 +79,6 @@ from sglang.srt.managers.request_validator import (
     RequestValidator,
     RequestValidatorConfig,
 )
-from sglang.srt.managers.scheduler import is_health_check_generate_req
 from sglang.srt.managers.scheduler_input_blocker import input_blocker_guard_region
 from sglang.srt.managers.score_request_handler import (
     ScoreRequestHandler,
@@ -394,12 +391,7 @@ class TokenizerManager(TokenizerControlMixin):
     def init_request_dispatcher(self):
         self._result_dispatcher = TypeBasedDispatcher(
             [
-                (
-                    AbortReq,
-                    lambda x: TokenizerManager.handle_abort_req(
-                        self.pause_controller, x
-                    ),
-                ),
+                (AbortReq, self.pause_controller.handle_abort_req),
                 (
                     OpenSessionReqOutput,
                     self.session_controller.handle_open_session_req_output,
@@ -599,7 +591,7 @@ class TokenizerManager(TokenizerControlMixin):
                     and await request.is_disconnected()
                 ):
                     # Abort the request for disconnected requests (non-streaming, waiting queue)
-                    TokenizerManager.abort_request(self.pause_controller, obj.rid)
+                    self.pause_controller.abort_request(obj.rid)
                     # Use exception to kill the whole call stack and asyncio task
                     raise ValueError(
                         f"Request is disconnected from the client side (type 1). Abort request {obj.rid=}"
@@ -682,7 +674,7 @@ class TokenizerManager(TokenizerControlMixin):
                     and await request.is_disconnected()
                 ):
                     # Abort the request for disconnected requests (non-streaming, running)
-                    TokenizerManager.abort_request(self.pause_controller, obj.rid)
+                    self.pause_controller.abort_request(obj.rid)
                     # Use exception to kill the whole call stack and asyncio task
                     raise ValueError(
                         f"Request is disconnected from the client side (type 3). Abort request {obj.rid=}"
@@ -802,43 +794,6 @@ class TokenizerManager(TokenizerControlMixin):
                     except StopAsyncIteration:
                         pass
 
-    @staticmethod
-    def abort_request(self: "PauseController", rid: str = "", abort_all: bool = False):
-        if not abort_all and rid not in self.rid_to_state:
-            return
-        req = AbortReq(rid=rid, abort_all=abort_all)
-        self.send_to_scheduler.send_pyobj(req)
-        if self.config.enable_metrics:
-            # TODO: also use custom_labels from the request
-            self.metrics_collector.observe_one_aborted_request(
-                self.metrics_collector.labels
-            )
-
-    @staticmethod
-    async def pause_generation(self: "PauseController", obj: PauseGenerationReqInput):
-        async with self.is_pause_cond:
-            self.is_pause = True
-            if obj.mode != "abort":
-                await self.send_to_scheduler.send_pyobj(obj)
-            else:
-                # we are using the model_update_lock to check if there is still on-going requests.
-                while True:
-                    # TODO: maybe make it async instead of fire-and-forget
-                    TokenizerManager.abort_request(self, abort_all=True)
-                    is_locked = await self.model_update_lock.is_locked()
-                    if not is_locked:
-                        break
-                    await asyncio.sleep(1.0)
-
-    @staticmethod
-    async def continue_generation(
-        self: "PauseController", obj: ContinueGenerationReqInput
-    ):
-        async with self.is_pause_cond:
-            self.is_pause = False
-            await self.send_to_scheduler.send_pyobj(obj)
-            self.is_pause_cond.notify_all()
-
     async def update_weights_from_disk(
         self,
         obj: UpdateWeightFromDiskReqInput,
@@ -852,7 +807,7 @@ class TokenizerManager(TokenizerControlMixin):
         logger.info("Start update_weights. Load format=%s", obj.load_format)
 
         if obj.abort_all_requests:
-            TokenizerManager.abort_request(self.pause_controller, abort_all=True)
+            self.pause_controller.abort_request(abort_all=True)
 
         # Immediately update the weights if the engine is in paused state
         async with self.pause_controller.is_pause_cond:
@@ -931,10 +886,10 @@ class TokenizerManager(TokenizerControlMixin):
         async def abort_request():
             await asyncio.sleep(2)
             if obj.is_single:
-                TokenizerManager.abort_request(self.pause_controller, obj.rid)
+                self.pause_controller.abort_request(obj.rid)
             else:
                 for rid in obj.rid:
-                    TokenizerManager.abort_request(self.pause_controller, rid)
+                    self.pause_controller.abort_request(rid)
 
         background_tasks = BackgroundTasks()
         background_tasks.add_task(abort_request)
@@ -1292,51 +1247,6 @@ class TokenizerManager(TokenizerControlMixin):
     def force_exit_handler(self):
         """Put some custom force exit logic here."""
         pass
-
-    @staticmethod
-    def handle_abort_req(self: "PauseController", recv_obj: AbortReq):
-        if is_health_check_generate_req(recv_obj):
-            return
-        state = self.rid_to_state[recv_obj.rid]
-        state.finished = True
-        state.time_stats.set_finished_time()
-
-        abort_message = recv_obj.abort_message or "Abort in waiting queue"
-        finish_reason = {
-            "type": "abort",
-            "message": abort_message,
-        }
-        if recv_obj.finished_reason:
-            finish_reason = recv_obj.finished_reason
-        meta_info = {
-            "id": recv_obj.rid,
-            "finish_reason": finish_reason,
-            "weight_version": self.config.weight_version,
-            "e2e_latency": state.time_stats.get_e2e_latency(),
-        }
-        is_stream = getattr(state.obj, "stream", False)
-        if getattr(state.obj, "return_logprob", False):
-            logprob_ops.fill_meta_info(
-                meta_info,
-                state,
-                top_logprobs_num=state.obj.top_logprobs_num,
-                token_ids_logprob=state.obj.token_ids_logprob,
-                return_text_in_logprobs=state.obj.return_text_in_logprobs
-                and not self.config.skip_tokenizer_init,
-                tokenizer=self.tokenizer,
-            )
-
-        output_ids = state.output_ids
-        meta_info["completion_tokens"] = len(output_ids)
-        if is_stream:
-            output_ids = [output_ids[-1]] if len(output_ids) > 0 else []
-        out = {
-            "text": state.get_text(),
-            "output_ids": output_ids,
-            "meta_info": meta_info,
-        }
-        state.out_list.append(out)
-        state.event.set()
 
     def update_active_ranks(self, ranks: ActiveRanksOutput):
         self.send_to_scheduler.send_pyobj(ranks)
