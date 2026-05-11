@@ -467,7 +467,7 @@ class TokenizerWorker(TokenizerManager):
         if obj.mode == "abort":
             # Abort polling: only the originator checks its own lock state
             while True:
-                TokenizerManager.abort_request(self.pause_controller, abort_all=True)
+                self.pause_controller.abort_request(abort_all=True)
                 is_locked = await self.model_update_lock.is_locked()
                 if not is_locked:
                     break
