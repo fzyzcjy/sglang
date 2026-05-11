@@ -926,7 +926,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 )
             self.model.set_dflash_layers_to_capture(self.dflash_target_layer_ids)
 
-    def _publish_modelexpress_metadata(self):
+    @staticmethod
+    def _publish_modelexpress_metadata(self: "RemoteInstanceWeightTransport"):
         """Publish metadata to ModelExpress server (seed mode).
 
         Supports two transport backends:
@@ -960,9 +961,13 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         )
 
         if transport == "nixl":
-            worker, tensor_count = self._build_nixl_worker_metadata(p2p_pb2)
+            worker, tensor_count = ModelRunner._build_nixl_worker_metadata(
+                self, p2p_pb2
+            )
         else:
-            worker, tensor_count = self._build_transfer_engine_worker_metadata(p2p_pb2)
+            worker, tensor_count = ModelRunner._build_transfer_engine_worker_metadata(
+                self, p2p_pb2
+            )
             if worker is None:
                 return
 
@@ -997,10 +1002,13 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         finally:
             mx_client.close()
 
-    def _build_transfer_engine_worker_metadata(self, p2p_pb2):
+    @staticmethod
+    def _build_transfer_engine_worker_metadata(
+        self: "RemoteInstanceWeightTransport", p2p_pb2
+    ):
         """Build WorkerMetadata using TransferEngine session_id."""
-        session_id = self.remote_instance_weight_transport.session_id
-        weight_info = self.remote_instance_weight_transport.weight_info
+        session_id = self.session_id
+        weight_info = self.weight_info
 
         if not session_id or weight_info is None:
             logger.warning(
@@ -1027,7 +1035,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         )
         return worker, len(tensors)
 
-    def _build_nixl_worker_metadata(self, p2p_pb2):
+    @staticmethod
+    def _build_nixl_worker_metadata(self: "RemoteInstanceWeightTransport", p2p_pb2):
         """Build WorkerMetadata using NIXL agent for RDMA transfers."""
         from modelexpress.nixl_transfer import NixlTransferManager
 
@@ -1071,7 +1080,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         )
 
         # Keep reference alive so NIXL agent isn't garbage collected
-        self.remote_instance_weight_transport._nixl_manager = nixl_mgr
+        self._nixl_manager = nixl_mgr
 
         return worker, len(tensors)
 
@@ -1303,7 +1312,9 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                         self.model, self.remote_instance_weight_transport.engine
                     )
                 )
-            self._publish_modelexpress_metadata()
+            ModelRunner._publish_modelexpress_metadata(
+                self.remote_instance_weight_transport
+            )
 
         if not self.is_draft_worker:
             get_offloader().post_init()
