@@ -94,10 +94,7 @@ class BaseTpWorker(ABC):
         )
 
     def update_weights_from_disk(self, recv_req: UpdateWeightFromDiskReqInput):
-        from sglang.srt.model_executor.model_runner import ModelRunner
-
-        success, message = ModelRunner.update_weights_from_disk(
-            self.model_runner.weight_updater,
+        success, message = self.model_runner.weight_updater.update_weights_from_disk(
             recv_req.model_path,
             recv_req.load_format,
             recapture_cuda_graph=recv_req.recapture_cuda_graph,
@@ -352,8 +349,6 @@ class TpModelWorker(BaseTpWorker):
         )
 
     def _init_model_runner(self):
-        from sglang.srt.model_executor.model_runner import ModelRunner
-
         self._model_runner = ModelRunner(
             model_config=self.model_config,
             mem_fraction_static=self.server_args.mem_fraction_static,
@@ -375,8 +370,6 @@ class TpModelWorker(BaseTpWorker):
         )
 
     def _init_multi_layer_eagle_model_runners(self):
-        from sglang.srt.model_executor.model_runner import ModelRunner
-
         self.model_runner_list.append(self.model_runner)
         for i in range(1, self.server_args.speculative_num_steps):
             self.model_runner_list.append(
