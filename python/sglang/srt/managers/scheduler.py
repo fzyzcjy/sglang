@@ -537,6 +537,8 @@ class Scheduler(
         # Init prefill kv split size when deterministic inference is enabled with various attention backends
         self.init_deterministic_inference_config()
 
+        self.offload_tags = set()
+
         # Init request dispatcher
         self.init_request_dispatcher()
 
@@ -1020,7 +1022,6 @@ class Scheduler(
         self.memory_saver_adapter = TorchMemorySaverAdapter.create(
             enable=self.server_args.enable_memory_saver
         )
-        self.offload_tags = set()
 
         # Init recv skipper and input blocker
         self.recv_skipper = SchedulerRecvSkipper.maybe_create(self.server_args)
