@@ -84,6 +84,7 @@ from sglang.srt.utils import get_bool_env_var
 from sglang.utils import TypeBasedDispatcher
 
 if TYPE_CHECKING:
+    from sglang.srt.managers.session_controller import SessionController
     from sglang.srt.managers.tokenizer_manager import TokenizerManager
 
 logger = logging.getLogger(__name__)
@@ -849,14 +850,15 @@ class TokenizerControlMixin:
 
         return results
 
+    @staticmethod
     async def open_session(
-        self: TokenizerManager,
+        self: "SessionController",
         obj: OpenSessionReqInput,
         request: Optional[fastapi.Request] = None,
     ):
         self.auto_create_handle_loop()
         if obj.streaming:
-            if not self.server_args.enable_streaming_session:
+            if not self.config.enable_streaming_session:
                 raise ValueError(
                     "Streaming sessions are disabled. "
                     "Please relaunch with --enable-streaming-session."
@@ -876,8 +878,9 @@ class TokenizerControlMixin:
         finally:
             self.session_futures.pop(obj.session_id, None)
 
+    @staticmethod
     async def close_session(
-        self: TokenizerManager,
+        self: "SessionController",
         obj: CloseSessionReqInput,
         request: Optional[fastapi.Request] = None,
     ):
