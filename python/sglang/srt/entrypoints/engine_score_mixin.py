@@ -23,9 +23,6 @@ from typing import List, Optional, Union
 import torch
 
 from sglang.srt.managers.score_request_handler import ScoreResult
-from sglang.srt.managers.tokenizer_manager_score_mixin import (
-    TokenizerManagerScoreMixin,
-)
 
 
 class EngineScoreMixin:
@@ -73,8 +70,7 @@ class EngineScoreMixin:
             optional pooled_hidden_states tensors.
         """
         return self.loop.run_until_complete(
-            TokenizerManagerScoreMixin.score_request(
-                self.tokenizer_manager.score_request_handler,
+            self.tokenizer_manager.score_request_handler.score_request(
                 query=query,
                 items=items,
                 label_token_ids=label_token_ids,
@@ -101,8 +97,7 @@ class EngineScoreMixin:
         return_pooled_hidden_states: bool = False,
     ) -> ScoreResult:
         """Asynchronous version of score(). See score() for full documentation."""
-        return await TokenizerManagerScoreMixin.score_request(
-            self.tokenizer_manager.score_request_handler,
+        return await self.tokenizer_manager.score_request_handler.score_request(
             query=query,
             items=items,
             label_token_ids=label_token_ids,
