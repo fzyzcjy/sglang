@@ -166,6 +166,9 @@ from sglang.srt.managers.schedule_policy import (
     SchedulePolicy,
 )
 from sglang.srt.managers.scheduler_components import kv_cache
+from sglang.srt.managers.scheduler_components.batch_result_processor import (
+    SchedulerBatchResultProcessor,
+)
 from sglang.srt.managers.scheduler_components.dp_attn_adapter import (
     SchedulerDPAttnAdapter,
 )
@@ -202,9 +205,6 @@ from sglang.srt.managers.scheduler_components.weight_updater import (
     SchedulerWeightUpdaterManager,
 )
 from sglang.srt.managers.scheduler_input_blocker import SchedulerInputBlocker
-from sglang.srt.managers.scheduler_output_processor_mixin import (
-    SchedulerOutputProcessorMixin,
-)
 from sglang.srt.managers.scheduler_pp_mixin import SchedulerPPMixin
 from sglang.srt.managers.scheduler_recv_skipper import SchedulerRecvSkipper
 from sglang.srt.managers.utils import GenerationBatchResult, validate_input_length
@@ -368,7 +368,6 @@ def create_scheduler_watchdog(
 
 
 class Scheduler(
-    SchedulerOutputProcessorMixin,
     SchedulerDisaggregationDecodeMixin,
     SchedulerDisaggregationPrefillMixin,
     SchedulerMultiplexMixin,
@@ -824,6 +823,53 @@ class Scheduler(
                 disagg_decode_transfer_queue=getattr(
                     self, "disagg_decode_transfer_queue", None
                 ),
+            ),
+        )
+
+        self.batch_result_processor = SchedulerBatchResultProcessor(
+            is_generation=self.is_generation,
+            disaggregation_mode=self.disaggregation_mode,
+            enable_hisparse=self.enable_hisparse,
+            enable_metrics=self.enable_metrics,
+            enable_overlap=self.enable_overlap,
+            enable_overlap_mlx=getattr(self, "enable_overlap_mlx", False),
+            server_args=self.server_args,
+            model_config=self.model_config,
+            token_to_kv_pool_allocator=self.token_to_kv_pool_allocator,
+            tree_cache=self.tree_cache,
+            hisparse_coordinator=self.hisparse_coordinator,
+            req_to_token_pool=self.req_to_token_pool,
+            decode_offload_manager=self.decode_offload_manager,
+            metrics_collector=getattr(self, "metrics_collector", None),
+            draft_worker=self.draft_worker,
+            model_worker=self.model_worker,
+            logprob_computer=self.logprob_computer,
+            output_streamer=self.output_streamer,
+            abort_request=self.abort_request,
+            # Wrapped in lambdas so they resolve ``self.metrics_reporter``
+            # lazily — depending on ctor insertion order this attribute may
+            # not be set at the moment ``SchedulerBatchResultProcessor`` is
+            # constructed (see also ``logprob_computer`` / ``output_streamer``
+            # — those are sister kwargs that lambda-resolve their ``self.X``
+            # the same way).
+            report_prefill_stats=lambda *a, **k: self.metrics_reporter.report_prefill_stats(
+                *a, **k
+            ),
+            report_decode_stats=lambda *a, **k: self.metrics_reporter.report_decode_stats(
+                *a, **k
+            ),
+            update_spec_metrics=lambda *a, **k: self.metrics_reporter.update_spec_metrics(
+                *a, **k
+            ),
+            increment_generated_tokens=lambda n: setattr(
+                self.metrics_reporter,
+                "num_generated_tokens",
+                self.metrics_reporter.num_generated_tokens + n,
+            ),
+            advance_forward_ct_decode=lambda: setattr(
+                self.metrics_reporter,
+                "forward_ct_decode",
+                (self.metrics_reporter.forward_ct_decode + 1) % (1 << 30),
             ),
         )
 
@@ -3103,18 +3149,18 @@ class Scheduler(
         result: Union[GenerationBatchResult, EmbeddingBatchResult],
     ):
         if batch.forward_mode.is_decode():
-            self.process_batch_result_decode(batch, result)
+            self.batch_result_processor.process_batch_result_decode(batch, result)
         elif batch.forward_mode.is_extend():
             if batch.is_dllm():
                 self.process_batch_result_dllm(batch, result)
             elif self.disaggregation_mode == DisaggregationMode.PREFILL:
                 self.process_batch_result_disagg_prefill(batch, result)
             else:
-                self.process_batch_result_prefill(batch, result)
+                self.batch_result_processor.process_batch_result_prefill(batch, result)
         elif batch.forward_mode.is_prebuilt():
-            self.process_batch_result_prebuilt(batch)
+            self.batch_result_processor.process_batch_result_prebuilt(batch)
         elif batch.forward_mode.is_idle():
-            self.process_batch_result_idle(batch, result)
+            self.batch_result_processor.process_batch_result_idle(batch, result)
 
         self.metrics_reporter.log_batch_result_stats(batch, result)
         self._maybe_clear_mm_inputs(batch)
