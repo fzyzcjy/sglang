@@ -67,6 +67,7 @@ from sglang.srt.managers.mm_utils import TensorTransportMode, wrap_shm_features
 from sglang.srt.managers.multimodal_processor import MultimodalProcessor
 from sglang.srt.managers.raw_tokenizer_wrapper import RawTokenizerWrapper
 from sglang.srt.managers.request_log_manager import RequestLogManager
+from sglang.srt.managers.request_metrics_recorder import RequestMetricsRecorder
 from sglang.srt.managers.request_preparer import (
     RequestPreparer,
     RequestPreparerConfig,
@@ -180,6 +181,13 @@ class TokenizerManager(TokenizerControlMixin):
                 sampling_params_class=SamplingParams,
                 disaggregation_transfer_backend=self.server_args.disaggregation_transfer_backend,
             ),
+        )
+
+        # Request metrics recorder
+        self.request_metrics_recorder = RequestMetricsRecorder(
+            server_args=self.server_args,
+            enable_metrics=self.enable_metrics,
+            enable_priority_scheduling=self.enable_priority_scheduling,
         )
 
         # Request log manager
