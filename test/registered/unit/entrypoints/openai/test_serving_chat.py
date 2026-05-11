@@ -55,6 +55,9 @@ class _MockTokenizerManager:
 
         # tokenizer stub
         self.tokenizer = Mock()
+        # raw_tokenizer_wrapper exposes the same Mock for the new owner-class accessor.
+        self.raw_tokenizer_wrapper = Mock()
+        self.raw_tokenizer_wrapper.tokenizer = self.tokenizer
         self.tokenizer.encode.return_value = [1, 2, 3, 4, 5]
         self.tokenizer.decode.return_value = "Test response"
         self.tokenizer.chat_template = None
@@ -174,7 +177,9 @@ class ServingChatTestCase(unittest.TestCase):
         self.chat._process_messages(req, is_multimodal=False)
 
         expected_tools = [tool.model_dump() for tool in req.tools]
-        kwargs = self.tm.tokenizer.apply_chat_template.call_args.kwargs
+        kwargs = (
+            self.tm.raw_tokenizer_wrapper.tokenizer.apply_chat_template.call_args.kwargs
+        )
         self.assertEqual(kwargs["tools"], expected_tools)
 
     def test_jinja_tool_schema_fallback_to_flat_function(self):
@@ -204,19 +209,23 @@ class ServingChatTestCase(unittest.TestCase):
             ],
         )
 
-        self.tm.tokenizer.apply_chat_template.side_effect = [
+        self.tm.raw_tokenizer_wrapper.tokenizer.apply_chat_template.side_effect = [
             RuntimeError("template expects flat tools format"),
             [1, 2, 3],
         ]
 
         self.chat._process_messages(req, is_multimodal=False)
 
-        first_tools = self.tm.tokenizer.apply_chat_template.call_args_list[0].kwargs[
-            "tools"
-        ]
-        second_tools = self.tm.tokenizer.apply_chat_template.call_args_list[1].kwargs[
-            "tools"
-        ]
+        first_tools = (
+            self.tm.raw_tokenizer_wrapper.tokenizer.apply_chat_template.call_args_list[
+                0
+            ].kwargs["tools"]
+        )
+        second_tools = (
+            self.tm.raw_tokenizer_wrapper.tokenizer.apply_chat_template.call_args_list[
+                1
+            ].kwargs["tools"]
+        )
         self.assertEqual(first_tools, [tool.model_dump() for tool in req.tools])
         self.assertEqual(
             second_tools, [tool.function.model_dump() for tool in req.tools]
@@ -686,17 +695,17 @@ class ServingChatTestCase(unittest.TestCase):
         tm.model_config.hf_config = mock_hf_config
 
         # Case 1: No chat template + DeepSeek V3.2 arch -> should use dsv32 encoding
-        tm.tokenizer.chat_template = None
+        tm.raw_tokenizer_wrapper.tokenizer.chat_template = None
         serving_chat = OpenAIServingChat(tm, TemplateManager())
         self.assertEqual(serving_chat.chat_encoding_spec, "dsv32")
 
         # Case 2: Chat template exists -> should NOT use dsv32 encoding
-        tm.tokenizer.chat_template = "some template"
+        tm.raw_tokenizer_wrapper.tokenizer.chat_template = "some template"
         serving_chat = OpenAIServingChat(tm, TemplateManager())
         self.assertIsNone(serving_chat.chat_encoding_spec)
 
         # Case 3: Not DeepSeek V3.2 architecture -> should NOT use dsv32 encoding
-        tm.tokenizer.chat_template = None
+        tm.raw_tokenizer_wrapper.tokenizer.chat_template = None
         mock_hf_config.architectures = ["LlamaForCausalLM"]
         serving_chat = OpenAIServingChat(tm, TemplateManager())
         self.assertIsNone(serving_chat.chat_encoding_spec)
@@ -704,11 +713,11 @@ class ServingChatTestCase(unittest.TestCase):
         # Case 4: DeepseekV4 arch -> always dsv4, even with chat_template
         # (release ships a stale V3 jinja we deliberately override).
         mock_hf_config.architectures = ["DeepseekV4ForCausalLM"]
-        tm.tokenizer.chat_template = "stale v3 jinja"
+        tm.raw_tokenizer_wrapper.tokenizer.chat_template = "stale v3 jinja"
         serving_chat = OpenAIServingChat(tm, TemplateManager())
         self.assertEqual(serving_chat.chat_encoding_spec, "dsv4")
 
-        tm.tokenizer.chat_template = None
+        tm.raw_tokenizer_wrapper.tokenizer.chat_template = None
         serving_chat = OpenAIServingChat(tm, TemplateManager())
         self.assertEqual(serving_chat.chat_encoding_spec, "dsv4")
 
