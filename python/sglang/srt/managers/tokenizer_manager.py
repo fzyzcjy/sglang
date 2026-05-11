@@ -70,6 +70,7 @@ from sglang.srt.managers.io_struct import (
 from sglang.srt.managers.mm_utils import TensorTransportMode, wrap_shm_features
 from sglang.srt.managers.multimodal_processor import MultimodalProcessor
 from sglang.srt.managers.raw_tokenizer_wrapper import RawTokenizerWrapper
+from sglang.srt.managers.request_log_manager import RequestLogManager
 from sglang.srt.managers.request_preparer import (
     RequestPreparer,
     RequestPreparerConfig,
@@ -191,6 +192,11 @@ class TokenizerManager(TokenizerControlMixin):
                 sampling_params_class=SamplingParams,
                 disaggregation_transfer_backend=self.server_args.disaggregation_transfer_backend,
             ),
+        )
+
+        # Request log manager
+        self.request_log_manager = RequestLogManager.from_server_args(
+            server_args=self.server_args,
         )
 
         # Request validator
