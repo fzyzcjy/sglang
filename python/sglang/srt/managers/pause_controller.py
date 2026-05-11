@@ -4,11 +4,11 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 
-from sglang.srt.managers import logprob_ops
 from sglang.srt.managers.io_struct import (
     ContinueGenerationReqInput,
     PauseGenerationReqInput,
 )
+from sglang.srt.managers.logprob_ops import fill
 from sglang.srt.managers.scheduler import is_health_check_generate_req
 
 logger = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ class PauseController:
         }
         is_stream = getattr(state.obj, "stream", False)
         if getattr(state.obj, "return_logprob", False):
-            logprob_ops.fill_meta_info(
+            fill.fill_meta_info(
                 meta_info,
                 state,
                 top_logprobs_num=state.obj.top_logprobs_num,

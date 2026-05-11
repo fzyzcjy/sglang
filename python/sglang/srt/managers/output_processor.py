@@ -8,13 +8,14 @@ import pybase64
 import torch
 
 from sglang.srt.constants import HEALTH_CHECK_RID_PREFIX
-from sglang.srt.managers import logprob_ops, request_tracing, spec_decoding_meta
+from sglang.srt.managers import request_tracing, spec_decoding_meta
 from sglang.srt.managers.io_struct import (
     BatchEmbeddingOutput,
     BatchStrOutput,
     BatchTokenIDOutput,
     WatchLoadUpdateReq,
 )
+from sglang.srt.managers.logprob_ops import absorb, streaming
 
 logger = logging.getLogger(__name__)
 from typing import Any, Dict, Optional
@@ -84,7 +85,7 @@ class OutputProcessor:
                     meta_info.update(scheduler_time_stats.convert_to_output_meta_info())
 
             if getattr(state.obj, "return_logprob", False):
-                logprob_ops.absorb_recv(
+                absorb.absorb_recv(
                     meta_info,
                     state,
                     top_logprobs_num=state.obj.top_logprobs_num,
@@ -149,7 +150,7 @@ class OutputProcessor:
                 if is_stream:
                     if incremental:
                         output_token_ids = delta_output_ids
-                        logprob_ops.slice_streaming_output_meta_info(
+                        streaming.slice_streaming_output_meta_info(
                             meta_info, output_offset
                         )
                         state.last_output_offset = len(state.output_ids)
@@ -191,7 +192,7 @@ class OutputProcessor:
                 if is_stream:
                     if incremental:
                         output_token_ids = delta_output_ids
-                        logprob_ops.slice_streaming_output_meta_info(
+                        streaming.slice_streaming_output_meta_info(
                             meta_info, output_offset
                         )
                         state.last_output_offset = len(state.output_ids)

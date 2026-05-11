@@ -10,8 +10,8 @@ import fastapi
 from fastapi import BackgroundTasks
 
 from sglang.srt.environ import envs
-from sglang.srt.managers import logprob_ops
 from sglang.srt.managers.io_struct import EmbeddingReqInput, GenerateReqInput
+from sglang.srt.managers.logprob_ops import streaming
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ class ResponseEmitter:
         if "meta_info" in out:
             meta_info_list = [chunk["meta_info"] for chunk in out_list]
             meta_info = dict(meta_info_list[-1])
-            for key in logprob_ops.INCREMENTAL_STREAMING_META_INFO_KEYS:
+            for key in streaming.INCREMENTAL_STREAMING_META_INFO_KEYS:
                 if any(key in m for m in meta_info_list):
                     meta_info[key] = [
                         item for m in meta_info_list for item in m.get(key, [])
