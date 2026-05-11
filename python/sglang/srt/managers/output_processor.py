@@ -15,7 +15,7 @@ from sglang.srt.managers.io_struct import (
     BatchTokenIDOutput,
     WatchLoadUpdateReq,
 )
-from sglang.srt.managers.logprob_ops import absorb, streaming
+from sglang.srt.managers.logprob_ops import accumulate, fill, streaming
 
 logger = logging.getLogger(__name__)
 from typing import Any, Dict, Optional
@@ -84,16 +84,24 @@ class OutputProcessor:
                     scheduler_time_stats = recv_obj.time_stats[i]
                     meta_info.update(scheduler_time_stats.convert_to_output_meta_info())
 
-            if getattr(state.obj, "return_logprob", False):
-                absorb.absorb_recv(
+            if (
+                getattr(state.obj, "return_logprob", False)
+                and recv_obj.input_token_logprobs_val is not None
+            ):
+                accumulate.accumulate_recv(
+                    state,
+                    recv_obj=recv_obj,
+                    recv_obj_index=i,
+                    top_logprobs_num=state.obj.top_logprobs_num,
+                    token_ids_logprob=state.obj.token_ids_logprob,
+                )
+                fill.fill_meta_info(
                     meta_info,
                     state,
                     top_logprobs_num=state.obj.top_logprobs_num,
                     token_ids_logprob=state.obj.token_ids_logprob,
                     return_text_in_logprobs=state.obj.return_text_in_logprobs
                     and not self.config.skip_tokenizer_init,
-                    recv_obj=recv_obj,
-                    recv_obj_index=i,
                     tokenizer=self.tokenizer,
                 )
 
