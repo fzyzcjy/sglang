@@ -12,9 +12,10 @@ logger = logging.getLogger(__name__)
 
 class WeightUpdater:
 
-    def __init__(self, *, tp_rank: int):
+    def __init__(self, *, tp_rank: int, model_runner_ref):
         self.tp_rank = tp_rank
         self._model_update_group: dict = {}
+        self._mr = model_runner_ref
 
     def init_weights_update_group(
         self,
