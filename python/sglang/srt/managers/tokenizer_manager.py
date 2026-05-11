@@ -88,8 +88,6 @@ from sglang.srt.managers.tokenized_request_builder import (
     TokenizedRequestBuilderConfig,
 )
 from sglang.srt.managers.tokenizer_control_mixin import TokenizerControlMixin
-from sglang.srt.observability.cpu_monitor import start_cpu_monitor_thread
-from sglang.srt.observability.metrics_collector import TokenizerMetricsCollector
 from sglang.srt.observability.req_time_stats import (
     real_time,
     set_time_batch,
@@ -358,33 +356,6 @@ class TokenizerManager(TokenizerControlMixin):
         self.fake_bootstrap_room_counter = 0
 
     def init_metric_collector_watchdog(self):
-        # Metrics
-        if self.enable_metrics:
-            engine_type = DisaggregationMode.to_engine_type(
-                self.server_args.disaggregation_mode
-            )
-
-            labels = {
-                "model_name": self.server_args.served_model_name,
-                "engine_type": engine_type,
-            }
-            if self.enable_priority_scheduling:
-                labels["priority"] = ""
-            if self.server_args.tokenizer_metrics_allowed_custom_labels:
-                for label in self.server_args.tokenizer_metrics_allowed_custom_labels:
-                    labels[label] = ""
-            if self.server_args.extra_metric_labels:
-                labels.update(self.server_args.extra_metric_labels)
-            self.metrics_collector = TokenizerMetricsCollector(
-                server_args=self.server_args,
-                labels=labels,
-                bucket_time_to_first_token=self.server_args.bucket_time_to_first_token,
-                bucket_e2e_request_latency=self.server_args.bucket_e2e_request_latency,
-                bucket_inter_token_latency=self.server_args.bucket_inter_token_latency,
-            )
-
-            start_cpu_monitor_thread("tokenizer")
-
         if self.server_args.gc_warning_threshold_secs > 0.0:
             configure_gc_warning(self.server_args.gc_warning_threshold_secs)
         self.soft_watchdog = Watchdog.create(
@@ -802,8 +773,8 @@ class TokenizerManager(TokenizerControlMixin):
         self.send_to_scheduler.send_pyobj(req)
         if self.enable_metrics:
             # TODO: also use custom_labels from the request
-            self.metrics_collector.observe_one_aborted_request(
-                self.metrics_collector.labels
+            self.request_metrics_recorder.metrics_collector.observe_one_aborted_request(
+                self.request_metrics_recorder.metrics_collector.labels
             )
 
     async def pause_generation(self, obj: PauseGenerationReqInput):
@@ -1211,7 +1182,7 @@ class TokenizerManager(TokenizerControlMixin):
                     await asyncio.sleep(0)
 
             if self.enable_metrics and state.obj.log_metrics:
-                self.collect_metrics(state, recv_obj, i)
+                self.request_metrics_recorder.collect_metrics(state, recv_obj, i)
             if (
                 self.request_log_manager.dump_requests_folder
                 and state.finished
@@ -1234,68 +1205,6 @@ class TokenizerManager(TokenizerControlMixin):
         ):
             load_update_req = WatchLoadUpdateReq(loads=[recv_obj.load])
             self.send_to_scheduler.send_pyobj(load_update_req)
-
-    def _request_has_grammar(self, obj: GenerateReqInput) -> bool:
-        return (
-            obj.sampling_params.get("json_schema", None)
-            or obj.sampling_params.get("regex", None)
-            or obj.sampling_params.get("ebnf", None)
-            or obj.sampling_params.get("structural_tag", None)
-        )
-
-    def collect_metrics(self, state: ReqState, recv_obj: BatchStrOutput, i: int):
-        completion_tokens = (
-            recv_obj.completion_tokens[i]
-            if getattr(recv_obj, "completion_tokens", None)
-            else 0
-        )
-
-        custom_labels = getattr(state.obj, "custom_labels", None)
-        labels = dict(self.metrics_collector.labels)
-        if custom_labels:
-            labels.update(custom_labels)
-        if self.enable_priority_scheduling:
-            priority = getattr(state.obj, "priority", None)
-            if priority is not None:
-                labels["priority"] = str(priority)
-        if (
-            not state.ttft_observed
-            and self.disaggregation_mode != DisaggregationMode.PREFILL
-        ):
-            state.ttft_observed = True
-            state.last_completion_tokens = completion_tokens
-            self.metrics_collector.observe_time_to_first_token(
-                labels, state.time_stats.get_first_token_latency()
-            )
-        else:
-            num_new_tokens = completion_tokens - state.last_completion_tokens
-            if num_new_tokens:
-                self.metrics_collector.observe_inter_token_latency(
-                    labels,
-                    state.time_stats.get_interval(),
-                    num_new_tokens,
-                )
-                state.time_stats.set_last_time()
-                state.last_completion_tokens = completion_tokens
-
-        if state.finished:
-            # Get detailed cache breakdown if available
-            cached_tokens_details = None
-            if (
-                hasattr(recv_obj, "cached_tokens_details")
-                and recv_obj.cached_tokens_details
-            ):
-                cached_tokens_details = recv_obj.cached_tokens_details[i]
-
-            self.metrics_collector.observe_one_finished_request(
-                labels,
-                recv_obj.prompt_tokens[i],
-                completion_tokens,
-                recv_obj.cached_tokens[i],
-                state.time_stats.get_e2e_latency(),
-                self._request_has_grammar(state.obj),
-                cached_tokens_details,
-            )
 
     async def sigterm_watchdog(self):
         while not self.gracefully_exit:
