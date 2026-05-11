@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 from sglang.srt.managers.io_struct import BatchStrOutput
-from sglang.srt.managers.request_state import ReqState
+from sglang.srt.managers.tokenizer_manager_components.request_state import ReqState
 
 INCREMENTAL_STREAMING_META_INFO_KEYS = (
     "output_token_logprobs",

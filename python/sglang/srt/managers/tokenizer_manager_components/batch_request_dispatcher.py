@@ -11,10 +11,17 @@ import fastapi
 
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.managers.io_struct import EmbeddingReqInput, GenerateReqInput
-from sglang.srt.managers.request_preparer import RequestPreparer
-from sglang.srt.managers.request_state import ReqState, init_req
-from sglang.srt.managers.response_emitter import ResponseEmitter
 from sglang.srt.managers.scheduler_input_blocker import input_blocker_guard_region
+from sglang.srt.managers.tokenizer_manager_components.request_preparer import (
+    RequestPreparer,
+)
+from sglang.srt.managers.tokenizer_manager_components.request_state import (
+    ReqState,
+    init_req,
+)
+from sglang.srt.managers.tokenizer_manager_components.response_emitter import (
+    ResponseEmitter,
+)
 from sglang.srt.utils import get_bool_env_var
 
 logger = logging.getLogger(__name__)

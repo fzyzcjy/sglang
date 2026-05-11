@@ -8,7 +8,7 @@ from sglang.srt.managers.io_struct import (
     BatchStrOutput,
     GenerateReqInput,
 )
-from sglang.srt.managers.request_state import ReqState
+from sglang.srt.managers.tokenizer_manager_components.request_state import ReqState
 from sglang.srt.observability.cpu_monitor import start_cpu_monitor_thread
 from sglang.srt.observability.metrics_collector import TokenizerMetricsCollector
 from sglang.srt.server_args import ServerArgs

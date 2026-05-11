@@ -30,14 +30,6 @@ import zmq.asyncio
 from sglang.srt.configs.model_config import ModelConfig
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
-from sglang.srt.managers.batch_request_dispatcher import (
-    BatchRequestDispatcher,
-    BatchRequestDispatcherConfig,
-)
-from sglang.srt.managers.corpus_controller import (
-    CorpusController,
-    CorpusControllerConfig,
-)
 from sglang.srt.managers.disagg_service import start_disagg_service
 from sglang.srt.managers.io_struct import (
     AbortReq,
@@ -57,47 +49,68 @@ from sglang.srt.managers.io_struct import (
     TokenizedGenerateReqInput,
     UpdateWeightFromDiskReqOutput,
 )
-from sglang.srt.managers.lora_controller import LoraController
 from sglang.srt.managers.mm_utils import wrap_shm_features
-from sglang.srt.managers.multimodal_processor_owner import MultimodalProcessor
-from sglang.srt.managers.output_processor import (
+from sglang.srt.managers.tokenizer_control_mixin import TokenizerControlMixin
+from sglang.srt.managers.tokenizer_manager_components.batch_request_dispatcher import (
+    BatchRequestDispatcher,
+    BatchRequestDispatcherConfig,
+)
+from sglang.srt.managers.tokenizer_manager_components.corpus_controller import (
+    CorpusController,
+    CorpusControllerConfig,
+)
+from sglang.srt.managers.tokenizer_manager_components.lora_controller import (
+    LoraController,
+)
+from sglang.srt.managers.tokenizer_manager_components.multimodal_processor_owner import (
+    MultimodalProcessor,
+)
+from sglang.srt.managers.tokenizer_manager_components.output_processor import (
     OutputProcessor,
     OutputProcessorConfig,
 )
-from sglang.srt.managers.pause_controller import (
+from sglang.srt.managers.tokenizer_manager_components.pause_controller import (
     PauseController,
     PauseControllerConfig,
 )
-from sglang.srt.managers.raw_tokenizer_wrapper import RawTokenizerWrapper
-from sglang.srt.managers.request_log_manager import RequestLogManager
-from sglang.srt.managers.request_metrics_recorder import RequestMetricsRecorder
-from sglang.srt.managers.request_preparer import (
+from sglang.srt.managers.tokenizer_manager_components.raw_tokenizer_wrapper import (
+    RawTokenizerWrapper,
+)
+from sglang.srt.managers.tokenizer_manager_components.request_log_manager import (
+    RequestLogManager,
+)
+from sglang.srt.managers.tokenizer_manager_components.request_metrics_recorder import (
+    RequestMetricsRecorder,
+)
+from sglang.srt.managers.tokenizer_manager_components.request_preparer import (
     RequestPreparer,
     RequestPreparerConfig,
 )
-from sglang.srt.managers.request_state import ReqState, init_req
-from sglang.srt.managers.request_validator import (
+from sglang.srt.managers.tokenizer_manager_components.request_state import (
+    ReqState,
+    init_req,
+)
+from sglang.srt.managers.tokenizer_manager_components.request_validator import (
     RequestValidator,
     RequestValidatorConfig,
 )
-from sglang.srt.managers.response_emitter import (
+from sglang.srt.managers.tokenizer_manager_components.response_emitter import (
     ResponseEmitter,
     ResponseEmitterConfig,
 )
-from sglang.srt.managers.score_request_handler import (
+from sglang.srt.managers.tokenizer_manager_components.score_request_handler import (
     ScoreRequestHandler,
     ScoreRequestHandlerConfig,
 )
-from sglang.srt.managers.session_controller import (
+from sglang.srt.managers.tokenizer_manager_components.session_controller import (
     SessionController,
     SessionControllerConfig,
 )
-from sglang.srt.managers.tokenized_request_builder import (
+from sglang.srt.managers.tokenizer_manager_components.tokenized_request_builder import (
     TokenizedRequestBuilder,
     TokenizedRequestBuilderConfig,
 )
-from sglang.srt.managers.tokenizer_control_mixin import TokenizerControlMixin
-from sglang.srt.managers.weight_disk_update_controller import (
+from sglang.srt.managers.tokenizer_manager_components.weight_disk_update_controller import (
     WeightDiskUpdateController,
     WeightDiskUpdateControllerConfig,
 )

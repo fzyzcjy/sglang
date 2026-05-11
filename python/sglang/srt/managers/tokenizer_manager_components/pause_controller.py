@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional
 from sglang.srt.managers.io_struct import (  # noqa: F401  (used in handler signature once method moves in)
     AbortReq,
 )
-from sglang.srt.managers.request_state import ReqState
+from sglang.srt.managers.tokenizer_manager_components.request_state import ReqState
 from sglang.srt.utils.aio_rwlock import RWLock
 
 

@@ -16,7 +16,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 import torch
 
 from sglang.srt.configs.model_config import ModelConfig
-from sglang.srt.managers.request_state import ReqState
+from sglang.srt.managers.tokenizer_manager_components.request_state import ReqState
 
 
 @dataclass(frozen=True, slots=True)

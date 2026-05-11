@@ -16,8 +16,10 @@ import torch
 from sglang.srt.entrypoints.openai.utils import convert_embeds_to_tensors
 from sglang.srt.managers.embed_types import PositionalEmbeds
 from sglang.srt.managers.io_struct import EmbeddingReqInput, GenerateReqInput
-from sglang.srt.managers.score_request_handler import ScoreRequestHandler
-from sglang.srt.managers.tokenized_request_builder import (
+from sglang.srt.managers.tokenizer_manager_components.score_request_handler import (
+    ScoreRequestHandler,
+)
+from sglang.srt.managers.tokenizer_manager_components.tokenized_request_builder import (
     TokenizedRequestBuilder,
 )
 from sglang.srt.server_args import MIS_DELIMITER_TOKEN_ID

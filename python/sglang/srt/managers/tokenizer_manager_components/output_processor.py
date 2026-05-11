@@ -20,10 +20,16 @@ from sglang.srt.managers.io_struct import (
 logger = logging.getLogger(__name__)
 from typing import Any, Dict, Optional
 
-from sglang.srt.managers.lora_controller import LoraController
-from sglang.srt.managers.request_log_manager import RequestLogManager
-from sglang.srt.managers.request_metrics_recorder import RequestMetricsRecorder
-from sglang.srt.managers.request_state import ReqState
+from sglang.srt.managers.tokenizer_manager_components.lora_controller import (
+    LoraController,
+)
+from sglang.srt.managers.tokenizer_manager_components.request_log_manager import (
+    RequestLogManager,
+)
+from sglang.srt.managers.tokenizer_manager_components.request_metrics_recorder import (
+    RequestMetricsRecorder,
+)
+from sglang.srt.managers.tokenizer_manager_components.request_state import ReqState
 
 
 @dataclass(slots=True, kw_only=True)

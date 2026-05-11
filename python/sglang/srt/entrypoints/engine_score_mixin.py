@@ -22,7 +22,9 @@ from typing import List, Optional, Union
 
 import torch
 
-from sglang.srt.managers.score_request_handler import ScoreResult
+from sglang.srt.managers.tokenizer_manager_components.score_request_handler import (
+    ScoreResult,
+)
 
 
 class EngineScoreMixin:

@@ -17,11 +17,19 @@ from sglang.srt.managers.schedule_batch import MultimodalDataItem
 logger = logging.getLogger(__name__)
 from typing import Dict, List, Optional
 
-from sglang.srt.managers.multimodal_processor_owner import MultimodalProcessor
-from sglang.srt.managers.raw_tokenizer_wrapper import RawTokenizerWrapper
-from sglang.srt.managers.request_state import ReqState
-from sglang.srt.managers.request_validator import RequestValidator
-from sglang.srt.managers.tokenized_request_builder import TokenizedRequestBuilder
+from sglang.srt.managers.tokenizer_manager_components.multimodal_processor_owner import (
+    MultimodalProcessor,
+)
+from sglang.srt.managers.tokenizer_manager_components.raw_tokenizer_wrapper import (
+    RawTokenizerWrapper,
+)
+from sglang.srt.managers.tokenizer_manager_components.request_state import ReqState
+from sglang.srt.managers.tokenizer_manager_components.request_validator import (
+    RequestValidator,
+)
+from sglang.srt.managers.tokenizer_manager_components.tokenized_request_builder import (
+    TokenizedRequestBuilder,
+)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

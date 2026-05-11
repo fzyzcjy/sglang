@@ -13,7 +13,9 @@ from sglang.srt.managers.io_struct import UpdateWeightFromDiskReqInput
 logger = logging.getLogger(__name__)
 from typing import Any, Awaitable, Callable, List, Optional
 
-from sglang.srt.managers.pause_controller import PauseController
+from sglang.srt.managers.tokenizer_manager_components.pause_controller import (
+    PauseController,
+)
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.utils.aio_rwlock import RWLock
 
