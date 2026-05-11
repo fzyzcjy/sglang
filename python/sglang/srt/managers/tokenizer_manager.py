@@ -65,6 +65,10 @@ from sglang.srt.managers.lora_controller import (
 )
 from sglang.srt.managers.mm_utils import TensorTransportMode, wrap_shm_features
 from sglang.srt.managers.multimodal_processor_owner import MultimodalProcessor
+from sglang.srt.managers.output_processor import (
+    OutputProcessor,
+    OutputProcessorConfig,
+)
 from sglang.srt.managers.pause_controller import (
     PauseController,
     PauseControllerConfig,
@@ -318,6 +322,28 @@ class TokenizerManager(TokenizerControlMixin):
                 max_external_corpus_tokens=self.server_args.speculative_ngram_external_corpus_max_tokens,
             ),
             auto_create_handle_loop=self.auto_create_handle_loop,
+        )
+
+        # Output processor
+        self.output_processor = OutputProcessor(
+            rid_to_state=self.rid_to_state,
+            tokenizer=self.raw_tokenizer_wrapper.tokenizer,
+            request_metrics_recorder=self.request_metrics_recorder,
+            request_log_manager=self.request_log_manager,
+            lora_controller=self.lora_controller,
+            send_to_scheduler=self.send_to_scheduler,
+            config=OutputProcessorConfig(
+                weight_version=self.server_args.weight_version,
+                batch_notify_size=self.server_args.batch_notify_size,
+                incremental_streaming_output=self.server_args.incremental_streaming_output,
+                enable_metrics=self.enable_metrics,
+                skip_tokenizer_init=self.server_args.skip_tokenizer_init,
+                speculative_algorithm=self.server_args.speculative_algorithm or "",
+                speculative_num_draft_tokens=self.server_args.speculative_num_draft_tokens,
+                dp_size=self.server_args.dp_size,
+                enable_lora=self.server_args.enable_lora,
+                served_model_name=self.server_args.served_model_name,
+            ),
         )
 
         # Session controller
