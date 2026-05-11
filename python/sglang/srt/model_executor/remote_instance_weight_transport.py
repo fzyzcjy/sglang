@@ -26,12 +26,12 @@ class RemoteInstanceWeightTransport:
         self.model = model
         self.tp_rank = tp_rank
         self.gpu_id = gpu_id
-        self.remote_instance_transfer_engine = None
-        self.remote_instance_transfer_engine_session_id = ""
-        self.remote_instance_transfer_engine_weight_info = None
+        self.engine = None
+        self.session_id = ""
+        self.weight_info = None
         self._nixl_manager = None
 
-    def remote_instance_init_transfer_engine(self):
+    def init_engine(self):
         try:
             from mooncake.engine import TransferEngine
         except ImportError as e:
@@ -39,16 +39,16 @@ class RemoteInstanceWeightTransport:
                 "Please install mooncake for using remote instance transfer engine: pip install mooncake"
             )
             return
-        self.remote_instance_transfer_engine = TransferEngine()
+        self.engine = TransferEngine()
         local_ip = get_local_ip_auto()
-        self.remote_instance_transfer_engine.initialize(
+        self.engine.initialize(
             local_ip, "P2PHANDSHAKE", "rdma", envs.MOONCAKE_DEVICE.get()
         )
-        self.remote_instance_transfer_engine_session_id = NetworkAddress(
-            local_ip, self.remote_instance_transfer_engine.get_rpc_port()
+        self.session_id = NetworkAddress(
+            local_ip, self.engine.get_rpc_port()
         ).to_host_port_str()
 
-    def _register_to_engine_info_bootstrap(self):
+    def register_to_bootstrap(self):
         """Register transfer engine info with the EngineInfoBootstrapServer via HTTP PUT.
 
         The bootstrap server runs on node_rank==0. For multi-node setups, the
@@ -72,8 +72,8 @@ class RemoteInstanceWeightTransport:
         payload = {
             "tp_rank": self.tp_rank,
             "transfer_engine_info": {
-                "session_id": self.remote_instance_transfer_engine_session_id,
-                "weights_info_dict": self.remote_instance_transfer_engine_weight_info,
+                "session_id": self.session_id,
+                "weights_info_dict": self.weight_info,
             },
         }
 
@@ -94,7 +94,7 @@ class RemoteInstanceWeightTransport:
                 f"Failed to register transfer engine info for tp_rank={self.tp_rank}: {e}"
             )
 
-    def _publish_modelexpress_metadata(self):
+    def publish_to_modelexpress(self):
         """Publish metadata to ModelExpress server (seed mode).
 
         Supports two transport backends:
@@ -167,8 +167,8 @@ class RemoteInstanceWeightTransport:
 
     def _build_transfer_engine_worker_metadata(self, p2p_pb2):
         """Build WorkerMetadata using TransferEngine session_id."""
-        session_id = self.remote_instance_transfer_engine_session_id
-        weight_info = self.remote_instance_transfer_engine_weight_info
+        session_id = self.session_id
+        weight_info = self.weight_info
 
         if not session_id or weight_info is None:
             logger.warning(
