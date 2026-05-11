@@ -155,15 +155,13 @@ class OutputProcessor:
             if state.finished:
                 self._finalize_on_finish(state, recv_obj, i, rid, meta_info)
 
-            if out_dict is not None:
-                state.out_list.append(out_dict)
-                pending_notify[rid] = state
-
-                if len(pending_notify) >= batch_notify_size:
-                    for s in pending_notify.values():
-                        s.event.set()
-                    pending_notify = {}
-                    await asyncio.sleep(0)
+            await self._enqueue_and_maybe_flush_pending(
+                out_dict=out_dict,
+                rid=rid,
+                state=state,
+                pending_notify=pending_notify,
+                batch_notify_size=batch_notify_size,
+            )
 
             if self.config.enable_metrics and state.obj.log_metrics:
                 self.request_metrics_recorder.collect_metrics(state, recv_obj, i)
@@ -180,19 +178,8 @@ class OutputProcessor:
             ):
                 self.request_log_manager.record_request_for_crash_dump(state, out_dict)
 
-        # handle_loop awaits next recv immediately
-        for s in pending_notify.values():
-            s.event.set()
-
-        # When skip_tokenizer_init is enabled, tokensizer_manager receives
-        # BatchTokenIDOutput.
-        if (
-            self.config.dp_size > 1
-            and isinstance(recv_obj, (BatchStrOutput, BatchTokenIDOutput))
-            and recv_obj.load is not None
-        ):
-            load_update_req = WatchLoadUpdateReq(loads=[recv_obj.load])
-            self.send_to_scheduler.send_pyobj(load_update_req)
+        self._drain_pending_notify(pending_notify)
+        self._maybe_emit_load_update(recv_obj)
 
     def _build_out_dict(
         self,
@@ -353,9 +340,7 @@ class OutputProcessor:
             )
         if self.config.enable_metrics:
             scheduler_time_stats = (
-                recv_obj.time_stats[i]
-                if recv_obj.time_stats is not None
-                else None
+                recv_obj.time_stats[i] if recv_obj.time_stats is not None else None
             )
             completion_tokens = (
                 recv_obj.completion_tokens[i]
@@ -375,3 +360,53 @@ class OutputProcessor:
             asyncio.create_task(
                 self.lora_controller.lora_registry.release(state.obj.lora_id)
             )
+
+    async def _enqueue_and_maybe_flush_pending(
+        self,
+        *,
+        out_dict: Optional[dict],
+        rid: str,
+        state: ReqState,
+        pending_notify: Dict[str, ReqState],
+        batch_notify_size: int,
+    ) -> None:
+        """Append out_dict to state.out_list and queue this rid for notify;
+        flush + asyncio.sleep(0) once the queue hits batch_notify_size.
+
+        Mutates ``pending_notify`` in place (cleared via ``.clear()`` on
+        flush so the caller's reference stays bound to the same dict).
+        """
+        if out_dict is None:
+            return
+        state.out_list.append(out_dict)
+        pending_notify[rid] = state
+
+        if len(pending_notify) >= batch_notify_size:
+            for s in pending_notify.values():
+                s.event.set()
+            pending_notify.clear()
+            await asyncio.sleep(0)
+
+    def _drain_pending_notify(
+        self,
+        pending_notify: Dict[str, ReqState],
+    ) -> None:
+        """Signal all queued state events at the end of a batch."""
+        # handle_loop awaits next recv immediately
+        for s in pending_notify.values():
+            s.event.set()
+
+    def _maybe_emit_load_update(self, recv_obj) -> None:
+        """Forward scheduler load to send_to_scheduler when running multi-DP.
+
+        When skip_tokenizer_init is enabled, tokenizer_manager receives
+        BatchTokenIDOutput; we still emit load updates for both branded
+        token batch outputs.
+        """
+        if (
+            self.config.dp_size > 1
+            and isinstance(recv_obj, (BatchStrOutput, BatchTokenIDOutput))
+            and recv_obj.load is not None
+        ):
+            load_update_req = WatchLoadUpdateReq(loads=[recv_obj.load])
+            self.send_to_scheduler.send_pyobj(load_update_req)
