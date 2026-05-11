@@ -1,83 +1,52 @@
-# TODO: also move pad_input_ids into this module
-import importlib
-import inspect
-import logging
-import pkgutil
+from __future__ import annotations
 
-from sglang.srt.configs.model_config import ModelImpl
-from sglang.srt.multimodal.processors.base_processor import BaseMultimodalProcessor
+from dataclasses import dataclass
+from typing import Any, Optional
+
+from sglang.srt.configs.model_config import ModelConfig
+from sglang.srt.disaggregation.encode_receiver import create_mm_receiver
+from sglang.srt.environ import envs
 from sglang.srt.server_args import ServerArgs
 
-logger = logging.getLogger(__name__)
 
-PROCESSOR_MAPPING = {}
-
-
-def import_processors(package_name: str, overwrite: bool = False):
-    package = importlib.import_module(package_name)
-    for _, name, ispkg in pkgutil.iter_modules(package.__path__, package_name + "."):
-        if not ispkg:
-            try:
-                module = importlib.import_module(name)
-            except Exception as e:
-                logger.warning(f"Ignore import error when loading {name}: {e}")
-                continue
-            all_members = inspect.getmembers(module, inspect.isclass)
-            classes = [
-                member
-                for name, member in all_members
-                if member.__module__ == module.__name__
-            ]
-            for cls in (
-                cls for cls in classes if issubclass(cls, BaseMultimodalProcessor)
-            ):
-                assert hasattr(cls, "models")
-                for arch in getattr(cls, "models"):
-                    if overwrite:
-                        for model_cls, processor_cls in PROCESSOR_MAPPING.items():
-                            if model_cls.__name__ == arch.__name__:
-                                del PROCESSOR_MAPPING[model_cls]
-                                break
-                    PROCESSOR_MAPPING[arch] = cls
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MultimodalProcessorConfig:
+    language_only: bool
+    encoder_transfer_backend: str
+    enable_adaptive_dispatch_to_encoder: bool
+    encoder_dispatch_min_items: int
 
 
-def get_mm_processor(
-    hf_config,
-    server_args: ServerArgs,
-    processor,
-    transport_mode,
-    model_config=None,
-    **kwargs,
-) -> BaseMultimodalProcessor:
-    model_impl = str(getattr(server_args, "model_impl", "auto")).lower()
-    uses_transformers_backend = model_impl == "transformers"
-    if model_impl == "auto" and model_config is not None:
-        from sglang.srt.model_loader.utils import get_resolved_model_impl
+@dataclass(frozen=True, slots=True, kw_only=True)
+class MultimodalProcessor:
+    """Owns mm_processor / mm_receiver and EPD dispatch routing."""
 
-        uses_transformers_backend = (
-            get_resolved_model_impl(model_config) == ModelImpl.TRANSFORMERS
-        )
+    mm_processor: Optional[Any]
+    mm_receiver: Optional[Any]
+    config: MultimodalProcessorConfig
 
-    for model_cls, processor_cls in PROCESSOR_MAPPING.items():
-        if model_cls.__name__ not in hf_config.architectures:
-            continue
-        if not uses_transformers_backend or getattr(
-            processor_cls, "supports_transformers_backend", False
-        ):
-            return processor_cls(
-                hf_config, server_args, processor, transport_mode, **kwargs
+    @classmethod
+    def from_server_args(
+        cls,
+        *,
+        server_args: ServerArgs,
+        model_config: ModelConfig,
+        mm_processor: Optional[Any],
+    ) -> "MultimodalProcessor":
+        if server_args.language_only:
+            mm_receiver = create_mm_receiver(
+                server_args,
+                dtype=model_config.dtype,
             )
-
-    if uses_transformers_backend:
-        from sglang.srt.multimodal.processors.transformers_auto import (
-            TransformersAutoMultimodalProcessor,
+        else:
+            mm_receiver = None
+        return cls(
+            mm_processor=mm_processor,
+            mm_receiver=mm_receiver,
+            config=MultimodalProcessorConfig(
+                language_only=server_args.language_only,
+                encoder_transfer_backend=server_args.encoder_transfer_backend,
+                enable_adaptive_dispatch_to_encoder=server_args.enable_adaptive_dispatch_to_encoder,
+                encoder_dispatch_min_items=envs.SGLANG_ENCODER_DISPATCH_MIN_ITEMS.get(),
+            ),
         )
-
-        return TransformersAutoMultimodalProcessor(
-            hf_config, server_args, processor, transport_mode, **kwargs
-        )
-
-    raise ValueError(
-        f"No processor registered for architecture: {hf_config.architectures}.\n"
-        f"Registered architectures: {[model_cls.__name__ for model_cls in PROCESSOR_MAPPING.keys()]}"
-    )
