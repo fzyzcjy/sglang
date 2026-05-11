@@ -39,7 +39,6 @@ from fastapi import BackgroundTasks
 
 from sglang.srt.configs.model_config import ModelConfig
 from sglang.srt.constants import HEALTH_CHECK_RID_PREFIX
-from sglang.srt.disaggregation.encode_receiver import create_mm_receiver
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
 from sglang.srt.lora.lora_registry import LoRARef, LoRARegistry
@@ -69,6 +68,7 @@ from sglang.srt.managers.io_struct import (
     WatchLoadUpdateReq,
 )
 from sglang.srt.managers.mm_utils import TensorTransportMode, wrap_shm_features
+from sglang.srt.managers.multimodal_processor import MultimodalProcessor
 from sglang.srt.managers.raw_tokenizer_wrapper import RawTokenizerWrapper
 from sglang.srt.managers.request_state import ReqState, init_req
 from sglang.srt.managers.request_validator import (
@@ -171,6 +171,13 @@ class TokenizerManager(TokenizerControlMixin):
 
         # Init metric collector and watchdog
         self.init_metric_collector_watchdog()
+
+        # Multimodal processor
+        self.multimodal_processor = MultimodalProcessor.from_server_args(
+            server_args=self.server_args,
+            model_config=self.model_config,
+            mm_processor=self.raw_tokenizer_wrapper.mm_processor,
+        )
 
         # Tokenized request builder
         self.tokenized_request_builder = TokenizedRequestBuilder(
@@ -350,13 +357,6 @@ class TokenizerManager(TokenizerControlMixin):
         start_disagg_service(self.server_args)
         # Single-source counter for auto-assigning fake bootstrap_room.
         self.fake_bootstrap_room_counter = 0
-
-        # Encoder Disaggregation
-        if self.server_args.language_only:
-            self.mm_receiver = create_mm_receiver(
-                self.server_args,
-                dtype=self.model_config.dtype,
-            )
 
     def init_metric_collector_watchdog(self):
         # Metrics
