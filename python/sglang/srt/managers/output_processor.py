@@ -153,49 +153,7 @@ class OutputProcessor:
                 state.time_stats.set_first_token_time()
 
             if state.finished:
-                if state.time_stats.trace_ctx.tracing_enable:
-                    state.time_stats.trace_ctx.trace_set_root_attrs(
-                        request_tracing.make_span_attrs(
-                            state=state,
-                            recv_obj=recv_obj,
-                            i=i,
-                            served_model_name=self.config.served_model_name,
-                        )
-                    )
-                state.time_stats.set_finished_time()
-                meta_info["e2e_latency"] = state.time_stats.get_e2e_latency()
-
-                if self.config.speculative_algorithm:
-                    spec_decoding_meta.fill_spec_decoding_meta(
-                        meta_info,
-                        recv_obj=recv_obj,
-                        i=i,
-                        speculative_num_draft_tokens=self.config.speculative_num_draft_tokens,
-                    )
-                if self.config.enable_metrics:
-                    scheduler_time_stats = (
-                        recv_obj.time_stats[i]
-                        if recv_obj.time_stats is not None
-                        else None
-                    )
-                    completion_tokens = (
-                        recv_obj.completion_tokens[i]
-                        if not isinstance(recv_obj, BatchEmbeddingOutput)
-                        else 0
-                    )
-                    meta_info.update(
-                        state.time_stats.convert_to_output_meta_info(
-                            scheduler_time_stats, completion_tokens
-                        )
-                    )
-
-                del self.rid_to_state[rid]
-
-                # Mark ongoing LoRA request as finished.
-                if self.config.enable_lora and state.obj.lora_path:
-                    asyncio.create_task(
-                        self.lora_controller.lora_registry.release(state.obj.lora_id)
-                    )
+                self._finalize_on_finish(state, recv_obj, i, rid, meta_info)
 
             if out_dict is not None:
                 state.out_list.append(out_dict)
@@ -274,9 +232,7 @@ class OutputProcessor:
         if is_stream:
             if incremental:
                 output_token_ids = delta_output_ids
-                streaming.slice_streaming_output_meta_info(
-                    meta_info, output_offset
-                )
+                streaming.slice_streaming_output_meta_info(meta_info, output_offset)
                 state.last_output_offset = len(state.output_ids)
                 return {
                     "text": delta_text,
@@ -323,9 +279,7 @@ class OutputProcessor:
         if is_stream:
             if incremental:
                 output_token_ids = delta_output_ids
-                streaming.slice_streaming_output_meta_info(
-                    meta_info, output_offset
-                )
+                streaming.slice_streaming_output_meta_info(meta_info, output_offset)
                 state.last_output_offset = len(state.output_ids)
                 return {
                     "output_ids": output_token_ids,
@@ -366,3 +320,58 @@ class OutputProcessor:
         ):
             out_dict["pooled_hidden_state"] = recv_obj.pooled_hidden_states[i]
         return out_dict
+
+    def _finalize_on_finish(
+        self,
+        state: ReqState,
+        recv_obj,
+        i: int,
+        rid: str,
+        meta_info: dict,
+    ) -> None:
+        """Tracing root attrs + spec-decoding meta + e2e latency + state pop
+        + LoRA release. Caller must already have gated on ``state.finished``.
+        """
+        if state.time_stats.trace_ctx.tracing_enable:
+            state.time_stats.trace_ctx.trace_set_root_attrs(
+                request_tracing.make_span_attrs(
+                    state=state,
+                    recv_obj=recv_obj,
+                    i=i,
+                    served_model_name=self.config.served_model_name,
+                )
+            )
+        state.time_stats.set_finished_time()
+        meta_info["e2e_latency"] = state.time_stats.get_e2e_latency()
+
+        if self.config.speculative_algorithm:
+            spec_decoding_meta.fill_spec_decoding_meta(
+                meta_info,
+                recv_obj=recv_obj,
+                i=i,
+                speculative_num_draft_tokens=self.config.speculative_num_draft_tokens,
+            )
+        if self.config.enable_metrics:
+            scheduler_time_stats = (
+                recv_obj.time_stats[i]
+                if recv_obj.time_stats is not None
+                else None
+            )
+            completion_tokens = (
+                recv_obj.completion_tokens[i]
+                if not isinstance(recv_obj, BatchEmbeddingOutput)
+                else 0
+            )
+            meta_info.update(
+                state.time_stats.convert_to_output_meta_info(
+                    scheduler_time_stats, completion_tokens
+                )
+            )
+
+        del self.rid_to_state[rid]
+
+        # Mark ongoing LoRA request as finished.
+        if self.config.enable_lora and state.obj.lora_path:
+            asyncio.create_task(
+                self.lora_controller.lora_registry.release(state.obj.lora_id)
+            )
