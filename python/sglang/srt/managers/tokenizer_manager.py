@@ -84,6 +84,10 @@ from sglang.srt.managers.score_request_handler import (
     ScoreRequestHandler,
     ScoreRequestHandlerConfig,
 )
+from sglang.srt.managers.tokenized_request_builder import (
+    TokenizedRequestBuilder,
+    TokenizedRequestBuilderConfig,
+)
 from sglang.srt.managers.tokenizer_control_mixin import TokenizerControlMixin
 from sglang.srt.observability.cpu_monitor import start_cpu_monitor_thread
 from sglang.srt.observability.metrics_collector import TokenizerMetricsCollector
@@ -169,6 +173,17 @@ class TokenizerManager(TokenizerControlMixin):
 
         # Init metric collector and watchdog
         self.init_metric_collector_watchdog()
+
+        # Tokenized request builder
+        self.tokenized_request_builder = TokenizedRequestBuilder(
+            tokenizer=self.raw_tokenizer_wrapper.tokenizer,
+            config=TokenizedRequestBuilderConfig(
+                vocab_size=self.model_config.vocab_size,
+                preferred_sampling_params=self.preferred_sampling_params,
+                sampling_params_class=SamplingParams,
+                disaggregation_transfer_backend=self.server_args.disaggregation_transfer_backend,
+            ),
+        )
 
         # Request validator
         self.request_validator = RequestValidator(
