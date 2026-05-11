@@ -81,6 +81,10 @@ from sglang.srt.managers.request_validator import (
     RequestValidator,
     RequestValidatorConfig,
 )
+from sglang.srt.managers.response_emitter import (
+    ResponseEmitter,
+    ResponseEmitterConfig,
+)
 from sglang.srt.managers.scheduler_input_blocker import input_blocker_guard_region
 from sglang.srt.managers.score_request_handler import (
     ScoreRequestHandler,
@@ -340,6 +344,19 @@ class TokenizerManager(TokenizerControlMixin):
                 dp_size=self.server_args.dp_size,
                 enable_lora=self.server_args.enable_lora,
                 served_model_name=self.server_args.served_model_name,
+            ),
+        )
+
+        # Response emitter
+        self.response_emitter = ResponseEmitter(
+            rid_to_state=self.rid_to_state,
+            pause_controller=self.pause_controller,
+            lora_controller=self.lora_controller,
+            request_log_manager=self.request_log_manager,
+            request_metrics_recorder=self.request_metrics_recorder,
+            config=ResponseEmitterConfig(
+                incremental_streaming_output=self.server_args.incremental_streaming_output,
+                enable_lora=self.server_args.enable_lora,
             ),
         )
 
