@@ -188,14 +188,12 @@ class RequestPreparer:
                     need_wait_for_mm_inputs=obj.need_wait_for_mm_inputs,
                 )
             if mm_inputs is None:
-                mm_inputs = (
-                    await self.mm_processor.process_mm_data_async(
-                        image_data=obj.image_data,
-                        audio_data=obj.audio_data,
-                        input_text=(input_text or input_ids),
-                        request_obj=obj,
-                        max_req_input_len=self.config.max_req_input_len,
-                    )
+                mm_inputs = await self.mm_processor.process_mm_data_async(
+                    image_data=obj.image_data,
+                    audio_data=obj.audio_data,
+                    input_text=(input_text or input_ids),
+                    request_obj=obj,
+                    max_req_input_len=self.config.max_req_input_len,
                 )
             return mm_inputs
 
