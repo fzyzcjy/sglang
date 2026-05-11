@@ -4,6 +4,26 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+from dataclasses import dataclass
+from typing import Optional
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class KVCacheBuildResult:
+    """Return type for ``build_kv_cache``: 9 fields the caller writes back to
+    ``Scheduler.self.X``. Field-cluster bundling (a single
+    ``self._kv_cache`` ref instead of 9) is a follow-up commit."""
+
+    is_hybrid_swa: bool
+    is_hybrid_ssm: bool
+    sliding_window_size: Optional[int]
+    full_tokens_per_layer: Optional[int]
+    swa_tokens_per_layer: Optional[int]
+    req_to_token_pool: object
+    token_to_kv_pool_allocator: object
+    disable_radix_cache: bool
+    tree_cache: object
+
 
 def get_draft_kv_pool(
     *,
