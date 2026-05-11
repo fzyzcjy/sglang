@@ -53,6 +53,9 @@ class _MockTokenizerManager:
         # default); tests for incremental_streaming_output=True override this.
         self.server_args = Mock(incremental_streaming_output=False)
         self.tokenizer = Mock()
+        # raw_tokenizer_wrapper exposes the same Mock for the new owner-class accessor.
+        self.raw_tokenizer_wrapper = Mock()
+        self.raw_tokenizer_wrapper.tokenizer = self.tokenizer
         self._stream_chunks = stream_chunks
 
     def generate_request(self, adapted_request, raw_request):
