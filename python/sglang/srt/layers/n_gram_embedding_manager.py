@@ -20,18 +20,18 @@ class NgramEmbeddingManager:
     def __init__(
         self,
         *,
-        use_ngram_embedding: bool,
-        token_table: Optional[torch.Tensor],
-        ngram_embedding_n: int,
-        ngram_embedding_k: int,
+        enabled: bool,
+        table: Optional[torch.Tensor],
+        n: int,
+        k: int,
     ):
-        self.use_ngram_embedding = use_ngram_embedding
-        self.token_table = token_table
-        self.ngram_embedding_n = ngram_embedding_n
-        self.ngram_embedding_k = ngram_embedding_k
+        self.enabled = enabled
+        self.table = table
+        self.n = n
+        self.k = k
 
     @classmethod
-    def maybe_init_ngram_embedding(
+    def from_model(
         cls,
         *,
         model: torch.nn.Module,
@@ -68,13 +68,13 @@ class NgramEmbeddingManager:
             ngram_embedding_n = hf_config.ngram_embedding_n
             ngram_embedding_k = hf_config.ngram_embedding_k
         return cls(
-            use_ngram_embedding=use_ngram_embedding,
-            token_table=token_table,
-            ngram_embedding_n=ngram_embedding_n,
-            ngram_embedding_k=ngram_embedding_k,
+            enabled=use_ngram_embedding,
+            table=token_table,
+            n=ngram_embedding_n,
+            k=ngram_embedding_k,
         )
 
-    def maybe_update_ngram_token_table(
+    def update_after_decode(
         self,
         next_token_ids: torch.Tensor,
         forward_batch: "ForwardBatch",
@@ -96,13 +96,13 @@ class NgramEmbeddingManager:
             ignore_tokens=None,
         )
 
-    def maybe_prepare_ngram_embedding(
+    def prepare_for_forward(
         self, batch: Optional[ScheduleBatch]
     ) -> Optional[ScheduleBatch]:
         """Fill the token table for ngram embedding before a forward pass."""
-        if batch is None or not self.use_ngram_embedding:
+        if batch is None or not self.enabled:
             return batch
-        batch.ne_token_table = self.token_table
+        batch.ne_token_table = self.table
         if batch.forward_mode == ForwardMode.EXTEND:
             all_tokens = []
             column_starts = []
@@ -114,19 +114,19 @@ class NgramEmbeddingManager:
                 if start == 0:
                     tokens = fill_ids[start:end]
                     column_starts.append(0)
-                elif start < self.ngram_embedding_n:
+                elif start < self.n:
                     tokens = fill_ids[0:end]
                     column_starts.append(0)
                 else:
                     # Prepend n-1 tokens before prefix_len for n-gram context
-                    tokens = fill_ids[start - self.ngram_embedding_n + 1 : end]
-                    column_starts.append(start - self.ngram_embedding_n + 1)
+                    tokens = fill_ids[start - self.n + 1 : end]
+                    column_starts.append(start - self.n + 1)
                 all_tokens.extend(tokens)
                 request_lengths.append(len(tokens))
-            dtype = self.token_table.dtype
-            device = self.token_table.device
+            dtype = self.table.dtype
+            device = self.table.device
             update_token_table(
-                ne_token_table=self.token_table,
+                ne_token_table=self.table,
                 tokens=torch.tensor(all_tokens, dtype=dtype, device=device),
                 row_indices=batch.req_pool_indices,
                 column_starts=torch.tensor(
