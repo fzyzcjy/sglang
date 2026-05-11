@@ -15,7 +15,6 @@ from sglang.srt.utils.common import require_mlp_tp_gather
 
 if TYPE_CHECKING:
     from sglang.srt.distributed.parallel_state import GroupCoordinator
-    from sglang.srt.managers.scheduler import Scheduler
 
 
 _ENABLE_METRICS_DP_ATTENTION = envs.SGLANG_ENABLE_METRICS_DP_ATTENTION.get()
@@ -225,8 +224,38 @@ def prepare_mlp_sync_batch_raw(
     return local_batch
 
 
-class SchedulerDPAttnMixin:
-    def prepare_mlp_sync_batch(self: Scheduler, local_batch: ScheduleBatch):
+class SchedulerDPAttnAdapter:
+    """DP-attention batch synchronization adapter. Composition target on
+    Scheduler (``self.dp_attn_adapter``). Owns no mutable state."""
+
+    def __init__(
+        self,
+        *,
+        tp_group,
+        req_to_token_pool,
+        token_to_kv_pool_allocator,
+        tree_cache,
+        offload_tags,
+        ps,
+        server_args,
+        model_config,
+        enable_overlap: bool,
+        spec_algorithm,
+        require_mlp_sync: bool,
+    ) -> None:
+        self.tp_group = tp_group
+        self.req_to_token_pool = req_to_token_pool
+        self.token_to_kv_pool_allocator = token_to_kv_pool_allocator
+        self.tree_cache = tree_cache
+        self.offload_tags = offload_tags
+        self.ps = ps
+        self.server_args = server_args
+        self.model_config = model_config
+        self.enable_overlap = enable_overlap
+        self.spec_algorithm = spec_algorithm
+        self.require_mlp_sync = require_mlp_sync
+
+    def prepare_mlp_sync_batch(self, local_batch: ScheduleBatch):
         return prepare_mlp_sync_batch_raw(
             local_batch,
             dp_size=self.server_args.dp_size,
@@ -241,7 +270,7 @@ class SchedulerDPAttnMixin:
         )
 
     def maybe_prepare_mlp_sync_batch(
-        self: Scheduler,
+        self,
         batch: Optional[ScheduleBatch],
         need_sync: Optional[bool] = None,
     ) -> Optional[ScheduleBatch]:
@@ -257,7 +286,7 @@ class SchedulerDPAttnMixin:
             batch = self.prepare_mlp_sync_batch(batch)
         return batch
 
-    def get_idle_batch(self: Scheduler) -> ScheduleBatch:
+    def get_idle_batch(self) -> ScheduleBatch:
         idle_batch = ScheduleBatch.init_new(
             [],
             self.req_to_token_pool,
