@@ -70,6 +70,10 @@ from sglang.srt.managers.io_struct import (
 from sglang.srt.managers.mm_utils import TensorTransportMode, wrap_shm_features
 from sglang.srt.managers.multimodal_processor import MultimodalProcessor
 from sglang.srt.managers.raw_tokenizer_wrapper import RawTokenizerWrapper
+from sglang.srt.managers.request_preparer import (
+    RequestPreparer,
+    RequestPreparerConfig,
+)
 from sglang.srt.managers.request_state import ReqState, init_req
 from sglang.srt.managers.request_validator import (
     RequestValidator,
@@ -205,6 +209,27 @@ class TokenizerManager(TokenizerControlMixin):
                 matryoshka_dimensions=self.model_config.matryoshka_dimensions,
                 hidden_size=self.model_config.hidden_size,
                 model_path=self.model_config.model_path,
+            ),
+        )
+
+        # Request preparer
+        self.request_preparer = RequestPreparer(
+            raw_tokenizer_wrapper=self.raw_tokenizer_wrapper,
+            multimodal_processor=self.multimodal_processor,
+            request_validator=self.request_validator,
+            tokenized_request_builder=self.tokenized_request_builder,
+            rid_to_state=self.rid_to_state,
+            config=RequestPreparerConfig(
+                skip_tokenizer_init=self.server_args.skip_tokenizer_init,
+                enable_dp_attention=self.server_args.enable_dp_attention,
+                enable_tokenizer_batch_encode=self.server_args.enable_tokenizer_batch_encode,
+                is_generation=self.is_generation,
+                disable_radix_cache=self.server_args.disable_radix_cache,
+                is_multimodal=self.model_config.is_multimodal,
+                architectures=self.model_config.hf_config.architectures,
+                max_req_input_len=self.max_req_input_len,
+                language_only=self.server_args.language_only,
+                encoder_transfer_backend=self.server_args.encoder_transfer_backend,
             ),
         )
 
