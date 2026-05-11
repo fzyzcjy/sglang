@@ -1009,7 +1009,9 @@ class Engine(EngineScoreMixin, EngineBase):
         )
 
         return self.loop.run_until_complete(
-            self.tokenizer_manager.update_weights_from_disk(obj, None)
+            self.tokenizer_manager.weight_disk_update_controller.update_weights_from_disk(
+                obj, None
+            )
         )
 
     def update_weights_from_ipc(
