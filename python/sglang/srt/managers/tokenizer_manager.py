@@ -65,6 +65,10 @@ from sglang.srt.managers.io_struct import (
 )
 from sglang.srt.managers.mm_utils import wrap_shm_features
 from sglang.srt.managers.multimodal_processor_owner import MultimodalProcessor
+from sglang.srt.managers.pause_controller import (
+    PauseController,
+    PauseControllerConfig,
+)
 from sglang.srt.managers.raw_tokenizer_wrapper import RawTokenizerWrapper
 from sglang.srt.managers.request_log_manager import RequestLogManager
 from sglang.srt.managers.request_metrics_recorder import RequestMetricsRecorder
@@ -190,6 +194,20 @@ class TokenizerManager(TokenizerControlMixin):
             enable_metrics=self.enable_metrics,
             enable_priority_scheduling=self.enable_priority_scheduling,
             disaggregation_mode=self.disaggregation_mode,
+        )
+
+        # Pause controller
+        self.pause_controller = PauseController(
+            send_to_scheduler=self.send_to_scheduler,
+            rid_to_state=self.rid_to_state,
+            model_update_lock=self.model_update_lock,
+            metrics_collector=self.request_metrics_recorder.metrics_collector,
+            tokenizer=self.tokenizer,
+            config=PauseControllerConfig(
+                enable_metrics=self.enable_metrics,
+                skip_tokenizer_init=self.server_args.skip_tokenizer_init,
+                weight_version=self.server_args.weight_version,
+            ),
         )
 
         # Session controller
@@ -334,8 +352,6 @@ class TokenizerManager(TokenizerControlMixin):
         self.model_update_result: Optional[Awaitable[UpdateWeightFromDiskReqOutput]] = (
             None
         )
-        self.is_pause = False
-        self.is_pause_cond = asyncio.Condition()
 
     def init_lora(self):
         # LoRA
@@ -378,7 +394,12 @@ class TokenizerManager(TokenizerControlMixin):
     def init_request_dispatcher(self):
         self._result_dispatcher = TypeBasedDispatcher(
             [
-                (AbortReq, self._handle_abort_req),
+                (
+                    AbortReq,
+                    lambda x: TokenizerManager.handle_abort_req(
+                        self.pause_controller, x
+                    ),
+                ),
                 (
                     OpenSessionReqOutput,
                     self.session_controller.handle_open_session_req_output,
@@ -437,8 +458,10 @@ class TokenizerManager(TokenizerControlMixin):
             obj, self.tokenizer, request
         )
 
-        async with self.is_pause_cond:
-            await self.is_pause_cond.wait_for(lambda: not self.is_pause)
+        async with self.pause_controller.is_pause_cond:
+            await self.pause_controller.is_pause_cond.wait_for(
+                lambda: not self.pause_controller.is_pause
+            )
 
         async with self.model_update_lock.reader_lock:
             await self._validate_and_resolve_lora(obj)
@@ -576,7 +599,7 @@ class TokenizerManager(TokenizerControlMixin):
                     and await request.is_disconnected()
                 ):
                     # Abort the request for disconnected requests (non-streaming, waiting queue)
-                    self.abort_request(obj.rid)
+                    TokenizerManager.abort_request(self.pause_controller, obj.rid)
                     # Use exception to kill the whole call stack and asyncio task
                     raise ValueError(
                         f"Request is disconnected from the client side (type 1). Abort request {obj.rid=}"
@@ -659,7 +682,7 @@ class TokenizerManager(TokenizerControlMixin):
                     and await request.is_disconnected()
                 ):
                     # Abort the request for disconnected requests (non-streaming, running)
-                    self.abort_request(obj.rid)
+                    TokenizerManager.abort_request(self.pause_controller, obj.rid)
                     # Use exception to kill the whole call stack and asyncio task
                     raise ValueError(
                         f"Request is disconnected from the client side (type 3). Abort request {obj.rid=}"
@@ -779,18 +802,20 @@ class TokenizerManager(TokenizerControlMixin):
                     except StopAsyncIteration:
                         pass
 
-    def abort_request(self, rid: str = "", abort_all: bool = False):
+    @staticmethod
+    def abort_request(self: "PauseController", rid: str = "", abort_all: bool = False):
         if not abort_all and rid not in self.rid_to_state:
             return
         req = AbortReq(rid=rid, abort_all=abort_all)
         self.send_to_scheduler.send_pyobj(req)
-        if self.enable_metrics:
+        if self.config.enable_metrics:
             # TODO: also use custom_labels from the request
-            self.request_metrics_recorder.metrics_collector.observe_one_aborted_request(
-                self.request_metrics_recorder.metrics_collector.labels
+            self.metrics_collector.observe_one_aborted_request(
+                self.metrics_collector.labels
             )
 
-    async def pause_generation(self, obj: PauseGenerationReqInput):
+    @staticmethod
+    async def pause_generation(self: "PauseController", obj: PauseGenerationReqInput):
         async with self.is_pause_cond:
             self.is_pause = True
             if obj.mode != "abort":
@@ -799,13 +824,16 @@ class TokenizerManager(TokenizerControlMixin):
                 # we are using the model_update_lock to check if there is still on-going requests.
                 while True:
                     # TODO: maybe make it async instead of fire-and-forget
-                    self.abort_request(abort_all=True)
+                    TokenizerManager.abort_request(self, abort_all=True)
                     is_locked = await self.model_update_lock.is_locked()
                     if not is_locked:
                         break
                     await asyncio.sleep(1.0)
 
-    async def continue_generation(self, obj: ContinueGenerationReqInput):
+    @staticmethod
+    async def continue_generation(
+        self: "PauseController", obj: ContinueGenerationReqInput
+    ):
         async with self.is_pause_cond:
             self.is_pause = False
             await self.send_to_scheduler.send_pyobj(obj)
@@ -824,11 +852,11 @@ class TokenizerManager(TokenizerControlMixin):
         logger.info("Start update_weights. Load format=%s", obj.load_format)
 
         if obj.abort_all_requests:
-            self.abort_request(abort_all=True)
+            TokenizerManager.abort_request(self.pause_controller, abort_all=True)
 
         # Immediately update the weights if the engine is in paused state
-        async with self.is_pause_cond:
-            is_paused = self.is_pause
+        async with self.pause_controller.is_pause_cond:
+            is_paused = self.pause_controller.is_pause
 
         lock_context = (
             self.model_update_lock.writer_lock if not is_paused else nullcontext()
@@ -903,10 +931,10 @@ class TokenizerManager(TokenizerControlMixin):
         async def abort_request():
             await asyncio.sleep(2)
             if obj.is_single:
-                self.abort_request(obj.rid)
+                TokenizerManager.abort_request(self.pause_controller, obj.rid)
             else:
                 for rid in obj.rid:
-                    self.abort_request(rid)
+                    TokenizerManager.abort_request(self.pause_controller, rid)
 
         background_tasks = BackgroundTasks()
         background_tasks.add_task(abort_request)
@@ -1265,7 +1293,8 @@ class TokenizerManager(TokenizerControlMixin):
         """Put some custom force exit logic here."""
         pass
 
-    def _handle_abort_req(self, recv_obj: AbortReq):
+    @staticmethod
+    def handle_abort_req(self: "PauseController", recv_obj: AbortReq):
         if is_health_check_generate_req(recv_obj):
             return
         state = self.rid_to_state[recv_obj.rid]
@@ -1282,7 +1311,7 @@ class TokenizerManager(TokenizerControlMixin):
         meta_info = {
             "id": recv_obj.rid,
             "finish_reason": finish_reason,
-            "weight_version": self.server_args.weight_version,
+            "weight_version": self.config.weight_version,
             "e2e_latency": state.time_stats.get_e2e_latency(),
         }
         is_stream = getattr(state.obj, "stream", False)
@@ -1293,7 +1322,7 @@ class TokenizerManager(TokenizerControlMixin):
                 top_logprobs_num=state.obj.top_logprobs_num,
                 token_ids_logprob=state.obj.token_ids_logprob,
                 return_text_in_logprobs=state.obj.return_text_in_logprobs
-                and not self.server_args.skip_tokenizer_init,
+                and not self.config.skip_tokenizer_init,
                 tokenizer=self.tokenizer,
             )
 
