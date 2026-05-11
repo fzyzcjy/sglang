@@ -154,8 +154,10 @@ class TemplateManager:
                 hf_template = self._resolve_hf_chat_template(tokenizer_manager)
                 if hf_template:
                     # override the chat template
-                    if tokenizer_manager.tokenizer:
-                        tokenizer_manager.tokenizer.chat_template = hf_template
+                    if tokenizer_manager.raw_tokenizer_wrapper.tokenizer:
+                        tokenizer_manager.raw_tokenizer_wrapper.tokenizer.chat_template = (
+                            hf_template
+                        )
                     self._jinja_template_content_format = (
                         detect_jinja_template_content_format(hf_template)
                     )
@@ -170,9 +172,11 @@ class TemplateManager:
                     )
 
         # Detect reasoning pattern and suggest parser from chat template
-        if tokenizer_manager.tokenizer:
-            template = tokenizer_manager.tokenizer.chat_template
-            self._run_template_detection(template, tokenizer_manager.tokenizer)
+        if tokenizer_manager.raw_tokenizer_wrapper.tokenizer:
+            template = tokenizer_manager.raw_tokenizer_wrapper.tokenizer.chat_template
+            self._run_template_detection(
+                template, tokenizer_manager.raw_tokenizer_wrapper.tokenizer
+            )
             if self._suggested_reasoning_parser:
                 logger.info(
                     f"Auto-detected reasoning parser: {self._suggested_reasoning_parser}"
@@ -266,7 +270,9 @@ class TemplateManager:
         """Load a Jinja template file."""
         with open(template_path, "r") as f:
             chat_template = "".join(f.readlines()).strip("\n")
-        tokenizer_manager.tokenizer.chat_template = chat_template.replace("\\n", "\n")
+        tokenizer_manager.raw_tokenizer_wrapper.tokenizer.chat_template = (
+            chat_template.replace("\\n", "\n")
+        )
         self._chat_template_name = None
         # Detect content format from the loaded template
         self._jinja_template_content_format = detect_jinja_template_content_format(
@@ -338,12 +344,20 @@ class TemplateManager:
         try:
             # Try (mm-)processor first, then tokenizer
             template = (
-                getattr(tokenizer_manager.processor, "chat_template", None)
-                if tokenizer_manager.processor
+                getattr(
+                    tokenizer_manager.raw_tokenizer_wrapper.processor,
+                    "chat_template",
+                    None,
+                )
+                if tokenizer_manager.raw_tokenizer_wrapper.processor
                 else None
             ) or (
-                getattr(tokenizer_manager.tokenizer, "chat_template", None)
-                if tokenizer_manager.tokenizer
+                getattr(
+                    tokenizer_manager.raw_tokenizer_wrapper.tokenizer,
+                    "chat_template",
+                    None,
+                )
+                if tokenizer_manager.raw_tokenizer_wrapper.tokenizer
                 else None
             )
 
