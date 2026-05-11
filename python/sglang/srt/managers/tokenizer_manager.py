@@ -571,24 +571,7 @@ class TokenizerManager(TokenizerControlMixin):
                 *(self.request_preparer._tokenize_one_request(obj) for obj in objs)
             )
 
-            # Cache the common prefix for parallel sampling
-            for i in range(batch_size):
-                tmp_obj = copy.copy(objs[i])
-                tokenized_obj = copy.copy(tokenized_objs[i])
-                tokenized_obj.rid = tmp_obj.regenerate_rid()
-                tokenized_obj.sampling_params = copy.copy(tokenized_obj.sampling_params)
-                tokenized_obj.sampling_params.max_new_tokens = 0
-                tokenized_obj.stream = False
-                init_req(
-                    self.rid_to_state,
-                    obj=tmp_obj,
-                    enable_trace=self.server_args.enable_trace,
-                    disagg_mode=self.disaggregation_mode,
-                )
-                self._send_one_request(tokenized_obj)
-                await TokenizerManager._wait_one_response(
-                    self.response_emitter, tmp_obj, request
-                ).__anext__()
+            await self._cache_parallel_sample_prefix(objs, tokenized_objs, request)
 
             # Expand requests, assign new rids for them, and send them
             for i in range(batch_size):
@@ -670,6 +653,32 @@ class TokenizerManager(TokenizerControlMixin):
                 )
                 rids.append(tmp_obj.rid)
         return generators, rids
+
+    async def _cache_parallel_sample_prefix(
+        self,
+        objs: List[Union[GenerateReqInput, EmbeddingReqInput]],
+        tokenized_objs: List[Union[TokenizedGenerateReqInput, TokenizedEmbeddingReqInput]],
+        request: Optional[fastapi.Request],
+    ) -> None:
+        # Cache the common prefix for parallel sampling
+        batch_size = len(objs)
+        for i in range(batch_size):
+            tmp_obj = copy.copy(objs[i])
+            tokenized_obj = copy.copy(tokenized_objs[i])
+            tokenized_obj.rid = tmp_obj.regenerate_rid()
+            tokenized_obj.sampling_params = copy.copy(tokenized_obj.sampling_params)
+            tokenized_obj.sampling_params.max_new_tokens = 0
+            tokenized_obj.stream = False
+            init_req(
+                self.rid_to_state,
+                obj=tmp_obj,
+                enable_trace=self.server_args.enable_trace,
+                disagg_mode=self.disaggregation_mode,
+            )
+            self._send_one_request(tokenized_obj)
+            await TokenizerManager._wait_one_response(
+                self.response_emitter, tmp_obj, request
+            ).__anext__()
 
     def configure_logging(self, obj: ConfigureLoggingReq):
         self.request_log_manager.request_logger.configure(
