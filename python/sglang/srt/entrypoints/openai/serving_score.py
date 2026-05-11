@@ -12,9 +12,6 @@ from sglang.srt.entrypoints.openai.protocol import (
     UsageInfo,
 )
 from sglang.srt.entrypoints.openai.serving_base import OpenAIServingBase
-from sglang.srt.managers.tokenizer_manager_score_mixin import (
-    TokenizerManagerScoreMixin,
-)
 
 logger = logging.getLogger(__name__)
 
