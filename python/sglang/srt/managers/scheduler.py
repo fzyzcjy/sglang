@@ -3060,7 +3060,7 @@ class Scheduler(
         self._maybe_log_idle_metrics()
 
         # kv event publishing
-        self._publish_kv_events()
+        self.publish_kv_events()
 
         # reset token ratio
         self.new_token_ratio = self.init_new_token_ratio
