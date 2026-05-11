@@ -208,17 +208,10 @@ class SchedulerUpdateWeightsMixin:
             assert (
                 draft_url is not None
             ), "draft_url must be provided when draft model is enabled"
-            from sglang.srt.model_executor.model_runner import ModelRunner
-
-            ModelRunner.save_remote_model(
-                self.draft_worker.model_runner.weight_exporter, draft_url
-            )
+            self.draft_worker.model_runner.weight_exporter.save_remote_model(draft_url)
 
     def save_sharded_model(self: Scheduler, params):
-        from sglang.srt.model_executor.model_runner import ModelRunner
-
-        ModelRunner.save_sharded_model(
-            self.tp_worker.model_runner.weight_exporter,
+        self.tp_worker.model_runner.weight_exporter.save_sharded_model(
             path=params["path"],
             pattern=params["pattern"],
             max_size=params["max_size"],
