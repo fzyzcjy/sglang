@@ -21,7 +21,6 @@ import signal
 import sys
 import threading
 from contextlib import nullcontext
-from enum import Enum
 from typing import Dict, List, Optional, Union
 
 import fastapi
@@ -66,6 +65,7 @@ from sglang.srt.managers.pause_controller import (
     PauseController,
     PauseControllerConfig,
 )
+from sglang.srt.managers.print_exception_wrapper import print_exception_wrapper
 from sglang.srt.managers.raw_tokenizer_wrapper import RawTokenizerWrapper
 from sglang.srt.managers.request_log_manager import RequestLogManager
 from sglang.srt.managers.request_metrics_recorder import RequestMetricsRecorder
@@ -87,6 +87,7 @@ from sglang.srt.managers.score_request_handler import (
     ScoreRequestHandler,
     ScoreRequestHandlerConfig,
 )
+from sglang.srt.managers.server_status import ServerStatus
 from sglang.srt.managers.session_controller import (
     SessionController,
     SessionControllerConfig,
@@ -121,11 +122,9 @@ from sglang.srt.utils import (
 from sglang.srt.utils.aio_rwlock import RWLock
 from sglang.srt.utils.network import get_zmq_socket
 from sglang.srt.utils.watchdog import Watchdog
-from sglang.utils import TypeBasedDispatcher, get_exception_traceback
+from sglang.utils import TypeBasedDispatcher
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-
-_REQUEST_STATE_WAIT_TIMEOUT = envs.SGLANG_REQUEST_STATE_WAIT_TIMEOUT.get()
 
 logger = logging.getLogger(__name__)
 
@@ -767,28 +766,6 @@ class TokenizerManager(TokenizerControlMixin):
             and self.default_priority_value is not None
         ):
             obj.priority = self.default_priority_value
-
-
-class ServerStatus(Enum):
-    Up = "Up"
-    Starting = "Starting"
-    UnHealthy = "UnHealthy"
-
-
-async def print_exception_wrapper(func):
-    """
-    Sometimes an asyncio function does not print exception.
-    We do another wrapper to handle the exception.
-    """
-    try:
-        await func()
-    except Exception:
-        traceback = get_exception_traceback()
-        logger.error(f"TokenizerManager hit an exception: {traceback}")
-        if hasattr(func, "__self__") and isinstance(func.__self__, TokenizerManager):
-            func.__self__.dump_requests_before_crash()
-        kill_process_tree(os.getpid(), include_parent=True)
-        sys.exit(1)
 
 
 class SignalHandler:

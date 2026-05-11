@@ -150,8 +150,9 @@ from sglang.srt.managers.multi_tokenizer_mixin import (
     read_from_shared_memory,
     write_data_for_multi_tokenizer,
 )
+from sglang.srt.managers.server_status import ServerStatus
 from sglang.srt.managers.template_manager import TemplateManager
-from sglang.srt.managers.tokenizer_manager import ServerStatus, TokenizerManager
+from sglang.srt.managers.tokenizer_manager import TokenizerManager
 from sglang.srt.observability.func_timer import enable_func_timer
 from sglang.srt.observability.trace import (
     process_tracing_init,
