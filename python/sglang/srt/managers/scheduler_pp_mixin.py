@@ -1078,7 +1078,7 @@ class SchedulerPPMixin:
     def _pp_process_batch_result(
         self: Scheduler, batch: ScheduleBatch, output_result: GenerationBatchResult
     ):
-        self.process_batch_result(batch, output_result)
+        self.process_batch_result(self.batch_result_processor, batch, output_result)
 
     def _pp_send_output_to_next_stage(
         self: Scheduler,

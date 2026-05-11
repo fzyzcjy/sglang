@@ -1346,7 +1346,7 @@ class SchedulerDisaggregationDecodeMixin:
             # Launch the current batch
             if batch:
                 result = self.run_batch(batch)
-                self.process_batch_result(batch, result)
+                self.process_batch_result(self.batch_result_processor, batch, result)
             else:
                 # When the server is idle, do self-check and re-init some states
                 self.on_idle()
@@ -1386,7 +1386,9 @@ class SchedulerDisaggregationDecodeMixin:
             # Process the last batch
             if self.last_batch:
                 tmp_batch, tmp_result = self.result_queue.popleft()
-                self.process_batch_result(tmp_batch, tmp_result)
+                self.process_batch_result(
+                    self.batch_result_processor, tmp_batch, tmp_result
+                )
             elif batch is None:
                 self.on_idle()
 
@@ -1416,7 +1418,9 @@ class SchedulerDisaggregationDecodeMixin:
         new_prebuilt_batch = self.get_new_prebuilt_batch()
         if new_prebuilt_batch:
             assert self.chunked_req is None
-            self.process_batch_result_prebuilt(new_prebuilt_batch)
+            self.process_batch_result_prebuilt(
+                self.batch_result_processor, new_prebuilt_batch
+            )
             new_prebuilt_batch.filter_batch()
             if not new_prebuilt_batch.is_empty():
                 if self.running_batch.is_empty():

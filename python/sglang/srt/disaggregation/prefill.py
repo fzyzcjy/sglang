@@ -401,7 +401,7 @@ class SchedulerDisaggregationPrefillMixin:
                 if self.enable_staging:
                     self.maybe_prefetch_staging_for_batch(batch)
                 result = self.run_batch(batch)
-                self.process_batch_result(batch, result)
+                self.process_batch_result(self.batch_result_processor, batch, result)
             else:
                 self.on_idle()
 
@@ -446,7 +446,9 @@ class SchedulerDisaggregationPrefillMixin:
             # Process the last batch
             if self.last_batch:
                 tmp_batch, tmp_result = self.result_queue.popleft()
-                self.process_batch_result(tmp_batch, tmp_result)
+                self.process_batch_result(
+                    self.batch_result_processor, tmp_batch, tmp_result
+                )
             elif batch is None:
                 # When the server is idle, do self-check and re-init some states
                 self.on_idle()
