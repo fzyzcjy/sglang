@@ -22,7 +22,7 @@ import sys
 import threading
 from contextlib import nullcontext
 from enum import Enum
-from typing import Dict, List, Optional, Union
+from typing import AsyncGenerator, Dict, List, Optional, Tuple, Union
 
 import fastapi
 import uvloop
@@ -543,45 +543,19 @@ class TokenizerManager(TokenizerControlMixin):
     ):
         batch_size = obj.batch_size
 
-        generators = []
-        rids = []
+        generators: List[AsyncGenerator] = []
+        rids: List[str] = []
         if getattr(obj, "parallel_sample_num", 1) == 1:
             if TokenizerManager._should_use_batch_tokenization(
                 self.request_preparer, batch_size, obj
             ):
-                tokenized_objs = await TokenizerManager._batch_tokenize_and_process(
-                    self.request_preparer, batch_size, obj
+                generators, rids = await self._dispatch_batch_tokenized(
+                    obj, batch_size, request
                 )
-                self._send_batch_request(tokenized_objs)
-
-                # Set up generators for each request in the batch
-                for i in range(batch_size):
-                    tmp_obj = obj[i]
-                    generators.append(
-                        TokenizerManager._wait_one_response(
-                            self.response_emitter, tmp_obj, request
-                        )
-                    )
-                    rids.append(tmp_obj.rid)
             else:
-                # Sequential tokenization and processing
-                with (
-                    input_blocker_guard_region(send_to_scheduler=self.send_to_scheduler)
-                    if get_bool_env_var("SGLANG_ENABLE_COLOCATED_BATCH_GEN")
-                    else nullcontext()
-                ):
-                    for i in range(batch_size):
-                        tmp_obj = obj[i]
-                        tokenized_obj = await TokenizerManager._tokenize_one_request(
-                            self.request_preparer, tmp_obj
-                        )
-                        self._send_one_request(tokenized_obj)
-                        generators.append(
-                            TokenizerManager._wait_one_response(
-                                self.response_emitter, tmp_obj, request
-                            )
-                        )
-                        rids.append(tmp_obj.rid)
+                generators, rids = await self._dispatch_sequential_tokenized(
+                    obj, batch_size, request
+                )
         else:
             # FIXME: When using batch and parallel_sample_num together, the perf is not optimal.
             if batch_size > 128:
@@ -644,6 +618,58 @@ class TokenizerManager(TokenizerControlMixin):
             obj, rids=rids, generators=generators, request=request
         ):
             yield x
+
+    async def _dispatch_batch_tokenized(
+        self,
+        obj: Union[GenerateReqInput, EmbeddingReqInput],
+        batch_size: int,
+        request: Optional[fastapi.Request],
+    ) -> Tuple[List[AsyncGenerator], List[str]]:
+        tokenized_objs = await TokenizerManager._batch_tokenize_and_process(
+            self.request_preparer, batch_size, obj
+        )
+        self._send_batch_request(tokenized_objs)
+
+        # Set up generators for each request in the batch
+        generators: List[AsyncGenerator] = []
+        rids: List[str] = []
+        for i in range(batch_size):
+            tmp_obj = obj[i]
+            generators.append(
+                TokenizerManager._wait_one_response(
+                    self.response_emitter, tmp_obj, request
+                )
+            )
+            rids.append(tmp_obj.rid)
+        return generators, rids
+
+    async def _dispatch_sequential_tokenized(
+        self,
+        obj: Union[GenerateReqInput, EmbeddingReqInput],
+        batch_size: int,
+        request: Optional[fastapi.Request],
+    ) -> Tuple[List[AsyncGenerator], List[str]]:
+        # Sequential tokenization and processing
+        generators: List[AsyncGenerator] = []
+        rids: List[str] = []
+        with (
+            input_blocker_guard_region(send_to_scheduler=self.send_to_scheduler)
+            if get_bool_env_var("SGLANG_ENABLE_COLOCATED_BATCH_GEN")
+            else nullcontext()
+        ):
+            for i in range(batch_size):
+                tmp_obj = obj[i]
+                tokenized_obj = await TokenizerManager._tokenize_one_request(
+                    self.request_preparer, tmp_obj
+                )
+                self._send_one_request(tokenized_obj)
+                generators.append(
+                    TokenizerManager._wait_one_response(
+                        self.response_emitter, tmp_obj, request
+                    )
+                )
+                rids.append(tmp_obj.rid)
+        return generators, rids
 
     def configure_logging(self, obj: ConfigureLoggingReq):
         self.request_log_manager.request_logger.configure(
