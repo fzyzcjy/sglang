@@ -641,9 +641,7 @@ class Mamba2AttnBackend(MambaAttnBackendBase):
 
     def __init__(self, model_runner: ModelRunner):
         super().__init__(model_runner)
-        config = mamba2_config(
-            model_runner.model_config, is_draft_worker=model_runner.is_draft_worker
-        )
+        config = mamba2_config(model_runner.model_config)
         assert config is not None
         self.mamba_chunk_size = config.mamba_chunk_size
 

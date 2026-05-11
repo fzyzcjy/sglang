@@ -214,9 +214,7 @@ def attn_backend_wrapper(runner: "ModelRunner", full_attn_backend: "AttentionBac
         hybrid_gdn_config(runner.model_config) is not None and runner.use_mla_backend
     ), "hybrid_gdn can only be used with non-MLA models."
 
-    if cfg := mambaish_config(
-        runner.model_config, is_draft_worker=runner.is_draft_worker
-    ):
+    if cfg := mambaish_config(runner.model_config):
         from sglang.srt.layers.attention.fla.utils import check_environments
         from sglang.srt.layers.attention.linear.kda_backend import KDAAttnBackend
         from sglang.srt.layers.attention.linear.lightning_backend import (
@@ -260,10 +258,7 @@ def attn_backend_wrapper(runner: "ModelRunner", full_attn_backend: "AttentionBac
                 ), "ascend backend is the only supported backend on NPU for hybrid GDN models, use --attention-backend ascend to specify the backend."
             logger.info(f"Using hybrid linear attention backend for hybrid GDN models.")
             linear_attn_backend = GDNAttnBackend(runner)
-        elif (
-            mamba2_config(runner.model_config, is_draft_worker=runner.is_draft_worker)
-            is not None
-        ):
+        elif mamba2_config(runner.model_config) is not None:
             linear_attn_backend = Mamba2AttnBackend(runner)
         elif kimi_linear_config(runner.model_config) is not None:
             linear_attn_backend = KDAAttnBackend(runner)

@@ -733,9 +733,7 @@ class ModelRunner:
             is_hybrid_swa_compress=self.is_hybrid_swa_compress,
             use_mla_backend=self.use_mla_backend,
             enable_hisparse=self.enable_hisparse,
-            mambaish_config=mambaish_config(
-                self.model_config, is_draft_worker=self.is_draft_worker
-            ),
+            mambaish_config=mambaish_config(self.model_config),
             hybrid_gdn_config=hybrid_gdn_config(self.model_config),
             start_layer=self.start_layer,
             end_layer=self.end_layer,
