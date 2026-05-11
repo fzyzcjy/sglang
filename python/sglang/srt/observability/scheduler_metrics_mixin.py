@@ -815,26 +815,6 @@ class SchedulerMetricsMixin:
                     self.stats.token_usage / 0.9,
                 )
 
-    def _get_num_pending_tokens(self: Scheduler, chunk_deduct: int = 0) -> int:
-        """Get the total number of tokens pending prefill.
-
-        This includes tokens from waiting queue requests plus remaining tokens
-        from the currently chunked request.
-
-        Args:
-            chunk_deduct: extra tokens to subtract from the chunked request's
-                remaining count. At batch-scheduling time the current chunk
-                has been planned but ``prefix_indices`` does not yet include it,
-                so callers pass ``extend_input_len`` here. At load-reporting
-                time ``prefix_indices`` is already up-to-date, so the default
-                0 is correct.
-        """
-        num_pending_tokens = sum(req.seqlen for req in self.waiting_queue)
-        if self.chunked_req is not None:
-            req = self.chunked_req
-            num_pending_tokens += req.seqlen - len(req.prefix_indices) - chunk_deduct
-        return num_pending_tokens
-
     def get_loads(self: Scheduler, req: GetLoadsReqInput = None) -> GetLoadsReqOutput:
         """
         Get comprehensive load metrics for /v1/loads endpoint.

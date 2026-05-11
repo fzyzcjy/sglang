@@ -3120,6 +3120,26 @@ class Scheduler(
         # sleep until next event
         self.maybe_sleep_on_idle()
 
+    def _get_num_pending_tokens(self, chunk_deduct: int = 0) -> int:
+        """Get the total number of tokens pending prefill.
+
+        This includes tokens from waiting queue requests plus remaining tokens
+        from the currently chunked request.
+
+        Args:
+            chunk_deduct: extra tokens to subtract from the chunked request's
+                remaining count. At batch-scheduling time the current chunk
+                has been planned but ``prefix_indices`` does not yet include it,
+                so callers pass ``extend_input_len`` here. At load-reporting
+                time ``prefix_indices`` is already up-to-date, so the default
+                0 is correct.
+        """
+        num_pending_tokens = sum(req.seqlen for req in self.waiting_queue)
+        if self.chunked_req is not None:
+            req = self.chunked_req
+            num_pending_tokens += req.seqlen - len(req.prefix_indices) - chunk_deduct
+        return num_pending_tokens
+
     def is_fully_idle(self, for_health_check=False) -> bool:
         # Health check piggybacks on running requests in process_output.
         # Only running_batch + waiting_queue guarantee active GPU processing;
