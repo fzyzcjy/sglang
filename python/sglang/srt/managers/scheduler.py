@@ -2323,8 +2323,7 @@ class Scheduler(
         prefill_delayer_single_pass = None
         if self.prefill_delayer:
             # Get max usage across all pools for prefill delay decision
-            max_pool_usage = self.get_pool_stats(
-                self.pool_stats_observer,
+            max_pool_usage = self.pool_stats_observer.get_pool_stats(
                 last_batch=self.last_batch,
                 running_batch=self.running_batch,
             ).get_max_pool_usage()
@@ -3001,18 +3000,18 @@ class Scheduler(
         ):
             return
 
-        self.get_pool_stats(
-            self.pool_stats_observer,
+        self.pool_stats_observer.get_pool_stats(
             last_batch=self.last_batch,
             running_batch=self.running_batch,
         ).update_scheduler_stats(self.stats)
-        self.stats.num_streaming_sessions = self.streaming_session_count(
-            self.pool_stats_observer,
+        self.stats.num_streaming_sessions = (
+            self.pool_stats_observer.streaming_session_count()
         )
-        self.stats.streaming_session_held_tokens = self.session_held_tokens(
-            self.pool_stats_observer,
-            last_batch=self.last_batch,
-            running_batch=self.running_batch,
+        self.stats.streaming_session_held_tokens = (
+            self.pool_stats_observer.session_held_tokens(
+                last_batch=self.last_batch,
+                running_batch=self.running_batch,
+            )
         )
 
         priority_enabled = self.enable_priority_scheduling
@@ -3049,8 +3048,7 @@ class Scheduler(
         # diverge during host-backup, see _get_swa_token_info clamp).
         if not self.enable_hisparse:
             has_leak, messages = self._check_all_pools(
-                self.get_pool_stats(
-                    self.pool_stats_observer,
+                self.pool_stats_observer.get_pool_stats(
                     last_batch=self.last_batch,
                     running_batch=self.running_batch,
                 )
