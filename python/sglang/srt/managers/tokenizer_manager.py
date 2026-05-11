@@ -39,7 +39,6 @@ from fastapi import BackgroundTasks
 
 from sglang.srt.configs.model_config import ModelConfig
 from sglang.srt.constants import HEALTH_CHECK_RID_PREFIX
-from sglang.srt.disaggregation.encode_receiver import create_mm_receiver
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
 from sglang.srt.lora.lora_registry import LoRARef, LoRARegistry
@@ -69,6 +68,7 @@ from sglang.srt.managers.io_struct import (
     WatchLoadUpdateReq,
 )
 from sglang.srt.managers.mm_utils import TensorTransportMode, wrap_shm_features
+from sglang.srt.managers.multimodal_processor_owner import MultimodalProcessor
 from sglang.srt.managers.raw_tokenizer_wrapper import RawTokenizerWrapper
 from sglang.srt.managers.request_state import ReqState, init_req
 from sglang.srt.managers.request_validator import (
@@ -175,6 +175,13 @@ class TokenizerManager(TokenizerControlMixin):
         # Init request dispatcher (called early so owner-class ctors can
         # pass dispatcher=self._result_dispatcher as a kwarg).
         self.init_request_dispatcher()
+
+        # Multimodal processor
+        self.multimodal_processor = MultimodalProcessor.from_server_args(
+            server_args=self.server_args,
+            model_config=self.model_config,
+            mm_processor=self.raw_tokenizer_wrapper.mm_processor,
+        )
 
         # Tokenized request builder
         self.tokenized_request_builder = TokenizedRequestBuilder(
@@ -352,13 +359,6 @@ class TokenizerManager(TokenizerControlMixin):
         # Single-source counter for auto-assigning fake bootstrap_room.
         self.fake_bootstrap_room_counter = 0
 
-        # Encoder Disaggregation
-        if self.server_args.language_only:
-            self.mm_receiver = create_mm_receiver(
-                self.server_args,
-                dtype=self.model_config.dtype,
-            )
-
     def init_metric_collector_watchdog(self):
         # Metrics
         if self.enable_metrics:
@@ -446,7 +446,9 @@ class TokenizerManager(TokenizerControlMixin):
             disagg_mode=self.disaggregation_mode,
         )
         if self.server_args.language_only:
-            self._handle_epd_disaggregation_encode_request(obj)
+            TokenizerManager._handle_epd_disaggregation_encode_request(
+                self.multimodal_processor, obj
+            )
         if self.server_args.tokenizer_worker_num > 1:
             self._attach_multi_http_worker_info(obj)
 
@@ -546,11 +548,13 @@ class TokenizerManager(TokenizerControlMixin):
                 in ["zmq_to_tokenizer", "mooncake"]
             ):
                 if self.server_args.language_only:
-                    mm_inputs = await self.mm_receiver.recv_mm_data(
-                        request_obj=obj,
-                        mm_processor=self.raw_tokenizer_wrapper.mm_processor,
-                        prompt=(input_text or input_ids),
-                        need_wait_for_mm_inputs=obj.need_wait_for_mm_inputs,
+                    mm_inputs = (
+                        await self.multimodal_processor.mm_receiver.recv_mm_data(
+                            request_obj=obj,
+                            mm_processor=self.raw_tokenizer_wrapper.mm_processor,
+                            prompt=(input_text or input_ids),
+                            need_wait_for_mm_inputs=obj.need_wait_for_mm_inputs,
+                        )
                     )
                 if mm_inputs is None:
                     mm_inputs = await self.raw_tokenizer_wrapper.mm_processor.process_mm_data_async(
@@ -1841,8 +1845,10 @@ class TokenizerManager(TokenizerControlMixin):
                 obj.lora_id[i] if isinstance(obj.lora_id, list) else obj.lora_id
             )
 
+    @staticmethod
     def _should_dispatch_to_encoder(
-        self, obj: Union[GenerateReqInput, EmbeddingReqInput]
+        self: "MultimodalProcessor",
+        obj: Union[GenerateReqInput, EmbeddingReqInput],
     ) -> bool:
         """Check if the request should be dispatched to encoder for processing.
 
@@ -1875,23 +1881,27 @@ class TokenizerManager(TokenizerControlMixin):
             + _count_mm_items(getattr(obj, "video_data", None))
             + _count_mm_items(getattr(obj, "audio_data", None))
         )
-        return total_mm_items >= envs.SGLANG_ENCODER_DISPATCH_MIN_ITEMS.get()
+        return total_mm_items >= self.config.encoder_dispatch_min_items
 
+    @staticmethod
     def _handle_epd_disaggregation_encode_request(
-        self, obj: Union[GenerateReqInput, EmbeddingReqInput]
+        self: "MultimodalProcessor",
+        obj: Union[GenerateReqInput, EmbeddingReqInput],
     ):
         """Handle EPD-disaggregation mode encoding request."""
         if isinstance(obj, GenerateReqInput) and obj.contains_mm_input():
             # dispatch to encoder by default
             should_dispatch = True
-            if self.server_args.enable_adaptive_dispatch_to_encoder:
-                should_dispatch = self._should_dispatch_to_encoder(obj)
+            if self.config.enable_adaptive_dispatch_to_encoder:
+                should_dispatch = TokenizerManager._should_dispatch_to_encoder(
+                    self, obj
+                )
 
             # Set need_wait_for_mm_inputs flag based on whether we dispatch to encoder
             # This flag will be used in _tokenize_one_request to determine processing path
             if should_dispatch:
                 obj.need_wait_for_mm_inputs = True
-                if self.server_args.encoder_transfer_backend == "zmq_to_scheduler":
+                if self.config.encoder_transfer_backend == "zmq_to_scheduler":
                     self.mm_receiver.send_encode_request(obj)
             else:
                 obj.need_wait_for_mm_inputs = False
