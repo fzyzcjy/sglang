@@ -175,6 +175,9 @@ from sglang.srt.managers.scheduler_components.invariant_checker import (
 from sglang.srt.managers.scheduler_components.kv_events_publisher import (
     SchedulerKvEventsPublisher,
 )
+from sglang.srt.managers.scheduler_components.load_inquirer import (
+    SchedulerLoadInquirer,
+)
 from sglang.srt.managers.scheduler_components.pool_stats_observer import (
     SchedulerPoolStatsObserver,
 )
@@ -646,6 +649,18 @@ class Scheduler(
             full_tokens_per_layer=self.full_tokens_per_layer,
             swa_tokens_per_layer=self.swa_tokens_per_layer,
             max_total_num_tokens=self.max_total_num_tokens,
+        )
+
+        self.load_inquirer = SchedulerLoadInquirer(
+            disaggregation_mode=self.disaggregation_mode,
+            ps=self.ps,
+            max_total_num_tokens=self.max_total_num_tokens,
+            max_running_requests=self.max_running_requests,
+            enable_lora=self.enable_lora,
+            pool_stats_observer=self.pool_stats_observer,
+            tp_worker=self.tp_worker,
+            token_to_kv_pool_allocator=self.token_to_kv_pool_allocator,
+            spec_algorithm=self.spec_algorithm,
         )
 
         self.invariant_checker = SchedulerInvariantChecker(
@@ -1430,7 +1445,30 @@ class Scheduler(
                     self.load_lora_adapter_from_tensors,
                 ),
                 (UnloadLoRAAdapterReqInput, self.unload_lora_adapter),
-                (GetLoadsReqInput, self.get_loads),
+                (
+                    GetLoadsReqInput,
+                    lambda req: self.get_loads(
+                        self.load_inquirer,
+                        req,
+                        running_batch=self.running_batch,
+                        waiting_queue=self.waiting_queue,
+                        stats=self.stats,
+                        spec_total_num_accepted_tokens=self.spec_total_num_accepted_tokens,
+                        spec_total_num_forward_ct=self.spec_total_num_forward_ct,
+                        disagg_prefill_bootstrap_queue=getattr(
+                            self, "disagg_prefill_bootstrap_queue", None
+                        ),
+                        disagg_prefill_inflight_queue=getattr(
+                            self, "disagg_prefill_inflight_queue", None
+                        ),
+                        disagg_decode_prealloc_queue=getattr(
+                            self, "disagg_decode_prealloc_queue", None
+                        ),
+                        disagg_decode_transfer_queue=getattr(
+                            self, "disagg_decode_transfer_queue", None
+                        ),
+                    ),
+                ),
                 (PauseGenerationReqInput, self.pause_generation),
                 (ContinueGenerationReqInput, self.continue_generation),
                 (DumperControlReqInput, self.handle_dumper_control),
