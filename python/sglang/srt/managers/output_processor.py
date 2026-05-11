@@ -146,15 +146,13 @@ class OutputProcessor:
             if state.finished:
                 self._finalize_on_finish(state, recv_obj, i, rid, meta_info)
 
-            if out_dict is not None:
-                state.out_list.append(out_dict)
-                pending_notify[rid] = state
-
-                if len(pending_notify) >= batch_notify_size:
-                    for s in pending_notify.values():
-                        s.event.set()
-                    pending_notify = {}
-                    await asyncio.sleep(0)
+            await self._enqueue_and_maybe_flush_pending(
+                out_dict=out_dict,
+                rid=rid,
+                state=state,
+                pending_notify=pending_notify,
+                batch_notify_size=batch_notify_size,
+            )
 
             if self.config.enable_metrics and state.obj.log_metrics:
                 self.request_metrics_recorder.collect_metrics(state, recv_obj, i)
@@ -356,3 +354,23 @@ class OutputProcessor:
             asyncio.create_task(
                 self.lora_controller.lora_registry.release(state.obj.lora_id)
             )
+
+    async def _enqueue_and_maybe_flush_pending(
+        self,
+        *,
+        out_dict: Optional[dict],
+        rid: str,
+        state: ReqState,
+        pending_notify: Dict[str, ReqState],
+        batch_notify_size: int,
+    ) -> None:
+        if out_dict is None:
+            return
+        state.out_list.append(out_dict)
+        pending_notify[rid] = state
+
+        if len(pending_notify) >= batch_notify_size:
+            for s in pending_notify.values():
+                s.event.set()
+            pending_notify.clear()
+            await asyncio.sleep(0)
