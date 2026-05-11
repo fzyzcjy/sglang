@@ -39,6 +39,10 @@ from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
 from sglang.srt.lora.lora_registry import LoRARef, LoRARegistry
 from sglang.srt.managers import logprob_ops, request_tracing, spec_decoding_meta
+from sglang.srt.managers.control.session_controller import (
+    SessionController,
+    SessionControllerConfig,
+)
 from sglang.srt.managers.disagg_service import start_disagg_service
 from sglang.srt.managers.inputs.multimodal_processor import MultimodalProcessor
 from sglang.srt.managers.inputs.raw_tokenizer_wrapper import RawTokenizerWrapper
@@ -69,7 +73,6 @@ from sglang.srt.managers.io_struct import (
     GenerateReqInput,
     HealthCheckOutput,
     LoadLoRAAdapterReqInput,
-    OpenSessionReqOutput,
     PauseGenerationReqInput,
     TokenizedEmbeddingReqInput,
     TokenizedGenerateReqInput,
@@ -165,6 +168,18 @@ class TokenizerManager(TokenizerControlMixin):
         # Init metric collector and watchdog
         self.init_metric_collector_watchdog()
 
+        # Result dispatcher (created early so controllers can register handlers in __post_init__)
+        self._result_dispatcher = TypeBasedDispatcher(
+            [
+                (FreezeGCReq, lambda x: None),
+                (HealthCheckOutput, lambda x: None),
+                (ActiveRanksOutput, self.update_active_ranks),
+            ]
+        )
+
+        # Communicators (RPC fan-out) -- needed by owner-class ctors below.
+        self.init_communicators(self.server_args)
+
         # Multimodal processor
         self.multimodal_processor = MultimodalProcessor.from_server_args(
             server_args=self.server_args,
@@ -246,6 +261,15 @@ class TokenizerManager(TokenizerControlMixin):
             ),
         )
 
+        # Session controller
+        self.session_controller = SessionController(
+            send_to_scheduler=self.send_to_scheduler,
+            dispatcher=self._result_dispatcher,
+            config=SessionControllerConfig(
+                enable_streaming_session=self.server_args.enable_streaming_session,
+            ),
+        )
+
         # Init request dispatcher
         self.init_request_dispatcher()
 
@@ -308,9 +332,6 @@ class TokenizerManager(TokenizerControlMixin):
         self.gracefully_exit = False
         self.last_receive_tstamp = real_time()
 
-        # Session
-        self.session_futures = {}  # session_id -> asyncio event
-
         # Subprocess liveness watchdog — set by Engine or http_server after construction
         self._subprocess_watchdog = None
 
@@ -368,22 +389,6 @@ class TokenizerManager(TokenizerControlMixin):
         )
 
     def init_request_dispatcher(self):
-        self._result_dispatcher = TypeBasedDispatcher(
-            [
-                (AbortReq, self._handle_abort_req),
-                (OpenSessionReqOutput, self._handle_open_session_req_output),
-                (
-                    UpdateWeightFromDiskReqOutput,
-                    self._handle_update_weights_from_disk_req_output,
-                ),
-                (FreezeGCReq, lambda x: None),
-                # For handling case when scheduler skips detokenizer and forwards back to the tokenizer manager, we ignore it.
-                (HealthCheckOutput, lambda x: None),
-                (ActiveRanksOutput, self.update_active_ranks),
-            ]
-        )
-        self.init_communicators(self.server_args)
-
         self.sampling_params_class = SamplingParams
         self.signal_handler_class = SignalHandler
 
@@ -1300,17 +1305,6 @@ class TokenizerManager(TokenizerControlMixin):
 
     def update_active_ranks(self, ranks: ActiveRanksOutput):
         self.send_to_scheduler.send_pyobj(ranks)
-
-    def _handle_open_session_req_output(self, recv_obj):
-        future = self.session_futures.get(recv_obj.session_id)
-        if future is None:
-            logger.warning(
-                "Open session response arrived after waiter cleanup: %s",
-                recv_obj.session_id,
-            )
-            return
-        if not future.done():
-            future.set_result(recv_obj.session_id if recv_obj.success else None)
 
     def _handle_update_weights_from_disk_req_output(self, recv_obj):
         if self.server_args.dp_size == 1:
