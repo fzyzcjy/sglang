@@ -194,6 +194,7 @@ from sglang.srt.mem_cache.common import maybe_cache_unfinished_req, release_kv_c
 from sglang.srt.model_executor.forward_batch_info import ForwardMode, PPProxyTensors
 from sglang.srt.model_loader.utils import get_resolved_model_impl
 from sglang.srt.multiplex.multiplexing_mixin import SchedulerMultiplexMixin
+from sglang.srt.observability.metrics_collector import QueueCount
 from sglang.srt.observability.req_time_stats import (
     real_time,
     set_schedule_time_batch,
@@ -2970,6 +2971,74 @@ class Scheduler(
             logging.warning("Hierarchical cache is not enabled.")
             if_success = False
         return ClearHiCacheReqOutput(success=if_success)
+
+    def _maybe_log_idle_metrics(self):
+        """Collect and log metrics every 30 seconds during idle."""
+        if (
+            not self.current_scheduler_metrics_enabled
+            or time.perf_counter() <= self.metrics_collector.last_log_time + 30
+        ):
+            return
+
+        self.get_pool_stats().update_scheduler_stats(self.stats)
+        self.stats.num_streaming_sessions = self._streaming_session_count()
+        self.stats.streaming_session_held_tokens = self._session_held_tokens()
+
+        priority_enabled = self.enable_priority_scheduling
+        self.stats.num_running_reqs = QueueCount.from_reqs(
+            self.running_batch.reqs, priority_enabled
+        )
+        self.stats.gen_throughput = 0
+        self.stats.num_queue_reqs = QueueCount.from_reqs(
+            self.waiting_queue, priority_enabled
+        )
+        self.stats.num_grammar_queue_reqs = len(self.grammar_manager)
+        if self.disaggregation_mode == DisaggregationMode.PREFILL:
+            self.stats.num_prefill_bootstrap_queue_reqs = QueueCount.from_reqs(
+                self.disagg_prefill_bootstrap_queue.queue, priority_enabled
+            )
+            self.stats.num_prefill_inflight_queue_reqs = QueueCount.from_reqs(
+                self.disagg_prefill_inflight_queue, priority_enabled
+            )
+        if self.disaggregation_mode == DisaggregationMode.DECODE:
+            self.stats.num_decode_prealloc_queue_reqs = QueueCount.from_reqs(
+                self.disagg_decode_prealloc_queue.queue, priority_enabled
+            )
+            self.stats.num_decode_transfer_queue_reqs = QueueCount.from_reqs(
+                self.disagg_decode_transfer_queue.queue, priority_enabled
+            )
+        self.metrics_collector.log_stats(self.stats)
+
+    def on_idle(self):
+        """Idle housekeeping: guard, check, metrics, reset, sleep."""
+        if not self.is_fully_idle():
+            return
+
+        # memory leak check (skipped for hisparse — pool counters intentionally
+        # diverge during host-backup, see _get_swa_token_info clamp).
+        if not self.enable_hisparse:
+            has_leak, messages = self._check_all_pools(self.get_pool_stats())
+            if has_leak:
+                self._report_leak("pool", "\n".join(messages))
+            self._check_req_pool()
+
+        # tree cache sanity check
+        self._check_tree_cache()
+
+        # metrics every 30s
+        self._maybe_log_idle_metrics()
+
+        # kv event publishing
+        self._publish_kv_events()
+
+        # reset token ratio
+        self.new_token_ratio = self.init_new_token_ratio
+
+        # reset device timer window so idle time isn't counted
+        self.reset_device_timer_window()
+
+        # sleep until next event
+        self.maybe_sleep_on_idle()
 
     def is_fully_idle(self, for_health_check=False) -> bool:
         # Health check piggybacks on running requests in process_output.
