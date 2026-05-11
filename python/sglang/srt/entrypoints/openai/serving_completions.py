@@ -571,14 +571,14 @@ class OpenAIServingCompletion(OpenAIServingBase):
                 return request.prompt[index // request.n]
             elif isinstance(request.prompt[0], int):
                 # for the case of single token ids prompt
-                return self.tokenizer_manager.tokenizer.decode(
+                return self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.decode(
                     request.prompt, skip_special_tokens=True
                 )
             elif isinstance(request.prompt[0], list) and isinstance(
                 request.prompt[0][0], int
             ):
                 # for the case of multiple token ids prompts
-                return self.tokenizer_manager.tokenizer.decode(
+                return self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.decode(
                     request.prompt[index // request.n],
                     skip_special_tokens=True,
                 )
@@ -593,7 +593,7 @@ class OpenAIServingCompletion(OpenAIServingBase):
         elif isinstance(request.prompt, list) and isinstance(request.prompt[0], list):
             # for the case of multiple token ids prompts
             return [
-                self.tokenizer_manager.tokenizer.decode(
+                self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.decode(
                     prompt, skip_special_tokens=True
                 )
                 for prompt in request.prompt
@@ -601,7 +601,7 @@ class OpenAIServingCompletion(OpenAIServingBase):
         elif isinstance(request.prompt, list) and isinstance(request.prompt[0], int):
             # for the case of single token ids prompt
             return [
-                self.tokenizer_manager.tokenizer.decode(
+                self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.decode(
                     request.prompt, skip_special_tokens=True
                 )
             ]
