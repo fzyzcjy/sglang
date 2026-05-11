@@ -1304,17 +1304,6 @@ class TokenizerManager(TokenizerControlMixin):
     def update_active_ranks(self, ranks: ActiveRanksOutput):
         self.send_to_scheduler.send_pyobj(ranks)
 
-    def _handle_open_session_req_output(self, recv_obj):
-        future = self.session_futures.get(recv_obj.session_id)
-        if future is None:
-            logger.warning(
-                "Open session response arrived after waiter cleanup: %s",
-                recv_obj.session_id,
-            )
-            return
-        if not future.done():
-            future.set_result(recv_obj.session_id if recv_obj.success else None)
-
     def _handle_update_weights_from_disk_req_output(self, recv_obj):
         if self.server_args.dp_size == 1:
             self.model_update_result.set_result(recv_obj)
