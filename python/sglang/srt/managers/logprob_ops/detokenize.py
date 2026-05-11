@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, List, Optional, Tuple
 
 
-def _detokenize_logprob_tokens(
+def detokenize_logprob_tokens(
     token_logprobs_val: List[float],
     token_logprobs_idx: List[int],
     *,
@@ -23,7 +23,7 @@ def _detokenize_logprob_tokens(
         return list(zip(token_logprobs_val, token_logprobs_idx, token_texts))
 
 
-def _detokenize_top_logprobs_tokens(
+def detokenize_top_logprobs_tokens(
     token_logprobs_val: List[List[float]],
     token_logprobs_idx: List[List[int]],
     *,
@@ -36,7 +36,7 @@ def _detokenize_top_logprobs_tokens(
     for i in range(len(token_logprobs_val)):
         if token_logprobs_val[i]:
             ret.append(
-                _detokenize_logprob_tokens(
+                detokenize_logprob_tokens(
                     token_logprobs_val[i],
                     token_logprobs_idx[i],
                     decode_to_text=decode_to_text,

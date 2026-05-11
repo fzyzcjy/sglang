@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Any, List, Optional
 
 from sglang.srt.managers.logprob_ops.detokenize import (
-    _detokenize_logprob_tokens,
-    _detokenize_top_logprobs_tokens,
+    detokenize_logprob_tokens,
+    detokenize_top_logprobs_tokens,
 )
 from sglang.srt.managers.request_state import ReqState
 
@@ -21,7 +21,7 @@ def fill_meta_info(
     # 1. Handle regular logprobs
     if len(state.input_token_logprobs_val) > len(state.input_token_logprobs):
         state.input_token_logprobs.extend(
-            _detokenize_logprob_tokens(
+            detokenize_logprob_tokens(
                 state.input_token_logprobs_val[len(state.input_token_logprobs) :],
                 state.input_token_logprobs_idx[len(state.input_token_logprobs) :],
                 decode_to_text=return_text_in_logprobs,
@@ -31,7 +31,7 @@ def fill_meta_info(
 
     if len(state.output_token_logprobs_val) > len(state.output_token_logprobs):
         state.output_token_logprobs.extend(
-            _detokenize_logprob_tokens(
+            detokenize_logprob_tokens(
                 state.output_token_logprobs_val[len(state.output_token_logprobs) :],
                 state.output_token_logprobs_idx[len(state.output_token_logprobs) :],
                 decode_to_text=return_text_in_logprobs,
@@ -47,7 +47,7 @@ def fill_meta_info(
     if top_logprobs_num > 0:
         if len(state.input_top_logprobs_val) > len(state.input_top_logprobs):
             state.input_top_logprobs.extend(
-                _detokenize_top_logprobs_tokens(
+                detokenize_top_logprobs_tokens(
                     state.input_top_logprobs_val[len(state.input_top_logprobs) :],
                     state.input_top_logprobs_idx[len(state.input_top_logprobs) :],
                     decode_to_text=return_text_in_logprobs,
@@ -56,7 +56,7 @@ def fill_meta_info(
             )
         if len(state.output_top_logprobs_val) > len(state.output_top_logprobs):
             state.output_top_logprobs.extend(
-                _detokenize_top_logprobs_tokens(
+                detokenize_top_logprobs_tokens(
                     state.output_top_logprobs_val[len(state.output_top_logprobs) :],
                     state.output_top_logprobs_idx[len(state.output_top_logprobs) :],
                     decode_to_text=return_text_in_logprobs,
@@ -73,7 +73,7 @@ def fill_meta_info(
             state.input_token_ids_logprobs
         ):
             state.input_token_ids_logprobs.extend(
-                _detokenize_top_logprobs_tokens(
+                detokenize_top_logprobs_tokens(
                     state.input_token_ids_logprobs_val[
                         len(state.input_token_ids_logprobs) :
                     ],
@@ -88,7 +88,7 @@ def fill_meta_info(
             state.output_token_ids_logprobs
         ):
             state.output_token_ids_logprobs.extend(
-                _detokenize_top_logprobs_tokens(
+                detokenize_top_logprobs_tokens(
                     state.output_token_ids_logprobs_val[
                         len(state.output_token_ids_logprobs) :
                     ],
