@@ -756,7 +756,9 @@ class AnthropicServing:
                 input_tokens = len(processed.prompt_ids)
             else:
                 # prompt_ids is a string (multimodal case) — tokenize it
-                tokenizer = self.openai_serving_chat.tokenizer_manager.tokenizer
+                tokenizer = (
+                    self.openai_serving_chat.tokenizer_manager.raw_tokenizer_wrapper.tokenizer
+                )
                 input_tokens = len(tokenizer.encode(processed.prompt_ids))
 
             return JSONResponse(
