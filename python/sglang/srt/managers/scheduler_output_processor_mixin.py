@@ -1050,7 +1050,27 @@ class SchedulerOutputProcessorMixin:
         spec_acceptance_histogram = []
         retraction_counts = []
         output_hidden_states = None
-        load = self.get_loads(GetLoadsReqInput(include=["core"]))
+        load = self.get_loads(
+            self.load_inquirer,
+            GetLoadsReqInput(include=["core"]),
+            running_batch=self.running_batch,
+            waiting_queue=self.waiting_queue,
+            stats=self.stats,
+            spec_total_num_accepted_tokens=self.spec_total_num_accepted_tokens,
+            spec_total_num_forward_ct=self.spec_total_num_forward_ct,
+            disagg_prefill_bootstrap_queue=getattr(
+                self, "disagg_prefill_bootstrap_queue", None
+            ),
+            disagg_prefill_inflight_queue=getattr(
+                self, "disagg_prefill_inflight_queue", None
+            ),
+            disagg_decode_prealloc_queue=getattr(
+                self, "disagg_decode_prealloc_queue", None
+            ),
+            disagg_decode_transfer_queue=getattr(
+                self, "disagg_decode_transfer_queue", None
+            ),
+        )
         routed_experts = None
         indexer_topk = None
         customized_info = {}

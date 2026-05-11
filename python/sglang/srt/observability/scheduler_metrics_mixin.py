@@ -33,6 +33,9 @@ if TYPE_CHECKING:
     from sglang.srt.managers.schedule_batch import Req
     from sglang.srt.managers.schedule_policy import PrefillAdder
     from sglang.srt.managers.scheduler import EmbeddingBatchResult, Scheduler
+    from sglang.srt.managers.scheduler_components.load_inquirer import (
+        SchedulerLoadInquirer,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -762,7 +765,21 @@ class SchedulerMetricsMixin:
                     self.stats.token_usage / 0.9,
                 )
 
-    def get_loads(self: Scheduler, req: GetLoadsReqInput = None) -> GetLoadsReqOutput:
+    @staticmethod
+    def get_loads(
+        self: "SchedulerLoadInquirer",
+        req: GetLoadsReqInput = None,
+        *,
+        running_batch,
+        waiting_queue,
+        stats,
+        spec_total_num_accepted_tokens: int,
+        spec_total_num_forward_ct: int,
+        disagg_prefill_bootstrap_queue,
+        disagg_prefill_inflight_queue,
+        disagg_decode_prealloc_queue,
+        disagg_decode_transfer_queue,
+    ) -> GetLoadsReqOutput:
         """
         Get comprehensive load metrics for /v1/loads endpoint.
 
@@ -778,20 +795,20 @@ class SchedulerMetricsMixin:
         include = set(req.include) if req.include else {"core"}
         include_all = "all" in include
 
-        num_running_reqs = len(self.running_batch.reqs)
+        num_running_reqs = len(running_batch.reqs)
 
-        waiting_queues = [self.waiting_queue]
+        waiting_queues = [waiting_queue]
         if self.disaggregation_mode == DisaggregationMode.PREFILL:
-            waiting_queues.append(self.disagg_prefill_bootstrap_queue.queue)
+            waiting_queues.append(disagg_prefill_bootstrap_queue.queue)
         elif self.disaggregation_mode == DisaggregationMode.DECODE:
-            waiting_queues.append(self.disagg_decode_prealloc_queue.queue)
-            waiting_queues.append(self.disagg_decode_transfer_queue.queue)
-            waiting_queues.append(self.disagg_decode_prealloc_queue.retracted_queue)
+            waiting_queues.append(disagg_decode_prealloc_queue.queue)
+            waiting_queues.append(disagg_decode_transfer_queue.queue)
+            waiting_queues.append(disagg_decode_prealloc_queue.retracted_queue)
 
         num_waiting_reqs = sum(len(queue) for queue in waiting_queues)
         num_used_tokens, kv_token_usage = self.pool_stats_observer.get_pool_stats(
-            last_batch=self.last_batch,
-            running_batch=self.running_batch,
+            last_batch=None,
+            running_batch=running_batch,
         ).get_kv_token_stats()
         num_total_tokens = num_used_tokens + sum(
             req.seqlen for queue in waiting_queues for req in queue
@@ -815,22 +832,21 @@ class SchedulerMetricsMixin:
 
         speculative = None
         if include_all or "spec" in include:
-            if not self.spec_algorithm.is_none() and self.spec_total_num_forward_ct > 0:
+            if not self.spec_algorithm.is_none() and spec_total_num_forward_ct > 0:
                 speculative = SpeculativeMetrics(
                     accept_length=(
-                        self.spec_total_num_accepted_tokens
-                        / self.spec_total_num_forward_ct
+                        spec_total_num_accepted_tokens / spec_total_num_forward_ct
                     ),
-                    accept_rate=self.stats.spec_accept_rate,
+                    accept_rate=stats.spec_accept_rate,
                 )
 
         lora = None
         if include_all or "lora" in include:
             if self.enable_lora:
                 lora = LoRAMetrics(
-                    slots_used=self.stats.lora_pool_slots_used,
-                    slots_total=self.stats.lora_pool_slots_total,
-                    utilization=self.stats.lora_pool_utilization,
+                    slots_used=stats.lora_pool_slots_used,
+                    slots_total=stats.lora_pool_slots_total,
+                    utilization=stats.lora_pool_utilization,
                 )
 
         disaggregation = None
@@ -844,15 +860,13 @@ class SchedulerMetricsMixin:
 
             if self.disaggregation_mode == DisaggregationMode.PREFILL:
                 mode_str = "prefill"
-                prefill_bootstrap = len(self.disagg_prefill_bootstrap_queue.queue)
-                prefill_inflight = len(self.disagg_prefill_inflight_queue)
+                prefill_bootstrap = len(disagg_prefill_bootstrap_queue.queue)
+                prefill_inflight = len(disagg_prefill_inflight_queue)
             elif self.disaggregation_mode == DisaggregationMode.DECODE:
                 mode_str = "decode"
-                decode_prealloc = len(self.disagg_decode_prealloc_queue.queue)
-                decode_transfer = len(self.disagg_decode_transfer_queue.queue)
-                decode_retracted = len(
-                    self.disagg_decode_prealloc_queue.retracted_queue
-                )
+                decode_prealloc = len(disagg_decode_prealloc_queue.queue)
+                decode_transfer = len(disagg_decode_transfer_queue.queue)
+                decode_retracted = len(disagg_decode_prealloc_queue.retracted_queue)
 
             disaggregation = DisaggregationMetrics(
                 mode=mode_str,
@@ -861,17 +875,17 @@ class SchedulerMetricsMixin:
                 decode_prealloc_queue_reqs=decode_prealloc,
                 decode_transfer_queue_reqs=decode_transfer,
                 decode_retracted_queue_reqs=decode_retracted,
-                kv_transfer_speed_gb_s=self.stats.kv_transfer_speed_gb_s,
-                kv_transfer_latency_ms=self.stats.kv_transfer_latency_ms,
+                kv_transfer_speed_gb_s=stats.kv_transfer_speed_gb_s,
+                kv_transfer_latency_ms=stats.kv_transfer_latency_ms,
             )
 
         queues = None
         if include_all or "queues" in include:
             queues = QueueMetrics(
-                waiting=len(self.waiting_queue),
-                grammar=self.stats.num_grammar_queue_reqs,
-                paused=self.stats.num_paused_reqs,
-                retracted=self.stats.num_retracted_reqs,
+                waiting=len(waiting_queue),
+                grammar=stats.num_grammar_queue_reqs,
+                paused=stats.num_paused_reqs,
+                retracted=stats.num_retracted_reqs,
             )
 
         return GetLoadsReqOutput(
@@ -883,9 +897,9 @@ class SchedulerMetricsMixin:
             num_total_tokens=num_total_tokens,
             max_total_num_tokens=self.max_total_num_tokens,
             token_usage=round(kv_token_usage, 4),
-            gen_throughput=round(self.stats.gen_throughput, 2),
-            cache_hit_rate=round(self.stats.cache_hit_rate, 4),
-            utilization=round(self.stats.utilization, 4),
+            gen_throughput=round(stats.gen_throughput, 2),
+            cache_hit_rate=round(stats.cache_hit_rate, 4),
+            utilization=round(stats.utilization, 4),
             max_running_requests=self.max_running_requests,
             memory=memory,
             speculative=speculative,
