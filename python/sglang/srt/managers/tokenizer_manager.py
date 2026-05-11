@@ -23,7 +23,7 @@ import threading
 from contextlib import nullcontext
 from enum import Enum
 from http import HTTPStatus
-from typing import Awaitable, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import fastapi
 import pybase64
@@ -56,7 +56,6 @@ from sglang.srt.managers.io_struct import (
     TokenizedEmbeddingReqInput,
     TokenizedGenerateReqInput,
     UpdateWeightFromDiskReqInput,
-    UpdateWeightFromDiskReqOutput,
     WatchLoadUpdateReq,
 )
 from sglang.srt.managers.mm_utils import TensorTransportMode, wrap_shm_features
@@ -91,6 +90,10 @@ from sglang.srt.managers.tokenized_request_builder import (
     TokenizedRequestBuilderConfig,
 )
 from sglang.srt.managers.tokenizer_control_mixin import TokenizerControlMixin
+from sglang.srt.managers.weight_disk_update_controller import (
+    WeightDiskUpdateController,
+    WeightDiskUpdateControllerConfig,
+)
 from sglang.srt.observability.req_time_stats import (
     real_time,
     set_time_batch,
@@ -274,6 +277,21 @@ class TokenizerManager(TokenizerControlMixin):
             ),
         )
 
+        # Weight disk update controller
+        self.weight_disk_update_controller = WeightDiskUpdateController(
+            send_to_scheduler=self.send_to_scheduler,
+            dispatcher=self._result_dispatcher,
+            pause_controller=self.pause_controller,
+            model_update_lock=self.model_update_lock,
+            server_args=self.server_args,
+            auto_create_handle_loop=self.auto_create_handle_loop,
+            config=WeightDiskUpdateControllerConfig(
+                dp_size=self.server_args.dp_size,
+                initial_load_format=self.server_args.load_format,
+                checkpoint_engine_wait_weights_before_ready=self.server_args.checkpoint_engine_wait_weights_before_ready,
+            ),
+        )
+
         # Session controller
         self.session_controller = SessionController(
             send_to_scheduler=self.send_to_scheduler,
@@ -349,17 +367,8 @@ class TokenizerManager(TokenizerControlMixin):
         self._subprocess_watchdog = None
 
     def init_weight_update(self):
-        # Initial weights status
-        self.initial_weights_loaded = True
-        if self.server_args.checkpoint_engine_wait_weights_before_ready:
-            self.initial_weights_loaded = False
-
-        # Weight updates
         # The event to notify the weight sync is finished.
         self.model_update_lock = RWLock()
-        self.model_update_result: Optional[Awaitable[UpdateWeightFromDiskReqOutput]] = (
-            None
-        )
 
     def init_lora(self):
         # LoRA
