@@ -125,7 +125,7 @@ class TestDefaultConfigurator(unittest.TestCase):
     def _run(self, available_bytes, page_size=1, **kwargs):
         mr = _make_model_runner(page_size=page_size, **kwargs)
         with mock_cpu_env():
-            from sglang.srt.model_executor.pool_configurator import (
+            from sglang.srt.model_executor.model_runner_components.pool_configurator import (
                 create_memory_pool_configurator,
             )
 
@@ -181,7 +181,7 @@ class TestHybridSWAConfigurator(unittest.TestCase):
     def _run(self, available_bytes, **kwargs):
         mr = self._make_swa_runner(**kwargs)
         with mock_cpu_env():
-            from sglang.srt.model_executor.pool_configurator import (
+            from sglang.srt.model_executor.model_runner_components.pool_configurator import (
                 create_memory_pool_configurator,
             )
 
@@ -269,7 +269,7 @@ class TestAllSWAConfigurator(unittest.TestCase):
             page_size=page_size,
         )
         with mock_cpu_env():
-            from sglang.srt.model_executor.pool_configurator import (
+            from sglang.srt.model_executor.model_runner_components.pool_configurator import (
                 create_memory_pool_configurator,
             )
 
@@ -307,7 +307,7 @@ class TestFactory(unittest.TestCase):
     def test_default_for_non_swa(self):
         mr = _make_model_runner(is_hybrid_swa=False)
         with mock_cpu_env():
-            from sglang.srt.model_executor.pool_configurator import (
+            from sglang.srt.model_executor.model_runner_components.pool_configurator import (
                 DefaultPoolConfigurator,
                 create_memory_pool_configurator,
             )
@@ -323,7 +323,7 @@ class TestFactory(unittest.TestCase):
             swa_num_kv_heads=4,
         )
         with mock_cpu_env():
-            from sglang.srt.model_executor.pool_configurator import (
+            from sglang.srt.model_executor.model_runner_components.pool_configurator import (
                 HybridSWAPoolConfigurator,
                 create_memory_pool_configurator,
             )
