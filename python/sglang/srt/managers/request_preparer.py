@@ -15,7 +15,7 @@ from sglang.srt.managers.io_struct import (
 from sglang.srt.managers.schedule_batch import MultimodalDataItem
 
 logger = logging.getLogger(__name__)
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from sglang.srt.managers.multimodal_processor_owner import MultimodalProcessor
 from sglang.srt.managers.raw_tokenizer_wrapper import RawTokenizerWrapper
@@ -68,94 +68,16 @@ class RequestPreparer:
     ):
         """Tokenize one request."""
         resolved = await self._resolve_input_source(obj)
-        input_text = resolved.input_text
-        input_embeds = resolved.input_embeds
-        input_ids = resolved.input_ids
-        token_type_ids = resolved.token_type_ids
+        mm_inputs, resolved = await self._maybe_run_mm_processor(obj, resolved)
 
-        contains_mm_input = obj.contains_mm_input()
-        is_mossvl = "MossVLForConditionalGeneration" in self.config.architectures
-        should_run_mm_processor = (
-            self.raw_tokenizer_wrapper.mm_processor is not None
-            and (contains_mm_input or is_mossvl)
-        )
-
-        if should_run_mm_processor:
-            if obj.image_data is not None and not isinstance(obj.image_data, list):
-                obj.image_data = [obj.image_data]
-            if obj.video_data is not None and not isinstance(obj.video_data, list):
-                obj.video_data = [obj.video_data]
-            if obj.audio_data is not None and not isinstance(obj.audio_data, list):
-                obj.audio_data = [obj.audio_data]
-            if contains_mm_input:
-                self.request_validator._validate_mm_limits(obj)
-
-            mm_inputs = None
-
-            if (
-                not self.config.language_only
-                or self.config.encoder_transfer_backend
-                in ["zmq_to_tokenizer", "mooncake"]
-            ):
-                if self.config.language_only:
-                    mm_inputs = (
-                        await self.multimodal_processor.mm_receiver.recv_mm_data(
-                            request_obj=obj,
-                            mm_processor=self.raw_tokenizer_wrapper.mm_processor,
-                            prompt=(input_text or input_ids),
-                            need_wait_for_mm_inputs=obj.need_wait_for_mm_inputs,
-                        )
-                    )
-                if mm_inputs is None:
-                    mm_inputs = await self.raw_tokenizer_wrapper.mm_processor.process_mm_data_async(
-                        image_data=obj.image_data,
-                        audio_data=obj.audio_data,
-                        input_text=(input_text or input_ids),
-                        request_obj=obj,
-                        max_req_input_len=self.config.max_req_input_len,
-                    )
-            elif (
-                self.config.language_only
-                and self.config.encoder_transfer_backend == "zmq_to_scheduler"
-                and not obj.need_wait_for_mm_inputs
-            ):
-                # In language_only mode with zmq_to_scheduler, if we didn't dispatch
-                # to encoder (e.g., only one image), process locally like non-language_only mode
-                mm_inputs = (
-                    await self.raw_tokenizer_wrapper.mm_processor.process_mm_data_async(
-                        image_data=obj.image_data,
-                        audio_data=obj.audio_data,
-                        input_text=(input_text or input_ids),
-                        request_obj=obj,
-                        max_req_input_len=self.config.max_req_input_len,
-                    )
-                )
-
-            if mm_inputs and mm_inputs.input_ids is not None:
-                input_ids = mm_inputs.input_ids
-            if mm_inputs and mm_inputs.token_type_ids is not None:
-                token_type_ids = mm_inputs.token_type_ids
-                if not isinstance(token_type_ids, list):
-                    token_type_ids = token_type_ids.flatten().tolist()
-            if (
-                envs.SGLANG_MM_PRECOMPUTE_HASH.get()
-                and mm_inputs
-                and mm_inputs.mm_items
-            ):
-                for item in mm_inputs.mm_items:
-                    if isinstance(item, MultimodalDataItem):
-                        item.set_pad_value()
-        else:
-            mm_inputs = None
-
-        self.request_validator.validate_one(obj=obj, input_ids=input_ids)
+        self.request_validator.validate_one(obj=obj, input_ids=resolved.input_ids)
         tokenized_obj = self.tokenized_request_builder.build(
             obj,
-            input_text,
-            input_ids,
-            input_embeds,
+            resolved.input_text,
+            resolved.input_ids,
+            resolved.input_embeds,
             mm_inputs,
-            token_type_ids,
+            resolved.token_type_ids,
         )
         tokenized_obj.time_stats = self.rid_to_state[obj.rid].time_stats
         self.rid_to_state[obj.rid].time_stats.set_tokenize_finish_time()
@@ -216,6 +138,119 @@ class RequestPreparer:
             token_type_ids=token_type_ids,
             input_embeds=input_embeds,
             input_text=input_text,
+        )
+
+    async def _maybe_run_mm_processor(
+        self,
+        obj: Union[GenerateReqInput, EmbeddingReqInput],
+        resolved: _ResolvedInput,
+    ) -> Tuple[Optional[Any], _ResolvedInput]:
+        """Run the multimodal processor if applicable.
+
+        Returns ``(mm_inputs, resolved)``. If MM should not run, returns
+        ``(None, resolved)`` unchanged. Otherwise returns the produced
+        mm_inputs plus a new _ResolvedInput with input_ids / token_type_ids
+        possibly overridden by mm_inputs.
+
+        Three dispatch modes:
+          - Not language_only OR encoder_transfer_backend ∈ {zmq_to_tokenizer,
+            mooncake}: run mm_receiver.recv_mm_data (language_only only) +
+            fallback to local mm_processor.process_mm_data_async.
+          - language_only && encoder_transfer_backend == zmq_to_scheduler
+            && !need_wait_for_mm_inputs: run local mm_processor only.
+          - Otherwise (language_only + zmq_to_scheduler +
+            need_wait_for_mm_inputs): no MM run; mm_inputs stays None.
+
+        Side effects:
+          - May normalize ``obj.image_data`` / ``obj.video_data`` /
+            ``obj.audio_data`` to lists.
+          - May call ``request_validator._validate_mm_limits(obj)``.
+          - May call ``set_pad_value()`` on each mm item when
+            SGLANG_MM_PRECOMPUTE_HASH is enabled.
+        """
+        contains_mm_input = obj.contains_mm_input()
+        is_mossvl = "MossVLForConditionalGeneration" in self.config.architectures
+        should_run_mm_processor = (
+            self.raw_tokenizer_wrapper.mm_processor is not None
+            and (contains_mm_input or is_mossvl)
+        )
+        if not should_run_mm_processor:
+            return None, resolved
+
+        if obj.image_data is not None and not isinstance(obj.image_data, list):
+            obj.image_data = [obj.image_data]
+        if obj.video_data is not None and not isinstance(obj.video_data, list):
+            obj.video_data = [obj.video_data]
+        if obj.audio_data is not None and not isinstance(obj.audio_data, list):
+            obj.audio_data = [obj.audio_data]
+        if contains_mm_input:
+            self.request_validator._validate_mm_limits(obj)
+
+        input_text = resolved.input_text
+        input_ids = resolved.input_ids
+        token_type_ids = resolved.token_type_ids
+
+        mm_inputs = None
+
+        if (
+            not self.config.language_only
+            or self.config.encoder_transfer_backend
+            in ["zmq_to_tokenizer", "mooncake"]
+        ):
+            if self.config.language_only:
+                mm_inputs = (
+                    await self.multimodal_processor.mm_receiver.recv_mm_data(
+                        request_obj=obj,
+                        mm_processor=self.raw_tokenizer_wrapper.mm_processor,
+                        prompt=(input_text or input_ids),
+                        need_wait_for_mm_inputs=obj.need_wait_for_mm_inputs,
+                    )
+                )
+            if mm_inputs is None:
+                mm_inputs = await self.raw_tokenizer_wrapper.mm_processor.process_mm_data_async(
+                    image_data=obj.image_data,
+                    audio_data=obj.audio_data,
+                    input_text=(input_text or input_ids),
+                    request_obj=obj,
+                    max_req_input_len=self.config.max_req_input_len,
+                )
+        elif (
+            self.config.language_only
+            and self.config.encoder_transfer_backend == "zmq_to_scheduler"
+            and not obj.need_wait_for_mm_inputs
+        ):
+            # In language_only mode with zmq_to_scheduler, if we didn't dispatch
+            # to encoder (e.g., only one image), process locally like non-language_only mode
+            mm_inputs = (
+                await self.raw_tokenizer_wrapper.mm_processor.process_mm_data_async(
+                    image_data=obj.image_data,
+                    audio_data=obj.audio_data,
+                    input_text=(input_text or input_ids),
+                    request_obj=obj,
+                    max_req_input_len=self.config.max_req_input_len,
+                )
+            )
+
+        if mm_inputs and mm_inputs.input_ids is not None:
+            input_ids = mm_inputs.input_ids
+        if mm_inputs and mm_inputs.token_type_ids is not None:
+            token_type_ids = mm_inputs.token_type_ids
+            if not isinstance(token_type_ids, list):
+                token_type_ids = token_type_ids.flatten().tolist()
+        if (
+            envs.SGLANG_MM_PRECOMPUTE_HASH.get()
+            and mm_inputs
+            and mm_inputs.mm_items
+        ):
+            for item in mm_inputs.mm_items:
+                if isinstance(item, MultimodalDataItem):
+                    item.set_pad_value()
+
+        return mm_inputs, _ResolvedInput(
+            input_ids=input_ids,
+            token_type_ids=token_type_ids,
+            input_embeds=resolved.input_embeds,
+            input_text=resolved.input_text,
         )
 
     async def _batch_tokenize_and_process(
