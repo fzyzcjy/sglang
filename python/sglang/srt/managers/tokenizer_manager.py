@@ -55,7 +55,6 @@ from sglang.srt.managers.io_struct import (
     GenerateReqInput,
     HealthCheckOutput,
     LoadLoRAAdapterReqInput,
-    OpenSessionReqOutput,
     PauseGenerationReqInput,
     TokenizedEmbeddingReqInput,
     TokenizedGenerateReqInput,
@@ -82,6 +81,10 @@ from sglang.srt.managers.scheduler_input_blocker import input_blocker_guard_regi
 from sglang.srt.managers.score_request_handler import (
     ScoreRequestHandler,
     ScoreRequestHandlerConfig,
+)
+from sglang.srt.managers.session_controller import (
+    SessionController,
+    SessionControllerConfig,
 )
 from sglang.srt.managers.tokenized_request_builder import (
     TokenizedRequestBuilder,
@@ -162,6 +165,18 @@ class TokenizerManager(TokenizerControlMixin):
 
         # Init metric collector and watchdog
         self.init_metric_collector_watchdog()
+
+        # Result dispatcher (created early so controllers can register handlers in __post_init__)
+        self._result_dispatcher = TypeBasedDispatcher(
+            [
+                (FreezeGCReq, lambda x: None),
+                (HealthCheckOutput, lambda x: None),
+                (ActiveRanksOutput, self.update_active_ranks),
+            ]
+        )
+
+        # Communicators (RPC fan-out) -- needed by owner-class ctors below.
+        self.init_communicators(self.server_args)
 
         # Multimodal processor
         self.multimodal_processor = MultimodalProcessor.from_server_args(
@@ -244,6 +259,15 @@ class TokenizerManager(TokenizerControlMixin):
             ),
         )
 
+        # Session controller
+        self.session_controller = SessionController(
+            send_to_scheduler=self.send_to_scheduler,
+            dispatcher=self._result_dispatcher,
+            config=SessionControllerConfig(
+                enable_streaming_session=self.server_args.enable_streaming_session,
+            ),
+        )
+
         # Init request dispatcher
         self.init_request_dispatcher()
 
@@ -306,9 +330,6 @@ class TokenizerManager(TokenizerControlMixin):
         self.gracefully_exit = False
         self.last_receive_tstamp = real_time()
 
-        # Session
-        self.session_futures = {}  # session_id -> asyncio event
-
         # Subprocess liveness watchdog — set by Engine or http_server after construction
         self._subprocess_watchdog = None
 
@@ -366,22 +387,6 @@ class TokenizerManager(TokenizerControlMixin):
         )
 
     def init_request_dispatcher(self):
-        self._result_dispatcher = TypeBasedDispatcher(
-            [
-                (AbortReq, self._handle_abort_req),
-                (OpenSessionReqOutput, self._handle_open_session_req_output),
-                (
-                    UpdateWeightFromDiskReqOutput,
-                    self._handle_update_weights_from_disk_req_output,
-                ),
-                (FreezeGCReq, lambda x: None),
-                # For handling case when scheduler skips detokenizer and forwards back to the tokenizer manager, we ignore it.
-                (HealthCheckOutput, lambda x: None),
-                (ActiveRanksOutput, self.update_active_ranks),
-            ]
-        )
-        self.init_communicators(self.server_args)
-
         self.sampling_params_class = SamplingParams
         self.signal_handler_class = SignalHandler
 
