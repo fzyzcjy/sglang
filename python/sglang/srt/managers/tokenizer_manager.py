@@ -38,6 +38,10 @@ from sglang.srt.constants import HEALTH_CHECK_RID_PREFIX
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
 from sglang.srt.managers import logprob_ops, request_tracing, spec_decoding_meta
+from sglang.srt.managers.corpus_controller import (
+    CorpusController,
+    CorpusControllerConfig,
+)
 from sglang.srt.managers.disagg_service import start_disagg_service
 from sglang.srt.managers.io_struct import (
     AbortReq,
@@ -224,6 +228,19 @@ class TokenizerManager(TokenizerControlMixin):
                 initial_load_format=self.server_args.load_format,
                 checkpoint_engine_wait_weights_before_ready=self.server_args.checkpoint_engine_wait_weights_before_ready,
             ),
+        )
+
+        # Corpus controller
+        self.corpus_controller = CorpusController(
+            add_external_corpus_communicator=self.add_external_corpus_communicator,
+            remove_external_corpus_communicator=self.remove_external_corpus_communicator,
+            list_external_corpora_communicator=self.list_external_corpora_communicator,
+            tokenizer=self.tokenizer,
+            config=CorpusControllerConfig(
+                speculative_algorithm=self.server_args.speculative_algorithm or "",
+                max_external_corpus_tokens=self.server_args.speculative_ngram_external_corpus_max_tokens,
+            ),
+            auto_create_handle_loop=self.auto_create_handle_loop,
         )
 
         # Session controller
