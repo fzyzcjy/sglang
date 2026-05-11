@@ -1447,8 +1447,7 @@ class Scheduler(
                 (UnloadLoRAAdapterReqInput, self.unload_lora_adapter),
                 (
                     GetLoadsReqInput,
-                    lambda req: self.get_loads(
-                        self.load_inquirer,
+                    lambda req: self.load_inquirer.get_loads(
                         req,
                         running_batch=self.running_batch,
                         waiting_queue=self.waiting_queue,

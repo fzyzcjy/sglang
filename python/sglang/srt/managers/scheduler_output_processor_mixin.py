@@ -1050,8 +1050,7 @@ class SchedulerOutputProcessorMixin:
         spec_acceptance_histogram = []
         retraction_counts = []
         output_hidden_states = None
-        load = self.get_loads(
-            self.load_inquirer,
+        load = self.load_inquirer.get_loads(
             GetLoadsReqInput(include=["core"]),
             running_batch=self.running_batch,
             waiting_queue=self.waiting_queue,
