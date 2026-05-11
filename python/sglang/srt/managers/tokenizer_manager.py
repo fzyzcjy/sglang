@@ -64,6 +64,10 @@ from sglang.srt.managers.io_struct import (
 )
 from sglang.srt.managers.mm_utils import TensorTransportMode, wrap_shm_features
 from sglang.srt.managers.multimodal_processor import MultimodalProcessor
+from sglang.srt.managers.pause_controller import (
+    PauseController,
+    PauseControllerConfig,
+)
 from sglang.srt.managers.raw_tokenizer_wrapper import RawTokenizerWrapper
 from sglang.srt.managers.request_log_manager import RequestLogManager
 from sglang.srt.managers.request_metrics_recorder import RequestMetricsRecorder
@@ -259,6 +263,21 @@ class TokenizerManager(TokenizerControlMixin):
             ),
         )
 
+        # Pause controller
+        self.pause_controller = PauseController(
+            send_to_scheduler=self.send_to_scheduler,
+            dispatcher=self._result_dispatcher,
+            rid_to_state=self.rid_to_state,
+            model_update_lock=self.model_update_lock,
+            metrics_collector=self.request_metrics_recorder.metrics_collector,
+            tokenizer=self.raw_tokenizer_wrapper.tokenizer,
+            config=PauseControllerConfig(
+                enable_metrics=self.enable_metrics,
+                skip_tokenizer_init=self.server_args.skip_tokenizer_init,
+                weight_version=self.server_args.weight_version,
+            ),
+        )
+
         # Session controller
         self.session_controller = SessionController(
             send_to_scheduler=self.send_to_scheduler,
@@ -345,8 +364,6 @@ class TokenizerManager(TokenizerControlMixin):
         self.model_update_result: Optional[Awaitable[UpdateWeightFromDiskReqOutput]] = (
             None
         )
-        self.is_pause = False
-        self.is_pause_cond = asyncio.Condition()
 
     def init_lora(self):
         # LoRA
