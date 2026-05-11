@@ -225,7 +225,9 @@ class SchedulerDllmMixin:
         new_batch.decoding_reqs = None
 
         # Record prefill stats for logging after forward
-        from sglang.srt.observability.scheduler_metrics_mixin import PrefillStats
+        from sglang.srt.managers.scheduler_components.metrics_reporter import (
+            PrefillStats,
+        )
 
         new_batch.prefill_stats = PrefillStats.from_adder(
             self.adder, self.running_batch.reqs, self.enable_priority_scheduling
