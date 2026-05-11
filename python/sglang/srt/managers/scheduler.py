@@ -178,6 +178,11 @@ from sglang.srt.managers.scheduler_components.kv_events_publisher import (
 from sglang.srt.managers.scheduler_components.load_inquirer import (
     SchedulerLoadInquirer,
 )
+from sglang.srt.managers.scheduler_components.metrics_reporter import (
+    RECORD_STEP_TIME,
+    PrefillStats,
+    SchedulerMetricsReporter,
+)
 from sglang.srt.managers.scheduler_components.pool_stats_observer import (
     SchedulerPoolStatsObserver,
 )
@@ -210,11 +215,6 @@ from sglang.srt.observability.req_time_stats import (
     real_time,
     set_schedule_time_batch,
     set_time_batch,
-)
-from sglang.srt.observability.scheduler_metrics_mixin import (
-    RECORD_STEP_TIME,
-    PrefillStats,
-    SchedulerMetricsReporter,
 )
 from sglang.srt.observability.trace import process_tracing_init, trace_set_thread_info
 from sglang.srt.parser.reasoning_parser import ReasoningParser
