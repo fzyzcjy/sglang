@@ -211,7 +211,7 @@ class OpenAIServingRerank(OpenAIServingBase):
 
         # Cache yes/no token IDs for Qwen3 reranker scoring
         self._yes_token_id, self._no_token_id = _get_yes_no_token_ids(
-            tokenizer_manager.tokenizer
+            tokenizer_manager.raw_tokenizer_wrapper.tokenizer
         )
 
     # NOTE: /v1/rerank is not an official OpenAI endpoint. This module may be moved
@@ -253,7 +253,9 @@ class OpenAIServingRerank(OpenAIServingBase):
           `tokenizer_manager.score_prompts(...)` in the handler.
         - For cross-encoder rerank models: adapt into `EmbeddingReqInput` pairs.
         """
-        chat_template = self.tokenizer_manager.tokenizer.chat_template
+        chat_template = (
+            self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer.chat_template
+        )
         model_path = getattr(self.tokenizer_manager.model_config, "model_path", "")
         backend = _detect_rerank_backend(
             request=request,
@@ -283,7 +285,11 @@ class OpenAIServingRerank(OpenAIServingBase):
         raw_request: Request,
     ) -> Union[List[RerankResponse], ErrorResponse, ORJSONResponse]:
         """Handle the rerank request"""
-        chat_template = getattr(self.tokenizer_manager.tokenizer, "chat_template", None)
+        chat_template = getattr(
+            self.tokenizer_manager.raw_tokenizer_wrapper.tokenizer,
+            "chat_template",
+            None,
+        )
         model_path = getattr(self.tokenizer_manager.model_config, "model_path", "")
         rerank_ret = await self._handle_rerank_paths(
             request=request,
