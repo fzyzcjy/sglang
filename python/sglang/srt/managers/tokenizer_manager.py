@@ -73,6 +73,10 @@ from sglang.srt.managers.io_struct import (
 from sglang.srt.managers.mm_utils import TensorTransportMode, wrap_shm_features
 from sglang.srt.managers.raw_tokenizer_wrapper import RawTokenizerWrapper
 from sglang.srt.managers.request_state import ReqState, init_req
+from sglang.srt.managers.request_validator import (
+    RequestValidator,
+    RequestValidatorConfig,
+)
 from sglang.srt.managers.schedule_batch import MultimodalDataItem
 from sglang.srt.managers.scheduler import is_health_check_generate_req
 from sglang.srt.managers.scheduler_input_blocker import input_blocker_guard_region
@@ -165,6 +169,24 @@ class TokenizerManager(TokenizerControlMixin):
 
         # Init metric collector and watchdog
         self.init_metric_collector_watchdog()
+
+        # Request validator
+        self.request_validator = RequestValidator(
+            config=RequestValidatorConfig(
+                context_len=self.context_len,
+                num_reserved_tokens=self.num_reserved_tokens,
+                is_generation=self.is_generation,
+                validate_total_tokens=self.validate_total_tokens,
+                allow_auto_truncate=self.server_args.allow_auto_truncate,
+                enable_return_hidden_states=self.server_args.enable_return_hidden_states,
+                enable_custom_logit_processor=self.server_args.enable_custom_logit_processor,
+                limit_mm_data_per_request=self.server_args.limit_mm_data_per_request,
+                is_matryoshka=self.model_config.is_matryoshka,
+                matryoshka_dimensions=self.model_config.matryoshka_dimensions,
+                hidden_size=self.model_config.hidden_size,
+                model_path=self.model_config.model_path,
+            ),
+        )
 
         # Score request handler
         self.score_request_handler = ScoreRequestHandler(
