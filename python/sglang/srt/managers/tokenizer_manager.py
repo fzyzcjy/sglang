@@ -57,6 +57,10 @@ from sglang.srt.managers.io_struct import (
     TokenizedGenerateReqInput,
     WatchLoadUpdateReq,
 )
+from sglang.srt.managers.lora_controller import (
+    LoraController,
+    LoraControllerConfig,
+)
 from sglang.srt.managers.mm_utils import TensorTransportMode, wrap_shm_features
 from sglang.srt.managers.multimodal_processor import MultimodalProcessor
 from sglang.srt.managers.pause_controller import (
@@ -158,9 +162,6 @@ class TokenizerManager(TokenizerControlMixin):
 
         # Init weight update
         self.init_weight_update()
-
-        # Init LoRA status
-        self.init_lora()
 
         # Init PD disaggregation and encoder disaggregation
         self.init_disaggregation()
@@ -288,6 +289,19 @@ class TokenizerManager(TokenizerControlMixin):
                 dp_size=self.server_args.dp_size,
                 initial_load_format=self.server_args.load_format,
                 checkpoint_engine_wait_weights_before_ready=self.server_args.checkpoint_engine_wait_weights_before_ready,
+            ),
+        )
+
+        # Lora controller
+        self.lora_controller = LoraController(
+            server_args=self.server_args,
+            auto_create_handle_loop=self.auto_create_handle_loop,
+            update_lora_adapter_communicator=self.update_lora_adapter_communicator,
+            config=LoraControllerConfig(
+                enable_lora=self.server_args.enable_lora,
+                max_loaded_loras=self.server_args.max_loaded_loras,
+                dp_size=self.server_args.dp_size,
+                initial_lora_paths=self.server_args.lora_paths,
             ),
         )
 
