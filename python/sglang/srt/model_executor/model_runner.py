@@ -570,7 +570,7 @@ class ModelRunner:
         )
 
         if self.server_args.remote_instance_weight_loader_use_transfer_engine():
-            self.remote_instance_weight_transport.remote_instance_init_transfer_engine()
+            self.remote_instance_weight_transport.init_engine()
 
         if not self.is_draft_worker:
             set_global_expert_location_metadata(
@@ -622,17 +622,15 @@ class ModelRunner:
 
         if (
             self.server_args.remote_instance_weight_loader_use_transfer_engine()
-            and self.remote_instance_weight_transport.remote_instance_transfer_engine
-            is not None
-            and self.remote_instance_weight_transport.remote_instance_transfer_engine_weight_info
-            is None
+            and self.remote_instance_weight_transport.engine is not None
+            and self.remote_instance_weight_transport.weight_info is None
         ):
             # Register memory and upstream the transfer engine info to the bootstrap server
-            self.remote_instance_weight_transport.remote_instance_transfer_engine_weight_info = register_memory_region(
+            self.remote_instance_weight_transport.weight_info = register_memory_region(
                 self.model,
-                self.remote_instance_weight_transport.remote_instance_transfer_engine,
+                self.remote_instance_weight_transport.engine,
             )
-            self.remote_instance_weight_transport._register_to_engine_info_bootstrap()
+            self.remote_instance_weight_transport.register_to_bootstrap()
 
         # For MTP models like DeepSeek-V3 or GLM-4.5, the MTP layer(s) are used separately as draft
         # models for speculative decoding. In those cases, `num_nextn_predict_layers` is used to
@@ -1089,7 +1087,7 @@ class ModelRunner:
             remote_instance_weight_loader_seed_instance_service_port=self.server_args.remote_instance_weight_loader_seed_instance_service_port,
             remote_instance_weight_loader_send_weights_group_ports=self.server_args.remote_instance_weight_loader_send_weights_group_ports,
             remote_instance_weight_loader_backend=self.server_args.remote_instance_weight_loader_backend,
-            remote_instance_weight_loader_transfer_engine=self.remote_instance_weight_transport.remote_instance_transfer_engine,
+            remote_instance_weight_loader_transfer_engine=self.remote_instance_weight_transport.engine,
             modelexpress_url=self.server_args.modelexpress_url,
             modelexpress_model_name=self.server_args.modelexpress_model_name
             or self.server_args.model_path,
@@ -1147,7 +1145,7 @@ class ModelRunner:
             )
             self.remote_instance_weight_transport.model = self.model
             if hasattr(self.loader, "remote_instance_transfer_engine_weight_info"):
-                self.remote_instance_weight_transport.remote_instance_transfer_engine_weight_info = (
+                self.remote_instance_weight_transport.weight_info = (
                     self.loader.remote_instance_transfer_engine_weight_info
                 )
         # Cache needs to be cleared after loading model weights (in the self.loader.load_model function).
@@ -1161,20 +1159,20 @@ class ModelRunner:
             # Seed loads via DefaultModelLoader (load_format=auto), which doesn't
             # call register_memory_region(). Do it here so weight_info is populated.
             if (
-                self.remote_instance_weight_transport.remote_instance_transfer_engine_weight_info
-                is None
-                and self.remote_instance_weight_transport.remote_instance_transfer_engine
-                is not None
+                self.remote_instance_weight_transport.weight_info is None
+                and self.remote_instance_weight_transport.engine is not None
             ):
                 from sglang.srt.model_loader.remote_instance_weight_loader_utils import (
                     register_memory_region,
                 )
 
-                self.remote_instance_weight_transport.remote_instance_transfer_engine_weight_info = register_memory_region(
-                    self.model,
-                    self.remote_instance_weight_transport.remote_instance_transfer_engine,
+                self.remote_instance_weight_transport.weight_info = (
+                    register_memory_region(
+                        self.model,
+                        self.remote_instance_weight_transport.engine,
+                    )
                 )
-            self.remote_instance_weight_transport._publish_modelexpress_metadata()
+            self.remote_instance_weight_transport.publish_to_modelexpress()
 
         if not self.is_draft_worker:
             get_offloader().post_init()
