@@ -99,7 +99,6 @@ from sglang.srt.model_executor import device_graphs
 from sglang.srt.model_executor.dummy_run import dummy_run
 from sglang.srt.model_executor.forward_batch_info import (
     ForwardBatch,
-    ForwardMode,
     PPProxyTensors,
 )
 from sglang.srt.model_executor.hook_manager import register_forward_hooks
@@ -165,6 +164,7 @@ from sglang.srt.utils.offloader import (
     get_offloader,
     set_offloader,
 )
+from sglang.srt.utils.profile_utils import build_step_span_name
 from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
 from sglang.srt.utils.weight_checker import WeightChecker
 
@@ -1621,7 +1621,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
 
         # Step span
         step_span_ctx = (
-            torch.profiler.record_function(_build_step_span_name(forward_batch))
+            torch.profiler.record_function(build_step_span_name(forward_batch))
             if torch.autograd._profiler_enabled()
             else contextlib.nullcontext()
         )
@@ -1894,13 +1894,3 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 split_forward_count,
             )
         return output
-
-
-def _build_step_span_name(forward_batch: ForwardBatch) -> str:
-    """Build a profile-trace span name for one forward step."""
-    mode = forward_batch.forward_mode
-    bs = forward_batch.batch_size
-    if mode == ForwardMode.EXTEND:
-        ext_toks = forward_batch.extend_num_tokens or 0
-        return f"step[EXTEND bs={bs} toks={ext_toks}]"
-    return f"step[{mode.name} bs={bs}]"
