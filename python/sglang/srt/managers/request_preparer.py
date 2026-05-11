@@ -192,27 +192,26 @@ class RequestPreparer:
 
         mm_inputs = None
 
-        if (
-            not self.config.language_only
-            or self.config.encoder_transfer_backend
-            in ["zmq_to_tokenizer", "mooncake"]
-        ):
+        if not self.config.language_only or self.config.encoder_transfer_backend in [
+            "zmq_to_tokenizer",
+            "mooncake",
+        ]:
             if self.config.language_only:
-                mm_inputs = (
-                    await self.multimodal_processor.mm_receiver.recv_mm_data(
-                        request_obj=obj,
-                        mm_processor=self.raw_tokenizer_wrapper.mm_processor,
-                        prompt=(input_text or input_ids),
-                        need_wait_for_mm_inputs=obj.need_wait_for_mm_inputs,
-                    )
+                mm_inputs = await self.multimodal_processor.mm_receiver.recv_mm_data(
+                    request_obj=obj,
+                    mm_processor=self.raw_tokenizer_wrapper.mm_processor,
+                    prompt=(input_text or input_ids),
+                    need_wait_for_mm_inputs=obj.need_wait_for_mm_inputs,
                 )
             if mm_inputs is None:
-                mm_inputs = await self.raw_tokenizer_wrapper.mm_processor.process_mm_data_async(
-                    image_data=obj.image_data,
-                    audio_data=obj.audio_data,
-                    input_text=(input_text or input_ids),
-                    request_obj=obj,
-                    max_req_input_len=self.config.max_req_input_len,
+                mm_inputs = (
+                    await self.raw_tokenizer_wrapper.mm_processor.process_mm_data_async(
+                        image_data=obj.image_data,
+                        audio_data=obj.audio_data,
+                        input_text=(input_text or input_ids),
+                        request_obj=obj,
+                        max_req_input_len=self.config.max_req_input_len,
+                    )
                 )
         elif (
             self.config.language_only
@@ -237,11 +236,7 @@ class RequestPreparer:
             token_type_ids = mm_inputs.token_type_ids
             if not isinstance(token_type_ids, list):
                 token_type_ids = token_type_ids.flatten().tolist()
-        if (
-            envs.SGLANG_MM_PRECOMPUTE_HASH.get()
-            and mm_inputs
-            and mm_inputs.mm_items
-        ):
+        if envs.SGLANG_MM_PRECOMPUTE_HASH.get() and mm_inputs and mm_inputs.mm_items:
             for item in mm_inputs.mm_items:
                 if isinstance(item, MultimodalDataItem):
                     item.set_pad_value()
