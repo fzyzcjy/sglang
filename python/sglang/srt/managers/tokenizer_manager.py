@@ -173,7 +173,8 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
         # Init metric collector and watchdog
         self.init_metric_collector_watchdog()
 
-        # Init request dispatcher
+        # Init request dispatcher (called early so owner-class ctors can
+        # pass dispatcher=self._result_dispatcher as a kwarg).
         self.init_request_dispatcher()
 
     def init_model_config(self):
