@@ -32,6 +32,10 @@ import zmq.asyncio
 from sglang.srt.configs.model_config import ModelConfig
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
+from sglang.srt.managers.batch_request_dispatcher import (
+    BatchRequestDispatcher,
+    BatchRequestDispatcherConfig,
+)
 from sglang.srt.managers.corpus_controller import (
     CorpusController,
     CorpusControllerConfig,
@@ -342,6 +346,20 @@ class TokenizerManager(TokenizerControlMixin):
             ),
         )
 
+        # Batch request dispatcher
+        self.batch_request_dispatcher = BatchRequestDispatcher(
+            request_preparer=self.request_preparer,
+            response_emitter=self.response_emitter,
+            rid_to_state=self.rid_to_state,
+            send_to_scheduler=self.send_to_scheduler,
+            send_one_request=self._send_one_request,
+            send_batch_request=self._send_batch_request,
+            config=BatchRequestDispatcherConfig(
+                enable_trace=self.server_args.enable_trace,
+                disaggregation_mode=self.disaggregation_mode,
+            ),
+        )
+
         # Init request dispatcher
         self.init_request_dispatcher()
 
@@ -540,7 +558,7 @@ class TokenizerManager(TokenizerControlMixin):
         self.send_to_scheduler.send_pyobj(batch_req)
         set_time_batch(tokenized_objs, "set_api_server_dispatch_finish_time")
 
-    async def _handle_batch_request(
+    async def _handle_batch_request_dispatch(
         self,
         obj: Union[GenerateReqInput, EmbeddingReqInput],
         request: Optional[fastapi.Request] = None,
@@ -638,6 +656,14 @@ class TokenizerManager(TokenizerControlMixin):
                 self.rid_to_state[objs[i].rid].time_stats.set_finished_time()
                 del self.rid_to_state[objs[i].rid]
 
+        return generators, rids
+
+    async def _handle_batch_request(
+        self,
+        obj: Union[GenerateReqInput, EmbeddingReqInput],
+        request: Optional[fastapi.Request] = None,
+    ):
+        generators, rids = await self._handle_batch_request_dispatch(obj, request)
         async for x in self.response_emitter._handle_batch_request(
             obj, rids=rids, generators=generators, request=request
         ):
