@@ -487,10 +487,9 @@ class RadixCache(KVCacheEventMixin, BasePrefixCache):
         if self.disable:
             return
 
-        token_ids = req.fill_ids
-        kv_indices = self.req_to_token_pool.req_to_token[
-            req.req_pool_idx, : len(token_ids)
-        ]
+        bound = req.kv_committed_len
+        token_ids = req.fill_ids[:bound]
+        kv_indices = self.req_to_token_pool.req_to_token[req.req_pool_idx, :bound]
 
         radix_key = RadixKey(
             token_ids, req.extra_key, is_bigram=self.is_eagle

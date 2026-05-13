@@ -84,9 +84,8 @@ class ChunkCache(BasePrefixCache):
         self.token_to_kv_pool_allocator.free(kv_indices)
 
     def cache_unfinished_req(self, req: Req, chunked=False):
-        kv_indices = self.req_to_token_pool.req_to_token[
-            req.req_pool_idx, : len(req.fill_ids)
-        ]
+        bound = req.kv_committed_len
+        kv_indices = self.req_to_token_pool.req_to_token[req.req_pool_idx, :bound]
         # `req.prefix_indices` will be used in `PrefillAdder::add_chunked_req` later
         req.prefix_indices = kv_indices.to(dtype=torch.int64, copy=True)
 

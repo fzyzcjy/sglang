@@ -493,18 +493,15 @@ class UnifiedRadixCache(BasePrefixCache):
         if self.session.try_cache_unfinished_req(req, chunked=chunked, **kwargs):
             return
 
-        token_ids = req.fill_ids
+        bound = req.kv_committed_len
+        token_ids = req.fill_ids[:bound]
 
         if self.disable:
-            kv_indices = self.req_to_token_pool.req_to_token[
-                req.req_pool_idx, : len(token_ids)
-            ]
+            kv_indices = self.req_to_token_pool.req_to_token[req.req_pool_idx, :bound]
             req.prefix_indices = kv_indices
             return
 
-        kv_indices_orig = self.req_to_token_pool.req_to_token[
-            req.req_pool_idx, : len(token_ids)
-        ]
+        kv_indices_orig = self.req_to_token_pool.req_to_token[req.req_pool_idx, :bound]
 
         # components prepare insert data + return effective cache_len
         insert_params = InsertParams(

@@ -487,19 +487,16 @@ class SWARadixCache(KVCacheEventMixin, BasePrefixCache):
 
     def cache_unfinished_req(self, req: Req, chunked=False) -> None:
         """Cache request when it is unfinished."""
+        bound = req.kv_committed_len
         if self.disable:
-            kv_indices = self.req_to_token_pool.req_to_token[
-                req.req_pool_idx, : len(req.fill_ids)
-            ]
+            kv_indices = self.req_to_token_pool.req_to_token[req.req_pool_idx, :bound]
 
             # `req.prefix_indices` will be used in `PrefillAdder::add_chunked_req` later
             req.prefix_indices = kv_indices
             return
 
-        token_ids = req.fill_ids
-        kv_indices = self.req_to_token_pool.req_to_token[
-            req.req_pool_idx, : len(token_ids)
-        ]
+        token_ids = req.fill_ids[:bound]
+        kv_indices = self.req_to_token_pool.req_to_token[req.req_pool_idx, :bound]
 
         radix_key = RadixKey(
             token_ids, req.extra_key, is_bigram=self.is_eagle
