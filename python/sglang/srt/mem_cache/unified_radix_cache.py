@@ -478,10 +478,14 @@ class UnifiedRadixCache(BasePrefixCache):
         else:
             self.token_to_kv_pool_allocator.free(kv_indices[req.cache_protected_len :])
 
-        self.dec_lock_ref(
-            req.last_node,
-            DecLockRefParams(swa_uuid_for_lock=getattr(req, "swa_uuid_for_lock", None)),
-        )
+        if req.locked_node is not None:
+            self.dec_lock_ref(
+                req.locked_node,
+                DecLockRefParams(
+                    swa_uuid_for_lock=getattr(req, "swa_uuid_for_lock", None)
+                ),
+            )
+            req.locked_node = None
 
         # cleanup
         for comp in self._components_tuple:
@@ -557,7 +561,7 @@ class UnifiedRadixCache(BasePrefixCache):
         )
 
         self.dec_lock_ref(
-            req.last_node,
+            req.locked_node,
             DecLockRefParams(swa_uuid_for_lock=getattr(req, "swa_uuid_for_lock", None)),
         )
         lock_result = self.inc_lock_ref(new_last_node)
@@ -571,6 +575,7 @@ class UnifiedRadixCache(BasePrefixCache):
             req.prefix_indices = new_indices
         req.cache_protected_len = len(new_indices)
         req.last_node = new_last_node
+        req.locked_node = new_last_node
         req.swa_uuid_for_lock = lock_result.swa_uuid_for_lock
 
         # cleanup

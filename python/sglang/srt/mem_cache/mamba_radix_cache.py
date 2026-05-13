@@ -595,7 +595,9 @@ class MambaRadixCache(KVCacheEventMixin, BasePrefixCache):
                 mamba_ping_pong_track_buffer_to_keep=mamba_ping_pong_track_buffer_to_keep,
             )
 
-        self.dec_lock_ref(req.last_node)
+        if req.locked_node is not None:
+            self.dec_lock_ref(req.locked_node)
+            req.locked_node = None
 
     def cache_unfinished_req(self, req: Req, chunked=False) -> None:
         """Cache request when it is unfinished."""
@@ -699,7 +701,7 @@ class MambaRadixCache(KVCacheEventMixin, BasePrefixCache):
             new_indices[req.cache_protected_len :],
         )
 
-        self.dec_lock_ref(req.last_node)
+        self.dec_lock_ref(req.locked_node)
         self.inc_lock_ref(new_last_node)
 
         # `req.prefix_indices` will be used in `PrefillAdder::add_chunked_req` later
@@ -710,6 +712,7 @@ class MambaRadixCache(KVCacheEventMixin, BasePrefixCache):
         req.cache_protected_len = len(new_indices)
         req.mamba_last_track_seqlen = None
         req.last_node = new_last_node
+        req.locked_node = new_last_node
 
     def pretty_print(self) -> None:
         self._print_helper(self.root_node, 0)

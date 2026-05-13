@@ -741,6 +741,10 @@ class Req(ReqDllmMixin):
         # The relative logprob_start_len in an extend batch
         self.extend_logprob_start_len = 0
         self.last_node: Any = None
+        # The node we hold a permanent inc_lock_ref on. Tracked separately
+        # from last_node so init_next_round_input's re-match (which overwrites
+        # last_node) doesn't desync from the lock's actual position.
+        self.locked_node: Any = None
         self.last_host_node: Any = None
         self.host_hit_length = 0
         # Tokens loaded from storage backend (L3) during prefetch for this request
@@ -1247,6 +1251,7 @@ class Req(ReqDllmMixin):
         self.routed_experts = None
         self.indexer_topk = None
         self.last_node = None
+        self.locked_node = None
         self.cache_protected_len = 0
         self.swa_uuid_for_lock = None
         self.swa_prefix_lock_released = False

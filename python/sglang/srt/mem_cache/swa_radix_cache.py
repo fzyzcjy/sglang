@@ -478,11 +478,13 @@ class SWARadixCache(KVCacheEventMixin, BasePrefixCache):
         self.token_to_kv_pool_allocator.free(kv_indices[page_aligned_len:])
 
         # Remove req slot release the cache lock
-        self.dec_lock_ref(
-            req.last_node,
-            DecLockRefParams(swa_uuid_for_lock=req.swa_uuid_for_lock),
-            skip_swa=req.swa_prefix_lock_released,
-        )
+        if req.locked_node is not None:
+            self.dec_lock_ref(
+                req.locked_node,
+                DecLockRefParams(swa_uuid_for_lock=req.swa_uuid_for_lock),
+                skip_swa=req.swa_prefix_lock_released,
+            )
+            req.locked_node = None
         req.swa_prefix_lock_released = False
 
     def cache_unfinished_req(self, req: Req, chunked=False) -> None:
@@ -532,7 +534,7 @@ class SWARadixCache(KVCacheEventMixin, BasePrefixCache):
         req.cache_protected_len = len(new_indices)
 
         self.dec_lock_ref(
-            req.last_node,
+            req.locked_node,
             DecLockRefParams(swa_uuid_for_lock=req.swa_uuid_for_lock),
             skip_swa=req.swa_prefix_lock_released,
         )
@@ -548,6 +550,7 @@ class SWARadixCache(KVCacheEventMixin, BasePrefixCache):
         else:
             req.prefix_indices = new_indices
         req.last_node = new_last_node
+        req.locked_node = new_last_node
         req.swa_uuid_for_lock = swa_uuid_for_lock
 
     def pretty_print(self) -> None:
