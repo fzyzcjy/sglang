@@ -532,7 +532,7 @@ class DecodePreallocQueue:
             message = f"Request {req.rid} exceeds the maximum number of tokens: {len(req.origin_input_ids)} > {self.max_total_num_tokens}"
             logger.error(message)
             prepare_abort(req, message, status_code=HTTPStatus.BAD_REQUEST)
-            self.scheduler.stream_output([req], req.return_logprob)
+            self.scheduler.output_streamer.stream_output([req], req.return_logprob)
             return True
         if self._uses_swa_tail_prealloc():
             _, swa_required = self._prealloc_required_tokens(req)
@@ -778,7 +778,7 @@ class DecodePreallocQueue:
             if rids_to_check is not None and decode_req.req.rid not in rids_to_check:
                 continue
             if isinstance(decode_req.req.finished_reason, FINISH_ABORT):
-                self.scheduler.stream_output(
+                self.scheduler.output_streamer.stream_output(
                     [decode_req.req], decode_req.req.return_logprob
                 )
                 failed_reqs.append(decode_req)
@@ -1508,7 +1508,7 @@ class DecodeTransferQueue:
                     error_message,
                     status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
                 )
-                self.scheduler.stream_output(
+                self.scheduler.output_streamer.stream_output(
                     [decode_req.req], decode_req.req.return_logprob
                 )
                 if self.scheduler.enable_hisparse:
@@ -1525,7 +1525,7 @@ class DecodeTransferQueue:
                     indices_to_remove.add(i)
                     # Check if request was aborted due to corruption
                     if isinstance(decode_req.req.finished_reason, FINISH_ABORT):
-                        self.scheduler.stream_output(
+                        self.scheduler.output_streamer.stream_output(
                             [decode_req.req], decode_req.req.return_logprob
                         )
                         if self.scheduler.enable_hisparse:
