@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import List, Optional, Tuple
+from dataclasses import dataclass
+from typing import (
+    Any,
+    Callable,
+    List,
+    Optional,
+    Tuple,
+)
 
 
 class SchedulerStats: ...  # type: ignore[no-redef]
@@ -123,3 +130,20 @@ class PoolStats:
         stats.kv_available_tokens = self.full_available_size
         stats.kv_evictable_tokens = self.full_evictable_size
         stats.kv_used_tokens = self.full_num_used
+
+
+@dataclass(kw_only=True, slots=True, frozen=True)
+class SchedulerPoolStatsObserver:
+    tree_cache: Any
+    token_to_kv_pool_allocator: Any
+    req_to_token_pool: Any
+    session_controller: Any
+    hisparse_coordinator: Any
+    is_hybrid_swa: bool
+    is_hybrid_ssm: bool
+    enable_hisparse: bool
+    full_tokens_per_layer: Any
+    swa_tokens_per_layer: Any
+    max_total_num_tokens: int
+    get_last_batch: Callable
+    get_running_batch: Callable
