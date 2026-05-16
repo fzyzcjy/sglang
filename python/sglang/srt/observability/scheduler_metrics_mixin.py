@@ -20,6 +20,7 @@ from sglang.srt.managers.io_struct import (
     SpeculativeMetrics,
 )
 from sglang.srt.managers.schedule_batch import ScheduleBatch
+from sglang.srt.managers.scheduler_components.kv_events_publisher import KvMetrics
 from sglang.srt.managers.utils import GenerationBatchResult
 from sglang.srt.observability.metrics_collector import (
     DPCooperationInfo,
@@ -72,18 +73,6 @@ class PrefillStats:
             num_new_seqs=len(adder.can_run_list),
             num_pending_tokens=num_pending_tokens,
         )
-
-
-@dataclasses.dataclass
-class KvMetrics:
-    request_active_slots: int = 0
-    request_total_slots: int = 0
-    kv_active_blocks: int = 0
-    kv_total_blocks: int = 0
-    num_requests_waiting: int = 0
-    gpu_cache_usage_perc: float = 0.0
-    gpu_prefix_cache_hit_rate: float = 0.0
-    data_parallel_rank: int = 0
 
 
 class SchedulerMetricsMixin:
