@@ -23,6 +23,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
 
+from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.environ import envs
 from sglang.srt.model_executor.forward_batch_info import ForwardMode
 from sglang.srt.observability.utils import exponential_buckets, generate_buckets
@@ -936,6 +937,43 @@ class SchedulerMetricsCollector:
             documentation="Available GPU memory in GB at startup.",
             labelnames=labels.keys(),
             multiprocess_mode="mostrecent",
+        )
+
+    @classmethod
+    def init_new(
+        cls,
+        *,
+        server_args: "ServerArgs",
+        ps: Any,
+        tp_rank: int,
+        pp_rank: int,
+        dp_rank: Optional[int],
+        enable_priority_scheduling: bool,
+        enable_lora: bool,
+        enable_hierarchical_cache: bool,
+    ) -> Optional["SchedulerMetricsCollector"]:
+        if not server_args.enable_metrics:
+            return None
+        engine_type = DisaggregationMode.to_engine_type(server_args.disaggregation_mode)
+        labels = {
+            "model_name": server_args.served_model_name,
+            "engine_type": engine_type,
+            "tp_rank": tp_rank,
+            "pp_rank": pp_rank,
+            "moe_ep_rank": ps.moe_ep_rank,
+        }
+        if enable_priority_scheduling:
+            labels["priority"] = ""
+        if dp_rank is not None:
+            labels["dp_rank"] = dp_rank
+        if server_args.extra_metric_labels:
+            labels.update(server_args.extra_metric_labels)
+        return cls(
+            labels=labels,
+            enable_lora=enable_lora,
+            enable_hierarchical_cache=enable_hierarchical_cache,
+            enable_streaming_session=server_args.enable_streaming_session,
+            server_args=server_args,
         )
 
     def _log_gauge(self, gauge: Gauge, data: Union[int, float]) -> None:
