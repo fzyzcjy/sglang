@@ -28,7 +28,10 @@ from sglang.srt.state_capturer.indexer_topk import get_global_indexer_capturer
 from sglang.srt.state_capturer.routed_experts import get_global_experts_capturer
 
 if TYPE_CHECKING:
-    pass
+    from sglang.srt.managers.utils import (
+        EmbeddingBatchResult,
+        GenerationBatchResult,
+    )
 
 logger = logging.getLogger(__name__)
 
