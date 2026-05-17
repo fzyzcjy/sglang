@@ -8,9 +8,9 @@ from unittest.mock import patch
 
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.distributed.parallel_state_wrapper import ParallelState
-from sglang.srt.observability.scheduler_metrics_mixin import (
+from sglang.srt.managers.scheduler_components.metrics_reporter import (
     PrefillStats,
-    SchedulerMetricsMixin,
+    SchedulerMetricsReporter,
 )
 
 
@@ -85,13 +85,34 @@ class _DummyPublisherThread:
         pass
 
 
-class _DummyScheduler(SchedulerMetricsMixin):
-    pass
+def _make_reporter(scheduler) -> SchedulerMetricsReporter:
+    if not hasattr(scheduler, "server_args"):
+        scheduler.server_args = types.SimpleNamespace(
+            enable_metrics=False,
+            enable_metrics_for_all_schedulers=False,
+            kv_events_config=None,
+            enable_mfu_metrics=False,
+        )
+    if not hasattr(scheduler, "ps"):
+        scheduler.ps = types.SimpleNamespace(attn_tp_rank=0, attn_cp_rank=0)
+    if not hasattr(scheduler, "kv_events_publisher"):
+        scheduler.kv_events_publisher = types.SimpleNamespace(
+            init_kv_events=lambda *a, **kw: None,
+        )
+    if not hasattr(scheduler, "tp_workers"):
+        scheduler.tp_workers = []
+    return SchedulerMetricsReporter(
+        scheduler=scheduler,
+        tp_rank=0,
+        pp_rank=0,
+        dp_rank=0,
+        metrics_collector=None,
+    )
 
 
 class TestForwardPassMetrics(unittest.TestCase):
     def setUp(self):
-        self.scheduler = _DummyScheduler()
+        self.scheduler = types.SimpleNamespace()
         self.scheduler.enable_fpm = True
         self.scheduler._fpm_worker_id = "worker-7"
         self.scheduler._fpm_dp_rank = 0
@@ -100,6 +121,7 @@ class TestForwardPassMetrics(unittest.TestCase):
         self.scheduler._fpm_gpu_time_acc = 0.0
         self.scheduler.waiting_queue = []
         self.scheduler.disaggregation_mode = DisaggregationMode.NULL
+        self.reporter = _make_reporter(self.scheduler)
 
     def _make_batch(self, **overrides):
         defaults = dict(
@@ -135,10 +157,10 @@ class TestForwardPassMetrics(unittest.TestCase):
         )
 
         with patch(
-            "sglang.srt.observability.scheduler_metrics_mixin.time.monotonic",
+            "sglang.srt.managers.scheduler_components.metrics_reporter.time.monotonic",
             return_value=104.5,
         ):
-            self.scheduler._emit_forward_pass_metrics(batch)
+            self.reporter._emit_forward_pass_metrics(batch)
 
         self.assertEqual(len(self.scheduler._fpm_publisher.metrics), 1)
         metrics = self.scheduler._fpm_publisher.metrics[0]
@@ -158,12 +180,12 @@ class TestForwardPassMetrics(unittest.TestCase):
     def test_emit_uses_device_timer_gpu_time(self):
         self.scheduler._fpm_uses_device_timer = True
         self.scheduler._fpm_gpu_time_acc = 0.042
-        self.scheduler.forward_pass_device_timer = types.SimpleNamespace(
+        self.reporter.forward_pass_device_timer = types.SimpleNamespace(
             _report=lambda: None,
         )
         batch = self._make_batch()
 
-        self.scheduler._emit_forward_pass_metrics(batch)
+        self.reporter._emit_forward_pass_metrics(batch)
 
         self.assertEqual(len(self.scheduler._fpm_publisher.metrics), 1)
         self.assertAlmostEqual(
@@ -174,12 +196,12 @@ class TestForwardPassMetrics(unittest.TestCase):
     def test_emit_skips_when_device_timer_zero(self):
         self.scheduler._fpm_uses_device_timer = True
         self.scheduler._fpm_gpu_time_acc = 0.0
-        self.scheduler.forward_pass_device_timer = types.SimpleNamespace(
+        self.reporter.forward_pass_device_timer = types.SimpleNamespace(
             _report=lambda: None,
         )
         batch = self._make_batch()
 
-        self.scheduler._emit_forward_pass_metrics(batch)
+        self.reporter._emit_forward_pass_metrics(batch)
 
         self.assertEqual(len(self.scheduler._fpm_publisher.metrics), 0)
 
@@ -187,10 +209,10 @@ class TestForwardPassMetrics(unittest.TestCase):
         batch = self._make_batch()
 
         with patch(
-            "sglang.srt.observability.scheduler_metrics_mixin.time.monotonic",
+            "sglang.srt.managers.scheduler_components.metrics_reporter.time.monotonic",
             return_value=100.035,
         ):
-            self.scheduler._emit_forward_pass_metrics(batch, result=None)
+            self.reporter._emit_forward_pass_metrics(batch, result=None)
 
         self.assertEqual(len(self.scheduler._fpm_publisher.metrics), 1)
         self.assertAlmostEqual(
@@ -205,10 +227,10 @@ class TestForwardPassMetrics(unittest.TestCase):
         batch = self._make_batch()
 
         with patch(
-            "sglang.srt.observability.scheduler_metrics_mixin.time.monotonic",
+            "sglang.srt.managers.scheduler_components.metrics_reporter.time.monotonic",
             return_value=101.0,
         ):
-            self.scheduler._emit_forward_pass_metrics(batch)
+            self.reporter._emit_forward_pass_metrics(batch)
 
         metrics = self.scheduler._fpm_publisher.metrics[0]
         self.assertEqual(metrics.queued_requests.num_prefill_requests, 3)
@@ -226,10 +248,10 @@ class TestForwardPassMetrics(unittest.TestCase):
         batch = self._make_batch()
 
         with patch(
-            "sglang.srt.observability.scheduler_metrics_mixin.time.monotonic",
+            "sglang.srt.managers.scheduler_components.metrics_reporter.time.monotonic",
             return_value=101.0,
         ):
-            self.scheduler._emit_forward_pass_metrics(batch)
+            self.reporter._emit_forward_pass_metrics(batch)
 
         metrics = self.scheduler._fpm_publisher.metrics[0]
         self.assertEqual(metrics.queued_requests.num_prefill_requests, 0)
@@ -237,7 +259,7 @@ class TestForwardPassMetrics(unittest.TestCase):
         self.assertEqual(metrics.queued_requests.sum_decode_kv_tokens, 15 + 30 + 45)
 
     def test_init_metrics_uses_server_worker_id(self):
-        scheduler = _DummyScheduler()
+        scheduler = types.SimpleNamespace()
         scheduler.server_args = types.SimpleNamespace(
             enable_metrics=False,
             enable_metrics_for_all_schedulers=False,
@@ -249,12 +271,14 @@ class TestForwardPassMetrics(unittest.TestCase):
         )
         scheduler.ps = _make_ps(attn_tp_rank=0, dp_rank=2, pp_rank=0, pp_size=1)
         scheduler.enable_kv_cache_events = False
+        reporter = _make_reporter(scheduler)
+        reporter.forward_pass_device_timer = None
 
         with patch(
             "sglang.srt.observability.forward_pass_metrics._FpmPublisherThread",
             _DummyPublisherThread,
         ):
-            scheduler.init_metrics(tp_rank=0, pp_rank=0, dp_rank=2)
+            reporter._init_fpm()
 
         self.assertTrue(scheduler.enable_fpm)
         self.assertEqual(scheduler._fpm_worker_id, "endpoint-42")
@@ -265,7 +289,7 @@ class TestForwardPassMetrics(unittest.TestCase):
         self.assertIsNotNone(scheduler.server_args.forward_pass_metrics_ipc_name)
 
     def test_init_fpm_disabled_on_non_last_pp_rank(self):
-        scheduler = _DummyScheduler()
+        scheduler = types.SimpleNamespace()
         scheduler.server_args = types.SimpleNamespace(
             enable_metrics=False,
             enable_metrics_for_all_schedulers=False,
@@ -277,12 +301,14 @@ class TestForwardPassMetrics(unittest.TestCase):
         )
         scheduler.ps = _make_ps(attn_tp_rank=0, dp_rank=0, pp_rank=0, pp_size=2)
         scheduler.enable_kv_cache_events = False
+        reporter = _make_reporter(scheduler)
+        reporter.forward_pass_device_timer = None
 
         with patch(
             "sglang.srt.observability.forward_pass_metrics._FpmPublisherThread",
             _DummyPublisherThread,
         ):
-            scheduler.init_metrics(tp_rank=0, pp_rank=0, dp_rank=0)
+            reporter._init_fpm()
 
         self.assertFalse(scheduler.enable_fpm)
 
