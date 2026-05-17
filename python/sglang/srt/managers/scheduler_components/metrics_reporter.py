@@ -36,6 +36,7 @@ if TYPE_CHECKING:
         EmbeddingBatchResult,
         Scheduler,
     )
+    from sglang.srt.managers.utils import EmbeddingBatchResult
 
 
 logger = logging.getLogger(__name__)
