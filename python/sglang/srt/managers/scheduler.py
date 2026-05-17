@@ -176,6 +176,9 @@ from sglang.srt.managers.scheduler_components.kv_events_publisher import (
 from sglang.srt.managers.scheduler_components.load_inquirer import (
     SchedulerLoadInquirer,
 )
+from sglang.srt.managers.scheduler_components.logprob_result_processor import (
+    SchedulerLogprobResultProcessor,
+)
 from sglang.srt.managers.scheduler_components.metrics_reporter import (
     RECORD_STEP_TIME,
     PrefillStats,
@@ -737,6 +740,11 @@ class Scheduler(
             dp_rank=dp_rank,
             metrics_collector_context=self.metrics_collector_context,
             metrics_collector=self.metrics_collector,
+        )
+
+        self.logprob_result_processor = SchedulerLogprobResultProcessor(
+            server_args=self.server_args,
+            model_config=self.model_config,
         )
 
         self.is_initializing = False
