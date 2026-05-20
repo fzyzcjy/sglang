@@ -86,6 +86,9 @@ class PerForwardOrchestrator:
         self._write_req_capacity = write_req_capacity
         self._write_entry_capacity = write_entry_capacity
         self._verify_capacity = max(1, per_forward_verify_capacity)
+        self._verify_capacity_per_req = max(
+            1, self._verify_capacity // write_req_capacity
+        )
 
     def before_forward(self, forward_batch: "ForwardBatch") -> None:
         if self._config.mode == "off":
@@ -120,6 +123,13 @@ class PerForwardOrchestrator:
                 f"verify capacity in CanaryLaunchCapacities.from_args (or "
                 f"_MAX_CUDA_GRID_SAFE_VERIFY_CAPACITY)"
             )
+        batch_verify_capacity = max(1, bs) * self._verify_capacity_per_req
+        if prefix_lens_sum > batch_verify_capacity:
+            raise RuntimeError(
+                f"kv-canary: forward_batch sum(prefix_lens)={prefix_lens_sum} exceeds "
+                f"batch verify capacity={batch_verify_capacity} for batch_size={bs}; "
+                f"check max_seq_len_per_req and CanaryLaunchCapacities.from_args"
+            )
 
         self._perturb_hook.perturb_hook(forward_batch)
         self._perturb_hook.perturb_real_kv_hook(forward_batch)
@@ -149,10 +159,11 @@ class PerForwardOrchestrator:
         violation_log = self._device_state.violation_log
         num_tokens = int(forward_batch.positions.shape[0])
         expected_inputs_slice = self._expected_inputs.slice(num_tokens)
+        verify_plan = self._verify_plan_for_batch(forward_batch=forward_batch)
         for group in self._buffer_groups:
             invoke_plan(
                 plan_input=self._plan_input_per_forward,
-                verify_plan=self._verify_plan_per_forward,
+                verify_plan=verify_plan,
                 write_plan=self._write_plan_per_forward,
                 group=group,
                 req_to_token=self._req_to_token_pool.req_to_token,
@@ -162,7 +173,7 @@ class PerForwardOrchestrator:
                 endpoints=self._endpoints,
                 group=group,
                 tag_filter=_is_head_tag,
-                verify_plan=self._verify_plan_per_forward,
+                verify_plan=verify_plan,
                 write_plan=self._write_plan_per_forward,
                 forward_batch=forward_batch,
                 expected_inputs=expected_inputs_slice,
@@ -178,12 +189,13 @@ class PerForwardOrchestrator:
         violation_log = self._device_state.violation_log
         num_tokens = int(forward_batch.positions.shape[0])
         expected_inputs_slice = self._expected_inputs.slice(num_tokens)
+        verify_plan = self._verify_plan_for_batch(forward_batch=forward_batch)
         for group in self._buffer_groups:
             launch_endpoints_per_forward(
                 endpoints=self._endpoints,
                 group=group,
                 tag_filter=_is_tail_tag,
-                verify_plan=self._verify_plan_per_forward,
+                verify_plan=verify_plan,
                 write_plan=self._write_plan_per_forward,
                 forward_batch=forward_batch,
                 expected_inputs=expected_inputs_slice,
@@ -191,6 +203,20 @@ class PerForwardOrchestrator:
                 real_kv_hash_mode=self._config.real_kv_hash_mode,
                 input_check_mode=self._config.input_check_mode,
             )
+
+    def _verify_plan_for_batch(self, *, forward_batch: "ForwardBatch") -> VerifyPlan:
+        bs = max(1, int(forward_batch.batch_size))
+        capacity = min(self._verify_capacity, bs * self._verify_capacity_per_req)
+        return VerifyPlan(
+            verify_slot_indices=self._verify_plan_per_forward.verify_slot_indices[
+                :capacity
+            ],
+            verify_positions=self._verify_plan_per_forward.verify_positions[:capacity],
+            verify_prev_slot_indices=self._verify_plan_per_forward.verify_prev_slot_indices[
+                :capacity
+            ],
+            verify_num_valid=self._verify_plan_per_forward.verify_num_valid,
+        )
 
 
 def _sum_prefix_lens(*, forward_batch: "ForwardBatch", bs: int) -> int:
