@@ -386,7 +386,7 @@ class Gemma3ForConditionalGeneration(PreTrainedModel):
 
         # Important: position_ids in Gemma3 are 1-indexed
         # This really does cost me sometime
-        positions += 1
+        positions = positions + 1
 
         # Replace image id with PAD if the image token if OOV, to avoid index-errors
         if input_ids is not None and self.config.image_token_index >= self.vocab_size:
