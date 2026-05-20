@@ -39,6 +39,7 @@ from sglang.jit_kernel.tests.kv_canary._fixtures import (
 from sglang.jit_kernel.tests.kv_canary._hand_oracle import (
     _hand_fold_all,
     _hand_fold_partial,
+    _hand_fold_source,
 )
 from sglang.test.ci.ci_register import register_cuda_ci
 
@@ -719,6 +720,61 @@ def test_real_kv_mode_all_byte_equal() -> None:
     _run_real_kv_mode_byte_equal_case(consts.RealKvHashMode.ALL)
 
 
+def test_real_kv_source_compress_mapping_byte_equal() -> None:
+    """Compressed source maps full logical slot to physical storage before hashing real KV bytes."""
+    cuda_buf, ref_buf = _setup_pair()
+    source_tensor = torch.arange(4 * 16, dtype=torch.uint8, device=_DEVICE).reshape(
+        4, 16
+    )
+    slot_mapping = torch.tensor([0, 2, 3, 1], dtype=torch.int64, device=_DEVICE)
+    sources_cuda = (
+        RealKvSource(
+            tensor=source_tensor,
+            page_size=1,
+            num_bytes_per_token=16,
+            read_bytes=16,
+            slot_mapping=slot_mapping,
+            compress_ratio=4,
+            compress_residue=3,
+        ),
+    )
+    sources_ref = clone_real_kv_sources(sources_cuda)
+
+    plan_cuda = make_write_plan(
+        write_offsets=[0, 1], seed_slot_indices=[-1], num_valid_reqs=1, device=_DEVICE
+    )
+    plan_ref = make_write_plan(
+        write_offsets=[0, 1], seed_slot_indices=[-1], num_valid_reqs=1, device=_DEVICE
+    )
+    fb_input_ids = torch.tensor([77], dtype=torch.int32, device=_DEVICE)
+    fb_positions = torch.tensor([7], dtype=torch.int32, device=_DEVICE)
+    fb_out_cache_loc = torch.tensor([7], dtype=torch.int32, device=_DEVICE)
+    pseudo_tokens, pseudo_positions = _dummy_pseudo_tensors(1)
+    cuda_log = FakeViolationLog.allocate(device=_DEVICE)
+    ref_log = FakeViolationLog.allocate(device=_DEVICE)
+
+    _run_both_and_assert_buf_and_state_equal(
+        cuda_canary_buf=cuda_buf,
+        ref_canary_buf=ref_buf,
+        plan_cuda=plan_cuda,
+        plan_ref=plan_ref,
+        fb_input_ids=fb_input_ids,
+        fb_positions=fb_positions,
+        fb_out_cache_loc=fb_out_cache_loc,
+        enable_write_verify_inputs=False,
+        expected_input_tokens=pseudo_tokens,
+        expected_input_positions=pseudo_positions,
+        cuda_log=cuda_log,
+        ref_log=ref_log,
+        real_kv_sources_cuda=sources_cuda,
+        real_kv_sources_ref=sources_ref,
+        real_kv_hash_mode=consts.RealKvHashMode.PARTIAL,
+    )
+    _, _, _, stored_real_kv_hash = read_slot_fields(canary_buf=cuda_buf, slot_idx=7)
+    expected_hash = _hand_fold_partial(bytes(range(32, 48)))
+    assert stored_real_kv_hash == to_signed_int64(expected_hash)
+
+
 @pytest.mark.parametrize("count", [1, 2, 3, 4])
 def test_real_kv_sources_fold_1_to_4(count: int) -> None:
     """Folding ``count`` sources sequentially → CUDA matches ref for every count in {1..4}."""
@@ -1292,7 +1348,7 @@ def test_seed_slot_resume_5_step_hardcoded() -> None:
 
 @pytest.mark.parametrize(
     "token_val",
-    [0, 1, 0xFFFFFFFF, -1, 0x80000000, 0x7FFFFFFF],
+    [0, 1, -1, -(2**31), 2**31 - 1],
 )
 def test_token_boundary_byte_equal_sweep(token_val: int) -> None:
     """Sweep token boundary values; assert CUDA write vs ref buf + state byte-equal."""
@@ -1414,10 +1470,8 @@ def test_chain_advances_with_real_kv_hash_all() -> None:
         rkv = 0
         for src in sources_cuda:
             row_bytes = src.tensor[slot_idx, : src.read_bytes].detach().cpu().tolist()
-            fold = 0
-            for b in row_bytes:
-                fold = splitmix64(fold ^ int(b))
-            rkv = splitmix64(rkv ^ fold)
+            source_hash = _hand_fold_source(bytes(row_bytes))
+            rkv = splitmix64(rkv ^ source_hash)
         stored_prev_signed = read_slot_fields(canary_buf=cuda_buf, slot_idx=slot_idx)[2]
         assert stored_prev_signed == to_signed_int64(
             running
@@ -1497,9 +1551,8 @@ def test_seed_continues_existing_chain() -> None:
     new_slot = 4
     new_token = 13
     new_position = 2
-    expected_running = splitmix64(
-        (expected_seed_prev_hash ^ seed_token ^ seed_position ^ seed_real_kv)
-        & ((1 << 64) - 1)
+    expected_running = splitmix64_mix4(
+        expected_seed_prev_hash, seed_token, seed_position, seed_real_kv
     )
 
     plan_cuda = make_write_plan(
@@ -1555,6 +1608,7 @@ def test_paged_real_kv_hash_consistent_across_slots() -> None:
         page_size=16,
         num_slots=16,
         device=_DEVICE,
+        fill_strategy="random_bytes",
     )
     sources_ref = clone_real_kv_sources(sources_cuda)
 

@@ -44,6 +44,7 @@ from sglang.jit_kernel.tests.kv_canary._fixtures import clone_real_kv_sources
 from sglang.jit_kernel.tests.kv_canary._hand_oracle import (
     _hand_fold_all,
     _hand_fold_partial,
+    _hand_fold_source,
 )
 from sglang.test.ci.ci_register import register_cuda_ci
 
@@ -1800,10 +1801,8 @@ def test_real_kv_hash_all_mode_with_multiple_sources() -> None:
                 .cpu()
                 .tolist()
             )
-            fold = 0
-            for b in row_bytes:
-                fold = splitmix64(fold ^ int(b))
-            rkv = splitmix64(rkv ^ fold)
+            source_hash = _hand_fold_source(bytes(row_bytes))
+            rkv = splitmix64(rkv ^ source_hash)
         real_kv_hashes.append(rkv)
 
     for slot_idx, token, position, rkv in zip(
@@ -1940,10 +1939,7 @@ def test_paged_layout_page_size_16() -> None:
             .cpu()
             .tolist()
         )
-        fold = 0
-        for b in row_bytes:
-            fold = splitmix64(fold ^ int(b))
-        rkv_values.append(fold)
+        rkv_values.append(_hand_fold_all(bytes(row_bytes)))
 
     for slot_idx, token, position, rkv in zip(
         slot_indices, tokens, positions, rkv_values

@@ -195,6 +195,7 @@ def _compute_real_kv_hash_scalar(
     acc: int = 0
 
     for source in real_kv_sources:
+        slot_for_source = _translate_real_kv_slot(source=source, slot_idx=slot_idx)
         page_size = source.page_size
         num_bytes_per_token = source.num_bytes_per_token
         read_bytes = source.read_bytes
@@ -202,8 +203,8 @@ def _compute_real_kv_hash_scalar(
             source.tensor.detach().to(device=work_device).contiguous().view(torch.uint8)
         )
 
-        row = slot_idx // page_size
-        col_within_page = slot_idx % page_size
+        row = slot_for_source // page_size
+        col_within_page = slot_for_source % page_size
         col_start = col_within_page * num_bytes_per_token
 
         effective_read_bytes = (
@@ -219,6 +220,23 @@ def _compute_real_kv_hash_scalar(
         acc = splitmix64(combined)
 
     return acc
+
+
+def _translate_real_kv_slot(*, source: RealKvSource, slot_idx: int) -> int:
+    slot = int(slot_idx)
+    if source.compress_ratio > 1:
+        if slot % source.compress_ratio != source.compress_residue:
+            return consts.CANARY_RESERVED_SLOT
+        slot = (slot - source.compress_residue) // source.compress_ratio
+    if source.slot_mapping is not None:
+        mapping = source.slot_mapping.detach().to(device="cpu", dtype=torch.int64)
+        if slot < 0 or slot >= int(mapping.shape[0]):
+            return consts.CANARY_RESERVED_SLOT
+        mapped = int(mapping[slot].item())
+        if mapped < 0:
+            return consts.CANARY_RESERVED_SLOT
+        return mapped
+    return slot
 
 
 def _splitmix64_fold_bytes_scalar(*, raw_bytes: list[int]) -> int:

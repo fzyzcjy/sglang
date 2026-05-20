@@ -1,10 +1,9 @@
 // Shared device helpers for the KV cache canary verify + write kernels.
 //
 // Real-KV source ABI (tvm-ffi cannot pass tuple[RealKvSource, ...] directly): the host wrapper unpacks the
-// tuple into a fixed-size array of 4 sources and passes 4 separate uint8 tensors plus a single int32 array
-// of (page_size, num_bytes_per_token, read_bytes) triplets of length 12 (4 sources x 3 fields). The host
-// also passes ``num_sources`` (count of valid leading entries); the kernel iterates only
-// ``sources[0..num_sources)`` and never reads the padding tail.
+// tuple into a fixed-size array of 4 sources and passes 4 separate uint8 tensors, 4 optional int64 mapping
+// tensors, plus a single int32 params array. The host also passes ``num_sources`` (count of valid leading
+// entries); the kernel iterates only ``sources[0..num_sources)`` and never reads the padding tail.
 
 #pragma once
 
@@ -17,11 +16,15 @@ namespace canary {
 
 // Device-side handle for one real-KV source.
 struct RealKvSourceHandle {
-  const uint8_t* tensor;     // raw uint8 byte pointer to the source tensor
+  const uint8_t* tensor;  // raw uint8 byte pointer to the source tensor
+  const int64_t* slot_mapping;
   int32_t row_stride_bytes;  // tensor.shape[1] in bytes (may exceed page_size * num_bytes_per_token)
   int32_t page_size;
   int32_t num_bytes_per_token;
   int32_t read_bytes;
+  int32_t compress_ratio;
+  int32_t compress_residue;
+  bool has_slot_mapping;
 };
 
 // Standard splitmix64 finalizer. Bit-equivalent to the Python splitmix64 in
@@ -43,6 +46,24 @@ SGL_DEVICE uint64_t splitmix64_mix4(uint64_t a, uint64_t b, uint64_t c, uint64_t
   return h;
 }
 
+SGL_DEVICE int64_t real_kv_translate_slot(const RealKvSourceHandle& src, int64_t slot_idx) {
+  int64_t slot = slot_idx;
+  if (src.compress_ratio > 1) {
+    if (slot % src.compress_ratio != src.compress_residue) {
+      return kCanaryReservedSlot;
+    }
+    slot = (slot - src.compress_residue) / src.compress_ratio;
+  }
+  if (src.has_slot_mapping) {
+    const int64_t mapped = src.slot_mapping[slot];
+    if (mapped < 0) {
+      return kCanaryReservedSlot;
+    }
+    slot = mapped;
+  }
+  return slot;
+}
+
 // Read 16 aligned bytes from a source as two uint64 little-endian words, following the RealKvSource access
 // invariant. The invariant (from kv_canary/verify.py docstring) is:
 //
@@ -58,8 +79,9 @@ SGL_DEVICE uint64_t splitmix64_mix4(uint64_t a, uint64_t b, uint64_t c, uint64_t
 // computed here is 16B-aligned, so the uint4 load below is a single coalesced LDG.E.128.
 SGL_DEVICE void real_kv_load_uint4(
     const RealKvSourceHandle& src, int64_t slot_idx, int64_t byte_offset, uint64_t& word_lo, uint64_t& word_hi) {
-  const int64_t row = slot_idx / src.page_size;
-  const int64_t col_within_page = slot_idx % src.page_size;
+  const int64_t source_slot = real_kv_translate_slot(src, slot_idx);
+  const int64_t row = source_slot / src.page_size;
+  const int64_t col_within_page = source_slot % src.page_size;
   const int64_t col = col_within_page * src.num_bytes_per_token + byte_offset;
   const int64_t flat_index = row * static_cast<int64_t>(src.row_stride_bytes) + col;
   const uint4 vec = *reinterpret_cast<const uint4*>(src.tensor + flat_index);

@@ -214,7 +214,7 @@ def canary_write_step(
     _assert_contiguous(slot_run_counter, "slot_run_counter")
     _assert_contiguous(kernel_run_counter, "kernel_run_counter")
 
-    padded_bufs, source_params = _build_real_kv_source_abi(
+    padded_bufs, padded_mappings, source_params = _build_real_kv_source_abi(
         real_kv_sources=real_kv_sources, device=canary_buf.device
     )
 
@@ -239,6 +239,10 @@ def canary_write_step(
         padded_bufs[1],
         padded_bufs[2],
         padded_bufs[3],
+        padded_mappings[0],
+        padded_mappings[1],
+        padded_mappings[2],
+        padded_mappings[3],
         source_params,
         len(real_kv_sources),
         int(real_kv_hash_mode),

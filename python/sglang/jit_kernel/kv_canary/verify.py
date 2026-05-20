@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Optional
 
 import torch
 
@@ -53,8 +53,9 @@ def _assert_contiguous(tensor: torch.Tensor, name: str) -> None:
 class RealKvSource:
     """One piece of real KV the canary folds into its fingerprint.
 
-    Slot access invariant (must hold for every source, regardless of underlying layout) — for a given slot_idx,
-    the canary reads exactly these bytes:
+    Slot access invariant (must hold for every source, regardless of underlying layout) — for a given logical
+    slot_idx, the canary first applies ``compress_ratio`` / ``compress_residue`` and ``slot_mapping`` when
+    configured, then reads exactly these bytes from the resulting physical slot:
 
         tensor[
             slot_idx // page_size,
@@ -94,12 +95,22 @@ class RealKvSource:
             multiple of 16.
         read_bytes: Leading bytes (out of ``num_bytes_per_token``) per slot folded into the fingerprint.
             Must be a positive multiple of 16, ``<= num_bytes_per_token``.
+        slot_mapping: Optional int64/int32 device LUT from compressed logical slot to physical source slot.
+            DSV4 HiSparse c4 sources use this because physical c4 pages are allocated independently from full
+            logical slots.
+        compress_ratio: Optional logical-to-compressed stride. ``1`` means identity. For DSV4 c4/c128 sources,
+            only slots whose ``slot_idx % compress_ratio == compress_residue`` are present in that source; all
+            other slots map to the reserved zero slot.
+        compress_residue: Residue class used with ``compress_ratio``.
     """
 
     tensor: torch.Tensor
     page_size: int
     num_bytes_per_token: int
     read_bytes: int
+    slot_mapping: Optional[torch.Tensor] = None
+    compress_ratio: int = 1
+    compress_residue: int = 0
 
     def __post_init__(self) -> None:
         if self.page_size < 1:
@@ -127,6 +138,26 @@ class RealKvSource:
             raise ValueError(
                 f"kv-canary: RealKvSource.tensor must be at least 2-D, got shape {tuple(self.tensor.shape)}"
             )
+        if self.compress_ratio < 1:
+            raise ValueError(
+                f"kv-canary: RealKvSource.compress_ratio must be >= 1, got {self.compress_ratio}"
+            )
+        if self.compress_residue < 0 or self.compress_residue >= self.compress_ratio:
+            raise ValueError(
+                f"kv-canary: RealKvSource.compress_residue must be in [0, {self.compress_ratio}), "
+                f"got {self.compress_residue}"
+            )
+        if self.slot_mapping is not None:
+            if self.slot_mapping.ndim != 1:
+                raise ValueError(
+                    f"kv-canary: RealKvSource.slot_mapping must be 1-D, got shape "
+                    f"{tuple(self.slot_mapping.shape)}"
+                )
+            if self.slot_mapping.dtype not in (torch.int32, torch.int64):
+                raise ValueError(
+                    f"kv-canary: RealKvSource.slot_mapping must be int32 or int64, "
+                    f"got {self.slot_mapping.dtype}"
+                )
         row_stride_bytes = int(self.tensor.shape[1]) * self.tensor.element_size()
         if row_stride_bytes % 16 != 0:
             raise ValueError(
@@ -247,9 +278,8 @@ def canary_verify_step(
         - record_violation(): idx = atomicAdd(violation_write_index, 1); if idx < ring_capacity, atomic-write
           the 8 int64 fields to violation_ring[idx] (kernel_kind, slot_idx, position, stored vs expected
           fields, fail_reason).
-        - Counters: warp-reduce per-thread "did I process an active entry?" via __ballot_sync + popc, then
-          warp-leader atomicAdd to slot_run_counter. kernel_run_counter += 1: single thread (tid == 0) does an
-          atomicAdd once per launch.
+        - Counters: slot_run_counter += plan.verify_num_valid[0] via one atomicAdd from tid == 0;
+          kernel_run_counter += 1 via one atomicAdd from tid == 0.
 
     Calling contract:
         - Pure side-effect; never raises. Host polls violation_write_index[0] > 0 for is_errored and
@@ -277,7 +307,7 @@ def canary_verify_step(
     _assert_contiguous(slot_run_counter, "slot_run_counter")
     _assert_contiguous(kernel_run_counter, "kernel_run_counter")
 
-    padded_bufs, source_params = _build_real_kv_source_abi(
+    padded_bufs, padded_mappings, source_params = _build_real_kv_source_abi(
         real_kv_sources=real_kv_sources, device=canary_buf.device
     )
 
@@ -297,6 +327,10 @@ def canary_verify_step(
         padded_bufs[1],
         padded_bufs[2],
         padded_bufs[3],
+        padded_mappings[0],
+        padded_mappings[1],
+        padded_mappings[2],
+        padded_mappings[3],
         source_params,
         len(real_kv_sources),
         int(real_kv_hash_mode),
@@ -318,7 +352,7 @@ def _build_real_kv_source_abi(
     *,
     real_kv_sources: tuple[RealKvSource, ...],
     device: torch.device,
-) -> tuple[list[torch.Tensor], torch.Tensor]:
+) -> tuple[list[torch.Tensor], list[torch.Tensor], torch.Tensor]:
     """Pad a RealKvSource tuple up to consts.MAX_REAL_KV_SOURCES dummy entries and build the (bufs, params) ABI.
 
     The kernel iterates only ``sources[0..num_sources)`` (caller passes ``num_sources = len(real_kv_sources)``
@@ -327,11 +361,12 @@ def _build_real_kv_source_abi(
     Returns:
         padded_bufs: list of length consts.MAX_REAL_KV_SOURCES; uint8 2-D tensors on ``device``. Padding
             tail is filled with a tiny 1-byte placeholder that the kernel never reads.
-        source_params: int32 tensor on CPU, shape [consts.MAX_REAL_KV_SOURCES, 3]. Leading rows hold each
-            source's (page_size, num_bytes_per_token, read_bytes); padding rows are left as the initial
-            zeros and never read.
+        padded_mappings: list of length consts.MAX_REAL_KV_SOURCES; int64 1-D tensors on ``device``.
+        source_params: int32 tensor on CPU. Leading rows hold each source's page size, byte width, read bytes,
+            compression transform, and mapping presence; padding rows are left as zeros and never read.
     """
     padded_bufs: list[torch.Tensor] = []
+    padded_mappings: list[torch.Tensor] = []
     params = torch.zeros(
         (consts.MAX_REAL_KV_SOURCES, consts.REAL_KV_SOURCE_FIELDS_PER_ENTRY),
         dtype=torch.int32,
@@ -347,15 +382,32 @@ def _build_real_kv_source_abi(
                 f"got {source_u8.dim()}-D"
             )
         padded_bufs.append(source_u8)
+        if source.slot_mapping is None:
+            mapping = torch.zeros(1, dtype=torch.int64, device=device)
+        else:
+            _assert_contiguous(
+                source.slot_mapping, f"real_kv_sources[{i}].slot_mapping"
+            )
+            mapping = source.slot_mapping.to(device=device, dtype=torch.int64)
+        padded_mappings.append(mapping)
         params[i, consts.REAL_KV_SOURCE_FIELD_PAGE_SIZE] = source.page_size
         params[i, consts.REAL_KV_SOURCE_FIELD_NUM_BYTES_PER_TOKEN] = (
             source.num_bytes_per_token
         )
         params[i, consts.REAL_KV_SOURCE_FIELD_READ_BYTES] = source.read_bytes
+        params[i, consts.REAL_KV_SOURCE_FIELD_COMPRESS_RATIO] = source.compress_ratio
+        params[i, consts.REAL_KV_SOURCE_FIELD_COMPRESS_RESIDUE] = (
+            source.compress_residue
+        )
+        params[i, consts.REAL_KV_SOURCE_FIELD_HAS_SLOT_MAPPING] = (
+            1 if source.slot_mapping is not None else 0
+        )
 
     # Pad bufs (never read by the kernel — num_sources bounds the iteration); params already zero.
     dummy = torch.zeros((1, 1), dtype=torch.uint8, device=device)
+    dummy_mapping = torch.zeros(1, dtype=torch.int64, device=device)
     for _ in range(len(real_kv_sources), consts.MAX_REAL_KV_SOURCES):
         padded_bufs.append(dummy)
+        padded_mappings.append(dummy_mapping)
 
-    return padded_bufs, params
+    return padded_bufs, padded_mappings, params

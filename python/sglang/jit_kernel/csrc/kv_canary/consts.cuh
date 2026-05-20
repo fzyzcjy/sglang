@@ -52,9 +52,12 @@ enum class RealKvHashMode : int32_t {
 
 constexpr int kMaxRealKvSources = 4;
 
-constexpr int kRealKvSourceFieldsPerEntry = 3;
+constexpr int kRealKvSourceFieldsPerEntry = 6;
 constexpr int kRealKvSourceFieldPageSize = 0;
 constexpr int kRealKvSourceFieldNumBytesPerToken = 1;
 constexpr int kRealKvSourceFieldReadBytes = 2;
+constexpr int kRealKvSourceFieldCompressRatio = 3;
+constexpr int kRealKvSourceFieldCompressResidue = 4;
+constexpr int kRealKvSourceFieldHasSlotMapping = 5;
 
 }  // namespace canary

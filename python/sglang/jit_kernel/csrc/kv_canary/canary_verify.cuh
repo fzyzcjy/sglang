@@ -58,13 +58,10 @@ __global__ void canary_verify_kernel(const VerifyKernelParams __grid_constant__ 
   const int32_t active = *p.verify_num_valid;
   const bool is_active_entry = (tid < static_cast<uint32_t>(active));
 
-  // slot_run_counter: warp-reduce per-thread "did I process an active entry?" via __ballot_sync + popc,
-  // then warp-leader atomicAdd. Done outside the early-exit so the popc covers the whole warp even when
-  // some lanes are inactive.
-  const unsigned int warp_mask = __ballot_sync(0xFFFFFFFFu, is_active_entry);
-  if ((threadIdx.x & 31u) == 0u && warp_mask != 0u) {
-    atomicAdd(
-        reinterpret_cast<unsigned long long*>(p.slot_run_counter), static_cast<unsigned long long>(__popc(warp_mask)));
+  // slot_run_counter tracks planned active entries, so one atomic per launch is sufficient. Keeping this
+  // out of the per-warp path matters for long decode runs where the canary verifies millions of entries.
+  if (tid == 0 && active > 0) {
+    atomicAdd(reinterpret_cast<unsigned long long*>(p.slot_run_counter), static_cast<unsigned long long>(active));
   }
 
   if (!is_active_entry) {
@@ -152,6 +149,10 @@ inline void canary_verify_step_cuda(
     tvm::ffi::TensorView real_kv_buf_1,
     tvm::ffi::TensorView real_kv_buf_2,
     tvm::ffi::TensorView real_kv_buf_3,
+    tvm::ffi::TensorView real_kv_mapping_0,
+    tvm::ffi::TensorView real_kv_mapping_1,
+    tvm::ffi::TensorView real_kv_mapping_2,
+    tvm::ffi::TensorView real_kv_mapping_3,
     tvm::ffi::TensorView real_kv_source_params,
     int64_t num_sources,
     int64_t real_kv_hash_mode) {
@@ -215,6 +216,14 @@ inline void canary_verify_step_cuda(
       .with_dtype<int32_t>()
       .with_device<kDLCPU>()
       .verify(real_kv_source_params);
+  SymbolicSize N_real_kv_mapping_0 = {"real_kv_mapping_0"};
+  TensorMatcher({N_real_kv_mapping_0}).with_dtype<int64_t>().with_device<kDLCUDA>(device_).verify(real_kv_mapping_0);
+  SymbolicSize N_real_kv_mapping_1 = {"real_kv_mapping_1"};
+  TensorMatcher({N_real_kv_mapping_1}).with_dtype<int64_t>().with_device<kDLCUDA>(device_).verify(real_kv_mapping_1);
+  SymbolicSize N_real_kv_mapping_2 = {"real_kv_mapping_2"};
+  TensorMatcher({N_real_kv_mapping_2}).with_dtype<int64_t>().with_device<kDLCUDA>(device_).verify(real_kv_mapping_2);
+  SymbolicSize N_real_kv_mapping_3 = {"real_kv_mapping_3"};
+  TensorMatcher({N_real_kv_mapping_3}).with_dtype<int64_t>().with_device<kDLCUDA>(device_).verify(real_kv_mapping_3);
 
   const int64_t slot_stride_bytes = N_stride.unwrap();
   const int32_t verify_capacity = static_cast<int32_t>(N_verify.unwrap());
@@ -252,12 +261,18 @@ inline void canary_verify_step_cuda(
   // Materialize the source handle array on the host. The CPU param tensor carries the per-source ints.
   const int32_t* params = static_cast<const int32_t*>(real_kv_source_params.data_ptr());
   tvm::ffi::TensorView source_bufs[kMaxRealKvSources] = {real_kv_buf_0, real_kv_buf_1, real_kv_buf_2, real_kv_buf_3};
+  tvm::ffi::TensorView source_mappings[kMaxRealKvSources] = {
+      real_kv_mapping_0, real_kv_mapping_1, real_kv_mapping_2, real_kv_mapping_3};
   for (int s = 0; s < kMaxRealKvSources; ++s) {
     p.sources[s].tensor = static_cast<const uint8_t*>(source_bufs[s].data_ptr());
+    p.sources[s].slot_mapping = static_cast<const int64_t*>(source_mappings[s].data_ptr());
     p.sources[s].row_stride_bytes = static_cast<int32_t>(source_bufs[s].size(1));
     p.sources[s].page_size = params[s * kRealKvSourceFieldsPerEntry + kRealKvSourceFieldPageSize];
     p.sources[s].num_bytes_per_token = params[s * kRealKvSourceFieldsPerEntry + kRealKvSourceFieldNumBytesPerToken];
     p.sources[s].read_bytes = params[s * kRealKvSourceFieldsPerEntry + kRealKvSourceFieldReadBytes];
+    p.sources[s].compress_ratio = params[s * kRealKvSourceFieldsPerEntry + kRealKvSourceFieldCompressRatio];
+    p.sources[s].compress_residue = params[s * kRealKvSourceFieldsPerEntry + kRealKvSourceFieldCompressResidue];
+    p.sources[s].has_slot_mapping = params[s * kRealKvSourceFieldsPerEntry + kRealKvSourceFieldHasSlotMapping] != 0;
   }
   p.num_sources = static_cast<int32_t>(num_sources);
   p.real_kv_hash_mode = static_cast<RealKvHashMode>(real_kv_hash_mode);

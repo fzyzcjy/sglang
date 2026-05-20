@@ -156,6 +156,11 @@ def clone_real_kv_sources(
             page_size=src.page_size,
             num_bytes_per_token=src.num_bytes_per_token,
             read_bytes=src.read_bytes,
+            slot_mapping=(
+                src.slot_mapping.clone() if src.slot_mapping is not None else None
+            ),
+            compress_ratio=src.compress_ratio,
+            compress_residue=src.compress_residue,
         )
         for src in sources
     )

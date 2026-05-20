@@ -1150,8 +1150,8 @@ def test_extras_capacity_undershoot_by_one() -> None:
     n_ref = int(ref_v.verify_num_valid[0].item())
     assert n_real == n_ref, f"real {n_real} vs ref {n_ref} diverged under cap"
     assert (
-        n_real <= verify_capacity
-    ), f"real n_valid {n_real} exceeded cap {verify_capacity}"
+        n_real == total_verify + extras_count
+    ), f"real n_valid {n_real} did not report total demand {total_verify + extras_count}"
 
 
 def test_swa_window_head_prev_slot_is_real_predecessor() -> None:

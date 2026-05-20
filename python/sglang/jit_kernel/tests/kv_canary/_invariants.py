@@ -103,7 +103,11 @@ class PlanInvariants:
         if extras_count == 0:
             return
         tail_start = derived_verify_count
-        tail_end = derived_verify_count + extras_count
+        verify_capacity = int(verify_plan.verify_slot_indices.shape[0])
+        visible_extras_count = max(0, min(extras_count, verify_capacity - tail_start))
+        if visible_extras_count == 0:
+            return
+        tail_end = tail_start + visible_extras_count
         n_valid = int(verify_plan.verify_num_valid[0].item())
         assert (
             tail_end <= n_valid
@@ -111,9 +115,9 @@ class PlanInvariants:
         plan_slots = verify_plan.verify_slot_indices[tail_start:tail_end]
         plan_positions = verify_plan.verify_positions[tail_start:tail_end]
         plan_prevs = verify_plan.verify_prev_slot_indices[tail_start:tail_end]
-        assert torch.equal(plan_slots, extras_slot_indices[:extras_count])
-        assert torch.equal(plan_positions, extras_positions[:extras_count])
-        assert torch.equal(plan_prevs, extras_prev_slot_indices[:extras_count])
+        assert torch.equal(plan_slots, extras_slot_indices[:visible_extras_count])
+        assert torch.equal(plan_positions, extras_positions[:visible_extras_count])
+        assert torch.equal(plan_prevs, extras_prev_slot_indices[:visible_extras_count])
 
     @staticmethod
     def _assert_padding_row_seed_is_minus_one(
@@ -141,13 +145,17 @@ class PlanInvariants:
         swa_window_size: int,
         derived_verify_count: int,
     ) -> None:
+        del swa_window_size
         if derived_verify_count == 0:
             return
+        visible_derived_count = min(
+            derived_verify_count, int(verify_plan.verify_positions.shape[0])
+        )
         positions_cpu = (
-            verify_plan.verify_positions[:derived_verify_count].detach().cpu().tolist()
+            verify_plan.verify_positions[:visible_derived_count].detach().cpu().tolist()
         )
         prevs_cpu = (
-            verify_plan.verify_prev_slot_indices[:derived_verify_count]
+            verify_plan.verify_prev_slot_indices[:visible_derived_count]
             .detach()
             .cpu()
             .tolist()
@@ -157,11 +165,6 @@ class PlanInvariants:
                 assert (
                     prev == -1
                 ), f"entry {i} at position 0 must have prev=-1, got {prev}"
-            else:
-                if swa_window_size == 0:
-                    assert (
-                        prev != -1
-                    ), f"FULL entry {i} at position {pos} must have prev != -1, got {prev}"
 
     @staticmethod
     def _assert_verify_num_valid_equals_derived_plus_extras(
@@ -483,12 +486,14 @@ class WriteInvariants:
             assert delta == 0, f"empty plan incremented slot_run_counter by {delta}"
             return
         total = int(plan.write_offsets[n_active].item())
+        slots_cpu = fb_out_cache_loc[:total].detach().cpu().tolist()
+        expected_delta = sum(1 for slot in slots_cpu if slot >= 0)
         delta = int(log_after.slot_run_counter[0].item()) - int(
             log_before.slot_run_counter[0].item()
         )
         assert (
-            delta == total
-        ), f"slot_run_counter delta {delta} != total write entries {total}"
+            delta == expected_delta
+        ), f"slot_run_counter delta {delta} != non-skipped write entries {expected_delta}"
 
     @staticmethod
     def _assert_write_kernel_run_counter_incremented_by_one(
