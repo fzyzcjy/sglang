@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Iterator, Optional
 
 import torch
 
 from sglang.jit_kernel.kv_canary.verify import CanaryLaunchTag
 from sglang.srt.kv_canary.buffer_group import CanaryBufferGroup
+from sglang.srt.kv_canary.capacities import CanaryLaunchCapacities
 from sglang.srt.kv_canary.config import CanaryConfig
 from sglang.srt.kv_canary.endpoint import (
     CanaryEndpoint,
@@ -33,36 +33,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True, slots=True, kw_only=True)
-class CanaryLaunchCapacities:
-    """Pre-allocation sizes for the per-forward and sweep tensors a CanaryRunner owns. Computed
-    once at install_canary from ServerArgs + ModelRunner metadata; all four fields are upper
-    bounds - actual per-step usage may be smaller but never larger.
-
-    Fields:
-        per_forward_verify_capacity: VerifyPlan row capacity for the per-forward HEAD/TAIL
-            launches. Sized to the total verify entries the per-forward path may produce in one
-            step (= sum_r prefix_lens[r] for the FULL group), upper-bounded by max_bs *
-            max_seq_len_per_req (the req_to_token table extent). install_canary refuses to silently
-            cap this value: if the upper exceeds _MAX_CUDA_GRID_SAFE_VERIFY_CAPACITY it raises with
-            an actionable knob list. PerForwardOrchestrator.before_forward additionally throws on
-            the per-step actual sum so an undersized capacity fails fast instead of OOB-reading
-            the tail threads of the verify kernel grid.
-        per_forward_write_req_capacity: WritePlan row capacity for per-forward writes, also used
-            to size the static fb_* PlanInput buffers (= max batch size under cuda graph).
-        per_forward_write_entry_capacity: Capacity for the expected_input_* placeholder tensors,
-            one entry per token written in a single forward.
-        sweep_verify_capacity: VerifyPlan row capacity for the radix sweep launch, sized to the
-            pool slot count. install_canary throws when this exceeds
-            _MAX_CUDA_GRID_SAFE_VERIFY_CAPACITY for the same reason as per-forward.
-    """
-
-    per_forward_verify_capacity: int
-    per_forward_write_req_capacity: int
-    per_forward_write_entry_capacity: int
-    sweep_verify_capacity: int
-
-
 class CanaryRunner:
     """Owns all canary state for one ModelRunner. Constructed once during install_canary, lives
     until server shutdown. The runner itself is a thin facade; per-concern state and behavior
@@ -82,10 +52,11 @@ class CanaryRunner:
         radix_cache: Optional["BasePrefixCache"] = None,
         launch_capacities: CanaryLaunchCapacities,
         swa_window_size: int = 0,
+        token_oracle_manager: Optional[TokenOracleManager] = None,
     ) -> None:
         self.config = config
         self._req_to_token_pool = req_to_token_pool
-        self._swa_window_size = int(swa_window_size)
+        self._swa_window_size = swa_window_size
 
         self._buffer_groups: tuple[CanaryBufferGroup, ...] = tuple(buffer_groups)
 
@@ -154,6 +125,7 @@ class CanaryRunner:
             per_forward_verify_capacity=launch_capacities.per_forward_verify_capacity,
             per_forward_write_req_capacity=launch_capacities.per_forward_write_req_capacity,
             per_forward_write_entry_capacity=launch_capacities.per_forward_write_entry_capacity,
+            token_oracle_manager=token_oracle_manager,
         )
         self._health_and_stats = HealthAndStats(
             config=config,
@@ -175,13 +147,6 @@ class CanaryRunner:
     def attach_radix_cache(self, radix_cache: "BasePrefixCache") -> None:
         self._sweep_orchestrator.attach_radix_cache(radix_cache)
         self._perturb_hook.attach_radix_cache(radix_cache)
-
-    def attach_token_oracle_manager(self, manager: TokenOracleManager) -> None:
-        """Bind the TokenOracleManager returned by install_oracle_sampler so the per-forward
-        input-check path (input_check_mode is True) can fill expected_input_* tensors from the
-        same oracle that drives sampling.
-        """
-        self._per_forward_orchestrator.attach_token_oracle_manager(manager)
 
     @contextlib.contextmanager
     def with_forward_pass(self, forward_batch: "ForwardBatch") -> Iterator[None]:
