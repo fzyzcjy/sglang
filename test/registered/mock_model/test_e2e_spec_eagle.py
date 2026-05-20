@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from utils import mock_model_engine_kwargs
+from utils import mock_model_engine_kwargs, shutdown_engine_ignoring_zombie_reap
 
 import sglang as sgl
 from sglang.test.ci.ci_register import register_cuda_ci
@@ -20,12 +20,19 @@ class TestE2ESpeculativeEagle(CustomTestCase):
     def setUpClass(cls) -> None:
         cls.engine = sgl.Engine(
             model_path="Qwen/Qwen3-0.6B",
-            **mock_model_engine_kwargs(speculative_algorithm="EAGLE"),
+            **mock_model_engine_kwargs(
+                speculative_algorithm="EAGLE",
+                cuda_graph_max_bs=8,
+                max_running_requests=32,
+                context_length=2048,
+                max_total_tokens=16384,
+                disable_piecewise_cuda_graph=True,
+            ),
         )
 
     @classmethod
     def tearDownClass(cls) -> None:
-        cls.engine.shutdown()
+        shutdown_engine_ignoring_zombie_reap(cls.engine)
 
     def test_spec_eagle_no_canary_violation(self) -> None:
         self.engine.generate(
