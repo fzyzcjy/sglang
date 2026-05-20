@@ -30,11 +30,39 @@ _MOCK_PD_COMMON_ARGS: List[str] = [
     "dummy",
     "--json-model-override-args",
     '{"num_hidden_layers": 1}',
+    "--skip-server-warmup",
     "--sampling-backend",
-    "token_oracle",
+    "pytorch",
     "--kv-canary",
     "raise",
+    "--cuda-graph-max-bs",
+    "8",
+    "--max-running-requests",
+    "32",
+    "--context-length",
+    "2048",
+    "--max-total-tokens",
+    "16384",
 ]
+
+
+def _without_sampling_backend(args: List[str]) -> List[str]:
+    filtered: List[str] = []
+    skip_next = False
+    for arg in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == "--sampling-backend":
+            skip_next = True
+            continue
+        filtered.append(arg)
+    return filtered
+
+
+_MOCK_PD_COMMON_ARGS_NO_SAMPLING_BACKEND: List[str] = _without_sampling_backend(
+    _MOCK_PD_COMMON_ARGS
+)
 
 _DEFAULT_PROMPTS: List[str] = [
     "Hello world",
@@ -133,14 +161,14 @@ class _MockModelPDBase(PDDisaggregationServerBase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        os.environ["SGLANG_KV_CANARY_INPUT_CHECK"] = "1"
-        os.environ["SGLANG_KV_CANARY_ENABLE_TOKEN_ORACLE"] = "1"
+        os.environ["SGLANG_KV_CANARY_INPUT_CHECK"] = "0"
+        os.environ["SGLANG_KV_CANARY_ENABLE_TOKEN_ORACLE"] = "0"
         super().setUpClass()
         cls.launch_all()
 
 
 class TestPdTransferCanaryClean(_MockModelPDBase, unittest.TestCase):
-    """PD standard scenario + canary all-on, no violation expected."""
+    """PD standard scenario + canary structural checks, no violation expected."""
 
     def test_pd_transfer_canary_clean(self) -> None:
         # Step 1: send parallel requests through the LB to exercise PD transfer path.
@@ -191,21 +219,31 @@ class TestPdTransferChecksumFullRealData(_MockModelPDBase, unittest.TestCase):
 class TestPdTransferCorruptedByteDetected(
     PDDisaggregationServerBase, unittest.TestCase
 ):
-    """Inject byte corruption; canary sweep must report a violation."""
+    """Inject byte corruption; canary must report a real-KV violation."""
 
     model: ClassVar[str] = _MODEL
-    extra_prefill_args: ClassVar[List[str]] = _MOCK_PD_COMMON_ARGS + [
-        "--kv-canary-real-data",
-        "all",
-        "--kv-canary-sweep-interval",
-        "1",
-    ]
-    extra_decode_args: ClassVar[List[str]] = _MOCK_PD_COMMON_ARGS + [
-        "--kv-canary-real-data",
-        "all",
-        "--kv-canary-sweep-interval",
-        "1",
-    ]
+    extra_prefill_args: ClassVar[List[str]] = (
+        _MOCK_PD_COMMON_ARGS_NO_SAMPLING_BACKEND
+        + [
+            "--kv-canary",
+            "log",
+            "--kv-canary-real-data",
+            "all",
+            "--kv-canary-sweep-interval",
+            "1",
+        ]
+    )
+    extra_decode_args: ClassVar[List[str]] = (
+        _MOCK_PD_COMMON_ARGS_NO_SAMPLING_BACKEND
+        + [
+            "--kv-canary",
+            "log",
+            "--kv-canary-real-data",
+            "all",
+            "--kv-canary-sweep-interval",
+            "1",
+        ]
+    )
 
     _prefill_stdout: ClassVar[io.StringIO]
     _prefill_stderr: ClassVar[io.StringIO]
@@ -215,9 +253,10 @@ class TestPdTransferCorruptedByteDetected(
 
     @classmethod
     def setUpClass(cls) -> None:
-        os.environ["SGLANG_KV_CANARY_INPUT_CHECK"] = "1"
-        os.environ["SGLANG_KV_CANARY_ENABLE_TOKEN_ORACLE"] = "1"
-        os.environ["SGLANG_KV_CANARY_REAL_PERTURB_BYTES_PROB"] = "0.5"
+        os.environ["SGLANG_KV_CANARY_INPUT_CHECK"] = "0"
+        os.environ["SGLANG_KV_CANARY_ENABLE_TOKEN_ORACLE"] = "0"
+        os.environ["SGLANG_KV_CANARY_REAL_PERTURB_BYTES_PROB"] = "1.0"
+        os.environ["SGLANG_KV_CANARY_PERTURB_WARMUP_STEPS"] = "0"
         super().setUpClass()
 
         cls._prefill_stdout = io.StringIO()
@@ -233,7 +272,10 @@ class TestPdTransferCorruptedByteDetected(
 
     @classmethod
     def tearDownClass(cls) -> None:
+        os.environ.pop("SGLANG_KV_CANARY_INPUT_CHECK", None)
+        os.environ.pop("SGLANG_KV_CANARY_ENABLE_TOKEN_ORACLE", None)
         os.environ.pop("SGLANG_KV_CANARY_REAL_PERTURB_BYTES_PROB", None)
+        os.environ.pop("SGLANG_KV_CANARY_PERTURB_WARMUP_STEPS", None)
         super().tearDownClass()
 
     @classmethod
@@ -286,7 +328,7 @@ class TestPdTransferCorruptedByteDetected(
         kind_prefixes: Iterable[str],
         flush_wait_seconds: float = 2.0,
     ) -> None:
-        """Assert at least one canary sweep_ violation appears in captured server output."""
+        """Assert at least one real-KV canary violation appears in captured server output."""
         if flush_wait_seconds > 0:
             time.sleep(flush_wait_seconds)
         haystack = "".join(
@@ -298,12 +340,17 @@ class TestPdTransferCorruptedByteDetected(
             ]
         )
         prefixes = list(kind_prefixes)
-        hits = [p for p in prefixes if f"canary_kind:       {p}" in haystack]
+        hits = [
+            p
+            for p in prefixes
+            if f"canary_kind:       {p}" in haystack
+            and "fail_reasons: real_kv_hash" in haystack
+        ]
         if hits:
             return
         excerpt = haystack[-2000:] if len(haystack) > 2000 else haystack
         self.fail(
-            f"Expected a 'canary_kind: <kind>' line with kind in {prefixes} in "
+            f"Expected a real_kv_hash canary violation with kind in {prefixes} in "
             f"captured prefill/decode output, but none found. "
             f"Tail of combined output (last 2000 chars):\n{excerpt}"
         )
@@ -312,14 +359,18 @@ class TestPdTransferCorruptedByteDetected(
         # Step 1: if perturb fired during warmup and the server crashed, violation is
         # already in the captured output — assert and return early.
         if self._launch_failed:
-            self._assert_sweep_violation_logged(["sweep_"], flush_wait_seconds=2.0)
+            self._assert_sweep_violation_logged(
+                ["sweep_", "per_forward_"], flush_wait_seconds=2.0
+            )
             return
 
         # Step 2: drive heavy traffic to maximize perturb trigger probability.
         _send_parallel_requests(self.lb_url, n=32, max_new_tokens=32, timeout=60.0)
 
-        # Step 3: assert that the sweep path caught a real-KV byte corruption.
-        self._assert_sweep_violation_logged(["sweep_"], flush_wait_seconds=2.0)
+        # Step 3: assert that canary caught a real-KV byte corruption.
+        self._assert_sweep_violation_logged(
+            ["sweep_", "per_forward_"], flush_wait_seconds=2.0
+        )
 
 
 if __name__ == "__main__":

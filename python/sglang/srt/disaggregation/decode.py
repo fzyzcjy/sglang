@@ -51,6 +51,7 @@ from sglang.srt.disaggregation.utils import (
     setup_state_kv_args,
 )
 from sglang.srt.environ import envs
+from sglang.srt.kv_canary.api import get_canary_runner
 from sglang.srt.layers.dp_attention import get_attention_tp_size
 from sglang.srt.managers.schedule_batch import FINISH_ABORT, ScheduleBatch
 from sglang.srt.managers.schedule_policy import match_prefix_for_req
@@ -69,6 +70,7 @@ from sglang.srt.mem_cache.memory_pool import (
     ReqToTokenPool,
 )
 from sglang.srt.mem_cache.swa_memory_pool import SWAKVPool
+from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.observability.req_time_stats import (
     set_schedule_time_batch,
     set_time_batch,
@@ -1645,6 +1647,11 @@ class SchedulerDisaggregationDecodeMixin:
             # Reset the inner idle batch to avoid reusing it.
             batch.inner_idle_batch = None
             return self.run_batch(idle_batch)
+
+        canary_runner = get_canary_runner(self.tp_worker.model_runner)
+        if canary_runner is not None:
+            forward_batch = ForwardBatch.init_new(batch, self.tp_worker.model_runner)
+            canary_runner.seed_prebuilt_forward_pass(forward_batch)
 
         return GenerationBatchResult()
 

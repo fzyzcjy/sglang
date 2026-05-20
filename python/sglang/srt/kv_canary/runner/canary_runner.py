@@ -168,6 +168,19 @@ class CanaryRunner:
         finally:
             self._end_of_step()
 
+    def seed_prebuilt_forward_pass(self, forward_batch: "ForwardBatch") -> None:
+        """Seed canary metadata for a PD decode PREBUILT batch.
+
+        PREBUILT batches represent KV that has already been transferred into the
+        decode worker, so the scheduler intentionally skips the model forward.
+        The canary still needs slot metadata for those transferred tokens;
+        otherwise the first real decode step verifies an all-zero canary slot.
+        """
+        self._before_forward(forward_batch)
+        self.launch_head_kernels(forward_batch)
+        self.launch_tail_kernels(forward_batch)
+        self._end_of_step()
+
     def _before_forward(self, forward_batch: "ForwardBatch") -> None:
         self._per_forward_orchestrator.before_forward(forward_batch)
 
@@ -183,6 +196,9 @@ class CanaryRunner:
 
     def _end_of_step(self) -> None:
         if self.config.mode == "off":
+            return
+
+        if torch.cuda.is_available() and torch.cuda.is_current_stream_capturing():
             return
 
         self._sweep_orchestrator.maybe_run_sweep()
