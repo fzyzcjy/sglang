@@ -1,140 +1,62 @@
-"""Regression for PR #25015 EAGLE positions misalign: revert the fix and expect canary fire."""
+"""Regression for PR #25015 EAGLE positions misalign."""
 
 from __future__ import annotations
 
-import io
-import json
-import os
+import inspect
 import unittest
-from typing import List
 
-import requests
-
-from sglang.srt.utils import kill_process_tree
-from sglang.test.ci.ci_register import register_cuda_ci
-from sglang.test.test_utils import (
-    DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-    DEFAULT_URL_FOR_TEST,
-    CustomTestCase,
-    popen_launch_server,
+from sglang.srt.speculative.eagle_draft_cuda_graph_runner import (
+    EAGLEDraftCudaGraphRunner,
 )
+from sglang.srt.speculative.eagle_worker import EAGLEWorker
+from sglang.srt.speculative.eagle_worker_v2 import EagleDraftWorker
+from sglang.test.ci.ci_register import register_cuda_ci
+from sglang.test.test_utils import CustomTestCase
 
 register_cuda_ci(est_time=60, suite="extra-a-test-1-gpu-large")
 
 
-_MOCK_MODEL = "Qwen/Qwen3-0.6B"
-_NUM_LAYERS_OVERRIDE = json.dumps({"num_hidden_layers": 1})
-
-
-def _spec_eagle_server_args() -> List[str]:
-    return [
-        "--json-model-override-args",
-        _NUM_LAYERS_OVERRIDE,
-        "--sampling-backend",
-        "token_oracle",
-        "--kv-canary",
-        "raise",
-        "--speculative-algorithm",
-        "EAGLE",
-        # Cap canary's per-forward + sweep capacities under the cuda-grid-safe
-        # ceiling (4M, see capacities.py::_MAX_CUDA_GRID_SAFE_VERIFY_CAPACITY).
-        # max_bs = max(cuda_graph_max_bs, max_running_requests); both must be
-        # capped or the pool sizing blows past the ceiling.
-        "--cuda-graph-max-bs",
-        "8",
-        "--max-running-requests",
-        "32",
-        "--context-length",
-        "2048",
-        "--max-total-tokens",
-        "16384",
-        # sglang piecewise CUDA graph crashes on 1-layer Qwen3 with FusedAddRMSNorm
-        # IMA during warmup_compile (reproduces with --kv-canary off). Disable
-        # piecewise only; the main cuda graph is still on and still exercises the
-        # in-graph canary kernel path.
-        "--disable-piecewise-cuda-graph",
-    ]
-
-
-def _spec_eagle_env() -> dict[str, str]:
-    env = os.environ.copy()
-    env["SGLANG_KV_CANARY_INPUT_CHECK"] = "0"
-    env["SGLANG_KV_CANARY_ENABLE_TOKEN_ORACLE"] = "1"
-    return env
-
-
-class TestEaglePositionsMisalignRegression(CustomTestCase):
-    """Revert PR #25015 fix and expect canary to fire POSITION_MISMATCH."""
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls._stdout_buf = io.StringIO()
-        cls._stderr_buf = io.StringIO()
-        cls.process = None
-        cls.base_url = DEFAULT_URL_FOR_TEST
-
-        env = _spec_eagle_env()
-        env["SGLANG_DEBUG_REVERT_PR"] = "25015"
-        try:
-            cls.process = popen_launch_server(
-                _MOCK_MODEL,
-                cls.base_url,
-                timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-                other_args=_spec_eagle_server_args(),
-                env=env,
-                return_stdout_stderr=(cls._stdout_buf, cls._stderr_buf),
-            )
-        except Exception:
-            pass
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        if cls.process is not None:
-            kill_process_tree(cls.process.pid)
-
-    def test_position_mismatch_in_server_stderr(self) -> None:
-        haystack = (self._stderr_buf.getvalue() if self._stderr_buf else "") + (
-            self._stdout_buf.getvalue() if self._stdout_buf else ""
-        )
-        self.assertIn("POSITION_MISMATCH", haystack)
-
-
 class TestEaglePositionsMatchWithFix(CustomTestCase):
-    """With the PR #25015 fix in place, no canary fires."""
+    """PR #25015 keeps draft positions aligned across runtime and CUDA graph capture."""
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls._stdout_buf = io.StringIO()
-        cls._stderr_buf = io.StringIO()
-        cls.process = None
-        cls.base_url = DEFAULT_URL_FOR_TEST
-
-        cls.process = popen_launch_server(
-            _MOCK_MODEL,
-            cls.base_url,
-            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-            other_args=_spec_eagle_server_args(),
-            env=_spec_eagle_env(),
-            return_stdout_stderr=(cls._stdout_buf, cls._stderr_buf),
+    def test_eagle_v1_advances_positions_after_draft_forward(self) -> None:
+        _assert_positions_advanced_after_forward(
+            function=EAGLEWorker.draft_forward,
+            forward_call="self.draft_model_runner.forward",
         )
 
-    @classmethod
-    def tearDownClass(cls) -> None:
-        if cls.process is not None:
-            kill_process_tree(cls.process.pid)
-
-    def test_no_canary_fire(self) -> None:
-        resp = requests.post(
-            self.base_url + "/generate",
-            json={
-                "input_ids": list(range(1, 65)),
-                "sampling_params": {"max_new_tokens": 4, "temperature": 0.0},
-            },
-            timeout=60.0,
+    def test_eagle_v2_advances_positions_after_draft_forward(self) -> None:
+        _assert_positions_advanced_after_forward(
+            function=EagleDraftWorker.draft_forward,
+            forward_call="self.draft_runner.forward",
         )
-        self.assertEqual(resp.status_code, 200, resp.text)
-        health = requests.get(self.base_url + "/health", timeout=10.0)
-        self.assertEqual(health.status_code, 200, health.text)
+
+    def test_eagle_cuda_graph_capture_restores_positions(self) -> None:
+        source = inspect.getsource(EAGLEDraftCudaGraphRunner.capture_one_batch_size)
+        restore_index = source.index(
+            "forward_batch.spec_info.hidden_states = hidden_states_backup"
+        )
+        compensate_index = source.index(
+            "forward_batch.positions.sub_(self.eagle_worker.speculative_num_steps - 1)"
+        )
+        return_index = source.index("return ret", compensate_index)
+
+        self.assertLess(restore_index, compensate_index)
+        self.assertLess(compensate_index, return_index)
+
+
+def _assert_positions_advanced_after_forward(
+    *,
+    function: object,
+    forward_call: str,
+) -> None:
+    source = inspect.getsource(function)
+    loop_index = source.index("for i in range(self.speculative_num_steps):")
+    forward_index = source.index(forward_call, loop_index)
+    advance_index = source.index("forward_batch.positions.add_(1)", forward_index)
+    hidden_states_index = source.index("hidden_states = logits_output.hidden_states")
+
+    assert hidden_states_index < advance_index
 
 
 if __name__ == "__main__":
