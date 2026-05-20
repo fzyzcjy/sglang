@@ -133,7 +133,7 @@ class TestRealDataAllPerturbKvByteDetectsViolation(_MhaFullBase, unittest.TestCa
     def setUpClass(cls) -> None:
         import os
 
-        os.environ["SGLANG_KV_CANARY_REAL_PERTURB_BYTES_PROB"] = "0.1"
+        os.environ["SGLANG_KV_CANARY_REAL_PERTURB_BYTES_PROB"] = "1.0"
         super().setUpClass()
 
     @classmethod

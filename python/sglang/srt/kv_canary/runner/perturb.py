@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
 import torch
 
-from sglang.srt.kv_canary.buffer_group import CanaryBufferGroup
+from sglang.jit_kernel.kv_canary import consts
+from sglang.jit_kernel.kv_canary.verify import RealKvSource
+from sglang.srt.kv_canary.buffer_group import CanaryBufferGroup, PoolKind
 from sglang.srt.kv_canary.plan_input import walk_radix_cache_for_canary
 from sglang.srt.kv_canary.runner.perturb_config import PerturbConfig
 from sglang.srt.kv_canary.runner.pump import PumpAndAllreduce
@@ -16,6 +19,22 @@ if TYPE_CHECKING:
     from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _RealKvPerturbTarget:
+    group: CanaryBufferGroup
+    source_index: int
+    source: RealKvSource
+    logical_slot_idx: int
+    physical_slot_idx: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _ReqToTokenPerturbTarget:
+    req_pool_idx: int
+    position: int
+    slot: int
 
 
 class PerturbHook:
@@ -83,7 +102,7 @@ class PerturbHook:
         req_pool_indices_cpu = req_pool_indices.detach().to("cpu").tolist()
         seq_lens_cpu = seq_lens.detach().to("cpu").tolist()
         rows, cols = int(table.shape[0]), int(table.shape[1])
-        active_pairs: list[tuple[int, int]] = []
+        active_targets: list[_ReqToTokenPerturbTarget] = []
         for req_pool_idx, seq_len in zip(req_pool_indices_cpu, seq_lens_cpu):
             req_pool_idx_int = int(req_pool_idx)
             seq_len_int = int(seq_len)
@@ -94,31 +113,38 @@ class PerturbHook:
             upper = min(seq_len_int, cols)
             row_slots = table[req_pool_idx_int, :upper].detach().to("cpu").tolist()
             for pos, raw_slot in enumerate(row_slots):
-                if int(raw_slot) < 1:
+                slot = int(raw_slot)
+                if slot < 1:
                     continue
-                active_pairs.append((req_pool_idx_int, pos))
-        if not active_pairs:
+                active_targets.append(
+                    _ReqToTokenPerturbTarget(
+                        req_pool_idx=req_pool_idx_int,
+                        position=pos,
+                        slot=slot,
+                    )
+                )
+        if not active_targets:
             return
 
-        pick = int(torch.randint(0, len(active_pairs), (1,)).item())
-        req_pool_idx, position = active_pairs[pick]
-
-        original = int(table[req_pool_idx, position].item())
-        slot_upper = rows * cols
-        if slot_upper <= 1:
+        pick = int(torch.randint(0, len(active_targets), (1,)).item())
+        target = active_targets[pick]
+        replacement_slots = [
+            item.slot for item in active_targets if item.slot != target.slot
+        ]
+        if not replacement_slots:
             return
-        new_value = int(torch.randint(0, slot_upper, (1,)).item())
-        if new_value == original:
-            new_value = (original + 1) % slot_upper
+        replacement_pick = int(torch.randint(0, len(replacement_slots), (1,)).item())
+        new_value = replacement_slots[replacement_pick]
+
         logger.info(
             "kv_canary perturb req_to_token: req_pool_idx=%d position=%d original_slot=%d new_slot=%d",
-            req_pool_idx,
-            position,
-            original,
+            target.req_pool_idx,
+            target.position,
+            target.slot,
             new_value,
         )
-        table[req_pool_idx, position] = new_value
-        self._perturb_undo = (req_pool_idx, position, original)
+        table[target.req_pool_idx, target.position] = new_value
+        self._perturb_undo = (target.req_pool_idx, target.position, target.slot)
 
     def perturb_real_kv_hook(self, forward_batch: Optional["ForwardBatch"]) -> None:
         if self._config.real_kv_prob <= 0.0:
@@ -134,22 +160,23 @@ class PerturbHook:
         if not candidate_slots:
             return
 
-        groups_with_real_kv: list[CanaryBufferGroup] = [
-            group for group in self._buffer_groups if group.real_kv_sources_k
-        ]
-        if not groups_with_real_kv:
+        targets = _collect_real_kv_perturb_targets(
+            buffer_groups=self._buffer_groups,
+            candidate_slots=candidate_slots,
+        )
+        if not targets:
             return
 
-        group_pick = int(torch.randint(0, len(groups_with_real_kv), (1,)).item())
-        group = groups_with_real_kv[group_pick]
-        sources = group.real_kv_sources_k
-        source_pick = int(torch.randint(0, len(sources), (1,)).item())
-        source = sources[source_pick]
+        target_pick = int(torch.randint(0, len(targets), (1,)).item())
+        target = targets[target_pick]
+        group = target.group
+        source_pick = target.source_index
+        source = target.source
+        logical_slot_idx = target.logical_slot_idx
+        slot_idx = target.physical_slot_idx
         if source.read_bytes <= 0 or source.num_bytes_per_token <= 0:
             return
 
-        slot_pick = int(torch.randint(0, len(candidate_slots), (1,)).item())
-        slot_idx = int(candidate_slots[slot_pick])
         row = slot_idx // max(1, source.page_size)
         col_base = (slot_idx % max(1, source.page_size)) * source.num_bytes_per_token
         max_offset = min(int(source.read_bytes), int(source.num_bytes_per_token))
@@ -170,7 +197,7 @@ class PerturbHook:
             "byte_offset=%d original_byte=0x%02X new_byte=0x%02X",
             group.kind.name,
             source_pick,
-            slot_idx,
+            logical_slot_idx,
             row,
             col,
             byte_offset,
@@ -263,3 +290,71 @@ class PerturbHook:
                     continue
                 candidate_slots.append(slot)
         return candidate_slots
+
+
+def _collect_real_kv_perturb_targets(
+    *,
+    buffer_groups: tuple[CanaryBufferGroup, ...],
+    candidate_slots: list[int],
+) -> list[_RealKvPerturbTarget]:
+    groups_with_real_kv: list[CanaryBufferGroup] = [
+        group for group in buffer_groups if group.real_kv_sources_k
+    ]
+    targets: list[_RealKvPerturbTarget] = []
+    for group in groups_with_real_kv:
+        for source_index, source in enumerate(group.real_kv_sources_k):
+            if source.read_bytes <= 0 or source.num_bytes_per_token <= 0:
+                continue
+            for logical_slot_idx in candidate_slots:
+                physical_slot_idx = _translate_source_slot(
+                    group=group,
+                    source=source,
+                    logical_slot_idx=logical_slot_idx,
+                )
+                if physical_slot_idx == consts.CANARY_RESERVED_SLOT:
+                    continue
+                row = physical_slot_idx // max(1, source.page_size)
+                if row < 0 or row >= int(source.tensor.shape[0]):
+                    continue
+                targets.append(
+                    _RealKvPerturbTarget(
+                        group=group,
+                        source_index=source_index,
+                        source=source,
+                        logical_slot_idx=logical_slot_idx,
+                        physical_slot_idx=physical_slot_idx,
+                    )
+                )
+    return targets
+
+
+def _translate_source_slot(
+    *,
+    group: CanaryBufferGroup,
+    source: RealKvSource,
+    logical_slot_idx: int,
+) -> int:
+    slot = int(logical_slot_idx)
+    if group.kind is PoolKind.SWA:
+        mapping = group.swa_index_lut
+        if mapping is None:
+            return consts.CANARY_RESERVED_SLOT
+        if slot < 0 or slot >= int(mapping.shape[0]):
+            return consts.CANARY_RESERVED_SLOT
+        slot = int(mapping[slot].detach().to("cpu").item())
+
+    if source.compress_ratio > 1:
+        if slot % source.compress_ratio != source.compress_residue:
+            return consts.CANARY_RESERVED_SLOT
+        slot = (slot - source.compress_residue) // source.compress_ratio
+
+    if source.slot_mapping is not None:
+        mapping = source.slot_mapping
+        if slot < 0 or slot >= int(mapping.shape[0]):
+            return consts.CANARY_RESERVED_SLOT
+        mapped = int(mapping[slot].detach().to("cpu").item())
+        if mapped < 0:
+            return consts.CANARY_RESERVED_SLOT
+        slot = mapped
+
+    return slot

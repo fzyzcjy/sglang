@@ -5,8 +5,10 @@ from typing import TYPE_CHECKING, Optional
 
 import torch
 
-from sglang.jit_kernel.kv_canary.verify import VerifyPlan
+from sglang.jit_kernel.kv_canary import consts
+from sglang.jit_kernel.kv_canary.verify import RealKvSource, VerifyPlan
 from sglang.jit_kernel.kv_canary.write import WritePlan
+from sglang.srt.environ import envs
 from sglang.srt.kv_canary.buffer_group import CanaryBufferGroup, PoolKind
 from sglang.srt.kv_canary.config import CanaryConfig
 from sglang.srt.kv_canary.endpoint import CanaryEndpoint
@@ -104,6 +106,10 @@ class SweepOrchestrator:
                     f"sweep capacity in CanaryLaunchCapacities.from_args (or "
                     f"_MAX_CUDA_GRID_SAFE_VERIFY_CAPACITY)"
                 )
+            _maybe_perturb_sweep_source(
+                group=group,
+                slot_indices=radix_input.extra_verify_slot_indices,
+            )
             invoke_plan(
                 plan_input=radix_input,
                 verify_plan=self._verify_plan_sweep_radix,
@@ -126,3 +132,84 @@ class SweepOrchestrator:
             self._sweep_passes,
             step_counter,
         )
+
+
+def _maybe_perturb_sweep_source(
+    *,
+    group: CanaryBufferGroup,
+    slot_indices: torch.Tensor,
+) -> None:
+    if not envs.SGLANG_KV_CANARY_REAL_PERTURB_BYTES_REQUIRE_ORPHAN.get():
+        return
+    probability = envs.SGLANG_KV_CANARY_REAL_PERTURB_BYTES_PROB.get()
+    if probability <= 0.0:
+        return
+    if torch.rand((), device="cpu").item() >= probability:
+        return
+    if not group.real_kv_sources_k:
+        logger.info(
+            "kv_canary perturb sweep real_kv: no real-kv sources for group_kind=%s entries=%d",
+            group.kind.name,
+            int(slot_indices.shape[0]),
+        )
+        return
+
+    logical_slots = [int(slot) for slot in slot_indices.detach().to("cpu").tolist()]
+    inspected_targets = 0
+    for source_index, source in enumerate(group.real_kv_sources_k):
+        for logical_slot_idx in logical_slots:
+            slot_idx = _translate_source_only_slot(
+                source=source, logical_slot_idx=logical_slot_idx
+            )
+            if slot_idx == consts.CANARY_RESERVED_SLOT:
+                continue
+            row = slot_idx // max(1, source.page_size)
+            col = (slot_idx % max(1, source.page_size)) * source.num_bytes_per_token
+            if row < 0 or row >= int(source.tensor.shape[0]):
+                continue
+            if col < 0 or col >= int(source.tensor.shape[1]):
+                continue
+            inspected_targets += 1
+
+            original_byte = int(source.tensor[row, col].item())
+            source.tensor[row, col] = original_byte ^ 0xFF
+            logger.info(
+                "kv_canary perturb sweep real_kv: group_kind=%s source_idx=%d slot=%d row=%d col=%d "
+                "original_byte=0x%02X new_byte=0x%02X",
+                group.kind.name,
+                source_index,
+                logical_slot_idx,
+                row,
+                col,
+                original_byte,
+                original_byte ^ 0xFF,
+            )
+            return
+    logger.info(
+        "kv_canary perturb sweep real_kv: no valid target for group_kind=%s entries=%d sources=%d inspected=%d",
+        group.kind.name,
+        len(logical_slots),
+        len(group.real_kv_sources_k),
+        inspected_targets,
+    )
+
+
+def _translate_source_only_slot(
+    *,
+    source: RealKvSource,
+    logical_slot_idx: int,
+) -> int:
+    slot = int(logical_slot_idx)
+    if source.compress_ratio > 1:
+        if slot % source.compress_ratio != source.compress_residue:
+            return consts.CANARY_RESERVED_SLOT
+        slot = (slot - source.compress_residue) // source.compress_ratio
+    if source.slot_mapping is not None:
+        mapping = source.slot_mapping
+        if slot < 0 or slot >= int(mapping.shape[0]):
+            return consts.CANARY_RESERVED_SLOT
+        mapped = int(mapping[slot].detach().to("cpu").item())
+        if mapped < 0:
+            return consts.CANARY_RESERVED_SLOT
+        slot = mapped
+    return slot

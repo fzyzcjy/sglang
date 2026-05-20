@@ -65,11 +65,22 @@ class _DSV4FlashBase(CanaryE2EBase):
 
 class TestNoPerturbNoViolation(_DSV4FlashBase, unittest.TestCase):
     def test_no_perturb_no_violation(self) -> None:
+        # Step 1: health can turn green slightly before DSV4 is ready for a high-concurrency burst.
+        preflight_results = self.send_parallel_requests(
+            n=1, max_new_tokens=1, timeout=_PER_CASE_TIMEOUT
+        )
+        self.assertEqual(
+            preflight_results[0].get("status_code"), 200, preflight_results[0]
+        )
+
+        # Step 2: with no perturbation enabled, every concurrent request should complete cleanly.
         results = self.send_parallel_requests(
             n=16, max_new_tokens=32, timeout=_PER_CASE_TIMEOUT
         )
         for r in results:
             self.assertEqual(r.get("status_code"), 200, r)
+
+        # Step 3: the server stays healthy and no canary violation is raised.
         self.assert_health_ok()
 
 
@@ -178,24 +189,38 @@ class TestSweepOrphanRadixDetectsViolation(_DSV4FlashBase, unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        os.environ["SGLANG_KV_CANARY_REAL_PERTURB_BYTES_PROB"] = "0.1"
+        os.environ["SGLANG_KV_CANARY_REAL_PERTURB_BYTES_PROB"] = "1.0"
         os.environ["SGLANG_KV_CANARY_REAL_PERTURB_BYTES_REQUIRE_ORPHAN"] = "1"
+        os.environ["SGLANG_KV_CANARY_PERTURB_WARMUP_STEPS"] = "0"
         super().setUpClass()
 
     @classmethod
     def tearDownClass(cls) -> None:
         os.environ.pop("SGLANG_KV_CANARY_REAL_PERTURB_BYTES_PROB", None)
         os.environ.pop("SGLANG_KV_CANARY_REAL_PERTURB_BYTES_REQUIRE_ORPHAN", None)
+        os.environ.pop("SGLANG_KV_CANARY_PERTURB_WARMUP_STEPS", None)
         super().tearDownClass()
 
     def test_sweep_orphan_radix_detects_violation(self) -> None:
-        prompts = ["The capital of France is" for _ in range(8)]
+        long_orphan_prompt = ("The capital of France is Paris. " * 96).strip()
+        orphan_prompts = [long_orphan_prompt for _ in range(4)]
+        active_prompts = ["The largest ocean on Earth is" for _ in range(8)]
         if self.launch_failed:
             self.assert_violation_kind_logged(["sweep_"], flush_wait_seconds=2.0)
             return
+
+        # Step 1: create long radix entries that become orphan candidates once the requests finish.
         self.send_parallel_requests(
-            n=32, prompts=prompts, max_new_tokens=8, timeout=_PER_CASE_TIMEOUT
+            n=4, prompts=orphan_prompts, max_new_tokens=4, timeout=_PER_CASE_TIMEOUT
         )
+
+        # Step 2: drive more forward passes so the sweep path can detect the orphan mutation.
+        self.send_parallel_requests(
+            n=32, prompts=active_prompts, max_new_tokens=8, timeout=_PER_CASE_TIMEOUT
+        )
+
+        # Step 3: the canary is expected to raise after detection, so client requests may observe
+        # connection errors. The strong assertion is the server-side sweep violation record.
         self.assert_violation_kind_logged(["sweep_"], flush_wait_seconds=2.0)
 
 
