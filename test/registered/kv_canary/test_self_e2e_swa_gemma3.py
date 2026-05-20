@@ -26,13 +26,24 @@ _NUM_LAYERS_OVERRIDE = '{"num_hidden_layers": 5}'
 # tested by test_long_prompt_swa_window_clip.
 _LONG_PROMPT = ("The quick brown fox jumps over the lazy dog. " * 200).strip()
 
+_CANARY_CAPACITY_CAPS: List[str] = [
+    "--cuda-graph-max-bs",
+    "8",
+    "--max-running-requests",
+    "32",
+    "--context-length",
+    "8192",
+    "--max-total-tokens",
+    "16384",
+]
+
 
 class _Gemma3SwaBase(CanaryE2EBase):
     model: ClassVar[str] = _GEMMA3_MODEL
     extra_server_args: ClassVar[List[str]] = [
         "--json-model-override-args",
         _NUM_LAYERS_OVERRIDE,
-    ]
+    ] + _CANARY_CAPACITY_CAPS
 
 
 class TestShortPromptFullSwaBothVerify(_Gemma3SwaBase, unittest.TestCase):
@@ -59,9 +70,7 @@ class TestLongPromptSwaWindowClip(_Gemma3SwaBase, unittest.TestCase):
     extra_server_args: ClassVar[List[str]] = [
         "--json-model-override-args",
         _NUM_LAYERS_OVERRIDE,
-        "--context-length",
-        "8192",
-    ]
+    ] + _CANARY_CAPACITY_CAPS
 
     def test_long_prompt_swa_window_clip(self) -> None:
         # Step 1: send a prompt that exceeds Gemma 3's SWA window (4096 tokens).
