@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 
@@ -44,6 +44,9 @@ def make_row_source(
     *,
     layer_buffer: torch.Tensor,
     read_bytes: int,
+    slot_mapping: Optional[torch.Tensor] = None,
+    compress_ratio: int = 1,
+    compress_residue: int = 0,
 ) -> Tuple[RealKvSource, ...]:
     contiguous = layer_buffer.contiguous()
     num_slots = int(contiguous.shape[0])
@@ -62,6 +65,9 @@ def make_row_source(
             page_size=1,
             num_bytes_per_token=num_bytes_per_token,
             read_bytes=clipped,
+            slot_mapping=slot_mapping,
+            compress_ratio=compress_ratio,
+            compress_residue=compress_residue,
         ),
     )
 
@@ -72,6 +78,9 @@ def make_packed_source(
     page_size: int,
     bytes_per_token: int,
     read_bytes: int,
+    slot_mapping: Optional[torch.Tensor] = None,
+    compress_ratio: int = 1,
+    compress_residue: int = 0,
 ) -> Tuple[RealKvSource, ...]:
     if read_bytes == 0 or page_buffer.numel() == 0:
         return ()
@@ -89,5 +98,8 @@ def make_packed_source(
             page_size=page_size,
             num_bytes_per_token=bytes_per_token,
             read_bytes=clipped,
+            slot_mapping=slot_mapping,
+            compress_ratio=compress_ratio,
+            compress_residue=compress_residue,
         ),
     )

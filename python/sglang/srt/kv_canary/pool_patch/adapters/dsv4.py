@@ -78,6 +78,7 @@ def _build_full_group(
     k_tail = alloc_canary_buf(num_slots=num_slots, device=device)
 
     indexer_buf = indexer_pool.index_k_with_scale_buffer[0]
+    c4_slot_mapping = getattr(c4_pool, "full_to_hisparse_device_index_mapping", None)
 
     sources = (
         make_packed_source(
@@ -85,6 +86,9 @@ def _build_full_group(
             page_size=c4_pool.page_size,
             bytes_per_token=_dsv4_packed_nope_rope_bytes_per_token(c4_pool),
             read_bytes=read_bytes,
+            slot_mapping=c4_slot_mapping,
+            compress_ratio=4,
+            compress_residue=3,
         )
         # Indexer page mirrors c4/c128's two-segment layout: [token-major K (index_head_dim bytes/token) | scale | pad].
         # index_head_dim is segment A's per-token byte width (K is fp8, 1B/elem); scale segment is trailing-ignored.
@@ -93,12 +97,17 @@ def _build_full_group(
             page_size=indexer_pool.page_size,
             bytes_per_token=indexer_pool.index_head_dim,
             read_bytes=read_bytes,
+            slot_mapping=c4_slot_mapping,
+            compress_ratio=4,
+            compress_residue=3,
         )
         + make_packed_source(
             page_buffer=c128_pool.kv_buffer[0],
             page_size=c128_pool.page_size,
             bytes_per_token=_dsv4_packed_nope_rope_bytes_per_token(c128_pool),
             read_bytes=read_bytes,
+            compress_ratio=128,
+            compress_residue=127,
         )
     )
 

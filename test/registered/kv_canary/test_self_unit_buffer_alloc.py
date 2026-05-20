@@ -52,22 +52,20 @@ def test_make_row_source_all_large_stride_uses_full_stride() -> None:
     assert sources[0].num_bytes_per_token == bytes_per_token
 
 
-def test_make_row_source_partial_small_stride_clips_to_stride() -> None:
+def test_make_row_source_partial_small_stride_returns_no_source() -> None:
     num_slots = 4
     bytes_per_token = 8
     layer_buf = torch.zeros(num_slots, bytes_per_token, dtype=torch.uint8)
     sources = make_row_source(layer_buffer=layer_buf, read_bytes=32)
-    assert len(sources) == 1
-    assert sources[0].read_bytes == bytes_per_token
+    assert sources == ()
 
 
-def test_make_row_source_all_small_stride_clips_to_stride() -> None:
+def test_make_row_source_all_small_stride_returns_no_source() -> None:
     num_slots = 4
     bytes_per_token = 8
     layer_buf = torch.zeros(num_slots, bytes_per_token, dtype=torch.uint8)
     sources = make_row_source(layer_buffer=layer_buf, read_bytes=sys.maxsize)
-    assert len(sources) == 1
-    assert sources[0].read_bytes == bytes_per_token
+    assert sources == ()
 
 
 def test_make_packed_source_partial_large_stride_clips_to_32() -> None:
@@ -100,7 +98,7 @@ def test_make_packed_source_all_large_stride_uses_full_stride() -> None:
     assert sources[0].num_bytes_per_token == bytes_per_token
 
 
-def test_make_packed_source_partial_small_stride_clips_to_stride() -> None:
+def test_make_packed_source_partial_small_stride_returns_no_source() -> None:
     bytes_per_token = 8
     page_size = 1
     page_buffer = torch.zeros(4, bytes_per_token, dtype=torch.uint8)
@@ -110,11 +108,10 @@ def test_make_packed_source_partial_small_stride_clips_to_stride() -> None:
         bytes_per_token=bytes_per_token,
         read_bytes=32,
     )
-    assert len(sources) == 1
-    assert sources[0].read_bytes == bytes_per_token
+    assert sources == ()
 
 
-def test_make_packed_source_all_small_stride_clips_to_stride() -> None:
+def test_make_packed_source_all_small_stride_returns_no_source() -> None:
     bytes_per_token = 8
     page_size = 1
     page_buffer = torch.zeros(4, bytes_per_token, dtype=torch.uint8)
@@ -124,5 +121,4 @@ def test_make_packed_source_all_small_stride_clips_to_stride() -> None:
         bytes_per_token=bytes_per_token,
         read_bytes=sys.maxsize,
     )
-    assert len(sources) == 1
-    assert sources[0].read_bytes == bytes_per_token
+    assert sources == ()
