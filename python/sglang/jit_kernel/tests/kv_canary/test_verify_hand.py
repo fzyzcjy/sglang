@@ -1237,7 +1237,7 @@ class TestLayoutAndScheduling:
         assert int(cuda_log.kernel_run_counter[0].item()) == 1
 
     def test_slot_zero_plan_entry_is_skipped(self) -> None:
-        """slot 0 is reserved padding, so verify skips it even when the plan explicitly names it."""
+        """slot 0 is reserved padding: verify skips loads/violations but still counts the submitted entry."""
         canary_buf = make_canary_buf(num_slots=16, slot_stride_bytes=32, device=_DEVICE)
         write_slot_fields(
             canary_buf=canary_buf,
@@ -1269,7 +1269,7 @@ class TestLayoutAndScheduling:
         torch.cuda.synchronize()
 
         assert int(log.write_index[0].item()) == 0
-        assert int(log.slot_run_counter[0].item()) == 0
+        assert int(log.slot_run_counter[0].item()) == 1
         assert int(log.kernel_run_counter[0].item()) == 1
 
     def test_disabled_plan_skips_slots_but_counts_kernel(self) -> None:
