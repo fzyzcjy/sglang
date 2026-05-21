@@ -270,6 +270,34 @@ class TestSelfUnitRunner(CustomTestCase):
             runner._per_forward_orchestrator._should_enable_input_check_for_launch(fb)
         )
 
+    def test_speculative_decode_expected_positions_follow_cache_slots(self):
+        """Verify EAGLE draft decode checks positions against the written cache slot."""
+        req_to_token = torch.zeros(3, 128, dtype=torch.int32, device=self.device)
+        req_to_token[1, 64] = 1001
+        req_to_token[1, 65] = 1002
+        req_to_token[2, 64] = 2001
+        req_to_token[2, 65] = 2002
+        forward_batch = SimpleNamespace(
+            req_pool_indices=torch.tensor([1, 2], dtype=torch.int64, device=self.device),
+            spec_info=SimpleNamespace(num_tokens_per_req=2),
+            positions=torch.tensor([65, 66, 65, 66], dtype=torch.int64, device=self.device),
+            out_cache_loc=torch.tensor([1001, 1002, 2001, 2002], dtype=torch.int64, device=self.device),
+        )
+
+        expected_positions = (
+            per_forward_module._derive_positions_from_req_to_token_slots(
+                forward_batch=forward_batch,
+                req_to_token=req_to_token,
+            )
+        )
+
+        self.assertTrue(
+            torch.equal(
+                expected_positions,
+                torch.tensor([64, 65, 64, 65], dtype=torch.int64, device=self.device),
+            )
+        )
+
     def test_sweep_every_n_cadence(self):
         """Verify sweep execution follows the configured step cadence."""
         config = _make_config(

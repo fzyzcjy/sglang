@@ -168,10 +168,7 @@ class PerForwardOrchestrator:
         self._perturb_manager.perturb_real_kv_used(forward_batch)
         self._perturb_manager.perturb_real_kv_unused_cache(forward_batch)
 
-        if (
-            self._config.input_check_mode
-            and not torch.cuda.is_current_stream_capturing()
-        ):
+        if self._should_enable_input_check_for_launch(forward_batch):
             manager = self._token_oracle_manager
             if manager is None:
                 raise RuntimeError(
@@ -183,6 +180,15 @@ class PerForwardOrchestrator:
                 forward_batch=forward_batch,
                 expected_inputs_out=self._expected_inputs,
             )
+            if _is_speculative_decode(forward_batch=forward_batch):
+                expected_positions = _derive_positions_from_req_to_token_slots(
+                    forward_batch=forward_batch,
+                    req_to_token=self._req_to_token_pool.req_to_token,
+                )
+                num_tokens = int(expected_positions.shape[0])
+                self._expected_inputs.positions[:num_tokens].copy_(
+                    expected_positions.to(torch.int64)
+                )
 
         fill_plan_input_per_forward(
             forward_batch=forward_batch,
@@ -270,6 +276,59 @@ class PerForwardOrchestrator:
             return False
 
         return True
+
+
+def _is_speculative_decode(*, forward_batch: "ForwardBatch") -> bool:
+    forward_mode = forward_batch.forward_mode
+    if forward_mode is None or not forward_mode.is_decode():
+        return False
+    return forward_batch.spec_info is not None
+
+
+def _derive_positions_from_req_to_token_slots(
+    *,
+    forward_batch: "ForwardBatch",
+    req_to_token: torch.Tensor,
+) -> torch.Tensor:
+    out_cache_loc = forward_batch.out_cache_loc
+    if out_cache_loc is None:
+        return forward_batch.positions
+
+    num_tokens = int(forward_batch.positions.shape[0])
+    req_pool_indices = _build_req_pool_idx_per_token(
+        forward_batch=forward_batch,
+        num_tokens=num_tokens,
+    )
+    rows = req_to_token[req_pool_indices.to(req_to_token.device)].to(torch.int64)
+    slots = out_cache_loc[:num_tokens].to(device=rows.device, dtype=torch.int64)
+    matches = rows == slots[:, None]
+    found = matches.any(dim=1)
+    derived_positions = matches.to(torch.int64).argmax(dim=1)
+    fallback_positions = forward_batch.positions[:num_tokens].to(
+        device=rows.device, dtype=torch.int64
+    )
+    return torch.where(found, derived_positions, fallback_positions)
+
+
+def _build_req_pool_idx_per_token(
+    *,
+    forward_batch: "ForwardBatch",
+    num_tokens: int,
+) -> torch.Tensor:
+    req_pool_indices = forward_batch.req_pool_indices
+    spec_info = forward_batch.spec_info
+    if spec_info is not None and getattr(spec_info, "num_tokens_per_req", -1) > 0:
+        lens = torch.full_like(req_pool_indices, int(spec_info.num_tokens_per_req))
+        result = torch.repeat_interleave(req_pool_indices, lens)
+    else:
+        result = req_pool_indices
+
+    if int(result.shape[0]) != num_tokens:
+        raise RuntimeError(
+            f"kv-canary: req_pool_indices per token has {int(result.shape[0])} entries, "
+            f"but forward_batch has {num_tokens} tokens"
+        )
+    return result
 
 
 def _is_head_tag(tag: CanaryLaunchTag) -> bool:
