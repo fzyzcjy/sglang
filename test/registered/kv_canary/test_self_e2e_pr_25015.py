@@ -91,6 +91,19 @@ class TestEaglePositionsMisalignRegression(CustomTestCase):
             kill_process_tree(cls.process.pid)
 
     def test_position_mismatch_in_server_stderr(self) -> None:
+        if self.process is not None and self._launch_exc is None:
+            try:
+                requests.post(
+                    self.base_url + "/generate",
+                    json={
+                        "input_ids": list(range(1, 65)),
+                        "sampling_params": {"max_new_tokens": 4, "temperature": 0.0},
+                    },
+                    timeout=60.0,
+                )
+            except requests.RequestException:
+                pass
+
         haystack = (self._stderr_buf.getvalue() if self._stderr_buf else "") + (
             self._stdout_buf.getvalue() if self._stdout_buf else ""
         )
