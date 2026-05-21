@@ -59,7 +59,7 @@ class TestPerturbRealKvUsedSwaFull(_PerturbRealKvUsedBase, unittest.TestCase):
 class TestPerturbRealKvUsedSwaSwa(_PerturbRealKvUsedBase, unittest.TestCase):
     __test__ = True
 
-    model_mode = "swa"
+    model_mode = "hybrid_swa"
     target_group = "swa"
 
 

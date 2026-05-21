@@ -35,6 +35,7 @@ class _ModeConfig:
 
     model_path: str
     json_model_override_args: Optional[str] = None
+    server_args: tuple[str, ...] = ()
 
 
 _MODE_CONFIGS: dict[str, _ModeConfig] = {
@@ -63,6 +64,15 @@ _MODE_CONFIGS: dict[str, _ModeConfig] = {
             }
         ),
     ),
+    "hybrid_swa": _ModeConfig(
+        model_path="openai/gpt-oss-20b",
+        server_args=(
+            "--load-format",
+            "dummy",
+            "--mem-fraction-static",
+            "0.70",
+        ),
+    ),
 }
 
 
@@ -86,7 +96,7 @@ class CanaryE2EBase(CustomTestCase):
         ``kv_canary violation: launch_tag=<TAG> fail_reason=<NAME[+NAME...]> ...``
     """
 
-    model_mode: ClassVar[Literal["mha", "swa"]]
+    model_mode: ClassVar[Literal["mha", "swa", "hybrid_swa"]]
     kv_canary_mode: ClassVar[Literal["off", "log", "raise"]]
     extra_env: ClassVar[dict[str, str]] = {}
     extra_server_args: ClassVar[tuple[str, ...]] = ()
@@ -118,6 +128,7 @@ class CanaryE2EBase(CustomTestCase):
             "32",
             "--max-total-tokens",
             "65536",
+            *cls._cfg.server_args,
             *cls.extra_server_args,
         ]
         if cls._cfg.json_model_override_args is not None:

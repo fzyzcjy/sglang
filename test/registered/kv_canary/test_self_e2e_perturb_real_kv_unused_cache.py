@@ -79,7 +79,7 @@ class TestPerturbRealKvUnusedCacheSwaSwa(
 ):
     __test__ = True
 
-    model_mode = "swa"
+    model_mode = "hybrid_swa"
     target_group = "swa"
 
 
