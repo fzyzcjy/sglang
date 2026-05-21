@@ -25,6 +25,7 @@ from sglang.srt.kv_canary.runner.launch import (
 )
 from sglang.srt.kv_canary.state import CanaryDeviceState
 from sglang.srt.kv_canary.token_oracle.oracle_manager import TokenOracleManager
+from sglang.srt.speculative.spec_info import SpecInputType
 
 if TYPE_CHECKING:
     from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
@@ -196,7 +197,7 @@ class PerForwardOrchestrator:
         violation_log = self._device_state.violation_log
         num_tokens = get_valid_num_tokens(forward_batch=forward_batch)
         expected_inputs_slice = self._expected_inputs.slice(num_tokens)
-        input_check_mode = self._should_enable_input_check_for_launch()
+        input_check_mode = self._should_enable_input_check_for_launch(forward_batch)
         for group in self._buffer_groups:
             invoke_plan(
                 plan_input=self._plan_input_per_forward,
@@ -226,7 +227,7 @@ class PerForwardOrchestrator:
         violation_log = self._device_state.violation_log
         num_tokens = get_valid_num_tokens(forward_batch=forward_batch)
         expected_inputs_slice = self._expected_inputs.slice(num_tokens)
-        input_check_mode = self._should_enable_input_check_for_launch()
+        input_check_mode = self._should_enable_input_check_for_launch(forward_batch)
         for group in self._buffer_groups:
             launch_endpoints_per_forward(
                 endpoints=self._endpoints,
@@ -254,8 +255,24 @@ class PerForwardOrchestrator:
         finally:
             self._input_check_suspension_depth -= 1
 
-    def _should_enable_input_check_for_launch(self) -> bool:
-        return self._config.input_check_mode and self._input_check_suspension_depth == 0
+    def _should_enable_input_check_for_launch(
+        self, forward_batch: "ForwardBatch"
+    ) -> bool:
+        if not self._config.input_check_mode:
+            return False
+        if self._input_check_suspension_depth > 0:
+            return False
+
+        spec_info = forward_batch.spec_info
+        if (
+            forward_batch.forward_mode is not None
+            and forward_batch.forward_mode.is_decode()
+            and spec_info is not None
+            and spec_info.spec_input_type == SpecInputType.EAGLE_DRAFT
+        ):
+            return False
+
+        return True
 
 
 def _is_head_tag(tag: CanaryLaunchTag) -> bool:

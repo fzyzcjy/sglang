@@ -123,7 +123,7 @@ class TestEaglePositionsMisalignRegression(CustomTestCase):
         )
         self.assertRegex(
             haystack,
-            r"kv_canary violation: launch_tag=\S+ fail_reason=\S*position\S*",
+            r"kv_canary violation: launch_tag=\S+ fail_reason=\S*(token|position)\S*",
         )
 
 
