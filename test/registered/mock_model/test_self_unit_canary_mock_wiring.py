@@ -43,6 +43,22 @@ def _scalar_expected_token(oracle: HashOracle, *, req_id: int, position: int) ->
 
 
 class TestFillExpectedInputs(CustomTestCase):
+    def test_sample_next_tokens_uses_next_position(self) -> None:
+        oracle = HashOracle(vocab_size=32000)
+        hook = install_oracle_sampler(oracle=oracle)
+
+        rid_a = "req-a"
+        hashed_a = _stable_hash_rid_i64(rid_a)
+        out = hook.sample_next_tokens(
+            req_ids=torch.tensor([hashed_a], dtype=torch.int64),
+            logits_positions=torch.tensor([5], dtype=torch.int64),
+        )
+
+        self.assertEqual(
+            out.tolist(),
+            [_scalar_expected_token(oracle, req_id=hashed_a, position=6)],
+        )
+
     def test_fill_expected_inputs_decode_one_token_per_req(self) -> None:
         oracle = HashOracle(vocab_size=32000)
         hook = install_oracle_sampler(oracle=oracle)
