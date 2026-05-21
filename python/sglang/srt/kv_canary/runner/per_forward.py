@@ -166,7 +166,6 @@ class PerForwardOrchestrator:
 
         self._perturb_manager.perturb_req_to_token(forward_batch)
         self._perturb_manager.perturb_real_kv_used(forward_batch)
-        self._perturb_manager.perturb_real_kv_unused_cache(forward_batch)
 
         if self._should_enable_input_check_for_launch(forward_batch):
             manager = self._token_oracle_manager

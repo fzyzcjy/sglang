@@ -201,6 +201,7 @@ class CanaryRunner:
             self._pump_and_allreduce.pump_and_drain()
             return
 
+        self._perturb_manager.perturb_real_kv_unused_cache(forward_batch=None)
         self._sweep_orchestrator.maybe_run_sweep()
         any_rank_errored = self._pump_and_allreduce.pump_and_drain()
         self._health_checker.step()
