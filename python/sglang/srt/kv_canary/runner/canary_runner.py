@@ -187,6 +187,8 @@ class CanaryRunner:
     def _end_of_step(self) -> None:
         if self.config.mode == "off":
             return
+        if torch.cuda.is_current_stream_capturing():
+            return
 
         self._per_forward_orchestrator.end_of_step()
         self._sweep_orchestrator.maybe_run_sweep()

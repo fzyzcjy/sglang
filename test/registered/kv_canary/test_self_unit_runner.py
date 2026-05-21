@@ -498,6 +498,37 @@ class TestSelfUnitRunner(CustomTestCase):
 
         self.assertIsNone(warner._pending_future)
 
+    def test_runner_skips_host_end_of_step_during_cuda_graph_capture(self):
+        """Verify graph capture avoids host-side end-of-step synchronization paths."""
+        runner = _make_runner(device=self.device)
+        calls: List[str] = []
+
+        with patch.object(torch.cuda, "is_current_stream_capturing", return_value=True):
+            with patch.object(
+                runner._per_forward_orchestrator,
+                "end_of_step",
+                lambda: calls.append("per_forward"),
+            ), patch.object(
+                runner._sweep_orchestrator,
+                "maybe_run_sweep",
+                lambda: calls.append("sweep"),
+            ), patch.object(
+                runner._pump_and_allreduce,
+                "pump_and_drain",
+                lambda: calls.append("pump"),
+            ), patch.object(
+                runner._health_checker,
+                "step",
+                lambda: calls.append("health"),
+            ), patch.object(
+                runner._stats_logger,
+                "step",
+                lambda: calls.append("stats"),
+            ):
+                runner._end_of_step()
+
+        self.assertEqual(calls, [])
+
     def test_periodic_stats_log_every_n_step(self):
         """Verify periodic stats are logged at the configured interval."""
         config = _make_config(
