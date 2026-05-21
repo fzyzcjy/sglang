@@ -51,9 +51,12 @@ class TokenOracleManager:
             num_tokens=num_tokens,
             rids_per_row=rids_int,
         )
-        expected_tokens = self.oracle.expected_tokens(
-            req_ids=req_ids, positions=positions.to(torch.int64)
-        )
+        if forward_batch.forward_mode is not None and forward_batch.forward_mode.is_extend():
+            expected_tokens = input_ids
+        else:
+            expected_tokens = self.oracle.expected_tokens(
+                req_ids=req_ids, positions=positions.to(torch.int64)
+            )
         expected_inputs_out.tokens[:num_tokens].copy_(expected_tokens.to(torch.int64))
         expected_inputs_out.positions[:num_tokens].copy_(positions.to(torch.int64))
 

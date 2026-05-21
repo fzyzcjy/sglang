@@ -82,7 +82,7 @@ class TestFillExpectedInputs(CustomTestCase):
         )
         self.assertEqual(expected_inputs.positions[:2].tolist(), [10, 20])
 
-    def test_fill_expected_inputs_extend_uses_extend_seq_lens(self) -> None:
+    def test_fill_expected_inputs_extend_uses_forward_input_ids(self) -> None:
         oracle = HashOracle(vocab_size=32000)
         hook = install_oracle_sampler(oracle=oracle)
 
@@ -91,7 +91,7 @@ class TestFillExpectedInputs(CustomTestCase):
         hashed_a = _stable_hash_rid_i64(rid_a)
         hashed_b = _stable_hash_rid_i64(rid_b)
         fb = _StubForwardBatch(
-            input_ids=torch.tensor([0, 0, 0, 0], dtype=torch.int64),
+            input_ids=torch.tensor([101, 102, 103, 201], dtype=torch.int64),
             positions=torch.tensor([0, 1, 2, 0], dtype=torch.int64),
             req_pool_indices=torch.tensor([5, 7], dtype=torch.int64),
             forward_mode=_StubForwardMode(extend=True),
@@ -109,12 +109,7 @@ class TestFillExpectedInputs(CustomTestCase):
 
         self.assertEqual(
             expected_inputs.tokens[:4].tolist(),
-            [
-                _scalar_expected_token(oracle, req_id=hashed_a, position=0),
-                _scalar_expected_token(oracle, req_id=hashed_a, position=1),
-                _scalar_expected_token(oracle, req_id=hashed_a, position=2),
-                _scalar_expected_token(oracle, req_id=hashed_b, position=0),
-            ],
+            [101, 102, 103, 201],
         )
         self.assertEqual(expected_inputs.positions[:4].tolist(), [0, 1, 2, 0])
 
