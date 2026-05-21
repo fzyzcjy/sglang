@@ -264,12 +264,6 @@ class PerForwardOrchestrator:
         if torch.cuda.is_current_stream_capturing():
             return False
 
-        if (
-            forward_batch.forward_mode is not None
-            and forward_batch.forward_mode.is_decode()
-        ):
-            return False
-
         return True
 
 

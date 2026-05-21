@@ -524,6 +524,40 @@ class TestSelfUnitRunner(CustomTestCase):
             )
         )
 
+    def test_token_oracle_derives_eagle_draft_decode_positions(self):
+        """Verify EAGLE draft decode positions are checked against seq_lens."""
+        forward_batch = SimpleNamespace(
+            forward_mode=_FakeDecodeForwardMode(),
+            spec_info=SimpleNamespace(num_tokens_per_req=2),
+            rids_int=torch.tensor([3, 7], dtype=torch.int64, device=self.device),
+            input_ids=torch.tensor(
+                [101, 102, 201, 202], dtype=torch.int64, device=self.device
+            ),
+            positions=torch.tensor(
+                [11, 11, 21, 21], dtype=torch.int64, device=self.device
+            ),
+            seq_lens=torch.tensor([10, 20], dtype=torch.int64, device=self.device),
+        )
+        expected_inputs = ExpectedInputs.allocate(capacity=4, device=self.device)
+        manager = TokenOracleManager(oracle=HashOracle(vocab_size=32000))
+
+        manager.fill_expected_inputs(
+            forward_batch=forward_batch,
+            expected_inputs_out=expected_inputs,
+        )
+
+        self.assertTrue(
+            torch.equal(expected_inputs.tokens[:4], forward_batch.input_ids)
+        )
+        self.assertTrue(
+            torch.equal(
+                expected_inputs.positions[:4],
+                torch.tensor(
+                    [10, 10, 20, 20], dtype=torch.int64, device=self.device
+                ),
+            )
+        )
+
     def test_kernel_run_counter_watchdog_raises_on_zero(self):
         """Verify the kernel watchdog raises when counters stop advancing."""
         runner = _make_runner(device=self.device)

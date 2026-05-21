@@ -51,7 +51,7 @@ class TokenOracleManager:
             num_tokens=num_tokens,
             rids_per_row=rids_int,
         )
-        if _uses_extend_like_layout(forward_batch=forward_batch):
+        if _uses_actual_input_tokens(forward_batch=forward_batch):
             expected_tokens = input_ids
         else:
             expected_tokens = self.oracle.expected_tokens(
@@ -115,6 +115,11 @@ def _expected_positions_for_input_check(
     fallback_positions: torch.Tensor,
 ) -> torch.Tensor:
     if not _uses_extend_like_layout(forward_batch=forward_batch):
+        if _uses_repeated_seq_len_layout(forward_batch=forward_batch):
+            return torch.repeat_interleave(
+                forward_batch.seq_lens.to(torch.int64),
+                int(forward_batch.spec_info.num_tokens_per_req),
+            )
         return fallback_positions
 
     extend_prefix_lens = forward_batch.extend_prefix_lens
@@ -142,3 +147,22 @@ def _uses_extend_like_layout(*, forward_batch: "ForwardBatch") -> bool:
     if forward_mode.is_draft_extend(include_v2=True):
         return True
     return forward_mode.is_extend()
+
+
+def _uses_actual_input_tokens(*, forward_batch: "ForwardBatch") -> bool:
+    forward_mode = forward_batch.forward_mode
+    if forward_mode is None:
+        return False
+    if forward_mode.is_decode():
+        return True
+    return _uses_extend_like_layout(forward_batch=forward_batch)
+
+
+def _uses_repeated_seq_len_layout(*, forward_batch: "ForwardBatch") -> bool:
+    forward_mode = forward_batch.forward_mode
+    if forward_mode is None or not forward_mode.is_decode():
+        return False
+    spec_info = forward_batch.spec_info
+    if spec_info is None or getattr(spec_info, "num_tokens_per_req", -1) <= 0:
+        return False
+    return forward_batch.seq_lens is not None
