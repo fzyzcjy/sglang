@@ -26,6 +26,7 @@ class TestPrepareServerArgs(CustomTestCase):
                 DEFAULT_SMALL_MODEL_NAME_FOR_TEST_QWEN,
                 "--json-model-override-args",
                 '{"rope_scaling": {"factor": 2.0, "rope_type": "linear"}}',
+                "--enforce-piecewise-cuda-graph",
             ]
         )
         self.assertEqual(server_args.model_path, DEFAULT_SMALL_MODEL_NAME_FOR_TEST_QWEN)
@@ -660,6 +661,7 @@ class TestSamplingBackendTokenOracleEnvGate(CustomTestCase):
                 DEFAULT_SMALL_MODEL_NAME_FOR_TEST_QWEN,
                 "--sampling-backend",
                 "token_oracle",
+                "--enforce-piecewise-cuda-graph",
             ]
         )
         self.assertEqual(parsed.sampling_backend, "token_oracle")

@@ -1,19 +1,18 @@
 import logging
 from unittest.mock import Mock
 
-import pytest
 from _pytest.logging import LogCaptureFixture
 
+from sglang.srt.kv_canary.buffer_group import CanaryBufferGroup, PoolKind
 from sglang.srt.kv_canary.perturb import real_kv_used
 from sglang.srt.kv_canary.perturb.config import PerturbConfig, TargetGroupKind
-from sglang.srt.kv_canary.perturb.slot_picker import ReqToTokenEntry
 from sglang.test.ci.ci_register import register_cpu_ci
 
 register_cpu_ci(est_time=5, suite="base-a-test-cpu")
 
 
 def test_real_kv_used_logs_when_target_group_has_no_real_kv_sources(
-    monkeypatch: pytest.MonkeyPatch, caplog: LogCaptureFixture
+    caplog: LogCaptureFixture,
 ) -> None:
     config = PerturbConfig(
         req_to_token_prob=0.0,
@@ -24,11 +23,15 @@ def test_real_kv_used_logs_when_target_group_has_no_real_kv_sources(
     )
     warmup_gate = Mock()
     warmup_gate.is_in_warmup.return_value = False
-
-    monkeypatch.setattr(
-        real_kv_used,
-        "pick_active_slot",
-        lambda **_: ReqToTokenEntry(req_pool_idx=0, position=0, value=7),
+    group = CanaryBufferGroup(
+        kind=PoolKind.FULL,
+        k_head=Mock(),
+        k_tail=Mock(),
+        v_head=None,
+        v_tail=None,
+        real_kv_sources_k=(),
+        real_kv_sources_v=(),
+        swa_index_lut=None,
     )
 
     with caplog.at_level(logging.INFO, logger=real_kv_used.logger.name):
@@ -36,11 +39,12 @@ def test_real_kv_used_logs_when_target_group_has_no_real_kv_sources(
             forward_batch=Mock(),
             config=config,
             req_to_token_pool=Mock(),
-            buffer_groups=(),
+            buffer_groups=(group,),
+            swa_window_size=0,
             warmup_gate=warmup_gate,
         )
 
     assert (
         "kv_canary perturb real_kv_used: skipped because no target group with "
-        "real_kv_sources_k matched target_group_kind=full slot=7"
+        "real_kv_sources_k matched target_group_kind=full"
     ) in caplog.text

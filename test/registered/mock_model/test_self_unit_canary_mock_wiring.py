@@ -23,8 +23,17 @@ register_cuda_ci(est_time=60, suite="extra-a-1-gpu-large")
 class _StubForwardMode:
     extend: bool
 
+    def is_decode(self) -> bool:
+        return not self.extend
+
     def is_extend(self) -> bool:
         return self.extend
+
+    def is_draft_extend(self, *, include_v2: bool) -> bool:
+        return False
+
+    def is_target_verify(self) -> bool:
+        return False
 
 
 @dataclasses.dataclass
@@ -82,8 +91,14 @@ class TestFillExpectedInputs(CustomTestCase):
 
         rid_a = "req-a"
         rid_b = "req-b"
+        expected_a = _scalar_expected_token(
+            oracle, req_id=_stable_hash_rid_i64(rid_a), position=10
+        )
+        expected_b = _scalar_expected_token(
+            oracle, req_id=_stable_hash_rid_i64(rid_b), position=20
+        )
         fb = _StubForwardBatch(
-            input_ids=torch.tensor([0, 0], dtype=torch.int64),
+            input_ids=torch.tensor([expected_a, expected_b], dtype=torch.int64),
             positions=torch.tensor([10, 20], dtype=torch.int64),
             req_pool_indices=torch.tensor([5, 7], dtype=torch.int64),
             forward_mode=_StubForwardMode(extend=False),
@@ -104,14 +119,7 @@ class TestFillExpectedInputs(CustomTestCase):
 
         self.assertEqual(
             expected_inputs.tokens[:2].tolist(),
-            [
-                _scalar_expected_token(
-                    oracle, req_id=_stable_hash_rid_i64(rid_a), position=10
-                ),
-                _scalar_expected_token(
-                    oracle, req_id=_stable_hash_rid_i64(rid_b), position=20
-                ),
-            ],
+            [expected_a, expected_b],
         )
         self.assertEqual(expected_inputs.positions[:2].tolist(), [10, 20])
 
