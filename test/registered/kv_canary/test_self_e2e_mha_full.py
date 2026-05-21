@@ -186,7 +186,7 @@ class TestSweepOrphanRadixDetectsViolation(_MhaFullBase, unittest.TestCase):
     def setUpClass(cls) -> None:
         import os
 
-        os.environ["SGLANG_KV_CANARY_REAL_PERTURB_BYTES_PROB"] = "0.1"
+        os.environ["SGLANG_KV_CANARY_REAL_PERTURB_BYTES_PROB"] = "1.0"
         os.environ["SGLANG_KV_CANARY_REAL_PERTURB_BYTES_REQUIRE_ORPHAN"] = "1"
         super().setUpClass()
 
