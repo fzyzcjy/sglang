@@ -198,6 +198,7 @@ def build_plan_input_radix_sweep(
     slot_indices, positions, prev_slot_indices = walk_radix_cache_for_canary(
         radix_cache=radix_cache,
         unlocked_only=unlocked_only,
+        swa_resident_only=swa_window_size > 0,
     )
     slot_indices = slot_indices.to(device)
     positions = positions.to(device)
@@ -235,6 +236,7 @@ def walk_radix_cache_for_canary(
     *,
     radix_cache: "BasePrefixCache",
     unlocked_only: bool = False,
+    swa_resident_only: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Walk the radix tree and emit flat (slot_indices, positions, prev_slot_indices) tensors for
     EVERY slot held by the radix cache (including slots whose tokens are also referenced by a
@@ -258,6 +260,8 @@ def walk_radix_cache_for_canary(
             slots actively in use.
             Default False: sweep emits every radix-tree slot (overlap with per-forward HEAD/TAIL
             coverage is harmless redundancy).
+        swa_resident_only: When True on ``SWARadixCache``, skip tombstoned nodes whose SWA slots
+            have already been freed.
 
     Cost: O(total radix slots). Runs on host every sweep_interval; bounded by pool size.
     If profiling shows this is the sweep hot path, future work can move it to a Triton kernel —
@@ -283,6 +287,7 @@ def walk_radix_cache_for_canary(
         prev_slot_buf=prev_slot_buf,
         is_root=True,
         unlocked_only=unlocked_only,
+        swa_resident_only=swa_resident_only,
     )
 
     slot_tensor = torch.tensor(slot_buf, dtype=torch.int64)
@@ -302,18 +307,24 @@ def _walk_radix_subtree(
     prev_slot_buf: list[int],
     is_root: bool,
     unlocked_only: bool,
+    swa_resident_only: bool,
 ) -> None:
     if isinstance(node.value, torch.Tensor):
         node_slots = [int(s) for s in node.value.tolist()]
     else:
         node_slots = []
 
+    is_swa_tombstone = (
+        type(radix_cache) is SWARadixCache
+        and swa_resident_only
+        and node.swa_tombstone
+    )
     if unlocked_only:
-        emit_slots = not is_root and _node_is_unlocked_for_canary(
+        emit_slots = not is_root and not is_swa_tombstone and _node_is_unlocked_for_canary(
             node=node, radix_cache=radix_cache
         )
     else:
-        emit_slots = not is_root
+        emit_slots = not is_root and not is_swa_tombstone
 
     chain_last_slot = parent_last_slot
     for j, slot in enumerate(node_slots):
@@ -336,6 +347,7 @@ def _walk_radix_subtree(
             prev_slot_buf=prev_slot_buf,
             is_root=False,
             unlocked_only=unlocked_only,
+            swa_resident_only=swa_resident_only,
         )
 
 

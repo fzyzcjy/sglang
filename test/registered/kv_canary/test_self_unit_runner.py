@@ -27,6 +27,7 @@ from sglang.srt.kv_canary.config import CanaryConfig, CanaryMode
 from sglang.srt.kv_canary.expected_inputs import ExpectedInputs
 from sglang.srt.kv_canary.perturb.config import PerturbConfig, TargetGroupKind
 from sglang.srt.kv_canary.perturb.manager import PerturbManager
+from sglang.srt.kv_canary.perturb.real_kv_used import _pick_active_slot_for_group
 from sglang.srt.kv_canary.perturb.slot_picker import collect_active_slots
 from sglang.srt.kv_canary.runner import canary_runner as runner_module
 from sglang.srt.kv_canary.runner import launch as launch_module
@@ -413,6 +414,28 @@ class TestSelfUnitRunner(CustomTestCase):
         )
 
         self.assertEqual([target.value for target in targets], [0])
+
+    def test_swa_real_kv_perturb_targets_only_active_window(self):
+        """Verify SWA real-KV perturb only targets slots inside the active sliding window."""
+        pool = _make_pool(self.device, max_reqs=4, max_seq=8)
+        pool.req_to_token[1, :6] = torch.tensor(
+            [10, 11, 12, 13, 14, 15], dtype=torch.int32, device=self.device
+        )
+        forward_batch = _make_forward_batch(self.device, bs=1, seq_lens_list=(6,))
+        group = _make_group(device=self.device, kind=PoolKind.SWA)
+
+        with patch.object(torch, "randint", return_value=torch.tensor(0)):
+            target = _pick_active_slot_for_group(
+                forward_batch=forward_batch,
+                req_to_token_pool=pool,
+                group=group,
+                swa_window_size=2,
+            )
+
+        self.assertIsNotNone(target)
+        assert target is not None
+        self.assertEqual(target.position, 4)
+        self.assertEqual(target.value, 14)
 
     def test_launch_endpoints_per_forward_uses_unpadded_token_tensors(self):
         """Verify endpoint launch receives tensors sliced to the real token count."""

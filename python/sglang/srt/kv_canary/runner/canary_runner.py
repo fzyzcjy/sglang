@@ -112,6 +112,7 @@ class CanaryRunner:
             buffer_groups=self._buffer_groups,
             pump_and_allreduce=self._pump_and_allreduce,
             swa_window_size=self._swa_window_size,
+            sweep_interval=config.sweep_interval,
         )
         self._per_forward_orchestrator = PerForwardOrchestrator(
             config=config,
