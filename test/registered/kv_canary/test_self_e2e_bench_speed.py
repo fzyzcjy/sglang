@@ -36,6 +36,8 @@ def _make_server_args(*, canary_on: bool) -> ServerArgs:
         "2048",
         "--piecewise-cuda-graph-max-tokens",
         "2048",
+        "--piecewise-cuda-graph-tokens",
+        "2048",
         "--cuda-graph-bs",
         "256",
     ]
