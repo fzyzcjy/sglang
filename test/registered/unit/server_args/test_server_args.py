@@ -1,19 +1,18 @@
 import json
 import tempfile
 import unittest
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from sglang.srt.arg_groups.speculative_hook import handle_speculative_decoding
-from sglang.srt.configs.model_config import AttentionArch
 from sglang.srt.server_args import PortArgs, ServerArgs, prepare_server_args
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import (
-    DEFAULT_SMALL_MODEL_NAME_FOR_TEST_QWEN,
     CustomTestCase,
 )
 
 register_cpu_ci(est_time=10, suite="base-a-test-cpu")
+
+_SERVER_ARGS_TEST_MODEL = "Qwen/Qwen3-0.6B"
 
 # Mock get_device() so all tests run on CPU-only CI runners
 _mock_device = patch("sglang.srt.server_args.get_device", return_value="cuda")
@@ -22,24 +21,18 @@ _mock_device.start()
 
 class TestPrepareServerArgs(CustomTestCase):
     def test_prepare_server_args(self):
-        model_config = SimpleNamespace(
-            attention_arch=AttentionArch.MHA,
-            hf_config=SimpleNamespace(architectures=["Qwen3ForCausalLM"]),
-            is_multimodal=False,
+        server_args = prepare_server_args(
+            [
+                "--model-path",
+                _SERVER_ARGS_TEST_MODEL,
+                "--json-model-override-args",
+                '{"rope_scaling": {"factor": 2.0, "rope_type": "linear"}}',
+                "--enforce-piecewise-cuda-graph",
+                "--piecewise-cuda-graph-max-tokens",
+                "8192",
+            ]
         )
-        with patch.object(ServerArgs, "get_model_config", return_value=model_config):
-            server_args = prepare_server_args(
-                [
-                    "--model-path",
-                    DEFAULT_SMALL_MODEL_NAME_FOR_TEST_QWEN,
-                    "--json-model-override-args",
-                    '{"rope_scaling": {"factor": 2.0, "rope_type": "linear"}}',
-                    "--enforce-piecewise-cuda-graph",
-                    "--piecewise-cuda-graph-max-tokens",
-                    "8192",
-                ]
-            )
-        self.assertEqual(server_args.model_path, DEFAULT_SMALL_MODEL_NAME_FOR_TEST_QWEN)
+        self.assertEqual(server_args.model_path, _SERVER_ARGS_TEST_MODEL)
         self.assertEqual(
             json.loads(server_args.json_model_override_args),
             {"rope_scaling": {"factor": 2.0, "rope_type": "linear"}},
@@ -655,7 +648,7 @@ class TestSamplingBackendTokenOracleEnvGate(CustomTestCase):
             reloaded.prepare_server_args(
                 [
                     "--model-path",
-                    DEFAULT_SMALL_MODEL_NAME_FOR_TEST_QWEN,
+                    _SERVER_ARGS_TEST_MODEL,
                     "--sampling-backend",
                     "token_oracle",
                 ]
@@ -665,25 +658,17 @@ class TestSamplingBackendTokenOracleEnvGate(CustomTestCase):
         reloaded = self._reload_server_args_with_env(enabled=True)
         self.assertIn("token_oracle", reloaded.SAMPLING_BACKEND_CHOICES)
 
-        model_config = SimpleNamespace(
-            attention_arch=AttentionArch.MHA,
-            hf_config=SimpleNamespace(architectures=["Qwen3ForCausalLM"]),
-            is_multimodal=False,
+        parsed = reloaded.prepare_server_args(
+            [
+                "--model-path",
+                _SERVER_ARGS_TEST_MODEL,
+                "--sampling-backend",
+                "token_oracle",
+                "--enforce-piecewise-cuda-graph",
+                "--piecewise-cuda-graph-max-tokens",
+                "8192",
+            ]
         )
-        with patch.object(
-            reloaded.ServerArgs, "get_model_config", return_value=model_config
-        ):
-            parsed = reloaded.prepare_server_args(
-                [
-                    "--model-path",
-                    DEFAULT_SMALL_MODEL_NAME_FOR_TEST_QWEN,
-                    "--sampling-backend",
-                    "token_oracle",
-                    "--enforce-piecewise-cuda-graph",
-                    "--piecewise-cuda-graph-max-tokens",
-                    "8192",
-                ]
-            )
         self.assertEqual(parsed.sampling_backend, "token_oracle")
 
 
