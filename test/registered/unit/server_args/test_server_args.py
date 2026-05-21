@@ -22,9 +22,7 @@ _mock_device.start()
 class TestPrepareServerArgs(CustomTestCase):
     def test_prepare_server_args(self):
         model_config = MagicMock(attention_arch=AttentionArch.MHA)
-        with patch.object(
-            ServerArgs, "get_model_config", return_value=model_config
-        ):
+        with patch.object(ServerArgs, "get_model_config", return_value=model_config):
             server_args = prepare_server_args(
                 [
                     "--model-path",
