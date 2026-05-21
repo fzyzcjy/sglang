@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-from typing import cast
 from unittest.mock import patch
 
 import torch
@@ -238,7 +237,9 @@ class TestRealKvUsedPerturb(CustomTestCase):
         expected[1, 8] = int(snapshot[1, 8].item()) ^ 0xFF
         self.assertTrue(torch.equal(source.tensor, expected))
 
-    def test_flip_first_byte_in_physical_swa_slot_does_not_translate_twice(self) -> None:
+    def test_flip_first_byte_in_physical_swa_slot_does_not_translate_twice(
+        self,
+    ) -> None:
         """Verify physical SWA slots are not passed through the SWA LUT a second time."""
         group = _make_group(kind=PoolKind.SWA, has_real_kv=True)
         source = group.real_kv_sources_k[0]
@@ -280,7 +281,7 @@ class TestRealKvUsedPerturb(CustomTestCase):
                 warmup_steps=20,
             ),
         )
-        manager.attach_radix_cache(cast("BasePrefixCache", object()))
+        manager.attach_radix_cache(object())
         forward_batch = make_forward_batch(device, bs=1, seq_lens_list=(1,))
         forward_batch.out_cache_loc = torch.tensor(
             [99], dtype=torch.int32, device=device
@@ -343,7 +344,7 @@ class TestRealKvUnusedCachePerturb(CustomTestCase):
                 warmup_steps=0,
             ),
         )
-        manager.attach_radix_cache(cast("BasePrefixCache", object()))
+        manager.attach_radix_cache(object())
         verify_plan = VerifyPlan.allocate(verify_capacity=1, device=device)
         verify_plan.verify_slot_indices[0] = 3
         verify_plan.verify_num_valid[0] = 1

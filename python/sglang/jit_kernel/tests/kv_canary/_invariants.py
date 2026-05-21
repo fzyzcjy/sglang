@@ -485,7 +485,7 @@ class WriteInvariants:
             assert delta == 0, f"empty plan incremented slot_run_counter by {delta}"
             return
         total = int(plan.write_offsets[n_active].item())
-        slots_cpu = fb_out_cache_loc[:total].detach().cpu().tolist()
+        slots_cpu = out_cache_loc[:total].detach().cpu().tolist()
         expected = sum(1 for slot in slots_cpu if slot >= 0)
         delta = int(log_after.slot_run_counter[0].item()) - int(
             log_before.slot_run_counter[0].item()

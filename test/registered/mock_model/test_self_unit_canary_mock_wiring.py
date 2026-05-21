@@ -213,7 +213,9 @@ class TestFillExpectedInputs(CustomTestCase):
             extend_prefix_lens=torch.tensor([10, 20], dtype=torch.int64),
             extend_seq_lens=torch.tensor([4, 4], dtype=torch.int64),
         )
-        expected_inputs = ExpectedInputs.allocate(capacity=8, device=torch.device("cpu"))
+        expected_inputs = ExpectedInputs.allocate(
+            capacity=8, device=torch.device("cpu")
+        )
         manager = TokenOracleManager(oracle=HashOracle(vocab_size=32000))
 
         manager.fill_expected_inputs(
@@ -221,7 +223,9 @@ class TestFillExpectedInputs(CustomTestCase):
             expected_inputs_out=expected_inputs,
         )
 
-        self.assertTrue(torch.equal(expected_inputs.tokens[:8], forward_batch.input_ids))
+        self.assertTrue(
+            torch.equal(expected_inputs.tokens[:8], forward_batch.input_ids)
+        )
         self.assertTrue(
             torch.equal(
                 expected_inputs.positions[:8],
@@ -245,7 +249,9 @@ class TestFillExpectedInputs(CustomTestCase):
             positions=torch.tensor([11, 11, 21, 21], dtype=torch.int64),
             seq_lens=torch.tensor([10, 20], dtype=torch.int64),
         )
-        expected_inputs = ExpectedInputs.allocate(capacity=4, device=torch.device("cpu"))
+        expected_inputs = ExpectedInputs.allocate(
+            capacity=4, device=torch.device("cpu")
+        )
         manager = TokenOracleManager(oracle=HashOracle(vocab_size=32000))
 
         manager.fill_expected_inputs(
@@ -253,7 +259,9 @@ class TestFillExpectedInputs(CustomTestCase):
             expected_inputs_out=expected_inputs,
         )
 
-        self.assertTrue(torch.equal(expected_inputs.tokens[:4], forward_batch.input_ids))
+        self.assertTrue(
+            torch.equal(expected_inputs.tokens[:4], forward_batch.input_ids)
+        )
         self.assertTrue(
             torch.equal(
                 expected_inputs.positions[:4],

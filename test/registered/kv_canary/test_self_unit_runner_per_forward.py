@@ -157,7 +157,9 @@ class TestLaunchEndpointsPerForward(CanaryRunnerTestCase):
         self.assertEqual(call["positions"].dtype, torch.int64)
         self.assertEqual(call["out_cache_loc"].dtype, torch.int64)
 
-    def test_launch_endpoints_per_forward_accepts_strided_boundary_tensors(self) -> None:
+    def test_launch_endpoints_per_forward_accepts_strided_boundary_tensors(
+        self,
+    ) -> None:
         """Verify EAGLE-style strided ForwardBatch views are copied at the canary boundary."""
         group = make_group(device=self.device)
         endpoint = RecordingEndpoint(kernel_kind=CanaryLaunchTag.HEAD_K_FULL)
@@ -200,7 +202,9 @@ class TestRunnerBeforeForward(CanaryRunnerTestCase):
         forward_batch.forward_mode = _FakeExtendForwardMode()
         orchestrator = runner._per_forward_orchestrator
 
-        self.assertTrue(orchestrator._should_enable_input_check_for_launch(forward_batch))
+        self.assertTrue(
+            orchestrator._should_enable_input_check_for_launch(forward_batch)
+        )
         with patch.object(torch.cuda, "is_current_stream_capturing", return_value=True):
             self.assertFalse(
                 orchestrator._should_enable_input_check_for_launch(forward_batch)
@@ -231,17 +235,23 @@ class TestRunnerBeforeForward(CanaryRunnerTestCase):
         req_to_token[2, 64] = 2001
         req_to_token[2, 65] = 2002
         forward_batch = SimpleNamespace(
-            req_pool_indices=torch.tensor([1, 2], dtype=torch.int64, device=self.device),
+            req_pool_indices=torch.tensor(
+                [1, 2], dtype=torch.int64, device=self.device
+            ),
             spec_info=SimpleNamespace(num_tokens_per_req=2),
-            positions=torch.tensor([65, 66, 65, 66], dtype=torch.int64, device=self.device),
+            positions=torch.tensor(
+                [65, 66, 65, 66], dtype=torch.int64, device=self.device
+            ),
             out_cache_loc=torch.tensor(
                 [1001, 1002, 2001, 2002], dtype=torch.int64, device=self.device
             ),
         )
 
-        expected_positions = per_forward_module._derive_positions_from_req_to_token_slots(
-            forward_batch=forward_batch,
-            req_to_token=req_to_token,
+        expected_positions = (
+            per_forward_module._derive_positions_from_req_to_token_slots(
+                forward_batch=forward_batch,
+                req_to_token=req_to_token,
+            )
         )
 
         self.assertTrue(
@@ -309,7 +319,9 @@ class TestRunnerBeforeForward(CanaryRunnerTestCase):
             def wait(self) -> torch.Tensor:
                 return torch.tensor([self._value], dtype=torch.uint8)
 
-        def _record_signal(*, src_device: torch.Tensor, stream: torch.cuda.Stream) -> _ReadyFuture:
+        def _record_signal(
+            *, src_device: torch.Tensor, stream: torch.cuda.Stream
+        ) -> _ReadyFuture:
             del stream
             return _ReadyFuture(int(src_device.detach().cpu().item()))
 
@@ -317,7 +329,9 @@ class TestRunnerBeforeForward(CanaryRunnerTestCase):
         with patch.object(torch.cuda, "is_current_stream_capturing", return_value=True):
             runner._end_of_step()
 
-        with patch.object(torch.cuda, "is_current_stream_capturing", return_value=False):
+        with patch.object(
+            torch.cuda, "is_current_stream_capturing", return_value=False
+        ):
             with patch.object(
                 violation_manager_module.FutureTensor,
                 "device_to_host",
