@@ -228,7 +228,13 @@ class EAGLEDraftCudaGraphRunner:
                 hook()
 
     def _capture_graph(self, graph, pool, stream, run_once_fn):
-        with torch.cuda.graph(graph, pool=pool, stream=stream):
+        canary_runner = self.model_runner.canary_runner
+        input_check_guard = (
+            canary_runner.suspend_input_check()
+            if canary_runner is not None
+            else contextlib.nullcontext()
+        )
+        with input_check_guard, torch.cuda.graph(graph, pool=pool, stream=stream):
             out = run_once_fn()
         return out
 

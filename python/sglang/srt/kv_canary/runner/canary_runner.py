@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from typing import TYPE_CHECKING, Iterator, Optional
+from typing import TYPE_CHECKING, ContextManager, Iterator, Optional
 
 import torch
 
@@ -186,6 +186,9 @@ class CanaryRunner:
 
     def finish_replayed_forward(self) -> None:
         self._end_of_step()
+
+    def suspend_input_check(self) -> ContextManager[None]:
+        return self._per_forward_orchestrator.suspend_input_check()
 
     def _end_of_step(self) -> None:
         if self.config.mode == "off":

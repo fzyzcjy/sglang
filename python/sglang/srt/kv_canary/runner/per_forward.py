@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Iterator, Optional
 
 import torch
 
@@ -24,7 +25,6 @@ from sglang.srt.kv_canary.runner.launch import (
 )
 from sglang.srt.kv_canary.state import CanaryDeviceState
 from sglang.srt.kv_canary.token_oracle.oracle_manager import TokenOracleManager
-from sglang.srt.speculative.spec_info import SpecInputType
 
 if TYPE_CHECKING:
     from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
@@ -137,6 +137,7 @@ class PerForwardOrchestrator:
         self._write_req_capacity = write_req_capacity
         self._write_entry_capacity = write_entry_capacity
         self._verify_capacity = per_forward_verify_capacity
+        self._input_check_suspension_depth: int = 0
 
         self._enable_warner = _CanaryEnableWarner(
             verify_capacity=self._verify_capacity,
@@ -195,10 +196,7 @@ class PerForwardOrchestrator:
         violation_log = self._device_state.violation_log
         num_tokens = get_valid_num_tokens(forward_batch=forward_batch)
         expected_inputs_slice = self._expected_inputs.slice(num_tokens)
-        input_check_mode = _should_enable_input_check_for_launch(
-            config=self._config,
-            forward_batch=forward_batch,
-        )
+        input_check_mode = self._should_enable_input_check_for_launch()
         for group in self._buffer_groups:
             invoke_plan(
                 plan_input=self._plan_input_per_forward,
@@ -228,10 +226,7 @@ class PerForwardOrchestrator:
         violation_log = self._device_state.violation_log
         num_tokens = get_valid_num_tokens(forward_batch=forward_batch)
         expected_inputs_slice = self._expected_inputs.slice(num_tokens)
-        input_check_mode = _should_enable_input_check_for_launch(
-            config=self._config,
-            forward_batch=forward_batch,
-        )
+        input_check_mode = self._should_enable_input_check_for_launch()
         for group in self._buffer_groups:
             launch_endpoints_per_forward(
                 endpoints=self._endpoints,
@@ -251,6 +246,20 @@ class PerForwardOrchestrator:
             return
         self._enable_warner.tick(self._verify_plan_per_forward.enable)
 
+    @contextlib.contextmanager
+    def suspend_input_check(self) -> Iterator[None]:
+        self._input_check_suspension_depth += 1
+        try:
+            yield
+        finally:
+            self._input_check_suspension_depth -= 1
+
+    def _should_enable_input_check_for_launch(self) -> bool:
+        return (
+            self._config.input_check_mode
+            and self._input_check_suspension_depth == 0
+        )
+
 
 def _is_head_tag(tag: CanaryLaunchTag) -> bool:
     return tag in (
@@ -268,23 +277,3 @@ def _is_tail_tag(tag: CanaryLaunchTag) -> bool:
         CanaryLaunchTag.TAIL_K_SWA,
         CanaryLaunchTag.TAIL_V_SWA,
     )
-
-
-def _should_enable_input_check_for_launch(
-    *, config: CanaryConfig, forward_batch: "ForwardBatch"
-) -> bool:
-    if not config.input_check_mode:
-        return False
-    if not torch.cuda.is_current_stream_capturing():
-        return True
-
-    spec_info = forward_batch.spec_info
-    if (
-        forward_batch.forward_mode is not None
-        and forward_batch.forward_mode.is_decode()
-        and spec_info is not None
-        and spec_info.spec_input_type == SpecInputType.EAGLE_DRAFT
-    ):
-        return False
-
-    return True
