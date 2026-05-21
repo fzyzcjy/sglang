@@ -552,9 +552,7 @@ class TestSelfUnitRunner(CustomTestCase):
         self.assertTrue(
             torch.equal(
                 expected_inputs.positions[:4],
-                torch.tensor(
-                    [10, 10, 20, 20], dtype=torch.int64, device=self.device
-                ),
+                torch.tensor([10, 10, 20, 20], dtype=torch.int64, device=self.device),
             )
         )
 
