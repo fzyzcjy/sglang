@@ -25,6 +25,7 @@ class TestPrepareServerArgs(CustomTestCase):
         model_config = SimpleNamespace(
             attention_arch=AttentionArch.MHA,
             hf_config=SimpleNamespace(),
+            is_multimodal=False,
         )
         with patch.object(ServerArgs, "get_model_config", return_value=model_config):
             server_args = prepare_server_args(
@@ -667,6 +668,7 @@ class TestSamplingBackendTokenOracleEnvGate(CustomTestCase):
         model_config = SimpleNamespace(
             attention_arch=AttentionArch.MHA,
             hf_config=SimpleNamespace(),
+            is_multimodal=False,
         )
         with patch.object(
             reloaded.ServerArgs, "get_model_config", return_value=model_config
