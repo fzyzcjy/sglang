@@ -13,15 +13,15 @@ from typing import TYPE_CHECKING, Optional
 
 import torch
 
-from sglang.srt.kv_canary.buffer_group import CanaryBufferGroup
+from sglang.srt.kv_canary.buffer_group import CanaryBufferGroup, PoolKind
 from sglang.srt.kv_canary.perturb.config import PerturbConfig
-from sglang.srt.kv_canary.perturb.slot_picker import pick_orphan_slot
 from sglang.srt.kv_canary.perturb.utils import (
     WarmupGate,
     flip_first_byte_in_source,
     pick_target_group,
     should_run_perturbation,
 )
+from sglang.srt.kv_canary.plan_input_builder import build_plan_input_radix_sweep
 
 if TYPE_CHECKING:
     from sglang.srt.mem_cache.base_prefix_cache import BasePrefixCache
@@ -36,6 +36,7 @@ def run(
     config: PerturbConfig,
     buffer_groups: tuple[CanaryBufferGroup, ...],
     radix_cache: Optional["BasePrefixCache"],
+    swa_window_size: int,
     warmup_gate: WarmupGate,
 ) -> None:
     if not should_run_perturbation(
@@ -47,13 +48,6 @@ def run(
     ):
         return
 
-    slot = pick_orphan_slot(radix_cache=radix_cache)
-    if slot is None:
-        logger.info(
-            "kv_canary perturb real_kv_unused_cache: skipped because no orphan radix-cache slot "
-            "was found"
-        )
-        return
     group = pick_target_group(
         buffer_groups=buffer_groups,
         target_kind=config.target_group_kind,
@@ -61,14 +55,30 @@ def run(
     if group is None or not group.real_kv_sources_k:
         logger.info(
             "kv_canary perturb real_kv_unused_cache: skipped because no target group with "
-            "real_kv_sources_k matched target_group_kind=%s slot=%d",
+            "real_kv_sources_k matched target_group_kind=%s",
             config.target_group_kind,
-            slot,
+        )
+        return
+    slot = _pick_sweep_slot_for_group(
+        radix_cache=radix_cache,
+        group=group,
+        swa_window_size=swa_window_size,
+    )
+    if slot is None:
+        logger.info(
+            "kv_canary perturb real_kv_unused_cache: skipped because no orphan sweep slot "
+            "was found for group=%s",
+            group.kind.name,
         )
         return
     source_pick = int(torch.randint(0, len(group.real_kv_sources_k), (1,)).item())
     source = group.real_kv_sources_k[source_pick]
-    flip_result = flip_first_byte_in_source(group=group, source=source, slot_idx=slot)
+    flip_result = flip_first_byte_in_source(
+        group=group,
+        source=source,
+        slot_idx=slot,
+        slot_is_physical=True,
+    )
     if flip_result is None:
         logger.info(
             "kv_canary perturb real_kv_unused_cache: skipped because slot=%d could not be mapped "
@@ -90,3 +100,31 @@ def run(
         original_byte,
         original_byte ^ 0xFF,
     )
+
+
+def _pick_sweep_slot_for_group(
+    *,
+    radix_cache: Optional["BasePrefixCache"],
+    group: CanaryBufferGroup,
+    swa_window_size: int,
+) -> Optional[int]:
+    if radix_cache is None:
+        return None
+
+    window = swa_window_size if group.kind is PoolKind.SWA else 0
+    plan_input = build_plan_input_radix_sweep(
+        radix_cache=radix_cache,
+        swa_window_size=window,
+        full_to_swa_index_mapping=group.swa_index_lut,
+        unlocked_only=True,
+    )
+    slots = [
+        int(raw_slot)
+        for raw_slot in plan_input.extra_verify_slot_indices.detach().to("cpu").tolist()
+        if int(raw_slot) >= 0
+    ]
+    if not slots:
+        return None
+
+    pick = int(torch.randint(0, len(slots), (1,)).item())
+    return slots[pick]

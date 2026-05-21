@@ -11,7 +11,10 @@ from sglang.srt.kv_canary.perturb.config import (
     TargetGroupKind,
     _parse_target_group_kind,
 )
-from sglang.srt.kv_canary.perturb.utils import pick_target_group
+from sglang.srt.kv_canary.perturb.utils import (
+    flip_first_byte_in_source,
+    pick_target_group,
+)
 from sglang.test.ci.ci_register import register_cuda_ci
 
 register_cuda_ci(est_time=10, stage="extra-a", runner_config="1-gpu-large")
@@ -87,6 +90,24 @@ def test_pick_target_group_ignores_groups_without_real_kv_sources() -> None:
     assert group is None
 
 
+def test_flip_first_byte_in_physical_swa_slot_does_not_translate_twice() -> None:
+    group = _make_group(kind=PoolKind.SWA, has_real_kv=True)
+    source = group.real_kv_sources_k[0]
+    source.tensor[2, 0] = 0x12
+    source.tensor[3, 0] = 0x34
+
+    result = flip_first_byte_in_source(
+        group=group,
+        source=source,
+        slot_idx=2,
+        slot_is_physical=True,
+    )
+
+    assert result == (2, 0, 0x12)
+    assert int(source.tensor[2, 0].item()) == 0xED
+    assert int(source.tensor[3, 0].item()) == 0x34
+
+
 def _make_group(*, kind: PoolKind, has_real_kv: bool) -> CanaryBufferGroup:
     source = RealKvSource(
         tensor=torch.zeros(4, 16, dtype=torch.uint8),
@@ -103,5 +124,7 @@ def _make_group(*, kind: PoolKind, has_real_kv: bool) -> CanaryBufferGroup:
         v_tail=torch.zeros(4, CANARY_SLOT_BYTES, dtype=torch.uint8),
         real_kv_sources_k=real_kv_sources,
         real_kv_sources_v=real_kv_sources,
-        swa_index_lut=None,
+        swa_index_lut=torch.tensor([3, 2, 1, 0], dtype=torch.int64)
+        if kind is PoolKind.SWA
+        else None,
     )

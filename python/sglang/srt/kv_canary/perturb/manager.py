@@ -34,10 +34,12 @@ class PerturbManager:
         req_to_token_pool: "ReqToTokenPool",
         buffer_groups: tuple[CanaryBufferGroup, ...],
         pump_and_allreduce: PumpAndAllreduce,
+        swa_window_size: int,
     ) -> None:
         self._config = config
         self._req_to_token_pool = req_to_token_pool
         self._buffer_groups = buffer_groups
+        self._swa_window_size = swa_window_size
         self._radix_cache: Optional["BasePrefixCache"] = None
         self._warmup_gate = WarmupGate(
             config=config, pump_and_allreduce=pump_and_allreduce
@@ -71,5 +73,6 @@ class PerturbManager:
             config=self._config,
             buffer_groups=self._buffer_groups,
             radix_cache=self._radix_cache,
+            swa_window_size=self._swa_window_size,
             warmup_gate=self._warmup_gate,
         )

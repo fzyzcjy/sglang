@@ -181,6 +181,7 @@ def build_plan_input_radix_sweep(
     radix_cache: "BasePrefixCache",
     swa_window_size: int,
     full_to_swa_index_mapping: Optional[torch.Tensor],
+    unlocked_only: bool = False,
 ) -> PlanInput:
     """Builder for the radix-sweep caller. Allocates a fresh PlanInput each sweep step (the
     Static-buffer contract on the PlanInput class applies to the per-forward path only).
@@ -196,6 +197,7 @@ def build_plan_input_radix_sweep(
 
     slot_indices, positions, prev_slot_indices = walk_radix_cache_for_canary(
         radix_cache=radix_cache,
+        unlocked_only=unlocked_only,
     )
     slot_indices = slot_indices.to(device)
     positions = positions.to(device)
