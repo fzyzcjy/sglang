@@ -30,14 +30,14 @@ struct WriteKernelParams {
   const int32_t* write_num_valid_reqs;
   int32_t write_req_capacity;
 
-  // ForwardBatch passthroughs. fb_out_cache_loc is caller-pre-translated for SWA groups; the kernel
+  // ForwardBatch passthroughs. out_cache_loc is caller-pre-translated for SWA groups; the kernel
   // treats it opaquely and skips entries with slot < 0.
-  const int64_t* fb_input_ids;
-  const int64_t* fb_positions;
-  const int64_t* fb_out_cache_loc;
+  const int64_t* input_ids;
+  const int64_t* positions;
+  const int64_t* out_cache_loc;
 
   // Pseudo-mode oracle inputs.
-  bool enable_write_verify_inputs;
+  bool enable_assert_inputs;
   const int64_t* expected_input_tokens;
   const int64_t* expected_input_positions;
 
@@ -84,14 +84,14 @@ __global__ void canary_write_kernel(const WriteKernelParams __grid_constant__ p)
 
   int64_t entries_written = 0;
   for (int64_t entry_offset = 0; entry_offset < entry_count; ++entry_offset) {
-    const int64_t fb_idx = entry_start + entry_offset;
-    const int64_t slot = p.fb_out_cache_loc[fb_idx];
+    const int64_t entry_idx = entry_start + entry_offset;
+    const int64_t slot = p.out_cache_loc[entry_idx];
     if (slot < 0) {
       continue;
     }
     ++entries_written;
-    const int64_t token = p.fb_input_ids[fb_idx];
-    const int64_t position = p.fb_positions[fb_idx];
+    const int64_t token = p.input_ids[entry_idx];
+    const int64_t position = p.positions[entry_idx];
 
     const uint64_t real_kv_hash_u64 = real_kv_fold_sources(p.sources, p.num_sources, slot, p.real_kv_hash_mode);
     const int64_t real_kv_hash = static_cast<int64_t>(real_kv_hash_u64);
@@ -99,9 +99,9 @@ __global__ void canary_write_kernel(const WriteKernelParams __grid_constant__ p)
     // Write-time input verification: compare actual (token, position) against caller-supplied expected
     // values; mismatch records a single violation row carrying both bits OR'd together. Chain still
     // advances on the actual (token, position) below so a downstream verify won't cascade.
-    if (p.enable_write_verify_inputs) {
-      const int64_t expected_token = p.expected_input_tokens[fb_idx];
-      const int64_t expected_position = p.expected_input_positions[fb_idx];
+    if (p.enable_assert_inputs) {
+      const int64_t expected_token = p.expected_input_tokens[entry_idx];
+      const int64_t expected_position = p.expected_input_positions[entry_idx];
       FailReason mismatch_bits{};
       if (token != expected_token) {
         mismatch_bits |= FailReason::kWriteTokenMismatch;
@@ -151,20 +151,20 @@ __global__ void canary_write_kernel(const WriteKernelParams __grid_constant__ p)
 // - real_kv_buf_0 .. real_kv_buf_3 are 4 fixed uint8 tensor slots.
 // - real_kv_source_params is a CPU int32 [kMaxRealKvSources, 3] table of (page_size, num_bytes_per_token,
 //   read_bytes) triplets.
-// - fb_out_cache_loc is caller-pre-translated for SWA groups; -1 entries mark skip. The kernel does not
+// - out_cache_loc is caller-pre-translated for SWA groups; -1 entries mark skip. The kernel does not
 //   consult any LUT.
 inline void canary_write_step_cuda(
     tvm::ffi::TensorView canary_buf,
     tvm::ffi::TensorView write_offsets,
     tvm::ffi::TensorView write_seed_slot_indices,
     tvm::ffi::TensorView write_num_valid_reqs,
-    tvm::ffi::TensorView fb_input_ids,
-    tvm::ffi::TensorView fb_positions,
-    tvm::ffi::TensorView fb_out_cache_loc,
+    tvm::ffi::TensorView input_ids,
+    tvm::ffi::TensorView positions,
+    tvm::ffi::TensorView out_cache_loc,
     int64_t kernel_kind,
-    int64_t enable_write_verify_inputs,
-    tvm::ffi::TensorView expected_input_tokens,
-    tvm::ffi::TensorView expected_input_positions,
+    int64_t enable_assert_inputs,
+    const tvm::ffi::Optional<tvm::ffi::TensorView> expected_input_tokens,
+    const tvm::ffi::Optional<tvm::ffi::TensorView> expected_input_positions,
     tvm::ffi::TensorView violation_ring,
     tvm::ffi::TensorView violation_write_index,
     tvm::ffi::TensorView slot_run_counter,
@@ -197,11 +197,23 @@ inline void canary_write_step_cuda(
   TensorMatcher({N_tokens})
       .with_dtype<int64_t>()
       .with_device<kDLCUDA>(device_)
-      .verify(fb_input_ids)
-      .verify(fb_positions)
-      .verify(fb_out_cache_loc)
-      .verify(expected_input_tokens)
-      .verify(expected_input_positions);
+      .verify(input_ids)
+      .verify(positions)
+      .verify(out_cache_loc);
+  const bool enable_assert_inputs_bool = (enable_assert_inputs != 0);
+  RuntimeCheck(
+      enable_assert_inputs_bool == expected_input_tokens.has_value(),
+      "canary_write: expected_input_tokens presence must match enable_assert_inputs");
+  RuntimeCheck(
+      enable_assert_inputs_bool == expected_input_positions.has_value(),
+      "canary_write: expected_input_positions presence must match enable_assert_inputs");
+  if (enable_assert_inputs_bool) {
+    TensorMatcher({N_tokens})
+        .with_dtype<int64_t>()
+        .with_device<kDLCUDA>(device_)
+        .verify(expected_input_tokens.value())
+        .verify(expected_input_positions.value());
+  }
 
   TensorMatcher({1}).with_dtype<int32_t>().with_device<kDLCUDA>(device_).verify(violation_write_index);
   SymbolicSize N_ring = {"ring_capacity"};
@@ -275,12 +287,14 @@ inline void canary_write_step_cuda(
   p.write_seed_slot_indices = static_cast<const int64_t*>(write_seed_slot_indices.data_ptr());
   p.write_num_valid_reqs = static_cast<const int32_t*>(write_num_valid_reqs.data_ptr());
   p.write_req_capacity = write_req_capacity;
-  p.fb_input_ids = static_cast<const int64_t*>(fb_input_ids.data_ptr());
-  p.fb_positions = static_cast<const int64_t*>(fb_positions.data_ptr());
-  p.fb_out_cache_loc = static_cast<const int64_t*>(fb_out_cache_loc.data_ptr());
-  p.enable_write_verify_inputs = (enable_write_verify_inputs != 0);
-  p.expected_input_tokens = static_cast<const int64_t*>(expected_input_tokens.data_ptr());
-  p.expected_input_positions = static_cast<const int64_t*>(expected_input_positions.data_ptr());
+  p.input_ids = static_cast<const int64_t*>(input_ids.data_ptr());
+  p.positions = static_cast<const int64_t*>(positions.data_ptr());
+  p.out_cache_loc = static_cast<const int64_t*>(out_cache_loc.data_ptr());
+  p.enable_assert_inputs = enable_assert_inputs_bool;
+  p.expected_input_tokens =
+      enable_assert_inputs_bool ? static_cast<const int64_t*>(expected_input_tokens.value().data_ptr()) : nullptr;
+  p.expected_input_positions =
+      enable_assert_inputs_bool ? static_cast<const int64_t*>(expected_input_positions.value().data_ptr()) : nullptr;
   p.violation_sink.ring = static_cast<int64_t*>(violation_ring.data_ptr());
   p.violation_sink.write_index = static_cast<int32_t*>(violation_write_index.data_ptr());
   p.violation_sink.ring_capacity = ring_capacity;

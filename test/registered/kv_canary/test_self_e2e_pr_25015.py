@@ -7,7 +7,6 @@ import logging
 import os
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from typing import List
 
 import requests
 
@@ -20,16 +19,15 @@ from sglang.test.test_utils import (
     popen_launch_server,
 )
 
+register_cuda_ci(est_time=60, stage="extra-a", runner_config="1-gpu-large")
+
 logger = logging.getLogger(__name__)
-
-register_cuda_ci(est_time=60, suite="extra-a-test-1-gpu-large")
-
 
 _MOCK_MODEL = "Qwen/Qwen3-0.6B"
 _EAGER_DRAFT_REQUEST_COUNT = 9
 
 
-def _spec_eagle_server_args() -> List[str]:
+def _spec_eagle_server_args() -> list[str]:
     return [
         "--sampling-backend",
         "token_oracle",
@@ -37,8 +35,6 @@ def _spec_eagle_server_args() -> List[str]:
         "raise",
         "--speculative-algorithm",
         "EAGLE",
-        # Caps kept small to keep the e2e test cheap (run time + device memory budget for the
-        # canary buffers). Not load-bearing on canary's overflow behavior.
         "--cuda-graph-max-bs",
         "1",
         "--max-running-requests",
@@ -112,6 +108,7 @@ class TestEaglePositionsMisalignRegression(CustomTestCase):
             kill_process_tree(cls.process.pid)
 
     def test_position_mismatch_in_server_stderr(self) -> None:
+        """Verify the reverted EAGLE path reports a canary position violation."""
         if self.process is not None and self._launch_exc is None:
             try:
                 _run_eager_draft_decode_requests(self.base_url)
@@ -152,6 +149,7 @@ class TestEaglePositionsMatchWithFix(CustomTestCase):
             kill_process_tree(cls.process.pid)
 
     def test_no_canary_fire(self) -> None:
+        """Verify the fixed EAGLE path serves requests without a canary violation."""
         responses = _run_eager_draft_decode_requests(self.base_url)
         for resp in responses:
             self.assertEqual(resp.status_code, 200, resp.text)

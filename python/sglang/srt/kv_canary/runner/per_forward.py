@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import logging
 from typing import TYPE_CHECKING, Iterator, Optional
 
 import torch
@@ -13,13 +12,9 @@ from sglang.srt.kv_canary.config import CanaryConfig
 from sglang.srt.kv_canary.endpoint import CanaryEndpoint
 from sglang.srt.kv_canary.expected_inputs import ExpectedInputs
 from sglang.srt.kv_canary.perturb.manager import PerturbManager
-from sglang.srt.kv_canary.plan_input_builder import (
-    PlanInput,
-    fill_plan_input_per_forward,
-)
-from sglang.srt.kv_canary.runner.future_tensor import FutureTensor
-from sglang.srt.kv_canary.runner.launch import (
-    get_valid_num_tokens,
+from sglang.srt.kv_canary.plan_input import PlanInput
+from sglang.srt.kv_canary.runner.enable_warner import _CanaryEnableWarner
+from sglang.srt.kv_canary.runner.kernel_launch import (
     invoke_plan,
     launch_endpoints_per_forward,
 )
@@ -30,48 +25,6 @@ if TYPE_CHECKING:
     from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
     from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 
-logger = logging.getLogger(__name__)
-
-
-class _CanaryEnableWarner:
-    """Double-buffered host mirror of ``VerifyPlan.enable``. Each call to :meth:`tick` drains the
-    previous step's async d2h (warn-logging when that step's plan kernel set enable=0 due to
-    capacity overflow) and enqueues a new copy for the current step. Drain happens right before
-    the slot is overwritten so the d2h gets a full forward pass of pipelining headroom.
-    """
-
-    def __init__(
-        self, *, verify_capacity: int, d2h_stream: Optional[torch.cuda.Stream]
-    ) -> None:
-        self._verify_capacity = verify_capacity
-        self._d2h_stream = d2h_stream
-        self._pending_future: Optional[FutureTensor] = None
-        self._overflow_count_total: int = 0
-
-    def tick(self, enable_device: torch.Tensor) -> None:
-        if torch.cuda.is_current_stream_capturing():
-            return
-
-        self._drain_previous()
-        self._pending_future = FutureTensor.create(
-            src_device=enable_device,
-            stream=self._d2h_stream,
-        )
-
-    def _drain_previous(self) -> None:
-        previous = self._pending_future
-        if previous is None:
-            return
-        enable_value = int(previous.wait().item())
-        if enable_value == 0:
-            self._overflow_count_total += 1
-            logger.warning(
-                "kv-canary: per-forward verify skipped this step due to overflow "
-                "(total=%d, capacity=%d); check ServerArgs / pool sizing",
-                self._overflow_count_total,
-                self._verify_capacity,
-            )
-
 
 class PerForwardOrchestrator:
     """Per-forward orchestrator. Split into three phases tightly aligned with the cuda-graph
@@ -81,8 +34,7 @@ class PerForwardOrchestrator:
       captured region): perturb hooks, fill the static expected_input buffers, fill the static
       per-forward PlanInput buffers.
     - ``launch_head_kernels(forward_batch)`` runs INSIDE the captured region (called by the
-      monkey-patched model.forward, before the original forward): canary_plan_step kernel +
-      HEAD endpoint launches.
+      monkey-patched model.forward, before the original forward): plan sub-kernels + HEAD endpoint launches.
     - ``launch_tail_kernels(forward_batch)`` runs INSIDE the captured region (called by the
       monkey-patched model.forward, after the original forward): TAIL endpoint launches reusing
       the plan staged in launch_head_kernels.
@@ -130,7 +82,6 @@ class PerForwardOrchestrator:
 
         self._plan_input_per_forward = PlanInput.allocate(
             bs_capacity=write_req_capacity,
-            extra_verify_capacity=0,
             device=device,
         )
 
@@ -164,8 +115,7 @@ class PerForwardOrchestrator:
                 f"CanaryLaunchCapacities.from_args"
             )
 
-        self._perturb_manager.perturb_req_to_token(forward_batch)
-        self._perturb_manager.perturb_real_kv_used(forward_batch)
+        self._perturb_manager.perturb(forward_batch)
 
         if self._should_enable_input_check_for_launch(forward_batch):
             manager = self._token_oracle_manager
@@ -189,9 +139,8 @@ class PerForwardOrchestrator:
                     expected_positions.to(torch.int64)
                 )
 
-        fill_plan_input_per_forward(
+        self._plan_input_per_forward.fill_from_forward_batch(
             forward_batch=forward_batch,
-            plan_input_out=self._plan_input_per_forward,
         )
 
     def launch_head_kernels(self, forward_batch: "ForwardBatch") -> None:
@@ -199,7 +148,7 @@ class PerForwardOrchestrator:
             return
 
         violation_log = self._device_state.violation_log
-        num_tokens = get_valid_num_tokens(forward_batch=forward_batch)
+        num_tokens = int(forward_batch.positions.shape[0])
         expected_inputs_slice = self._expected_inputs.slice(num_tokens)
         input_check_mode = self._should_enable_input_check_for_launch(forward_batch)
         for group in self._buffer_groups:
@@ -229,7 +178,7 @@ class PerForwardOrchestrator:
             return
 
         violation_log = self._device_state.violation_log
-        num_tokens = get_valid_num_tokens(forward_batch=forward_batch)
+        num_tokens = int(forward_batch.positions.shape[0])
         expected_inputs_slice = self._expected_inputs.slice(num_tokens)
         input_check_mode = self._should_enable_input_check_for_launch(forward_batch)
         for group in self._buffer_groups:

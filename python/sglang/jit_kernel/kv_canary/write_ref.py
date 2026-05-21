@@ -16,17 +16,17 @@ from sglang.jit_kernel.kv_canary.verify_ref import (
 from sglang.jit_kernel.kv_canary.write import WritePlan
 
 
-def canary_write_step_torch_reference(
+def launch_canary_write_kernel_torch_reference(
     *,
     canary_buf: torch.Tensor,
     plan: WritePlan,
-    fb_input_ids: torch.Tensor,
-    fb_positions: torch.Tensor,
-    fb_out_cache_loc: torch.Tensor,
+    input_ids: torch.Tensor,
+    positions: torch.Tensor,
+    out_cache_loc: torch.Tensor,
     kernel_kind: CanaryLaunchTag,
     enable_write_verify_inputs: bool,
-    expected_input_tokens: torch.Tensor,
-    expected_input_positions: torch.Tensor,
+    expected_input_tokens: torch.Tensor | None,
+    expected_input_positions: torch.Tensor | None,
     violation_ring: torch.Tensor,
     violation_write_index: torch.Tensor,
     slot_run_counter: torch.Tensor,
@@ -50,9 +50,9 @@ def canary_write_step_torch_reference(
     seed_slot_indices_host = plan.write_seed_slot_indices[:active_reqs].to(
         device=work_device, dtype=torch.int64
     )
-    fb_input_ids_host = fb_input_ids.detach().to(device=work_device, dtype=torch.int64)
-    fb_positions_host = fb_positions.detach().to(device=work_device, dtype=torch.int64)
-    fb_out_cache_loc_host = fb_out_cache_loc.detach().to(
+    input_ids_host = input_ids.detach().to(device=work_device, dtype=torch.int64)
+    positions_host = positions.detach().to(device=work_device, dtype=torch.int64)
+    out_cache_loc_host = out_cache_loc.detach().to(
         device=work_device, dtype=torch.int64
     )
 
@@ -73,12 +73,24 @@ def canary_write_step_torch_reference(
             f"kv-canary: canary_buf slot stride must hold at least 4 int64 fields, got {slot_stride_i64}"
         )
 
-    expected_input_tokens_host = expected_input_tokens.detach().to(
-        device=work_device, dtype=torch.int64
-    )
-    expected_input_positions_host = expected_input_positions.detach().to(
-        device=work_device, dtype=torch.int64
-    )
+    if enable_write_verify_inputs:
+        if expected_input_tokens is None or expected_input_positions is None:
+            raise ValueError(
+                "kv-canary: expected input tensors are required when enable_write_verify_inputs=True"
+            )
+        expected_input_tokens_host = expected_input_tokens.detach().to(
+            device=work_device, dtype=torch.int64
+        )
+        expected_input_positions_host = expected_input_positions.detach().to(
+            device=work_device, dtype=torch.int64
+        )
+    else:
+        if expected_input_tokens is not None or expected_input_positions is not None:
+            raise ValueError(
+                "kv-canary: expected input tensors must be None when enable_write_verify_inputs=False"
+            )
+        expected_input_tokens_host = None
+        expected_input_positions_host = None
 
     violation_rows: list[list[int]] = []
     total_slots_written = 0
@@ -94,12 +106,12 @@ def canary_write_step_torch_reference(
         running_prev_hash = compute_slot_hash(buf_i64, seed_slot)
 
         for entry_offset in range(entry_count):
-            fb_idx = entry_start + entry_offset
-            slot = int(fb_out_cache_loc_host[fb_idx].item())
+            entry_idx = entry_start + entry_offset
+            slot = int(out_cache_loc_host[entry_idx].item())
             if slot < 0:
                 continue
-            token = int(fb_input_ids_host[fb_idx].item())
-            position = int(fb_positions_host[fb_idx].item())
+            token = int(input_ids_host[entry_idx].item())
+            position = int(positions_host[entry_idx].item())
 
             real_kv_hash_u64 = _compute_real_kv_hash_scalar(
                 slot_idx=slot,
@@ -109,9 +121,11 @@ def canary_write_step_torch_reference(
             )
 
             if enable_write_verify_inputs:
+                assert expected_input_tokens_host is not None
+                assert expected_input_positions_host is not None
                 mismatch_bits = consts.FailReason(0)
-                expected_token = int(expected_input_tokens_host[fb_idx].item())
-                expected_position = int(expected_input_positions_host[fb_idx].item())
+                expected_token = int(expected_input_tokens_host[entry_idx].item())
+                expected_position = int(expected_input_positions_host[entry_idx].item())
                 if token != expected_token:
                     mismatch_bits |= consts.FailReason.WRITE_TOKEN_MISMATCH
                 if position != expected_position:

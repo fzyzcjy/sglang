@@ -11,12 +11,13 @@ from sglang.jit_kernel.kv_canary.consts import (
 from sglang.jit_kernel.kv_canary.verify import (
     CanaryLaunchTag,
     RealKvSource,
+    VerifyOrWriteContext,
     VerifyPlan,
-    canary_verify_step,
+    launch_canary_verify_kernel,
 )
 from sglang.jit_kernel.kv_canary.write import (
     WritePlan,
-    canary_write_step,
+    launch_canary_write_kernel,
 )
 from sglang.srt.kv_canary.buffer_group import CanaryBufferGroup, PoolKind
 from sglang.srt.kv_canary.expected_inputs import ExpectedInputs
@@ -65,9 +66,9 @@ class CanaryEndpoint:
         *,
         verify_plan: VerifyPlan,
         write_plan: WritePlan,
-        fb_input_ids: torch.Tensor,
-        fb_positions: torch.Tensor,
-        fb_out_cache_loc: torch.Tensor,
+        input_ids: torch.Tensor,
+        positions: torch.Tensor,
+        out_cache_loc: torch.Tensor,
         input_check_mode: bool,
         expected_inputs: ExpectedInputs,
         violation_log: ViolationLog,
@@ -78,42 +79,36 @@ class CanaryEndpoint:
                 f"kv-canary: launch_per_forward not supported on sweep endpoint {self.kernel_kind.name}"
             )
 
-        canary_verify_step(
-            canary_buf=self.canary_buf,
-            plan=verify_plan,
-            kernel_kind=self.kernel_kind,
-            violation_ring=violation_log.violation_ring,
-            violation_write_index=violation_log.violation_write_index,
-            slot_run_counter=self.slot_run_counter_view,
-            kernel_run_counter=self.kernel_run_counter_view,
-            real_kv_sources=self.real_kv_sources,
+        context = self._make_verify_or_write_context(
+            violation_log=violation_log,
             real_kv_hash_mode=real_kv_hash_mode,
+        )
+        launch_canary_verify_kernel(
+            context=context,
+            plan=verify_plan,
         )
 
         # SWA endpoints translate the per-token slot indices host-side before invoking the write kernel.
         if self.full_to_swa_index_mapping is not None:
-            fb_out_cache_loc_for_canary = self.full_to_swa_index_mapping[
-                fb_out_cache_loc
-            ]
+            out_cache_loc_for_canary = self.full_to_swa_index_mapping[out_cache_loc]
         else:
-            fb_out_cache_loc_for_canary = fb_out_cache_loc
+            out_cache_loc_for_canary = out_cache_loc
+        if input_check_mode:
+            expected_input_tokens = expected_inputs.tokens
+            expected_input_positions = expected_inputs.positions
+        else:
+            expected_input_tokens = None
+            expected_input_positions = None
 
-        canary_write_step(
-            canary_buf=self.canary_buf,
+        launch_canary_write_kernel(
+            context=context,
             plan=write_plan,
-            fb_input_ids=fb_input_ids,
-            fb_positions=fb_positions,
-            fb_out_cache_loc=fb_out_cache_loc_for_canary,
-            kernel_kind=self.kernel_kind,
-            enable_write_verify_inputs=input_check_mode,
-            expected_input_tokens=expected_inputs.tokens,
-            expected_input_positions=expected_inputs.positions,
-            violation_ring=violation_log.violation_ring,
-            violation_write_index=violation_log.violation_write_index,
-            slot_run_counter=self.slot_run_counter_view,
-            kernel_run_counter=self.kernel_run_counter_view,
-            real_kv_sources=self.real_kv_sources,
-            real_kv_hash_mode=real_kv_hash_mode,
+            input_ids=input_ids,
+            positions=positions,
+            out_cache_loc=out_cache_loc_for_canary,
+            enable_assert_inputs=input_check_mode,
+            expected_input_tokens=expected_input_tokens,
+            expected_input_positions=expected_input_positions,
         )
 
     def launch_sweep(
@@ -128,9 +123,22 @@ class CanaryEndpoint:
                 f"kv-canary: launch_sweep not supported on non-sweep endpoint {self.kernel_kind.name}"
             )
 
-        canary_verify_step(
-            canary_buf=self.canary_buf,
+        launch_canary_verify_kernel(
+            context=self._make_verify_or_write_context(
+                violation_log=violation_log,
+                real_kv_hash_mode=real_kv_hash_mode,
+            ),
             plan=verify_plan,
+        )
+
+    def _make_verify_or_write_context(
+        self,
+        *,
+        violation_log: ViolationLog,
+        real_kv_hash_mode: RealKvHashMode,
+    ) -> VerifyOrWriteContext:
+        return VerifyOrWriteContext(
+            canary_buf=self.canary_buf,
             kernel_kind=self.kernel_kind,
             violation_ring=violation_log.violation_ring,
             violation_write_index=violation_log.violation_write_index,

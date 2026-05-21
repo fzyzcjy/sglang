@@ -14,6 +14,7 @@ register_cpu_ci(est_time=5, suite="base-a-test-cpu")
 def test_real_kv_used_logs_when_target_group_has_no_real_kv_sources(
     caplog: LogCaptureFixture,
 ) -> None:
+    """Verify real KV used perturbation logs when the selected group has no real KV sources."""
     config = PerturbConfig(
         req_to_token_prob=0.0,
         real_kv_used_prob=1.0,

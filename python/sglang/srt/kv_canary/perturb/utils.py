@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Optional
 
 import torch
@@ -8,7 +9,6 @@ import torch
 from sglang.jit_kernel.kv_canary.verify import RealKvSource
 from sglang.srt.kv_canary.buffer_group import CanaryBufferGroup, PoolKind
 from sglang.srt.kv_canary.perturb.config import PerturbConfig, TargetGroupKind
-from sglang.srt.kv_canary.runner.pump import PumpAndAllreduce
 
 logger = logging.getLogger(__name__)
 
@@ -27,15 +27,15 @@ class WarmupGate:
         self,
         *,
         config: PerturbConfig,
-        pump_and_allreduce: PumpAndAllreduce,
+        step_counter_getter: Callable[[], int],
     ) -> None:
         self._config = config
-        self._pump_and_allreduce = pump_and_allreduce
+        self._step_counter_getter = step_counter_getter
         self._warmup_disable_logged: bool = False
         self._warmup_enable_logged: bool = False
 
     def is_in_warmup(self) -> bool:
-        step = self._pump_and_allreduce.step_counter
+        step = self._step_counter_getter()
         warmup_steps = self._config.warmup_steps
 
         if step < warmup_steps:
@@ -90,15 +90,19 @@ def pick_target_group(
     buffer_groups: tuple[CanaryBufferGroup, ...],
     target_kind: TargetGroupKind,
 ) -> Optional[CanaryBufferGroup]:
-    """Filter buffer_groups by target_kind (FULL / SWA exact, ANY random) restricted to
-    groups with non-empty real_kv_sources_k. Returns None if no group matches."""
+    """Filter buffer_groups by target_kind restricted to groups with non-empty real_kv_sources_k.
+
+    Returns None if no group matches.
+    """
     eligible = [group for group in buffer_groups if group.real_kv_sources_k]
     if not eligible:
         return None
-    if target_kind == TargetGroupKind.ANY:
-        pick = int(torch.randint(0, len(eligible), (1,)).item())
-        return eligible[pick]
-    want = PoolKind(target_kind.value)
+    if target_kind == TargetGroupKind.FULL:
+        want = PoolKind.FULL
+    elif target_kind == TargetGroupKind.SWA:
+        want = PoolKind.SWA
+    else:
+        raise ValueError(f"Unsupported target_group_kind: {target_kind!r}")
     filtered = [group for group in eligible if group.kind == want]
     if not filtered:
         return None

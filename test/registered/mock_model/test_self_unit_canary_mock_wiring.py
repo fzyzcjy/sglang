@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import dataclasses
 import unittest
+from types import SimpleNamespace
 
 import torch
 
 from sglang.srt.kv_canary.expected_inputs import ExpectedInputs
 from sglang.srt.kv_canary.token_oracle.oracle import HashOracle
+from sglang.srt.kv_canary.token_oracle.oracle_manager import TokenOracleManager
 from sglang.srt.kv_canary.token_oracle.sampler import install_oracle_sampler
 from sglang.srt.model_executor.forward_batch_info import (
     _oracle_request_ids,
@@ -64,6 +66,7 @@ def _scalar_expected_token(oracle: HashOracle, *, req_id: int, position: int) ->
 
 class TestFillExpectedInputs(CustomTestCase):
     def test_oracle_request_ids_use_disaggregation_bootstrap_room(self) -> None:
+        """Verify disaggregation bootstrap room is used as the oracle request id."""
         reqs = [
             _StubReq(rid="prefill-local-rid", bootstrap_room=1234),
             _StubReq(rid="regular-rid", bootstrap_room=None),
@@ -72,6 +75,7 @@ class TestFillExpectedInputs(CustomTestCase):
         self.assertEqual(_oracle_request_ids(reqs), ["1234", "regular-rid"])
 
     def test_sample_next_tokens_uses_next_position(self) -> None:
+        """Verify oracle sampling predicts the next token position."""
         oracle = HashOracle(vocab_size=32000)
         hook = install_oracle_sampler(oracle=oracle)
 
@@ -88,6 +92,7 @@ class TestFillExpectedInputs(CustomTestCase):
         )
 
     def test_fill_expected_inputs_decode_one_token_per_req(self) -> None:
+        """Verify decode mode records the actual forwarded input token per request."""
         oracle = HashOracle(vocab_size=32000)
         hook = install_oracle_sampler(oracle=oracle)
 
@@ -126,6 +131,7 @@ class TestFillExpectedInputs(CustomTestCase):
         self.assertEqual(expected_inputs.positions[:2].tolist(), [10, 20])
 
     def test_fill_expected_inputs_extend_uses_forward_input_ids(self) -> None:
+        """Verify extend mode records the actual forwarded input ids."""
         oracle = HashOracle(vocab_size=32000)
         hook = install_oracle_sampler(oracle=oracle)
 
@@ -159,6 +165,7 @@ class TestFillExpectedInputs(CustomTestCase):
     def test_fill_expected_inputs_zero_tokens_is_noop(
         self,
     ) -> None:
+        """Verify filling zero expected tokens leaves the output buffer unchanged."""
         hook = install_oracle_sampler(oracle=HashOracle(vocab_size=100))
 
         rid_a = "req-a"
@@ -186,9 +193,78 @@ class TestFillExpectedInputs(CustomTestCase):
 
         self.assertEqual(expected_inputs.tokens.tolist(), initial_tokens.tolist())
 
+    def test_token_oracle_uses_actual_draft_extend_input_tokens(self) -> None:
+        """Verify EAGLE draft extend checks generated inputs against themselves."""
+        mode = SimpleNamespace(
+            is_decode=lambda: False,
+            is_target_verify=lambda: False,
+            is_draft_extend=lambda include_v2=False: True,
+            is_extend=lambda: False,
+        )
+        forward_batch = SimpleNamespace(
+            forward_mode=mode,
+            spec_info=SimpleNamespace(num_tokens_per_req=4),
+            rids_int=torch.tensor([3, 7], dtype=torch.int64),
+            input_ids=torch.tensor(
+                [101, 102, 103, 104, 201, 202, 203, 204],
+                dtype=torch.int64,
+            ),
+            positions=torch.arange(8, dtype=torch.int64),
+            extend_prefix_lens=torch.tensor([10, 20], dtype=torch.int64),
+            extend_seq_lens=torch.tensor([4, 4], dtype=torch.int64),
+        )
+        expected_inputs = ExpectedInputs.allocate(capacity=8, device=torch.device("cpu"))
+        manager = TokenOracleManager(oracle=HashOracle(vocab_size=32000))
+
+        manager.fill_expected_inputs(
+            forward_batch=forward_batch,
+            expected_inputs_out=expected_inputs,
+        )
+
+        self.assertTrue(torch.equal(expected_inputs.tokens[:8], forward_batch.input_ids))
+        self.assertTrue(
+            torch.equal(
+                expected_inputs.positions[:8],
+                forward_batch.positions,
+            )
+        )
+
+    def test_token_oracle_derives_eagle_draft_decode_positions(self) -> None:
+        """Verify EAGLE draft decode positions are checked against seq_lens."""
+        mode = SimpleNamespace(
+            is_decode=lambda: True,
+            is_extend=lambda: False,
+            is_draft_extend=lambda include_v2=False: False,
+            is_target_verify=lambda: False,
+        )
+        forward_batch = SimpleNamespace(
+            forward_mode=mode,
+            spec_info=SimpleNamespace(num_tokens_per_req=2),
+            rids_int=torch.tensor([3, 7], dtype=torch.int64),
+            input_ids=torch.tensor([101, 102, 201, 202], dtype=torch.int64),
+            positions=torch.tensor([11, 11, 21, 21], dtype=torch.int64),
+            seq_lens=torch.tensor([10, 20], dtype=torch.int64),
+        )
+        expected_inputs = ExpectedInputs.allocate(capacity=4, device=torch.device("cpu"))
+        manager = TokenOracleManager(oracle=HashOracle(vocab_size=32000))
+
+        manager.fill_expected_inputs(
+            forward_batch=forward_batch,
+            expected_inputs_out=expected_inputs,
+        )
+
+        self.assertTrue(torch.equal(expected_inputs.tokens[:4], forward_batch.input_ids))
+        self.assertTrue(
+            torch.equal(
+                expected_inputs.positions[:4],
+                torch.tensor([10, 10, 20, 20], dtype=torch.int64),
+            )
+        )
+
 
 class TestMockModelServerLaunchHelpers(CustomTestCase):
     def test_mock_model_server_args_adds_canary_defaults(self) -> None:
+        """Verify mock model launch args include KV canary defaults before user args."""
         args = mock_model_server_args("--tp", "2")
 
         self.assertIn("--load-format", args)
@@ -200,12 +276,14 @@ class TestMockModelServerLaunchHelpers(CustomTestCase):
         self.assertEqual(args[-2:], ["--tp", "2"])
 
     def test_mock_model_server_env_enables_input_check_by_default(self) -> None:
+        """Verify mock model launch env enables canary input checking by default."""
         env = mock_model_server_env()
 
         self.assertEqual(env["SGLANG_KV_CANARY_INPUT_CHECK"], "1")
         self.assertEqual(env["SGLANG_KV_CANARY_ENABLE_TOKEN_ORACLE"], "1")
 
     def test_mock_model_server_env_can_disable_input_check(self) -> None:
+        """Verify mock model launch env can disable canary input checking."""
         env = mock_model_server_env(input_check_enabled=False)
 
         self.assertEqual(env["SGLANG_KV_CANARY_INPUT_CHECK"], "0")

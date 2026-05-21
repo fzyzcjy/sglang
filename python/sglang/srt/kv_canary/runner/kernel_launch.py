@@ -7,7 +7,7 @@ import torch
 from sglang.jit_kernel.kv_canary.consts import (
     RealKvHashMode,
 )
-from sglang.jit_kernel.kv_canary.plan import canary_plan_step
+from sglang.jit_kernel.kv_canary.plan import launch_canary_plan_kernels
 from sglang.jit_kernel.kv_canary.verify import (
     CanaryLaunchTag,
     VerifyPlan,
@@ -16,7 +16,7 @@ from sglang.jit_kernel.kv_canary.write import WritePlan
 from sglang.srt.kv_canary.buffer_group import CanaryBufferGroup, PoolKind
 from sglang.srt.kv_canary.endpoint import CanaryEndpoint
 from sglang.srt.kv_canary.expected_inputs import ExpectedInputs
-from sglang.srt.kv_canary.plan_input_builder import PlanInput
+from sglang.srt.kv_canary.plan_input import PlanInput
 from sglang.srt.kv_canary.state import ViolationLog
 
 if TYPE_CHECKING:
@@ -24,6 +24,9 @@ if TYPE_CHECKING:
 
 
 _BOUNDARY_INT_DTYPES = (torch.int32, torch.int64)
+_INPUT_IDS = "forward_batch.input_ids"
+_OUT_LOC = "forward_batch.out_cache_loc"
+_POSITIONS = "forward_batch.positions"
 
 
 def invoke_plan(
@@ -36,17 +39,13 @@ def invoke_plan(
     swa_window_size: int,
 ) -> None:
     window = swa_window_size if group.kind is PoolKind.SWA else 0
-    canary_plan_step(
+    launch_canary_plan_kernels(
         verify_plan_out=verify_plan,
         write_plan_out=write_plan,
-        fb_req_pool_indices=plan_input.fb_req_pool_indices,
-        fb_prefix_lens=plan_input.fb_prefix_lens,
-        fb_extend_seq_lens=plan_input.fb_extend_seq_lens,
+        req_pool_indices=plan_input.req_pool_indices,
+        prefix_lens=plan_input.prefix_lens,
+        extend_seq_lens=plan_input.extend_seq_lens,
         req_to_token=req_to_token,
-        extra_verify_slot_indices=plan_input.extra_verify_slot_indices,
-        extra_verify_positions=plan_input.extra_verify_positions,
-        extra_verify_prev_slot_indices=plan_input.extra_verify_prev_slot_indices,
-        extra_verify_num_valid=plan_input.extra_verify_num_valid,
         swa_window_size=window,
         full_to_swa_index_mapping=group.swa_index_lut,
         verify_capacity=int(verify_plan.verify_slot_indices.shape[0]),
@@ -66,24 +65,9 @@ def launch_endpoints_per_forward(
     real_kv_hash_mode: RealKvHashMode,
     input_check_mode: bool,
 ) -> None:
-    positions = _canonicalize_boundary_int64(
-        forward_batch.positions, "forward_batch.positions"
-    )
-    out_cache_loc = forward_batch.out_cache_loc
-    if out_cache_loc is not None:
-        out_cache_loc = _canonicalize_boundary_int64(
-            out_cache_loc, "forward_batch.out_cache_loc"
-        )
-    input_ids = forward_batch.input_ids
-    if input_ids is not None:
-        input_ids = _canonicalize_boundary_int64(input_ids, "forward_batch.input_ids")
-
-    valid_num_tokens = get_valid_num_tokens(forward_batch=forward_batch)
-    positions = positions[:valid_num_tokens]
-    if input_ids is not None:
-        input_ids = input_ids[:valid_num_tokens]
-    if out_cache_loc is not None:
-        out_cache_loc = out_cache_loc[:valid_num_tokens]
+    positions = _canonicalize_boundary_int64(forward_batch.positions, _POSITIONS)
+    out_cache_loc = _canonicalize_boundary_int64(forward_batch.out_cache_loc, _OUT_LOC)
+    input_ids = _canonicalize_boundary_int64(forward_batch.input_ids, _INPUT_IDS)
 
     num_tokens = int(positions.shape[0])
     if expected_inputs.tokens.shape[0] != num_tokens:
@@ -97,19 +81,22 @@ def launch_endpoints_per_forward(
             f"!= num_tokens {num_tokens}; caller must slice before invoking"
         )
 
-    for endpoint in endpoints:
-        if not _endpoint_belongs_to_group(endpoint, group):
-            continue
-        if not tag_filter(endpoint.kernel_kind):
-            continue
-        if _is_sweep_tag(endpoint.kernel_kind):
-            continue
+    active_endpoints = [
+        endpoint
+        for endpoint in endpoints
+        if _endpoint_belongs_to_group(endpoint, group)
+        and tag_filter(endpoint.kernel_kind)
+        and not _is_sweep_tag(endpoint.kernel_kind)
+    ]
+    assert len(active_endpoints) > 0
+
+    for endpoint in active_endpoints:
         endpoint.launch_per_forward(
             verify_plan=verify_plan,
             write_plan=write_plan,
-            fb_input_ids=input_ids,
-            fb_positions=positions,
-            fb_out_cache_loc=out_cache_loc,
+            input_ids=input_ids,
+            positions=positions,
+            out_cache_loc=out_cache_loc,
             input_check_mode=input_check_mode,
             expected_inputs=expected_inputs,
             violation_log=violation_log,
@@ -125,11 +112,15 @@ def launch_endpoints_sweep(
     violation_log: ViolationLog,
     real_kv_hash_mode: RealKvHashMode,
 ) -> None:
-    for endpoint in endpoints:
-        if not _endpoint_belongs_to_group(endpoint, group):
-            continue
-        if not _is_sweep_tag(endpoint.kernel_kind):
-            continue
+    active_endpoints = [
+        endpoint
+        for endpoint in endpoints
+        if _endpoint_belongs_to_group(endpoint, group)
+        and _is_sweep_tag(endpoint.kernel_kind)
+    ]
+    assert len(active_endpoints) > 0
+
+    for endpoint in active_endpoints:
         endpoint.launch_sweep(
             verify_plan=verify_plan,
             violation_log=violation_log,
@@ -153,14 +144,11 @@ def _endpoint_belongs_to_group(
     return suffix == group.kind.name
 
 
-def get_valid_num_tokens(*, forward_batch: "ForwardBatch") -> int:
-    num_token_non_padded_cpu = forward_batch.num_token_non_padded_cpu
-    if num_token_non_padded_cpu is not None:
-        return int(num_token_non_padded_cpu)
-    return int(forward_batch.positions.shape[0])
-
-
-def _canonicalize_boundary_int64(tensor: torch.Tensor, name: str) -> torch.Tensor:
+def _canonicalize_boundary_int64(
+    tensor: torch.Tensor | None, name: str
+) -> torch.Tensor | None:
+    if tensor is None:
+        return None
     if tensor.dtype not in _BOUNDARY_INT_DTYPES:
         raise TypeError(
             f"kv-canary: {name} must have dtype torch.int32 or torch.int64, got {tensor.dtype}"

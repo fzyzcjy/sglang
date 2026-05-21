@@ -8,7 +8,7 @@ import torch
 from sglang.jit_kernel.kv_canary import consts
 from sglang.jit_kernel.kv_canary.plan import canary_plan_step
 from sglang.jit_kernel.kv_canary.plan_ref import (
-    canary_plan_step_torch_reference,
+    launch_canary_plan_kernels_torch_reference,
 )
 from sglang.jit_kernel.kv_canary.verify import (
     CanaryLaunchTag,
@@ -17,11 +17,11 @@ from sglang.jit_kernel.kv_canary.verify import (
     canary_verify_step,
 )
 from sglang.jit_kernel.kv_canary.verify_ref import (
-    canary_verify_step_torch_reference,
+    launch_canary_verify_kernel_torch_reference,
 )
 from sglang.jit_kernel.kv_canary.write import WritePlan, canary_write_step
 from sglang.jit_kernel.kv_canary.write_ref import (
-    canary_write_step_torch_reference,
+    launch_canary_write_kernel_torch_reference,
 )
 from sglang.jit_kernel.tests.kv_canary._canary_helpers import (
     FakeViolationLog,
@@ -39,9 +39,9 @@ def _run_both_plan(
     triton_write: WritePlan,
     ref_verify: VerifyPlan,
     ref_write: WritePlan,
-    fb_req_pool_indices: torch.Tensor,
-    fb_prefix_lens: torch.Tensor,
-    fb_extend_seq_lens: torch.Tensor,
+    req_pool_indices: torch.Tensor,
+    prefix_lens: torch.Tensor,
+    extend_seq_lens: torch.Tensor,
     req_to_token: torch.Tensor,
     extras: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
     swa_window_size: int,
@@ -50,34 +50,26 @@ def _run_both_plan(
     active_verify_entries: Optional[int] = None,
     active_write_reqs: Optional[int] = None,
 ) -> None:
-    extra_slots, extra_positions, extra_prev_slots, extra_num_valid = extras
+    _ = extras
     verify_capacity = int(triton_verify.verify_slot_indices.shape[0])
     canary_plan_step(
         verify_plan_out=triton_verify,
         write_plan_out=triton_write,
-        fb_req_pool_indices=fb_req_pool_indices,
-        fb_prefix_lens=fb_prefix_lens,
-        fb_extend_seq_lens=fb_extend_seq_lens,
+        req_pool_indices=req_pool_indices,
+        prefix_lens=prefix_lens,
+        extend_seq_lens=extend_seq_lens,
         req_to_token=req_to_token,
-        extra_verify_slot_indices=extra_slots,
-        extra_verify_positions=extra_positions,
-        extra_verify_prev_slot_indices=extra_prev_slots,
-        extra_verify_num_valid=extra_num_valid,
         swa_window_size=swa_window_size,
         full_to_swa_index_mapping=full_to_swa_index_mapping,
         verify_capacity=verify_capacity,
     )
-    canary_plan_step_torch_reference(
+    launch_canary_plan_kernels_torch_reference(
         verify_plan_out=ref_verify,
         write_plan_out=ref_write,
-        fb_req_pool_indices=fb_req_pool_indices,
-        fb_prefix_lens=fb_prefix_lens,
-        fb_extend_seq_lens=fb_extend_seq_lens,
+        req_pool_indices=req_pool_indices,
+        prefix_lens=prefix_lens,
+        extend_seq_lens=extend_seq_lens,
         req_to_token=req_to_token,
-        extra_verify_slot_indices=extra_slots,
-        extra_verify_positions=extra_positions,
-        extra_verify_prev_slot_indices=extra_prev_slots,
-        extra_verify_num_valid=extra_num_valid,
         swa_window_size=swa_window_size,
         full_to_swa_index_mapping=full_to_swa_index_mapping,
         verify_capacity=int(ref_verify.verify_slot_indices.shape[0]),
@@ -177,7 +169,7 @@ def _run_both_verify(
         real_kv_sources=real_kv_sources_cuda,
         real_kv_hash_mode=real_kv_hash_mode,
     )
-    canary_verify_step_torch_reference(
+    launch_canary_verify_kernel_torch_reference(
         canary_buf=ref_canary_buf,
         plan=plan_ref,
         kernel_kind=kernel_kind,
@@ -200,9 +192,9 @@ def _run_both_write(
     ref_canary_buf: torch.Tensor,
     plan_cuda,
     plan_ref,
-    fb_input_ids: torch.Tensor,
-    fb_positions: torch.Tensor,
-    fb_out_cache_loc: torch.Tensor,
+    input_ids: torch.Tensor,
+    positions: torch.Tensor,
+    out_cache_loc: torch.Tensor,
     enable_write_verify_inputs: bool,
     expected_input_tokens: torch.Tensor,
     expected_input_positions: torch.Tensor,
@@ -217,9 +209,9 @@ def _run_both_write(
     canary_write_step(
         canary_buf=cuda_canary_buf,
         plan=plan_cuda,
-        fb_input_ids=fb_input_ids,
-        fb_positions=fb_positions,
-        fb_out_cache_loc=fb_out_cache_loc,
+        input_ids=input_ids,
+        positions=positions,
+        out_cache_loc=out_cache_loc,
         kernel_kind=kernel_kind,
         enable_write_verify_inputs=enable_write_verify_inputs,
         expected_input_tokens=expected_input_tokens,
@@ -231,12 +223,12 @@ def _run_both_write(
         real_kv_sources=real_kv_sources_cuda,
         real_kv_hash_mode=real_kv_hash_mode,
     )
-    canary_write_step_torch_reference(
+    launch_canary_write_kernel_torch_reference(
         canary_buf=ref_canary_buf,
         plan=plan_ref,
-        fb_input_ids=fb_input_ids,
-        fb_positions=fb_positions,
-        fb_out_cache_loc=fb_out_cache_loc,
+        input_ids=input_ids,
+        positions=positions,
+        out_cache_loc=out_cache_loc,
         kernel_kind=kernel_kind,
         enable_write_verify_inputs=enable_write_verify_inputs,
         expected_input_tokens=expected_input_tokens,
@@ -309,9 +301,9 @@ def _yield_simpler(inputs: Any) -> Iterator[tuple[str, Any]]:
         yield label, candidate
 
     bs_field = (
-        "fb_req_pool_indices"
-        if "fb_req_pool_indices" in fields
-        else ("fb_input_ids" if "fb_input_ids" in fields else None)
+        "req_pool_indices"
+        if "req_pool_indices" in fields
+        else ("input_ids" if "input_ids" in fields else None)
     )
     if bs_field is not None and isinstance(fields[bs_field], torch.Tensor):
         tensor = fields[bs_field]
@@ -319,12 +311,12 @@ def _yield_simpler(inputs: Any) -> Iterator[tuple[str, Any]]:
             new_len = tensor.numel() - 1
             related_tensors_overrides: dict[str, Any] = {}
             for name in (
-                "fb_req_pool_indices",
-                "fb_prefix_lens",
-                "fb_extend_seq_lens",
-                "fb_input_ids",
-                "fb_positions",
-                "fb_out_cache_loc",
+                "req_pool_indices",
+                "prefix_lens",
+                "extend_seq_lens",
+                "input_ids",
+                "positions",
+                "out_cache_loc",
                 "expected_input_tokens",
                 "expected_input_positions",
             ):
@@ -412,9 +404,9 @@ def run_write_diff(
     *,
     buf_pair: tuple[torch.Tensor, torch.Tensor],
     plan_pair: tuple[WritePlan, WritePlan],
-    fb_input_ids: torch.Tensor,
-    fb_positions: torch.Tensor,
-    fb_out_cache_loc: torch.Tensor,
+    input_ids: torch.Tensor,
+    positions: torch.Tensor,
+    out_cache_loc: torch.Tensor,
     expected_input_tokens: torch.Tensor,
     expected_input_positions: torch.Tensor,
     enable_write_verify_inputs: bool = False,
@@ -436,9 +428,9 @@ def run_write_diff(
         ref_canary_buf=buf_pair[1],
         plan_cuda=plan_pair[0],
         plan_ref=plan_pair[1],
-        fb_input_ids=fb_input_ids,
-        fb_positions=fb_positions,
-        fb_out_cache_loc=fb_out_cache_loc,
+        input_ids=input_ids,
+        positions=positions,
+        out_cache_loc=out_cache_loc,
         enable_write_verify_inputs=enable_write_verify_inputs,
         expected_input_tokens=expected_input_tokens,
         expected_input_positions=expected_input_positions,
@@ -456,9 +448,9 @@ def run_write_diff(
 def run_plan_diff(
     *,
     plan_pair: tuple[tuple[VerifyPlan, WritePlan], tuple[VerifyPlan, WritePlan]],
-    fb_req_pool_indices: torch.Tensor,
-    fb_prefix_lens: torch.Tensor,
-    fb_extend_seq_lens: torch.Tensor,
+    req_pool_indices: torch.Tensor,
+    prefix_lens: torch.Tensor,
+    extend_seq_lens: torch.Tensor,
     req_to_token: torch.Tensor,
     extras: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
     swa_window_size: int = 0,
@@ -476,9 +468,9 @@ def run_plan_diff(
         triton_write=triton_write,
         ref_verify=ref_verify,
         ref_write=ref_write,
-        fb_req_pool_indices=fb_req_pool_indices,
-        fb_prefix_lens=fb_prefix_lens,
-        fb_extend_seq_lens=fb_extend_seq_lens,
+        req_pool_indices=req_pool_indices,
+        prefix_lens=prefix_lens,
+        extend_seq_lens=extend_seq_lens,
         req_to_token=req_to_token,
         extras=extras,
         swa_window_size=swa_window_size,

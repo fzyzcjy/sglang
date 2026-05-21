@@ -21,7 +21,7 @@ from sglang.srt.kv_canary.perturb.utils import (
     pick_target_group,
     should_run_perturbation,
 )
-from sglang.srt.kv_canary.plan_input_builder import build_plan_input_radix_sweep
+from sglang.srt.kv_canary.sweep_plan_builder import build_verify_plan_radix_sweep
 
 if TYPE_CHECKING:
     from sglang.srt.mem_cache.base_prefix_cache import BasePrefixCache
@@ -117,15 +117,14 @@ def _pick_sweep_slot_for_group(
         return None
 
     window = swa_window_size if group.kind is PoolKind.SWA else 0
-    plan_input = build_plan_input_radix_sweep(
+    verify_plan = build_verify_plan_radix_sweep(
         radix_cache=radix_cache,
         swa_window_size=window,
         full_to_swa_index_mapping=group.swa_index_lut,
-        unlocked_only=True,
     )
     slots = [
         int(raw_slot)
-        for raw_slot in plan_input.extra_verify_slot_indices.detach().to("cpu").tolist()
+        for raw_slot in verify_plan.verify_slot_indices.detach().to("cpu").tolist()
         if int(raw_slot) >= 0
     ]
     if not slots:

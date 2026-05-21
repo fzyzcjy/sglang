@@ -30,7 +30,6 @@ from sglang.jit_kernel.tests.kv_canary._differential import (
 from sglang.jit_kernel.tests.kv_canary._fixtures import (
     _dummy_pseudo_tensors,
     _empty_extras,
-    make_extras_explicit,
 )
 from sglang.test.ci.ci_register import register_cuda_ci
 
@@ -69,10 +68,10 @@ def _build_write_fixtures(
         req_capacity=4,
         device=device,
     )
-    fb_input_ids = torch.tensor([10, 20, 30, 40, 50], dtype=torch.int64, device=device)
-    fb_positions = torch.tensor([0, 1, 2, 3, 4], dtype=torch.int64, device=device)
-    fb_out_cache_loc = torch.tensor([0, 1, 2, 3, 4], dtype=torch.int64, device=device)
-    return plan_cuda, plan_ref, fb_input_ids, fb_positions, fb_out_cache_loc
+    input_ids = torch.tensor([10, 20, 30, 40, 50], dtype=torch.int64, device=device)
+    positions = torch.tensor([0, 1, 2, 3, 4], dtype=torch.int64, device=device)
+    out_cache_loc = torch.tensor([0, 1, 2, 3, 4], dtype=torch.int64, device=device)
+    return plan_cuda, plan_ref, input_ids, positions, out_cache_loc
 
 
 def _build_plan_fixtures(
@@ -89,9 +88,9 @@ def _build_plan_fixtures(
     bs = 3
     max_reqs = 4
     max_seq_len = 16
-    fb_req_pool_indices = torch.tensor([1, 2, 3], dtype=torch.int64, device=device)
-    fb_prefix_lens = torch.tensor([0, 4, 8], dtype=torch.int64, device=device)
-    fb_extend_seq_lens = torch.tensor([5, 1, 1], dtype=torch.int64, device=device)
+    req_pool_indices = torch.tensor([1, 2, 3], dtype=torch.int64, device=device)
+    prefix_lens = torch.tensor([0, 4, 8], dtype=torch.int64, device=device)
+    extend_seq_lens = torch.tensor([5, 1, 1], dtype=torch.int64, device=device)
     rp_axis = torch.arange(max_reqs, device=device, dtype=torch.int32).unsqueeze(1)
     pos_axis = torch.arange(max_seq_len, device=device, dtype=torch.int32).unsqueeze(0)
     req_to_token_int32 = (rp_axis * max_seq_len + pos_axis).contiguous()
@@ -99,7 +98,7 @@ def _build_plan_fixtures(
         req_to_token = req_to_token_int32.to(torch.int64)
     else:
         req_to_token = req_to_token_int32
-    return fb_req_pool_indices, fb_prefix_lens, fb_extend_seq_lens, req_to_token
+    return req_pool_indices, prefix_lens, extend_seq_lens, req_to_token
 
 
 def test_verify_byte_equal_across_repeated_launches_10x() -> None:
@@ -150,8 +149,8 @@ def test_verify_byte_equal_across_repeated_launches_10x() -> None:
 
 def test_write_byte_equal_across_repeated_launches_10x() -> None:
     num_launches = 10
-    plan_cuda, plan_ref, fb_input_ids, fb_positions, fb_out_cache_loc = (
-        _build_write_fixtures(device=_DEVICE)
+    plan_cuda, plan_ref, input_ids, positions, out_cache_loc = _build_write_fixtures(
+        device=_DEVICE
     )
 
     snapshot_bufs: list[torch.Tensor] = []
@@ -163,16 +162,16 @@ def test_write_byte_equal_across_repeated_launches_10x() -> None:
             num_slots=16, slot_stride_bytes=32, device=_DEVICE
         )
         cuda_log, ref_log = make_log_pair(capacity=64, device=_DEVICE)
-        pseudo_tok, pseudo_pos = _dummy_pseudo_tensors(fb_input_ids.shape[0])
+        pseudo_tok, pseudo_pos = _dummy_pseudo_tensors(input_ids.shape[0])
 
         _run_both_write(
             cuda_canary_buf=cuda_buf,
             ref_canary_buf=ref_buf,
             plan_cuda=plan_cuda,
             plan_ref=plan_ref,
-            fb_input_ids=fb_input_ids,
-            fb_positions=fb_positions,
-            fb_out_cache_loc=fb_out_cache_loc,
+            input_ids=input_ids,
+            positions=positions,
+            out_cache_loc=out_cache_loc,
             enable_write_verify_inputs=False,
             expected_input_tokens=pseudo_tok,
             expected_input_positions=pseudo_pos,
@@ -205,7 +204,9 @@ def test_write_byte_equal_across_repeated_launches_10x() -> None:
 
 def test_plan_byte_equal_across_repeated_launches_10x() -> None:
     num_launches = 10
-    fb_rpi, fb_prefix, fb_extend, req_to_token = _build_plan_fixtures(device=_DEVICE)
+    req_pool_indices, prefix_lens, extend_seq_lens, req_to_token = _build_plan_fixtures(
+        device=_DEVICE
+    )
 
     snapshot_slots: list[torch.Tensor] = []
     snapshot_positions: list[torch.Tensor] = []
@@ -223,9 +224,9 @@ def test_plan_byte_equal_across_repeated_launches_10x() -> None:
             triton_write=triton_w,
             ref_verify=ref_v,
             ref_write=ref_w,
-            fb_req_pool_indices=fb_rpi,
-            fb_prefix_lens=fb_prefix,
-            fb_extend_seq_lens=fb_extend,
+            req_pool_indices=req_pool_indices,
+            prefix_lens=prefix_lens,
+            extend_seq_lens=extend_seq_lens,
             req_to_token=req_to_token,
             extras=_empty_extras(),
             swa_window_size=0,
@@ -298,18 +299,8 @@ def test_verify_multi_launch_100x_counter_linear() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "extras_present,per_req_present",
-    [
-        (False, False),
-        (False, True),
-        (True, False),
-        (True, True),
-    ],
-)
-def test_plan_extras_present_and_per_req_present_cartesian_4_combos(
-    extras_present: bool, per_req_present: bool
-) -> None:
+@pytest.mark.parametrize("per_req_present", [False, True])
+def test_plan_per_req_present_or_absent(per_req_present: bool) -> None:
     max_reqs = 4
     max_seq_len = 16
     rp_axis = torch.arange(max_reqs, device=_DEVICE, dtype=torch.int32).unsqueeze(1)
@@ -317,23 +308,13 @@ def test_plan_extras_present_and_per_req_present_cartesian_4_combos(
     req_to_token = (rp_axis * max_seq_len + pos_axis).contiguous()
 
     if per_req_present:
-        fb_rpi = torch.tensor([1, 2], dtype=torch.int64, device=_DEVICE)
-        fb_prefix = torch.tensor([3, 5], dtype=torch.int64, device=_DEVICE)
-        fb_extend = torch.tensor([1, 1], dtype=torch.int64, device=_DEVICE)
+        req_pool_indices = torch.tensor([1, 2], dtype=torch.int64, device=_DEVICE)
+        prefix_lens = torch.tensor([3, 5], dtype=torch.int64, device=_DEVICE)
+        extend_seq_lens = torch.tensor([1, 1], dtype=torch.int64, device=_DEVICE)
     else:
-        fb_rpi = torch.tensor([0], dtype=torch.int64, device=_DEVICE)
-        fb_prefix = torch.tensor([0], dtype=torch.int64, device=_DEVICE)
-        fb_extend = torch.tensor([0], dtype=torch.int64, device=_DEVICE)
-
-    if extras_present:
-        extras = make_extras_explicit(
-            slot_indices=[10, 11],
-            positions=[0, 1],
-            prev_slot_indices=[-1, 10],
-            capacity=max(2, 1),
-        )
-    else:
-        extras = _empty_extras()
+        req_pool_indices = torch.tensor([0], dtype=torch.int64, device=_DEVICE)
+        prefix_lens = torch.tensor([0], dtype=torch.int64, device=_DEVICE)
+        extend_seq_lens = torch.tensor([0], dtype=torch.int64, device=_DEVICE)
 
     triton_v = VerifyPlan.allocate(verify_capacity=64, device=_DEVICE)
     triton_w = WritePlan.allocate(write_req_capacity=8, device=_DEVICE)
@@ -345,11 +326,11 @@ def test_plan_extras_present_and_per_req_present_cartesian_4_combos(
         triton_write=triton_w,
         ref_verify=ref_v,
         ref_write=ref_w,
-        fb_req_pool_indices=fb_rpi,
-        fb_prefix_lens=fb_prefix,
-        fb_extend_seq_lens=fb_extend,
+        req_pool_indices=req_pool_indices,
+        prefix_lens=prefix_lens,
+        extend_seq_lens=extend_seq_lens,
         req_to_token=req_to_token,
-        extras=extras,
+        extras=_empty_extras(),
         swa_window_size=0,
         full_to_swa_index_mapping=None,
     )
@@ -361,16 +342,10 @@ def test_plan_extras_present_and_per_req_present_cartesian_4_combos(
         ref_write=ref_w,
     )
 
-    if not per_req_present and not extras_present:
+    if not per_req_present:
         assert int(triton_v.verify_num_valid[0].item()) == 0
-        bs = int(fb_rpi.shape[0])
+        bs = int(req_pool_indices.shape[0])
         assert int(triton_w.write_offsets[bs].item()) == 0
 
-    if not per_req_present and extras_present:
-        assert int(triton_v.verify_num_valid[0].item()) == 2
-
-    if per_req_present and not extras_present:
+    if per_req_present:
         assert int(triton_v.verify_num_valid[0].item()) == 8
-
-    if per_req_present and extras_present:
-        assert int(triton_v.verify_num_valid[0].item()) == 10

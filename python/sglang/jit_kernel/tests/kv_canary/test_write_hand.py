@@ -2,17 +2,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable
+from unittest.mock import patch
 
 import pytest
 import torch
 
 from sglang.jit_kernel.kv_canary import consts
+from sglang.jit_kernel.kv_canary import write as write_module
 from sglang.jit_kernel.kv_canary.verify import (
+    CANARY_SLOT_BYTES,
     CanaryLaunchTag,
     RealKvSource,
+    VerifyOrWriteContext,
     canary_verify_step,
 )
-from sglang.jit_kernel.kv_canary.write import canary_write_step
+from sglang.jit_kernel.kv_canary.write import (
+    canary_write_step,
+    launch_canary_write_kernel,
+)
 from sglang.jit_kernel.tests.kv_canary._canary_helpers import (
     FakeViolationLog,
     assert_canary_state_equal,
@@ -66,6 +73,14 @@ class _WriteSingleSlotInput:
     real_kv_hash_mode: consts.RealKvHashMode = consts.RealKvHashMode.OFF
 
 
+class _RecordingWriteModule:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, ...]] = []
+
+    def canary_write_step_cuda(self, *args: object) -> None:
+        self.calls.append(args)
+
+
 def _run_write_single_slot_byte_equal(case: _WriteSingleSlotInput) -> None:
     buf_pair = make_canary_buf_pair(num_slots=16, slot_stride_bytes=32, device=_DEVICE)
     plan_pair = make_write_plan_pair(
@@ -80,9 +95,9 @@ def _run_write_single_slot_byte_equal(case: _WriteSingleSlotInput) -> None:
     run_write_diff(
         buf_pair=buf_pair,
         plan_pair=plan_pair,
-        fb_input_ids=_int32_tensor([case.token]),
-        fb_positions=_int32_tensor([case.position]),
-        fb_out_cache_loc=_int32_tensor([0]),
+        input_ids=_int32_tensor([case.token]),
+        positions=_int32_tensor([case.position]),
+        out_cache_loc=_int32_tensor([0]),
         enable_write_verify_inputs=case.enable_write_verify_inputs,
         expected_input_tokens=pseudo_tokens,
         expected_input_positions=pseudo_positions,
@@ -108,9 +123,9 @@ class TestSeedSlot:
         run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([42]),
-            fb_positions=_int32_tensor([0]),
-            fb_out_cache_loc=_int32_tensor([3]),
+            input_ids=_int32_tensor([42]),
+            positions=_int32_tensor([0]),
+            out_cache_loc=_int32_tensor([3]),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
         )
@@ -150,9 +165,9 @@ class TestSeedSlot:
         run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([999]),
-            fb_positions=_int32_tensor([5]),
-            fb_out_cache_loc=_int32_tensor([2]),
+            input_ids=_int32_tensor([999]),
+            positions=_int32_tensor([5]),
+            out_cache_loc=_int32_tensor([2]),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
         )
@@ -191,9 +206,9 @@ class TestSeedSlot:
         run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([222]),
-            fb_positions=_int32_tensor([1]),
-            fb_out_cache_loc=_int32_tensor([2]),
+            input_ids=_int32_tensor([222]),
+            positions=_int32_tensor([1]),
+            out_cache_loc=_int32_tensor([2]),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
             assert_equal=False,
@@ -258,9 +273,9 @@ class TestSeedSlot:
         cuda_log, _ = run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor(tokens),
-            fb_positions=_int32_tensor(positions),
-            fb_out_cache_loc=_int32_tensor(out_cache_loc),
+            input_ids=_int32_tensor(tokens),
+            positions=_int32_tensor(positions),
+            out_cache_loc=_int32_tensor(out_cache_loc),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
         )
@@ -314,9 +329,9 @@ class TestSeedSlot:
         run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([new_token]),
-            fb_positions=_int32_tensor([new_position]),
-            fb_out_cache_loc=_int32_tensor([new_slot]),
+            input_ids=_int32_tensor([new_token]),
+            positions=_int32_tensor([new_position]),
+            out_cache_loc=_int32_tensor([new_slot]),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
         )
@@ -345,9 +360,9 @@ class TestChain:
         run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([10, 20, 30, 40, 50]),
-            fb_positions=_int32_tensor([0, 1, 2, 3, 4]),
-            fb_out_cache_loc=_int32_tensor([0, 1, 2, 3, 4]),
+            input_ids=_int32_tensor([10, 20, 30, 40, 50]),
+            positions=_int32_tensor([0, 1, 2, 3, 4]),
+            out_cache_loc=_int32_tensor([0, 1, 2, 3, 4]),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
         )
@@ -382,9 +397,9 @@ class TestChain:
         run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor(tokens),
-            fb_positions=_int32_tensor(positions),
-            fb_out_cache_loc=_int32_tensor(out_cache_loc),
+            input_ids=_int32_tensor(tokens),
+            positions=_int32_tensor(positions),
+            out_cache_loc=_int32_tensor(out_cache_loc),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
         )
@@ -430,9 +445,9 @@ class TestChain:
         run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor(tokens),
-            fb_positions=_int32_tensor(positions),
-            fb_out_cache_loc=_int32_tensor(slot_indices),
+            input_ids=_int32_tensor(tokens),
+            positions=_int32_tensor(positions),
+            out_cache_loc=_int32_tensor(slot_indices),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
             real_kv_sources_pair=(sources_cuda, sources_ref),
@@ -466,9 +481,9 @@ class TestMockMode:
         cuda_log, _ = run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([1, 2, 3]),
-            fb_positions=_int32_tensor([0, 1, 2]),
-            fb_out_cache_loc=_int32_tensor([0, 1, 2]),
+            input_ids=_int32_tensor([1, 2, 3]),
+            positions=_int32_tensor([0, 1, 2]),
+            out_cache_loc=_int32_tensor([0, 1, 2]),
             expected_input_tokens=_int32_tensor([999, 999, 999]),
             expected_input_positions=_int32_tensor([999, 999, 999]),
         )
@@ -486,17 +501,17 @@ class TestMockMode:
             num_valid_reqs=1,
             device=_DEVICE,
         )
-        fb_input_ids = _int32_tensor([7, 8, 9])
-        fb_positions = _int32_tensor([0, 1, 2])
+        input_ids = _int32_tensor([7, 8, 9])
+        positions = _int32_tensor([0, 1, 2])
         cuda_log, _ = run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=fb_input_ids,
-            fb_positions=fb_positions,
-            fb_out_cache_loc=_int32_tensor([0, 1, 2]),
+            input_ids=input_ids,
+            positions=positions,
+            out_cache_loc=_int32_tensor([0, 1, 2]),
             enable_write_verify_inputs=True,
-            expected_input_tokens=fb_input_ids.clone(),
-            expected_input_positions=fb_positions.clone(),
+            expected_input_tokens=input_ids.clone(),
+            expected_input_positions=positions.clone(),
         )
 
         assert int(cuda_log.write_index[0].item()) == 0
@@ -515,9 +530,9 @@ class TestMockMode:
         cuda_log, _ = run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([42]),
-            fb_positions=_int32_tensor([0]),
-            fb_out_cache_loc=_int32_tensor([0]),
+            input_ids=_int32_tensor([42]),
+            positions=_int32_tensor([0]),
+            out_cache_loc=_int32_tensor([0]),
             enable_write_verify_inputs=True,
             expected_input_tokens=_int32_tensor([99]),
             expected_input_positions=_int32_tensor([0]),
@@ -545,9 +560,9 @@ class TestMockMode:
         cuda_log, _ = run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([42]),
-            fb_positions=_int32_tensor([7]),
-            fb_out_cache_loc=_int32_tensor([0]),
+            input_ids=_int32_tensor([42]),
+            positions=_int32_tensor([7]),
+            out_cache_loc=_int32_tensor([0]),
             enable_write_verify_inputs=True,
             expected_input_tokens=_int32_tensor([42]),
             expected_input_positions=_int32_tensor([0]),
@@ -576,9 +591,9 @@ class TestMockMode:
         cuda_log, _ = run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([10, 20, 30]),
-            fb_positions=_int32_tensor([0, 1, 2]),
-            fb_out_cache_loc=_int32_tensor([1, 2, 3]),
+            input_ids=_int32_tensor([10, 20, 30]),
+            positions=_int32_tensor([0, 1, 2]),
+            out_cache_loc=_int32_tensor([1, 2, 3]),
             enable_write_verify_inputs=True,
             expected_input_tokens=_int32_tensor([999, 999, 999]),
             expected_input_positions=_int32_tensor([999, 999, 999]),
@@ -637,12 +652,12 @@ class TestMockMode:
             num_valid_reqs=1,
             device=_DEVICE,
         )
-        fb_input_ids = _int32_tensor(tokens)
-        fb_positions = _int32_tensor(positions)
-        fb_out_cache_loc = _int32_tensor(out_cache_locs)
+        input_ids = _int32_tensor(tokens)
+        positions = _int32_tensor(positions)
+        out_cache_loc = _int32_tensor(out_cache_locs)
 
-        pseudo_tokens = fb_input_ids.clone()
-        pseudo_positions = fb_positions.clone()
+        pseudo_tokens = input_ids.clone()
+        pseudo_positions = positions.clone()
 
         if bit_to_trigger == "MOCK_TOKEN":
             pseudo_tokens[corruption_index] = tokens[corruption_index] + 999
@@ -652,9 +667,9 @@ class TestMockMode:
         cuda_log, ref_log = run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=fb_input_ids,
-            fb_positions=fb_positions,
-            fb_out_cache_loc=fb_out_cache_loc,
+            input_ids=input_ids,
+            positions=positions,
+            out_cache_loc=out_cache_loc,
             enable_write_verify_inputs=True,
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
@@ -697,9 +712,9 @@ class TestSlotHandling:
         cuda_log, _ = run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([42, 99]),
-            fb_positions=_int32_tensor([0, 1]),
-            fb_out_cache_loc=_int32_tensor([4, -1]),
+            input_ids=_int32_tensor([42, 99]),
+            positions=_int32_tensor([0, 1]),
+            out_cache_loc=_int32_tensor([4, -1]),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
         )
@@ -709,7 +724,7 @@ class TestSlotHandling:
         assert int(cuda_log.slot_run_counter.item()) == 1
 
     def test_pre_translated_slot_writes_normally(self) -> None:
-        """``fb_out_cache_loc[i] >= 0`` → the kernel writes to exactly that slot, with no LUT applied. This
+        """``out_cache_loc[i] >= 0`` → the kernel writes to exactly that slot, with no LUT applied. This
         confirms the kernel is SWA-agnostic: SWA endpoints feed the same shape of input here after their
         host-side gather, so the contract is symmetric across FULL / SWA groups.
         """
@@ -728,9 +743,9 @@ class TestSlotHandling:
         run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([55]),
-            fb_positions=_int32_tensor([0]),
-            fb_out_cache_loc=_int32_tensor([4]),
+            input_ids=_int32_tensor([55]),
+            positions=_int32_tensor([0]),
+            out_cache_loc=_int32_tensor([4]),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
         )
@@ -755,9 +770,9 @@ class TestSlotHandling:
         run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([1]),
-            fb_positions=_int32_tensor([0]),
-            fb_out_cache_loc=_int32_tensor([0]),
+            input_ids=_int32_tensor([1]),
+            positions=_int32_tensor([0]),
+            out_cache_loc=_int32_tensor([0]),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
         )
@@ -772,7 +787,7 @@ class TestSlotHandling:
             assert stored_token_other == 0
 
     def test_write_skip_when_out_cache_loc_is_minus_one(self) -> None:
-        """fb_out_cache_loc[i] = -1 → that entry's slot is untouched by write kernel."""
+        """out_cache_loc[i] = -1 → that entry's slot is untouched by write kernel."""
         buf_pair = make_canary_buf_pair(
             num_slots=16, slot_stride_bytes=32, device=_DEVICE
         )
@@ -790,9 +805,9 @@ class TestSlotHandling:
         run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([100, 200, 300]),
-            fb_positions=_int32_tensor([0, 1, 2]),
-            fb_out_cache_loc=_int32_tensor([5, -1, 7]),
+            input_ids=_int32_tensor([100, 200, 300]),
+            positions=_int32_tensor([0, 1, 2]),
+            out_cache_loc=_int32_tensor([5, -1, 7]),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
         )
@@ -824,9 +839,9 @@ class TestSlotHandling:
         run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_big,
-            fb_input_ids=_int32_tensor(list(range(100, 108))),
-            fb_positions=_int32_tensor([0] * 8),
-            fb_out_cache_loc=_int32_tensor(big_slots),
+            input_ids=_int32_tensor(list(range(100, 108))),
+            positions=_int32_tensor([0] * 8),
+            out_cache_loc=_int32_tensor(big_slots),
             expected_input_tokens=pseudo_tokens_big,
             expected_input_positions=pseudo_positions_big,
             assert_equal=False,
@@ -847,9 +862,9 @@ class TestSlotHandling:
         run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_small,
-            fb_input_ids=_int32_tensor([7, 8, 9]),
-            fb_positions=_int32_tensor([0, 0, 0]),
-            fb_out_cache_loc=_int32_tensor(small_slots),
+            input_ids=_int32_tensor([7, 8, 9]),
+            positions=_int32_tensor([0, 0, 0]),
+            out_cache_loc=_int32_tensor(small_slots),
             expected_input_tokens=pseudo_tokens_small,
             expected_input_positions=pseudo_positions_small,
             assert_equal=False,
@@ -880,9 +895,9 @@ class TestRealKvHash:
         run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([1, 2]),
-            fb_positions=_int32_tensor([0, 1]),
-            fb_out_cache_loc=_int32_tensor([0, 1]),
+            input_ids=_int32_tensor([1, 2]),
+            positions=_int32_tensor([0, 1]),
+            out_cache_loc=_int32_tensor([0, 1]),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
             real_kv_sources_pair=(sources, sources),
@@ -918,9 +933,9 @@ class TestRealKvHash:
         run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([10, 20, 30]),
-            fb_positions=_int32_tensor([0, 1, 2]),
-            fb_out_cache_loc=_int32_tensor([0, 1, 2]),
+            input_ids=_int32_tensor([10, 20, 30]),
+            positions=_int32_tensor([0, 1, 2]),
+            out_cache_loc=_int32_tensor([0, 1, 2]),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
             real_kv_sources_pair=(sources_cuda, sources_ref),
@@ -946,9 +961,9 @@ class TestRealKvHash:
         run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([1, 2]),
-            fb_positions=_int32_tensor([0, 1]),
-            fb_out_cache_loc=_int32_tensor([0, 1]),
+            input_ids=_int32_tensor([1, 2]),
+            positions=_int32_tensor([0, 1]),
+            out_cache_loc=_int32_tensor([0, 1]),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
             real_kv_sources_pair=(sources_cuda, sources_ref),
@@ -964,9 +979,9 @@ class TestRealKvHash:
             num_valid_reqs=1,
             device=_DEVICE,
         )
-        fb_input_ids = _int32_tensor([1])
-        fb_positions = _int32_tensor([0])
-        fb_out_cache_loc = _int32_tensor([0])
+        input_ids = _int32_tensor([1])
+        positions = _int32_tensor([0])
+        out_cache_loc = _int32_tensor([0])
         pseudo_tokens, pseudo_positions = _dummy_pseudo_tensors(1)
         log = FakeViolationLog.allocate(device=_DEVICE)
         sources = make_real_kv_sources(count=4, device=_DEVICE)
@@ -977,9 +992,9 @@ class TestRealKvHash:
             canary_write_step(
                 canary_buf=cuda_buf,
                 plan=plan,
-                fb_input_ids=fb_input_ids,
-                fb_positions=fb_positions,
-                fb_out_cache_loc=fb_out_cache_loc,
+                input_ids=input_ids,
+                positions=positions,
+                out_cache_loc=out_cache_loc,
                 kernel_kind=CanaryLaunchTag.HEAD_K_FULL,
                 enable_write_verify_inputs=False,
                 expected_input_tokens=pseudo_tokens,
@@ -1069,9 +1084,9 @@ class TestRealKvHash:
         run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([7]),
-            fb_positions=_int32_tensor([0]),
-            fb_out_cache_loc=_int32_tensor([0]),
+            input_ids=_int32_tensor([7]),
+            positions=_int32_tensor([0]),
+            out_cache_loc=_int32_tensor([0]),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
             real_kv_sources_pair=((source_cuda,), (source_ref,)),
@@ -1118,9 +1133,9 @@ class TestRealKvHash:
         run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([42, 84]),
-            fb_positions=_int32_tensor([0, 1]),
-            fb_out_cache_loc=_int32_tensor([3, 7]),
+            input_ids=_int32_tensor([42, 84]),
+            positions=_int32_tensor([0, 1]),
+            out_cache_loc=_int32_tensor([3, 7]),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
             real_kv_sources_pair=(sources_cuda, sources_ref),
@@ -1153,9 +1168,9 @@ class TestRealKvHash:
             canary_write_step(
                 canary_buf=buf,
                 plan=plan,
-                fb_input_ids=_int32_tensor([1]),
-                fb_positions=_int32_tensor([0]),
-                fb_out_cache_loc=_int32_tensor([2]),
+                input_ids=_int32_tensor([1]),
+                positions=_int32_tensor([0]),
+                out_cache_loc=_int32_tensor([2]),
                 kernel_kind=CanaryLaunchTag.HEAD_K_FULL,
                 enable_write_verify_inputs=False,
                 expected_input_tokens=pseudo_tokens,
@@ -1191,9 +1206,9 @@ class TestRunCounter:
             num_valid_reqs=0,
             device=_DEVICE,
         )
-        fb_input_ids = _int32_tensor([0])
-        fb_positions = _int32_tensor([0])
-        fb_out_cache_loc = _int32_tensor([0])
+        input_ids = _int32_tensor([0])
+        positions = _int32_tensor([0])
+        out_cache_loc = _int32_tensor([0])
         pseudo_tokens, pseudo_positions = _dummy_pseudo_tensors(1)
         cuda_log, ref_log = make_log_pair(device=_DEVICE)
 
@@ -1203,9 +1218,9 @@ class TestRunCounter:
                 ref_canary_buf=buf_pair[1],
                 plan_cuda=plan_pair[0],
                 plan_ref=plan_pair[1],
-                fb_input_ids=fb_input_ids,
-                fb_positions=fb_positions,
-                fb_out_cache_loc=fb_out_cache_loc,
+                input_ids=input_ids,
+                positions=positions,
+                out_cache_loc=out_cache_loc,
                 enable_write_verify_inputs=False,
                 expected_input_tokens=pseudo_tokens,
                 expected_input_positions=pseudo_positions,
@@ -1235,9 +1250,9 @@ class TestRunCounter:
         cuda_log, _ = run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([1, 2, 3, 4, 5]),
-            fb_positions=_int32_tensor([0, 1, 0, 1, 2]),
-            fb_out_cache_loc=_int32_tensor([0, 1, 2, 3, 4]),
+            input_ids=_int32_tensor([1, 2, 3, 4, 5]),
+            positions=_int32_tensor([0, 1, 0, 1, 2]),
+            out_cache_loc=_int32_tensor([0, 1, 2, 3, 4]),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
         )
@@ -1262,9 +1277,9 @@ class TestMisc:
         cuda_log, _ = run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([0]),
-            fb_positions=_int32_tensor([0]),
-            fb_out_cache_loc=_int32_tensor([0]),
+            input_ids=_int32_tensor([0]),
+            positions=_int32_tensor([0]),
+            out_cache_loc=_int32_tensor([0]),
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
         )
@@ -1297,9 +1312,9 @@ class TestMisc:
         cuda_log, ref_log = run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([42]),
-            fb_positions=_int32_tensor([0]),
-            fb_out_cache_loc=_int32_tensor([0]),
+            input_ids=_int32_tensor([42]),
+            positions=_int32_tensor([0]),
+            out_cache_loc=_int32_tensor([0]),
             expected_input_tokens=garbage_expected_tokens,
             expected_input_positions=garbage_expected_positions,
             assert_equal=False,
@@ -1307,6 +1322,51 @@ class TestMisc:
 
         assert int(cuda_log.write_index[0].item()) == 0
         assert int(ref_log.write_index[0].item()) == 0
+
+    def test_disabled_assert_inputs_passes_none_to_cuda(self) -> None:
+        """Disabled input assertions pass None instead of dummy tensors."""
+        canary_buf = torch.zeros(
+            4, CANARY_SLOT_BYTES, dtype=torch.uint8, device=_DEVICE
+        )
+        plan = make_write_plan(
+            write_offsets=[0, 0],
+            seed_slot_indices=[-1],
+            num_valid_reqs=0,
+            device=_DEVICE,
+        )
+        input_ids = torch.zeros(1, dtype=torch.int64, device=_DEVICE)
+        positions = torch.zeros(1, dtype=torch.int64, device=_DEVICE)
+        out_cache_loc = torch.zeros(1, dtype=torch.int64, device=_DEVICE)
+        log = FakeViolationLog.allocate(capacity=2, device=_DEVICE)
+        context = VerifyOrWriteContext(
+            canary_buf=canary_buf,
+            kernel_kind=CanaryLaunchTag.HEAD_K_FULL,
+            violation_ring=log.ring,
+            violation_write_index=log.write_index,
+            slot_run_counter=log.slot_run_counter,
+            kernel_run_counter=log.kernel_run_counter,
+            real_kv_sources=(),
+            real_kv_hash_mode=consts.RealKvHashMode.OFF,
+        )
+        module = _RecordingWriteModule()
+
+        with patch.object(write_module, "_jit_canary_write_module", lambda: module):
+            launch_canary_write_kernel(
+                context=context,
+                plan=plan,
+                input_ids=input_ids,
+                positions=positions,
+                out_cache_loc=out_cache_loc,
+                enable_assert_inputs=False,
+                expected_input_tokens=None,
+                expected_input_positions=None,
+            )
+
+        assert len(module.calls) == 1
+        call = module.calls[0]
+        assert call[8] == 0
+        assert call[9] is None
+        assert call[10] is None
 
 
 class TestBoundarySweep:
@@ -1339,18 +1399,18 @@ class TestPseudoMode:
             num_valid_reqs=1,
             device=_DEVICE,
         )
-        fb_input_ids = _int32_tensor([10, 20, 30, 40, 50])
-        fb_positions = _int32_tensor([0, 1, 2, 3, 4])
-        fb_out_cache_loc = _int32_tensor([1, 2, 3, 4, 5])
+        input_ids = _int32_tensor([10, 20, 30, 40, 50])
+        positions = _int32_tensor([0, 1, 2, 3, 4])
+        out_cache_loc = _int32_tensor([1, 2, 3, 4, 5])
         pseudo_tokens = _int32_tensor([10, 20, 30, 999, 50])
-        pseudo_positions = fb_positions.clone()
+        pseudo_positions = positions.clone()
 
         cuda_log, _ = run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=fb_input_ids,
-            fb_positions=fb_positions,
-            fb_out_cache_loc=fb_out_cache_loc,
+            input_ids=input_ids,
+            positions=positions,
+            out_cache_loc=out_cache_loc,
             enable_write_verify_inputs=True,
             expected_input_tokens=pseudo_tokens,
             expected_input_positions=pseudo_positions,
@@ -1375,9 +1435,9 @@ class TestPseudoMode:
         cuda_log, _ = run_write_diff(
             buf_pair=buf_pair,
             plan_pair=plan_pair,
-            fb_input_ids=_int32_tensor([10, 20, 30]),
-            fb_positions=_int32_tensor([0, 1, 2]),
-            fb_out_cache_loc=_int32_tensor([1, 2, 3]),
+            input_ids=_int32_tensor([10, 20, 30]),
+            positions=_int32_tensor([0, 1, 2]),
+            out_cache_loc=_int32_tensor([1, 2, 3]),
             expected_input_tokens=_int32_tensor([99, 99, 99]),
             expected_input_positions=_int32_tensor([99, 99, 99]),
         )

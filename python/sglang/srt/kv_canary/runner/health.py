@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Optional
 
 import torch
@@ -8,13 +9,12 @@ import torch
 from sglang.jit_kernel.kv_canary.verify import CanaryLaunchTag
 from sglang.srt.kv_canary.config import CanaryConfig
 from sglang.srt.kv_canary.runner.future_tensor import FutureTensor
-from sglang.srt.kv_canary.runner.pump import PumpAndAllreduce
 from sglang.srt.kv_canary.runner.sweep import SweepOrchestrator
 from sglang.srt.kv_canary.state import CanaryDeviceState
 
 logger = logging.getLogger("sglang.srt.kv_canary.runner.canary_runner")
 
-_HEALTH_CHECK_EVERY_N_STEPS: int = 1000
+_HEALTH_CHECK_EVERY_N_STEPS: int = 100
 _HEALTH_CHECK_WARMUP_STEPS: int = 100
 _SWEEP_TAGS: frozenset[CanaryLaunchTag] = frozenset(
     (
@@ -33,18 +33,18 @@ class KernelRunCounterHealthChecker:
         config: CanaryConfig,
         device_state: CanaryDeviceState,
         active_tags: tuple[CanaryLaunchTag, ...],
-        pump_and_allreduce: PumpAndAllreduce,
+        step_counter_getter: Callable[[], int],
         d2h_stream: torch.cuda.Stream,
     ) -> None:
         self._config = config
         self._device_state = device_state
         self._active_tags = active_tags
-        self._pump_and_allreduce = pump_and_allreduce
+        self._step_counter_getter = step_counter_getter
         self._d2h_stream = d2h_stream
         self._previous_health_future: Optional[FutureTensor] = None
 
     def step(self) -> None:
-        step_counter = self._pump_and_allreduce.step_counter
+        step_counter = self._step_counter_getter()
         if step_counter < _HEALTH_CHECK_WARMUP_STEPS:
             return
         if step_counter % _HEALTH_CHECK_EVERY_N_STEPS != 0:
@@ -64,7 +64,7 @@ class KernelRunCounterHealthChecker:
                     f"at step={step_counter}; canary path is not executing"
                 )
 
-        self._previous_health_future = FutureTensor.create(
+        self._previous_health_future = FutureTensor.device_to_host(
             src_device=device_state.kernel_run_counters, stream=self._d2h_stream
         )
 
@@ -81,14 +81,14 @@ class PeriodicCanaryStatsLogger:
         config: CanaryConfig,
         device_state: CanaryDeviceState,
         active_tags: tuple[CanaryLaunchTag, ...],
-        pump_and_allreduce: PumpAndAllreduce,
+        step_counter_getter: Callable[[], int],
         sweep_orchestrator: SweepOrchestrator,
         d2h_stream: torch.cuda.Stream,
     ) -> None:
         self._config = config
         self._device_state = device_state
         self._active_tags = active_tags
-        self._pump_and_allreduce = pump_and_allreduce
+        self._step_counter_getter = step_counter_getter
         self._sweep_orchestrator = sweep_orchestrator
         self._d2h_stream = d2h_stream
         self._previous_slot_sum_future: Optional[FutureTensor] = None
@@ -98,7 +98,7 @@ class PeriodicCanaryStatsLogger:
         period = self._config.stats_print_every_n_steps
         if period <= 0:
             return
-        step_counter = self._pump_and_allreduce.step_counter
+        step_counter = self._step_counter_getter()
         if step_counter == 0 or step_counter % period != 0:
             return
 
@@ -121,10 +121,10 @@ class PeriodicCanaryStatsLogger:
             )
 
         slot_sum_device = device_state.slot_run_counters.sum().view(1)
-        self._previous_slot_sum_future = FutureTensor.create(
+        self._previous_slot_sum_future = FutureTensor.device_to_host(
             src_device=slot_sum_device, stream=self._d2h_stream
         )
-        self._previous_write_index_future = FutureTensor.create(
+        self._previous_write_index_future = FutureTensor.device_to_host(
             src_device=device_state.violation_log.violation_write_index,
             stream=self._d2h_stream,
         )

@@ -37,16 +37,13 @@ class CanaryConfig:
             redundancy) and verifies them.
         real_kv_hash_mode: RealKvHashMode (OFF / PARTIAL / ALL). Uniform across head/tail/sweep launches;
             PARTIAL (first 16B, hard cap) is cheap enough for production defaults.
-        input_check_mode: bool. True = canary_write_step additionally compares
+        input_check_mode: bool. True = launch_canary_write_kernel additionally compares
             forward_batch.input_ids[i] / positions[i] against caller-supplied expected_input_tokens[i] /
             expected_input_positions[i]; mismatch records a violation. Only useful when something else
             (e.g. token_oracle.oracle_manager.fill_expected_inputs) is feeding the expected_* placeholders
             per forward — canary itself knows no oracle.
         stats_print_every_n_steps: 0 disables periodic stats logging; positive N prints
             "canary protected N tokens, ran M sweep passes, K violations so far" every N forward steps.
-        allreduce_violation_signal: True = end-of-step pump performs TP- and PP-group allreduce on the local
-            is_errored byte so all ranks raise in lockstep; False = each rank raises independently (faster
-            but produces partial-failure logs across TP/PP groups).
     """
 
     mode: Literal["off", "log", "raise"]
@@ -55,7 +52,6 @@ class CanaryConfig:
     real_kv_hash_mode: RealKvHashMode
     input_check_mode: bool
     stats_print_every_n_steps: int
-    allreduce_violation_signal: bool
 
     @classmethod
     def from_env(cls, server_args: "ServerArgs") -> "CanaryConfig":
@@ -74,5 +70,4 @@ class CanaryConfig:
             real_kv_hash_mode=RealKvHashMode[real_kv_raw],
             input_check_mode=envs.SGLANG_KV_CANARY_INPUT_CHECK.get(),
             stats_print_every_n_steps=envs.SGLANG_KV_CANARY_STATS_PRINT_EVERY_N_STEPS.get(),
-            allreduce_violation_signal=envs.SGLANG_KV_CANARY_ALLREDUCE_VIOLATION_SIGNAL.get(),
         )

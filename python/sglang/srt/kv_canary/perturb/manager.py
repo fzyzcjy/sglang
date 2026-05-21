@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Optional
 
 from sglang.srt.kv_canary.buffer_group import CanaryBufferGroup
@@ -10,7 +11,6 @@ from sglang.srt.kv_canary.perturb import (
 )
 from sglang.srt.kv_canary.perturb.config import PerturbConfig
 from sglang.srt.kv_canary.perturb.utils import WarmupGate
-from sglang.srt.kv_canary.runner.pump import PumpAndAllreduce
 
 if TYPE_CHECKING:
     from sglang.srt.mem_cache.base_prefix_cache import BasePrefixCache
@@ -33,23 +33,28 @@ class PerturbManager:
         config: PerturbConfig,
         req_to_token_pool: "ReqToTokenPool",
         buffer_groups: tuple[CanaryBufferGroup, ...],
-        pump_and_allreduce: PumpAndAllreduce,
+        step_counter_getter: Callable[[], int],
         swa_window_size: int,
         sweep_interval: int,
     ) -> None:
         self._config = config
         self._req_to_token_pool = req_to_token_pool
         self._buffer_groups = buffer_groups
-        self._pump_and_allreduce = pump_and_allreduce
+        self._step_counter_getter = step_counter_getter
         self._swa_window_size = swa_window_size
         self._sweep_interval = sweep_interval
         self._radix_cache: Optional["BasePrefixCache"] = None
         self._warmup_gate = WarmupGate(
-            config=config, pump_and_allreduce=pump_and_allreduce
+            config=config, step_counter_getter=step_counter_getter
         )
 
     def attach_radix_cache(self, radix_cache: "BasePrefixCache") -> None:
         self._radix_cache = radix_cache
+
+    def perturb(self, forward_batch: Optional["ForwardBatch"]) -> None:
+        self.perturb_req_to_token(forward_batch)
+        self.perturb_real_kv_used(forward_batch)
+        self.perturb_real_kv_unused_cache(forward_batch)
 
     def perturb_req_to_token(self, forward_batch: Optional["ForwardBatch"]) -> None:
         req_to_token.run(
@@ -79,6 +84,6 @@ class PerturbManager:
             radix_cache=self._radix_cache,
             swa_window_size=self._swa_window_size,
             sweep_interval=self._sweep_interval,
-            step_counter=self._pump_and_allreduce.step_counter,
+            step_counter=self._step_counter_getter(),
             warmup_gate=self._warmup_gate,
         )

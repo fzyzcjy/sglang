@@ -475,6 +475,7 @@ class Envs:
     SGLANG_DSA_HIP_DISABLE_PRESHUFFLE = EnvBoolWithAlias(
         False, deprecated_name="SGLANG_NSA_HIP_DISABLE_PRESHUFFLE"
     )
+    SGLANG_DSA_MQA_LOGITS_FREE_MEM_FRACTION = EnvFloat(0.2)
     SGLANG_USE_FUSED_METADATA_COPY = EnvBool(True)
 
     # sgl-kernel
@@ -719,7 +720,6 @@ class Envs:
     # ===================================================================
     SGLANG_KV_CANARY_RING_CAPACITY = EnvInt(1024)
     SGLANG_KV_CANARY_STATS_PRINT_EVERY_N_STEPS = EnvInt(100)
-    SGLANG_KV_CANARY_ALLREDUCE_VIOLATION_SIGNAL = EnvBool(False)
     # Input-id / position verification inside canary_write_step. Only useful
     # when a token_oracle is feeding expected_input_* tensors per forward;
     # production users never set this. Test harnesses flip it on via
@@ -748,10 +748,9 @@ class Envs:
     # --kv-canary-sweep-interval > 0.
     SGLANG_KV_CANARY_PERTURB_REAL_KV_UNUSED_CACHE_PROB = EnvFloat(0.0)
     # Which CanaryBufferGroup the real_kv_used / real_kv_unused_cache perturb
-    # targets: "full" / "swa" exact-match the PoolKind name, "any" picks at
-    # random among groups with non-empty real_kv_sources. Used by per-group
+    # targets: "full" / "swa" exact-match the PoolKind name. Used by per-group
     # e2e tests to drive detection deterministically.
-    SGLANG_KV_CANARY_PERTURB_TARGET_GROUP = EnvStr("any")
+    SGLANG_KV_CANARY_PERTURB_TARGET_GROUP = EnvStr(None)
     SGLANG_KV_CANARY_ENABLE_TOKEN_ORACLE = EnvBool(False)
     # ===================================================================
     # /KV-Canary / Token-Oracle
