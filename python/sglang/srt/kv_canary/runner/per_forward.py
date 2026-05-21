@@ -255,10 +255,7 @@ class PerForwardOrchestrator:
             self._input_check_suspension_depth -= 1
 
     def _should_enable_input_check_for_launch(self) -> bool:
-        return (
-            self._config.input_check_mode
-            and self._input_check_suspension_depth == 0
-        )
+        return self._config.input_check_mode and self._input_check_suspension_depth == 0
 
 
 def _is_head_tag(tag: CanaryLaunchTag) -> bool:
