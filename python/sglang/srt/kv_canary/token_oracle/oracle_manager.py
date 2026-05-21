@@ -51,7 +51,10 @@ class TokenOracleManager:
             num_tokens=num_tokens,
             rids_per_row=rids_int,
         )
-        if forward_batch.forward_mode is not None and forward_batch.forward_mode.is_extend():
+        if (
+            forward_batch.forward_mode is not None
+            and forward_batch.forward_mode.is_extend()
+        ):
             expected_tokens = input_ids
         else:
             expected_tokens = self.oracle.expected_tokens(
