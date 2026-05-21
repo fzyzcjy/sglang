@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from sglang.srt.arg_groups.speculative_hook import handle_speculative_decoding
@@ -21,7 +22,10 @@ _mock_device.start()
 
 class TestPrepareServerArgs(CustomTestCase):
     def test_prepare_server_args(self):
-        model_config = MagicMock(attention_arch=AttentionArch.MHA)
+        model_config = SimpleNamespace(
+            attention_arch=AttentionArch.MHA,
+            hf_config=SimpleNamespace(),
+        )
         with patch.object(ServerArgs, "get_model_config", return_value=model_config):
             server_args = prepare_server_args(
                 [
@@ -660,7 +664,10 @@ class TestSamplingBackendTokenOracleEnvGate(CustomTestCase):
         reloaded = self._reload_server_args_with_env(enabled=True)
         self.assertIn("token_oracle", reloaded.SAMPLING_BACKEND_CHOICES)
 
-        model_config = MagicMock(attention_arch=AttentionArch.MHA)
+        model_config = SimpleNamespace(
+            attention_arch=AttentionArch.MHA,
+            hf_config=SimpleNamespace(),
+        )
         with patch.object(
             reloaded.ServerArgs, "get_model_config", return_value=model_config
         ):
