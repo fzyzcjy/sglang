@@ -31,6 +31,7 @@ from sglang.srt.kv_canary.perturb.slot_picker import collect_active_slots
 from sglang.srt.kv_canary.runner import canary_runner as runner_module
 from sglang.srt.kv_canary.runner import launch as launch_module
 from sglang.srt.kv_canary.runner import per_forward as per_forward_module
+from sglang.srt.kv_canary.runner import pump as pump_module
 from sglang.srt.kv_canary.runner.canary_runner import CanaryRunner
 from sglang.srt.kv_canary.state import ViolationLog
 from sglang.test.ci.ci_register import register_cuda_ci
@@ -498,24 +499,34 @@ class TestSelfUnitRunner(CustomTestCase):
 
         self.assertIsNone(warner._pending_future)
 
-    def test_runner_skips_host_end_of_step_during_cuda_graph_capture(self):
-        """Verify graph capture avoids host-side end-of-step synchronization paths."""
+    def test_runner_pumps_without_host_drain_during_cuda_graph_capture(self):
+        """Verify graph capture keeps violation pumping but avoids host synchronization."""
         runner = _make_runner(device=self.device)
         calls: List[str] = []
+        created_signals: List[int] = []
+
+        def _fail_if_waited():
+            raise AssertionError("capture path must not wait for a host-side future")
+
+        def _record_create(*, src_device, stream):
+            del stream
+            created_signals.append(int(src_device.cpu().item()))
+            return SimpleNamespace(wait=_fail_if_waited)
+
+        runner._device_state.violation_log.violation_write_index.fill_(1)
+        runner._pump_and_allreduce._previous_pump_future = SimpleNamespace(
+            wait=_fail_if_waited
+        )
 
         with patch.object(torch.cuda, "is_current_stream_capturing", return_value=True):
             with patch.object(
-                runner._per_forward_orchestrator,
-                "end_of_step",
-                lambda: calls.append("per_forward"),
+                pump_module.FutureTensor,
+                "create",
+                _record_create,
             ), patch.object(
                 runner._sweep_orchestrator,
                 "maybe_run_sweep",
                 lambda: calls.append("sweep"),
-            ), patch.object(
-                runner._pump_and_allreduce,
-                "pump_and_drain",
-                lambda: calls.append("pump"),
             ), patch.object(
                 runner._health_checker,
                 "step",
@@ -528,6 +539,7 @@ class TestSelfUnitRunner(CustomTestCase):
                 runner._end_of_step()
 
         self.assertEqual(calls, [])
+        self.assertEqual(created_signals, [1])
 
     def test_periodic_stats_log_every_n_step(self):
         """Verify periodic stats are logged at the configured interval."""
