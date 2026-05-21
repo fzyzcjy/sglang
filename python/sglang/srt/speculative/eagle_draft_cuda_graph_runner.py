@@ -218,7 +218,8 @@ class EAGLEDraftCudaGraphRunner:
         for _ in range(2):
             torch.cuda.synchronize()
             self.model_runner.tp_group.barrier()
-            run_once_fn()
+            with self._suspend_canary_input_check():
+                run_once_fn()
             hook = getattr(
                 self.model_runner.draft_attn_backend,
                 "on_after_cuda_graph_warmup",
@@ -228,15 +229,17 @@ class EAGLEDraftCudaGraphRunner:
                 hook()
 
     def _capture_graph(self, graph, pool, stream, run_once_fn):
-        canary_runner = self.model_runner.canary_runner
-        input_check_guard = (
-            canary_runner.suspend_input_check()
-            if canary_runner is not None
-            else contextlib.nullcontext()
-        )
-        with input_check_guard, torch.cuda.graph(graph, pool=pool, stream=stream):
+        with self._suspend_canary_input_check(), torch.cuda.graph(
+            graph, pool=pool, stream=stream
+        ):
             out = run_once_fn()
         return out
+
+    def _suspend_canary_input_check(self):
+        canary_runner = self.model_runner.canary_runner
+        if canary_runner is None:
+            return contextlib.nullcontext()
+        return canary_runner.suspend_input_check()
 
     def _replay(self, forward_batch: ForwardBatch):
         ctx = (
