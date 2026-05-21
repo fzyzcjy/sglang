@@ -907,8 +907,9 @@ class CudaGraphRunner:
         else:
             captured_fn = run_once_fn
 
-        with self._suspend_canary_input_check(), graph_ctx(
-            cuda_graph=graph, pool=pool, stream=stream
+        with (
+            self._suspend_canary_input_check(),
+            graph_ctx(cuda_graph=graph, pool=pool, stream=stream),
         ):
             out = captured_fn()
         return out
