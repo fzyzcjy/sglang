@@ -8,7 +8,10 @@ import torch
 from sglang.srt.kv_canary.expected_inputs import ExpectedInputs
 from sglang.srt.kv_canary.token_oracle.oracle import HashOracle
 from sglang.srt.kv_canary.token_oracle.sampler import install_oracle_sampler
-from sglang.srt.model_executor.forward_batch_info import _stable_hash_rid_i64
+from sglang.srt.model_executor.forward_batch_info import (
+    _oracle_request_ids,
+    _stable_hash_rid_i64,
+)
 from sglang.test.ci.ci_register import register_cuda_ci
 from sglang.test.mock_model_utils import mock_model_server_args, mock_model_server_env
 from sglang.test.test_utils import CustomTestCase
@@ -34,6 +37,12 @@ class _StubForwardBatch:
     rids_int: torch.Tensor
 
 
+@dataclasses.dataclass
+class _StubReq:
+    rid: str
+    bootstrap_room: int | None
+
+
 def _scalar_expected_token(oracle: HashOracle, *, req_id: int, position: int) -> int:
     out = oracle.expected_tokens(
         req_ids=torch.tensor([req_id], dtype=torch.int64),
@@ -43,6 +52,14 @@ def _scalar_expected_token(oracle: HashOracle, *, req_id: int, position: int) ->
 
 
 class TestFillExpectedInputs(CustomTestCase):
+    def test_oracle_request_ids_use_disaggregation_bootstrap_room(self) -> None:
+        reqs = [
+            _StubReq(rid="prefill-local-rid", bootstrap_room=1234),
+            _StubReq(rid="regular-rid", bootstrap_room=None),
+        ]
+
+        self.assertEqual(_oracle_request_ids(reqs), ["1234", "regular-rid"])
+
     def test_sample_next_tokens_uses_next_position(self) -> None:
         oracle = HashOracle(vocab_size=32000)
         hook = install_oracle_sampler(oracle=oracle)
