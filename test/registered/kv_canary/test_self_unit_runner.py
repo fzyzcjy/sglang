@@ -497,7 +497,10 @@ class TestSelfUnitRunner(CustomTestCase):
                 device=self.device,
             ),
             positions=torch.arange(8, dtype=torch.int64, device=self.device),
-            extend_seq_lens=torch.tensor([1, 1], dtype=torch.int64, device=self.device),
+            extend_prefix_lens=torch.tensor(
+                [10, 20], dtype=torch.int64, device=self.device
+            ),
+            extend_seq_lens=torch.tensor([4, 4], dtype=torch.int64, device=self.device),
         )
         expected_inputs = ExpectedInputs.allocate(capacity=8, device=self.device)
         manager = TokenOracleManager(oracle=HashOracle(vocab_size=32000))
@@ -511,7 +514,14 @@ class TestSelfUnitRunner(CustomTestCase):
             torch.equal(expected_inputs.tokens[:8], forward_batch.input_ids)
         )
         self.assertTrue(
-            torch.equal(expected_inputs.positions[:8], forward_batch.positions)
+            torch.equal(
+                expected_inputs.positions[:8],
+                torch.tensor(
+                    [10, 11, 12, 13, 20, 21, 22, 23],
+                    dtype=torch.int64,
+                    device=self.device,
+                ),
+            )
         )
 
     def test_kernel_run_counter_watchdog_raises_on_zero(self):

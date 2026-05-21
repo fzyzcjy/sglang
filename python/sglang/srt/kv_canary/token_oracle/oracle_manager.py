@@ -51,14 +51,20 @@ class TokenOracleManager:
             num_tokens=num_tokens,
             rids_per_row=rids_int,
         )
-        if _uses_actual_input_tokens(forward_batch=forward_batch):
+        if _uses_extend_like_layout(forward_batch=forward_batch):
             expected_tokens = input_ids
         else:
             expected_tokens = self.oracle.expected_tokens(
                 req_ids=req_ids, positions=positions.to(torch.int64)
             )
         expected_inputs_out.tokens[:num_tokens].copy_(expected_tokens.to(torch.int64))
-        expected_inputs_out.positions[:num_tokens].copy_(positions.to(torch.int64))
+        expected_positions = _expected_positions_for_input_check(
+            forward_batch=forward_batch,
+            fallback_positions=positions,
+        )
+        expected_inputs_out.positions[:num_tokens].copy_(
+            expected_positions.to(torch.int64)
+        )
 
     def sample_next_tokens(
         self, *, req_ids: torch.Tensor, logits_positions: torch.Tensor
@@ -103,7 +109,33 @@ def _build_req_id_per_token(
     return result
 
 
-def _uses_actual_input_tokens(*, forward_batch: "ForwardBatch") -> bool:
+def _expected_positions_for_input_check(
+    *,
+    forward_batch: "ForwardBatch",
+    fallback_positions: torch.Tensor,
+) -> torch.Tensor:
+    if not _uses_extend_like_layout(forward_batch=forward_batch):
+        return fallback_positions
+
+    extend_prefix_lens = forward_batch.extend_prefix_lens
+    extend_seq_lens = forward_batch.extend_seq_lens
+    if extend_prefix_lens is None or extend_seq_lens is None:
+        return fallback_positions
+
+    return torch.cat(
+        [
+            torch.arange(
+                int(prefix_len.item()),
+                int(prefix_len.item()) + int(extend_len.item()),
+                device=fallback_positions.device,
+                dtype=torch.int64,
+            )
+            for prefix_len, extend_len in zip(extend_prefix_lens, extend_seq_lens)
+        ]
+    )
+
+
+def _uses_extend_like_layout(*, forward_batch: "ForwardBatch") -> bool:
     forward_mode = forward_batch.forward_mode
     if forward_mode is None:
         return False
