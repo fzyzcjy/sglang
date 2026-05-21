@@ -674,7 +674,9 @@ class Qwen3ForCausalLM(nn.Module):
 
     def set_embed_and_head(self, embed, head):
         del self.model.embed_tokens.weight
-        del self.lm_head.weight
+        if not self.config.tie_word_embeddings:
+            del self.lm_head.weight
+
         self.model.embed_tokens.weight = embed
         self.lm_head.weight = head
         torch.cuda.empty_cache()
