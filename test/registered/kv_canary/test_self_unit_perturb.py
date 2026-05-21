@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import unittest
 import os
+import unittest
 from typing import cast
 from unittest.mock import patch
 
