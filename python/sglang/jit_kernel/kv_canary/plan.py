@@ -415,9 +415,6 @@ def _plan_offsets_kernel(
         mask=write_tail_in_range,
     )
 
-    write_active_mark = tl.where((is_active & (write_lens > 0)), bs_offs + 1, 0)
-    write_num_valid_reqs = tl.max(write_active_mark, axis=0)
-
     # Scalar writes: verify_num_valid is clamped to the verify_capacity tensor extent so the verify kernel
     # never indexes past the buffer; enable carries the overflow bit (0 when requested > capacity) so the
     # verify kernel skips the whole launch and the host can warn-log this step.
@@ -429,7 +426,7 @@ def _plan_offsets_kernel(
     clamped = tl.where(overflow, VERIFY_CAPACITY, requested)  # scalar
     tl.store(out_verify_num_valid_ptr, clamped.to(tl.int32))
     tl.store(out_verify_enable_ptr, tl.full((), enable, tl.int32))
-    tl.store(out_write_num_valid_reqs_ptr, write_num_valid_reqs.to(tl.int32))
+    tl.store(out_write_num_valid_reqs_ptr, tl.full((), bs, tl.int32))
 
 
 @triton.jit
