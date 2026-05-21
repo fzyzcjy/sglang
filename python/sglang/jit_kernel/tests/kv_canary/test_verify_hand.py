@@ -13,6 +13,7 @@ from sglang.jit_kernel.kv_canary.verify import (
     RealKvSource,
     canary_verify_step,
 )
+from sglang.jit_kernel.kv_canary.verify_ref import _compute_real_kv_hash_scalar
 from sglang.jit_kernel.kv_canary.write_ref import (
     canary_write_step_torch_reference,
 )
@@ -924,21 +925,14 @@ class TestRealKvHash:
         running = splitmix64(consts.CANARY_CHAIN_ANCHOR)
         real_kv_hashes: list[int] = []
         for slot_idx in slot_indices:
-            rkv = 0
-            for src in sources_cuda:
-                page_id = slot_idx // src.page_size
-                page_off = (slot_idx % src.page_size) * src.num_bytes_per_token
-                row_bytes = (
-                    src.tensor[page_id, page_off : page_off + src.read_bytes]
-                    .detach()
-                    .cpu()
-                    .tolist()
+            real_kv_hashes.append(
+                _compute_real_kv_hash_scalar(
+                    real_kv_sources=sources_cuda,
+                    real_kv_hash_mode=consts.RealKvHashMode.ALL,
+                    slot_idx=slot_idx,
+                    work_device=torch.device("cpu"),
                 )
-                fold = 0
-                for b in row_bytes:
-                    fold = splitmix64(fold ^ int(b))
-                rkv = splitmix64(rkv ^ fold)
-            real_kv_hashes.append(rkv)
+            )
 
         for slot_idx, token, position, rkv in zip(
             slot_indices, tokens, positions, real_kv_hashes
@@ -1261,21 +1255,14 @@ class TestLayoutAndScheduling:
         running = splitmix64(consts.CANARY_CHAIN_ANCHOR)
         rkv_values: list[int] = []
         for slot_idx in slot_indices:
-            page_id = slot_idx // sources_cuda[0].page_size
-            page_off = (slot_idx % sources_cuda[0].page_size) * sources_cuda[
-                0
-            ].num_bytes_per_token
-            row_bytes = (
-                sources_cuda[0]
-                .tensor[page_id, page_off : page_off + sources_cuda[0].read_bytes]
-                .detach()
-                .cpu()
-                .tolist()
+            rkv_values.append(
+                _compute_real_kv_hash_scalar(
+                    real_kv_sources=sources_cuda,
+                    real_kv_hash_mode=consts.RealKvHashMode.ALL,
+                    slot_idx=slot_idx,
+                    work_device=torch.device("cpu"),
+                )
             )
-            fold = 0
-            for b in row_bytes:
-                fold = splitmix64(fold ^ int(b))
-            rkv_values.append(fold)
 
         for slot_idx, token, position, rkv in zip(
             slot_indices, tokens, positions, rkv_values

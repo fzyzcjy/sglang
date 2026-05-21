@@ -12,6 +12,7 @@ from sglang.jit_kernel.kv_canary.verify import (
     RealKvSource,
     canary_verify_step,
 )
+from sglang.jit_kernel.kv_canary.verify_ref import _compute_real_kv_hash_scalar
 from sglang.jit_kernel.kv_canary.write import canary_write_step
 from sglang.jit_kernel.tests.kv_canary._canary_helpers import (
     FakeViolationLog,
@@ -54,7 +55,8 @@ _DEVICE = torch.device("cuda")
 
 
 def _int32_tensor(values: list[int]) -> torch.Tensor:
-    return torch.tensor(values, dtype=torch.int32, device=_DEVICE)
+    signed_values = [((value + (1 << 31)) % (1 << 32)) - (1 << 31) for value in values]
+    return torch.tensor(signed_values, dtype=torch.int32, device=_DEVICE)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -300,9 +302,8 @@ class TestSeedSlot:
         new_slot = 4
         new_token = 13
         new_position = 2
-        expected_running = splitmix64(
-            (expected_seed_prev_hash ^ seed_token ^ seed_position ^ seed_real_kv)
-            & ((1 << 64) - 1)
+        expected_running = splitmix64_mix4(
+            expected_seed_prev_hash, seed_token, seed_position, seed_real_kv
         )
 
         plan_pair = make_write_plan_pair(
@@ -442,15 +443,12 @@ class TestChain:
 
         running = splitmix64(consts.CANARY_CHAIN_ANCHOR)
         for slot_idx, token, position in zip(slot_indices, tokens, positions):
-            rkv = 0
-            for src in sources_cuda:
-                row_bytes = (
-                    src.tensor[slot_idx, : src.read_bytes].detach().cpu().tolist()
-                )
-                fold = 0
-                for b in row_bytes:
-                    fold = splitmix64(fold ^ int(b))
-                rkv = splitmix64(rkv ^ fold)
+            rkv = _compute_real_kv_hash_scalar(
+                real_kv_sources=sources_cuda,
+                real_kv_hash_mode=consts.RealKvHashMode.ALL,
+                slot_idx=slot_idx,
+                work_device=torch.device("cpu"),
+            )
             stored_prev_signed = read_slot_fields(
                 canary_buf=cuda_buf, slot_idx=slot_idx
             )[2]
@@ -1109,6 +1107,8 @@ class TestRealKvHash:
             num_slots=16,
             device=_DEVICE,
         )
+        sources_cuda[0].tensor[0, 3 * 16 : 4 * 16] = 3
+        sources_cuda[0].tensor[0, 7 * 16 : 8 * 16] = 7
         sources_ref = clone_real_kv_sources(sources_cuda)
 
         plan_pair = make_write_plan_pair(

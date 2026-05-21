@@ -69,7 +69,7 @@ def _draw_random_write_inputs(rng: random.Random) -> WriteFuzzInputs:
     )
     src_count = rng.choice([1, 2, 4])
     page_size = rng.choice([1, 16])
-    bytes_per = rng.choice([8, 64, 128])
+    bytes_per = rng.choice([16, 64, 128])
     kernel_kind = rng.choice(list(CanaryLaunchTag))
     ring_capacity = rng.choice([16, 64, 256])
 
@@ -125,7 +125,7 @@ def _draw_random_write_inputs(rng: random.Random) -> WriteFuzzInputs:
     )
 
     fb_input_ids = torch.tensor(
-        [rng.randint(0, 0xFFFFFFFF) for _ in range(total_tokens)],
+        [rng.randint(-(1 << 31), (1 << 31) - 1) for _ in range(total_tokens)],
         dtype=torch.int32,
         device=_DEVICE,
     )
@@ -214,7 +214,7 @@ def _summarize(inputs: WriteFuzzInputs) -> str:
     total = int(inputs.plan_cuda.write_offsets[n_active].item())
     return (
         f"n_reqs={n_active} total_tokens={total} kind={inputs.kernel_kind.name} "
-        f"pseudo={inputs.enable_write_verify_inputs.name} hash_mode={inputs.real_kv_hash_mode.name} "
+        f"pseudo={inputs.enable_write_verify_inputs} hash_mode={inputs.real_kv_hash_mode.name} "
         f"sources={len(inputs.real_kv_sources_cuda)}"
     )
 

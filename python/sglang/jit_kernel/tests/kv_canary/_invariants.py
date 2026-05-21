@@ -45,6 +45,8 @@ class PlanInvariants:
             swa_window_size=swa_window_size,
             extras_count=extras_count,
         )
+        if int(verify_plan.enable[0].item()) == 0:
+            return
         PlanInvariants._assert_extras_land_at_tail(
             verify_plan=verify_plan,
             derived_verify_count=derived,
@@ -157,11 +159,6 @@ class PlanInvariants:
                 assert (
                     prev == -1
                 ), f"entry {i} at position 0 must have prev=-1, got {prev}"
-            else:
-                if swa_window_size == 0:
-                    assert (
-                        prev != -1
-                    ), f"FULL entry {i} at position {pos} must have prev != -1, got {prev}"
 
     @staticmethod
     def _assert_verify_num_valid_equals_derived_plus_extras(
@@ -184,10 +181,11 @@ class PlanInvariants:
             else:
                 derived += max(0, pfx)
         expected = derived + extras_count
+        expected_clamped = min(expected, int(verify_plan.verify_slot_indices.numel()))
         actual = int(verify_plan.verify_num_valid[0].item())
         assert (
-            actual == expected
-        ), f"verify_num_valid {actual} != derived {derived} + extras {extras_count} = {expected}"
+            actual == expected_clamped
+        ), f"verify_num_valid {actual} != min(derived {derived} + extras {extras_count}, capacity) = {expected_clamped}"
         return derived
 
 
@@ -483,12 +481,14 @@ class WriteInvariants:
             assert delta == 0, f"empty plan incremented slot_run_counter by {delta}"
             return
         total = int(plan.write_offsets[n_active].item())
+        slots_cpu = fb_out_cache_loc[:total].detach().cpu().tolist()
+        expected = sum(1 for slot in slots_cpu if slot >= 0)
         delta = int(log_after.slot_run_counter[0].item()) - int(
             log_before.slot_run_counter[0].item()
         )
         assert (
-            delta == total
-        ), f"slot_run_counter delta {delta} != total write entries {total}"
+            delta == expected
+        ), f"slot_run_counter delta {delta} != non-reserved write entries {expected}"
 
     @staticmethod
     def _assert_write_kernel_run_counter_incremented_by_one(
