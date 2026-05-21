@@ -34,7 +34,7 @@ from sglang.srt.kv_canary.runner import per_forward as per_forward_module
 from sglang.srt.kv_canary.runner import pump as pump_module
 from sglang.srt.kv_canary.runner.canary_runner import CanaryRunner
 from sglang.srt.kv_canary.state import ViolationLog
-from sglang.srt.kv_canary.token_oracle.oracle import TokenOracle
+from sglang.srt.kv_canary.token_oracle.oracle import HashOracle
 from sglang.srt.kv_canary.token_oracle.oracle_manager import TokenOracleManager
 from sglang.test.ci.ci_register import register_cuda_ci
 from sglang.test.kv_canary.fixtures import (
@@ -480,7 +480,7 @@ class TestSelfUnitRunner(CustomTestCase):
             extend_seq_lens=torch.tensor([1, 1], dtype=torch.int64, device=self.device),
         )
         expected_inputs = ExpectedInputs.allocate(capacity=8, device=self.device)
-        manager = TokenOracleManager(oracle=TokenOracle(vocab_size=32000))
+        manager = TokenOracleManager(oracle=HashOracle(vocab_size=32000))
 
         manager.fill_expected_inputs(
             forward_batch=forward_batch,
