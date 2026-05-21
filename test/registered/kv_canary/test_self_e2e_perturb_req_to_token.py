@@ -18,6 +18,8 @@ class _PerturbReqToTokenBase(CanaryE2EBase):
     FULL or SWA. We only assert that *some* per-forward chain_hash violation is logged.
     """
 
+    __test__ = False
+
     kv_canary_mode = "log"
     extra_env = {
         "SGLANG_KV_CANARY_PERTURB_REQ_TO_TOKEN_PROB": "0.1",
@@ -30,10 +32,14 @@ class _PerturbReqToTokenBase(CanaryE2EBase):
 
 
 class TestPerturbReqToTokenMha(_PerturbReqToTokenBase, unittest.TestCase):
+    __test__ = True
+
     model_mode = "mha"
 
 
 class TestPerturbReqToTokenSwa(_PerturbReqToTokenBase, unittest.TestCase):
+    __test__ = True
+
     model_mode = "swa"
 
 
