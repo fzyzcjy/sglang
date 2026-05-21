@@ -125,6 +125,9 @@ def _expected_positions_for_input_check(
             int(forward_batch.spec_info.num_tokens_per_req),
         )
 
+    if _uses_decode_draft_extend_layout(forward_batch=forward_batch):
+        return fallback_positions + 1
+
     if not _uses_extend_like_layout(forward_batch=forward_batch):
         return fallback_positions
 
@@ -157,3 +160,11 @@ def _uses_repeated_seq_len_layout(*, forward_batch: "ForwardBatch") -> bool:
     if spec_info is None or getattr(spec_info, "num_tokens_per_req", -1) <= 0:
         return False
     return forward_batch.seq_lens is not None
+
+
+def _uses_decode_draft_extend_layout(*, forward_batch: "ForwardBatch") -> bool:
+    forward_mode = forward_batch.forward_mode
+    if forward_mode is None or not forward_mode.is_draft_extend_v2():
+        return False
+    spec_info = forward_batch.spec_info
+    return spec_info is not None and spec_info.num_correct_drafts is not None
