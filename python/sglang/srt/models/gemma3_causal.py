@@ -568,22 +568,31 @@ class Gemma3TextModel(PreTrainedModel):
         #    "full_attention":    {"rope_type": ..., "rope_theta": 1000000}}
         # Flatten into the format Gemma3RotaryEmbedding expects.
         rope_params = config.rope_parameters
+        full_rope_params = {}
         if isinstance(rope_params, dict) and "full_attention" in rope_params:
-            global_theta = rope_params["full_attention"].get("rope_theta", 1000000.0)
+            full_rope_params = rope_params["full_attention"]
             local_theta = rope_params["sliding_attention"].get("rope_theta", 10000.0)
         else:
             # v4 flat format fallback
-            global_theta = (
-                rope_params.get("rope_theta", 10000.0) if rope_params else 10000.0
-            )
+            if isinstance(rope_params, dict):
+                full_rope_params = rope_params
             local_theta = getattr(config, "rope_local_base_freq", 10000.0)
+
+        global_theta = full_rope_params.get(
+            "rope_theta", getattr(config, "rope_theta", 1000000.0)
+        )
+        global_rope_type = full_rope_params.get(
+            "rope_type", full_rope_params.get("type", "default")
+        )
+        global_rope_factor = full_rope_params.get("factor")
 
         global_config = copy.deepcopy(config)
         global_config.rope_parameters = {
             "rope_theta": global_theta,
-            "factor": config.rope_parameters["full_attention"]["factor"],
-            "rope_type": "linear",
+            "rope_type": global_rope_type if global_rope_factor is None else "linear",
         }
+        if global_rope_factor is not None:
+            global_config.rope_parameters["factor"] = global_rope_factor
         self.rotary_emb = Gemma3RotaryEmbedding(config=global_config)
         self.gradient_checkpointing = False
 
@@ -866,6 +875,8 @@ class Gemma3ForCausalLM(PreTrainedModel):
                 # Skip loading extra bias for GPTQ models.
                 if name.endswith(".bias") and name not in params_dict:
                     continue
+                if name not in params_dict:
+                    continue
                 param = params_dict[name]
                 weight_loader = param.weight_loader
                 weight_loader(param, loaded_weight, shard_id)
@@ -881,6 +892,8 @@ class Gemma3ForCausalLM(PreTrainedModel):
                 # Remapping the name of FP8 kv-scale.
                 name = maybe_remap_kv_scale_name(name, params_dict)
                 if name is None:
+                    continue
+                if name not in params_dict:
                     continue
 
                 param = params_dict[name]
