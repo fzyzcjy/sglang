@@ -278,10 +278,16 @@ class TestSelfUnitRunner(CustomTestCase):
         req_to_token[2, 64] = 2001
         req_to_token[2, 65] = 2002
         forward_batch = SimpleNamespace(
-            req_pool_indices=torch.tensor([1, 2], dtype=torch.int64, device=self.device),
+            req_pool_indices=torch.tensor(
+                [1, 2], dtype=torch.int64, device=self.device
+            ),
             spec_info=SimpleNamespace(num_tokens_per_req=2),
-            positions=torch.tensor([65, 66, 65, 66], dtype=torch.int64, device=self.device),
-            out_cache_loc=torch.tensor([1001, 1002, 2001, 2002], dtype=torch.int64, device=self.device),
+            positions=torch.tensor(
+                [65, 66, 65, 66], dtype=torch.int64, device=self.device
+            ),
+            out_cache_loc=torch.tensor(
+                [1001, 1002, 2001, 2002], dtype=torch.int64, device=self.device
+            ),
         )
 
         expected_positions = (
