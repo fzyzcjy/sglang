@@ -43,6 +43,8 @@ def _spec_eagle_server_args() -> List[str]:
         "32",
         "--context-length",
         "2048",
+        "--piecewise-cuda-graph-max-tokens",
+        "2048",
         "--max-total-tokens",
         "16384",
     ]
