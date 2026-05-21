@@ -6,6 +6,7 @@ import io
 import logging
 import os
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from typing import List
 
 import requests
@@ -25,6 +26,7 @@ register_cuda_ci(est_time=60, suite="extra-a-test-1-gpu-large")
 
 
 _MOCK_MODEL = "Qwen/Qwen3-0.6B"
+_EAGER_DRAFT_REQUEST_COUNT = 9
 
 
 def _spec_eagle_server_args() -> List[str]:
@@ -55,6 +57,25 @@ def _spec_eagle_env() -> dict[str, str]:
     env["SGLANG_KV_CANARY_INPUT_CHECK"] = "0"
     env["SGLANG_KV_CANARY_ENABLE_TOKEN_ORACLE"] = "1"
     return env
+
+
+def _run_eager_draft_decode_requests(base_url: str) -> list[requests.Response]:
+    def send_one(offset: int) -> requests.Response:
+        return requests.post(
+            base_url + "/generate",
+            json={
+                "input_ids": list(range(1 + offset, 65 + offset)),
+                "sampling_params": {
+                    "max_new_tokens": 32,
+                    "temperature": 0.0,
+                    "ignore_eos": True,
+                },
+            },
+            timeout=60.0,
+        )
+
+    with ThreadPoolExecutor(max_workers=_EAGER_DRAFT_REQUEST_COUNT) as executor:
+        return list(executor.map(send_one, range(_EAGER_DRAFT_REQUEST_COUNT)))
 
 
 class TestEaglePositionsMisalignRegression(CustomTestCase):
@@ -93,18 +114,7 @@ class TestEaglePositionsMisalignRegression(CustomTestCase):
     def test_position_mismatch_in_server_stderr(self) -> None:
         if self.process is not None and self._launch_exc is None:
             try:
-                requests.post(
-                    self.base_url + "/generate",
-                    json={
-                        "input_ids": list(range(1, 65)),
-                        "sampling_params": {
-                            "max_new_tokens": 32,
-                            "temperature": 0.0,
-                            "ignore_eos": True,
-                        },
-                    },
-                    timeout=60.0,
-                )
+                _run_eager_draft_decode_requests(self.base_url)
             except requests.RequestException:
                 pass
 
@@ -142,19 +152,9 @@ class TestEaglePositionsMatchWithFix(CustomTestCase):
             kill_process_tree(cls.process.pid)
 
     def test_no_canary_fire(self) -> None:
-        resp = requests.post(
-            self.base_url + "/generate",
-            json={
-                "input_ids": list(range(1, 65)),
-                "sampling_params": {
-                    "max_new_tokens": 32,
-                    "temperature": 0.0,
-                    "ignore_eos": True,
-                },
-            },
-            timeout=60.0,
-        )
-        self.assertEqual(resp.status_code, 200, resp.text)
+        responses = _run_eager_draft_decode_requests(self.base_url)
+        for resp in responses:
+            self.assertEqual(resp.status_code, 200, resp.text)
         health = requests.get(self.base_url + "/health", timeout=10.0)
         self.assertEqual(health.status_code, 200, health.text)
         haystack = (self._stderr_buf.getvalue() if self._stderr_buf else "") + (
