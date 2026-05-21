@@ -396,7 +396,12 @@ class TestSelfUnitRunner(CustomTestCase):
 
     def test_sweep_throws_when_walker_output_exceeds_sweep_capacity(self):
         """Verify sweep planning rejects walker output beyond capacity."""
-        runner = _make_runner(device=self.device, sweep_verify_capacity=1)
+        config = _make_config(sweep_interval=1)
+        runner = _make_runner(
+            device=self.device,
+            config=config,
+            sweep_verify_capacity=1,
+        )
         cache = make_radix_cache([[], [10, 11], [12, 13, 14]], device=self.device)
         cache.req_to_token_pool = make_req_to_token_pool(self.device)
         runner.attach_radix_cache(cache)
