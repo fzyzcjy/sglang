@@ -34,6 +34,8 @@ from sglang.srt.kv_canary.runner import per_forward as per_forward_module
 from sglang.srt.kv_canary.runner import pump as pump_module
 from sglang.srt.kv_canary.runner.canary_runner import CanaryRunner
 from sglang.srt.kv_canary.state import ViolationLog
+from sglang.srt.kv_canary.token_oracle.oracle import TokenOracle
+from sglang.srt.kv_canary.token_oracle.oracle_manager import TokenOracleManager
 from sglang.test.ci.ci_register import register_cuda_ci
 from sglang.test.kv_canary.fixtures import (
     DEFAULT_DEVICE,
@@ -106,6 +108,9 @@ class _FakeDecodeForwardMode:
         return False
 
     def is_draft_extend_v2(self) -> bool:
+        return False
+
+    def is_draft_extend(self, include_v2: bool = False) -> bool:
         return False
 
     def is_extend_or_draft_extend_or_mixed(self) -> bool:
@@ -454,6 +459,40 @@ class TestSelfUnitRunner(CustomTestCase):
         self.assertTrue(call["fb_input_ids"].is_contiguous())
         self.assertTrue(call["fb_positions"].is_contiguous())
         self.assertTrue(call["fb_out_cache_loc"].is_contiguous())
+
+    def test_token_oracle_expands_draft_extend_req_ids_per_token(self):
+        """Verify EAGLE draft extend maps one request row to every draft token."""
+        mode = SimpleNamespace(
+            is_target_verify=lambda: False,
+            is_draft_extend=lambda include_v2=False: True,
+            is_extend=lambda: True,
+        )
+        forward_batch = SimpleNamespace(
+            forward_mode=mode,
+            spec_info=SimpleNamespace(num_tokens_per_req=4),
+            rids_int=torch.tensor([3, 7], dtype=torch.int64, device=self.device),
+            input_ids=torch.tensor(
+                [101, 102, 103, 104, 201, 202, 203, 204],
+                dtype=torch.int64,
+                device=self.device,
+            ),
+            positions=torch.arange(8, dtype=torch.int64, device=self.device),
+            extend_seq_lens=torch.tensor([1, 1], dtype=torch.int64, device=self.device),
+        )
+        expected_inputs = ExpectedInputs.allocate(capacity=8, device=self.device)
+        manager = TokenOracleManager(oracle=TokenOracle(vocab_size=32000))
+
+        manager.fill_expected_inputs(
+            forward_batch=forward_batch,
+            expected_inputs_out=expected_inputs,
+        )
+
+        self.assertTrue(
+            torch.equal(expected_inputs.tokens[:8], forward_batch.input_ids)
+        )
+        self.assertTrue(
+            torch.equal(expected_inputs.positions[:8], forward_batch.positions)
+        )
 
     def test_kernel_run_counter_watchdog_raises_on_zero(self):
         """Verify the kernel watchdog raises when counters stop advancing."""
