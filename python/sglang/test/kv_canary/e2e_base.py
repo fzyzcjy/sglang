@@ -71,6 +71,8 @@ _MODE_CONFIGS: dict[str, _ModeConfig] = {
             "dummy",
             "--mem-fraction-static",
             "0.70",
+            "--max-total-tokens",
+            "131072",
         ),
     ),
 }

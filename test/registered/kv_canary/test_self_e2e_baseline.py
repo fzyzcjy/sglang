@@ -35,5 +35,26 @@ class TestBaselineSwa(_BaselineBase, unittest.TestCase):
     model_mode = "swa"
 
 
+class TestBaselineHybridSwaRealDataSweep(CanaryE2EBase, unittest.TestCase):
+    __test__ = True
+
+    model_mode = "hybrid_swa"
+    kv_canary_mode = "log"
+    extra_env = {}
+    extra_server_args = (
+        "--kv-canary-real-data",
+        "partial",
+        "--kv-canary-sweep-interval",
+        "4",
+    )
+    use_unique_prompts = True
+
+    def test_no_violation_with_real_data_sweep(self) -> None:
+        """Verify hybrid-SWA real-KV sweep has no ambient violations."""
+        self.send_parallel_requests(n=8)
+        self.send_parallel_requests(n=8)
+        self.assert_no_violation(wait_seconds=5.0)
+
+
 if __name__ == "__main__":
     unittest.main()
