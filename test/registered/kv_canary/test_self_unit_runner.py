@@ -505,24 +505,22 @@ class TestSelfUnitRunner(CustomTestCase):
         calls: List[str] = []
         created_signals: List[int] = []
 
-        def _fail_if_waited():
-            raise AssertionError("capture path must not wait for a host-side future")
-
         def _record_create(*, src_device, stream):
             del stream
             created_signals.append(int(src_device.cpu().item()))
-            return SimpleNamespace(wait=_fail_if_waited)
+            return SimpleNamespace(
+                wait=lambda: torch.zeros(1, dtype=torch.uint8, device="cpu")
+            )
 
         runner._device_state.violation_log.violation_write_index.fill_(1)
-        runner._pump_and_allreduce._previous_pump_future = SimpleNamespace(
-            wait=_fail_if_waited
-        )
 
         with patch.object(torch.cuda, "is_current_stream_capturing", return_value=True):
             with patch.object(
                 pump_module.FutureTensor,
                 "create",
-                _record_create,
+                lambda **kwargs: (_ for _ in ()).throw(
+                    AssertionError("capture path must not enqueue host copies")
+                ),
             ), patch.object(
                 runner._sweep_orchestrator,
                 "maybe_run_sweep",
@@ -539,6 +537,13 @@ class TestSelfUnitRunner(CustomTestCase):
                 runner._end_of_step()
 
         self.assertEqual(calls, [])
+        self.assertEqual(created_signals, [])
+
+        with patch.object(torch.cuda, "is_current_stream_capturing", return_value=False):
+            with patch.object(pump_module.FutureTensor, "create", _record_create):
+                with self.assertRaisesRegex(RuntimeError, "kv_canary violation"):
+                    runner._end_of_step()
+
         self.assertEqual(created_signals, [1])
 
     def test_periodic_stats_log_every_n_step(self):

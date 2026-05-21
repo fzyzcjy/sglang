@@ -31,6 +31,7 @@ class PumpAndAllreduce:
         self._step_counter: int = 0
         self._previous_pump_future: Optional[FutureTensor] = None
         self._previous_allreduce_future: Optional[FutureTensor] = None
+        self._capture_pending: bool = False
 
     @property
     def step_counter(self) -> int:
@@ -40,17 +41,22 @@ class PumpAndAllreduce:
         violation_log = self._device_state.violation_log
         signal = (violation_log.violation_write_index > 0).to(torch.uint8)
         is_capturing = torch.cuda.is_current_stream_capturing()
+        if is_capturing:
+            self._capture_pending = True
+            self._step_counter += 1
+            return False
 
         local_errored = False
-        if self._previous_pump_future is not None and not is_capturing:
+        if self._previous_pump_future is not None:
             local_errored = bool(int(self._previous_pump_future.wait().item()))
+        if self._capture_pending:
+            local_errored = local_errored or bool(int(signal.cpu().item()))
+            self._capture_pending = False
         self._previous_pump_future = FutureTensor.create(
             src_device=signal.view(-1)[:1], stream=self._d2h_stream
         )
 
         self._step_counter += 1
-        if is_capturing:
-            return False
 
         any_rank_errored = local_errored
         allreduce_buf = self._device_state.allreduce_buf
