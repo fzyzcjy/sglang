@@ -112,6 +112,12 @@ class CanaryE2EBase(CustomTestCase):
             cls.kv_canary_mode,
             "--context-length",
             "8192",
+            "--cuda-graph-max-bs",
+            "8",
+            "--max-running-requests",
+            "32",
+            "--max-total-tokens",
+            "65536",
             *cls.extra_server_args,
         ]
         if cls._cfg.json_model_override_args is not None:
