@@ -21,7 +21,6 @@ class TestE2EPipelineParallel(CustomTestCase):
     def setUpClass(cls) -> None:
         engine_kwargs = mock_model_engine_kwargs(
             pp_size=2,
-            json_model_override_args='{"num_hidden_layers": 2}',
             sampling_backend="pytorch",
             cuda_graph_max_bs=8,
             max_running_requests=32,

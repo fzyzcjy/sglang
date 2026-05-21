@@ -158,13 +158,12 @@ class TestMockModelEngineKwargs(CustomTestCase):
         else:
             os.environ["SGLANG_KV_CANARY_INPUT_CHECK"] = self._prior_input_check
 
-    def test_mock_model_engine_kwargs_merges_json_override(self) -> None:
+    def test_mock_model_engine_kwargs_preserves_json_override(self) -> None:
         kwargs = mock_model_engine_kwargs(
             json_model_override_args='{"rope_theta": 1000.0}',
         )
 
         merged = json.loads(kwargs["json_model_override_args"])
-        self.assertEqual(merged["num_hidden_layers"], 1)
         self.assertEqual(merged["rope_theta"], 1000.0)
 
     def test_mock_model_engine_kwargs_speculative_disables_input_check(self) -> None:

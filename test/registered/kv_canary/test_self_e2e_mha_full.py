@@ -10,15 +10,11 @@ register_cuda_ci(est_time=210, stage="extra-a", runner_config="1-gpu-large")
 
 
 _QWEN3_MODEL = "Qwen/Qwen3-0.6B"
-_NUM_LAYERS_OVERRIDE = '{"num_hidden_layers": 1}'
 
-# DO NOT pass --disable-cuda-graph in any canary e2e test. The canary kernel
-# must run inside the (main) cuda graph alongside the real attn kernel;
-# disabling the main graph silently bypasses the only path that exercises that
-# invariant end-to-end. --disable-piecewise-cuda-graph IS allowed: the
-# piecewise warmup path triggers an upstream sglang IMA on 1-layer Qwen that
-# is unrelated to canary, and sglang's own error message suggests this
-# workaround.
+# DO NOT pass --disable-cuda-graph or --disable-piecewise-cuda-graph in any
+# canary e2e test. The canary kernel must run inside the cuda graph alongside
+# the real attn kernel; disabling the graph silently bypasses the only path
+# that exercises that invariant end-to-end.
 
 # Cap canary install-time capacities below the cuda-grid-safe ceiling
 # enforced by install_canary (4M, see capacities.py::_MAX_CUDA_GRID_SAFE_VERIFY_CAPACITY).
@@ -36,17 +32,12 @@ _CANARY_CAPACITY_CAPS: List[str] = [
     "2048",
     "--max-total-tokens",
     "16384",
-    "--disable-piecewise-cuda-graph",
 ]
 
 
 class _MhaFullBase(CanaryE2EBase):
     model: ClassVar[str] = _QWEN3_MODEL
-    extra_server_args: ClassVar[List[str]] = [
-        "--json-model-override-args",
-        _NUM_LAYERS_OVERRIDE,
-        *_CANARY_CAPACITY_CAPS,
-    ]
+    extra_server_args: ClassVar[List[str]] = list(_CANARY_CAPACITY_CAPS)
 
 
 class TestNoPerturbNoViolation(_MhaFullBase, unittest.TestCase):
@@ -74,8 +65,6 @@ class TestPerturbReqToTokenDetectsViolation(_MhaFullBase, unittest.TestCase):
 
 class TestRealDataOff(_MhaFullBase, unittest.TestCase):
     extra_server_args: ClassVar[List[str]] = [
-        "--json-model-override-args",
-        _NUM_LAYERS_OVERRIDE,
         *_CANARY_CAPACITY_CAPS,
         "--kv-canary-real-data",
         "off",
@@ -89,8 +78,6 @@ class TestRealDataOff(_MhaFullBase, unittest.TestCase):
 
 class TestRealDataPartial(_MhaFullBase, unittest.TestCase):
     extra_server_args: ClassVar[List[str]] = [
-        "--json-model-override-args",
-        _NUM_LAYERS_OVERRIDE,
         *_CANARY_CAPACITY_CAPS,
         "--kv-canary-real-data",
         "partial",
@@ -104,8 +91,6 @@ class TestRealDataPartial(_MhaFullBase, unittest.TestCase):
 
 class TestRealDataAll(_MhaFullBase, unittest.TestCase):
     extra_server_args: ClassVar[List[str]] = [
-        "--json-model-override-args",
-        _NUM_LAYERS_OVERRIDE,
         *_CANARY_CAPACITY_CAPS,
         "--kv-canary-real-data",
         "all",
@@ -119,8 +104,6 @@ class TestRealDataAll(_MhaFullBase, unittest.TestCase):
 
 class TestRealDataAllPerturbKvByteDetectsViolation(_MhaFullBase, unittest.TestCase):
     extra_server_args: ClassVar[List[str]] = [
-        "--json-model-override-args",
-        _NUM_LAYERS_OVERRIDE,
         *_CANARY_CAPACITY_CAPS,
         "--kv-canary-real-data",
         "all",
@@ -188,8 +171,6 @@ class TestLogModeKeepsServerAlive(_MhaFullBase, unittest.TestCase):
 
 class TestSweepOrphanRadixDetectsViolation(_MhaFullBase, unittest.TestCase):
     extra_server_args: ClassVar[List[str]] = [
-        "--json-model-override-args",
-        _NUM_LAYERS_OVERRIDE,
         *_CANARY_CAPACITY_CAPS,
         "--kv-canary-real-data",
         "all",

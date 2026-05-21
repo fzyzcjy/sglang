@@ -6,7 +6,6 @@ main code (server_args) does not have to know about it.
 
 from __future__ import annotations
 
-import json
 import os
 from typing import Any
 
@@ -16,7 +15,6 @@ def mock_model_engine_kwargs(**overrides: Any) -> dict[str, Any]:
 
     Defaults:
         load_format = "dummy"            (no real weights loaded)
-        json_model_override_args = '{"num_hidden_layers": 1}'
         sampling_backend = "token_oracle" (gate for install_token_oracle_from_env)
         kv_canary = "raise"              (mock-model without canary is mostly pointless)
         cuda_graph_max_bs / max_running_requests / context_length / max_total_tokens
@@ -38,9 +36,7 @@ def mock_model_engine_kwargs(**overrides: Any) -> dict[str, Any]:
     is set, the default sampling backend switches to ``pytorch`` because the
     oracle can't predict draft-position tokens.
 
-    Caller-supplied overrides win; for json_model_override_args, the override
-    dict is merged on top of the default so callers can add extra keys without
-    losing num_hidden_layers=1.
+    Caller-supplied overrides win.
     """
     is_spec = "speculative_algorithm" in overrides
     default_sampling_backend = "pytorch" if is_spec else "token_oracle"
@@ -54,7 +50,6 @@ def mock_model_engine_kwargs(**overrides: Any) -> dict[str, Any]:
 
     defaults: dict[str, Any] = {
         "load_format": "dummy",
-        "json_model_override_args": json.dumps({"num_hidden_layers": 1}),
         "sampling_backend": default_sampling_backend,
         "kv_canary": "raise",
         "cuda_graph_max_bs": 8,
@@ -62,10 +57,6 @@ def mock_model_engine_kwargs(**overrides: Any) -> dict[str, Any]:
         "context_length": 2048,
         "max_total_tokens": 16384,
     }
-    if "json_model_override_args" in overrides:
-        user_dict = json.loads(overrides.pop("json_model_override_args"))
-        merged = {"num_hidden_layers": 1, **user_dict}
-        defaults["json_model_override_args"] = json.dumps(merged)
     defaults.update(overrides)
     return defaults
 

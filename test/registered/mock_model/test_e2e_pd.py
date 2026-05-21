@@ -28,8 +28,6 @@ _MODEL = "Qwen/Qwen3-0.6B"
 _MOCK_PD_COMMON_ARGS: List[str] = [
     "--load-format",
     "dummy",
-    "--json-model-override-args",
-    '{"num_hidden_layers": 1}',
     "--skip-server-warmup",
     "--sampling-backend",
     "pytorch",
