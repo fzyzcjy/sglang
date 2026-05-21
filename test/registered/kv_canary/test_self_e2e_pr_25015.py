@@ -40,7 +40,7 @@ def _spec_eagle_server_args() -> List[str]:
         # Caps kept small to keep the e2e test cheap (run time + device memory budget for the
         # canary buffers). Not load-bearing on canary's overflow behavior.
         "--cuda-graph-max-bs",
-        "8",
+        "1",
         "--max-running-requests",
         "32",
         "--context-length",
