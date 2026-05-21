@@ -315,13 +315,13 @@ def _walk_radix_subtree(
         node_slots = []
 
     is_swa_tombstone = (
-        type(radix_cache) is SWARadixCache
-        and swa_resident_only
-        and node.swa_tombstone
+        type(radix_cache) is SWARadixCache and swa_resident_only and node.swa_tombstone
     )
     if unlocked_only:
-        emit_slots = not is_root and not is_swa_tombstone and _node_is_unlocked_for_canary(
-            node=node, radix_cache=radix_cache
+        emit_slots = (
+            not is_root
+            and not is_swa_tombstone
+            and _node_is_unlocked_for_canary(node=node, radix_cache=radix_cache)
         )
     else:
         emit_slots = not is_root and not is_swa_tombstone
