@@ -674,7 +674,7 @@ class Qwen3ForCausalLM(nn.Module):
 
     def set_embed_and_head(self, embed, head):
         del self.model.embed_tokens.weight
-        if not self.config.tie_word_embeddings:
+        if not self.config.tie_word_embeddings and hasattr(self.lm_head, "weight"):
             del self.lm_head.weight
 
         self.model.embed_tokens.weight = embed
