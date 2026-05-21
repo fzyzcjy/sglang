@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from typing import cast
 from unittest.mock import patch
 
 import torch
