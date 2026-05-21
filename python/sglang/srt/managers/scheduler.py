@@ -415,6 +415,9 @@ class Scheduler(
         # Init mamba backend
         self.init_mamba_backend()
 
+        if pr_num := envs.SGLANG_DEBUG_REVERT_PR.get():
+            revert_pr_fix(pr_num)
+
         # Launch a model worker and draft model worker if using speculative decoding
         self.init_model_worker()
 
@@ -703,9 +706,6 @@ class Scheduler(
             output_streamer=self.output_streamer,
             abort_request=self.abort_request,
         )
-
-        if pr_num := envs.SGLANG_DEBUG_REVERT_PR.get():
-            revert_pr_fix(pr_num)
 
         self.is_initializing = False
 
