@@ -673,15 +673,10 @@ class Qwen3ForCausalLM(nn.Module):
         return self.model.embed_tokens.weight, self.lm_head.weight
 
     def set_embed_and_head(self, embed, head):
-        if self.lm_head is self.model.embed_tokens:
-            del self.model.embed_tokens.weight
-            self.model.embed_tokens.weight = embed
-            self.lm_head = self.model.embed_tokens
-        else:
-            del self.model.embed_tokens.weight
-            del self.lm_head.weight
-            self.model.embed_tokens.weight = embed
-            self.lm_head.weight = head
+        del self.model.embed_tokens.weight
+        del self.lm_head.weight
+        self.model.embed_tokens.weight = embed
+        self.lm_head.weight = head
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
