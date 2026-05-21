@@ -30,6 +30,7 @@ from sglang.srt.kv_canary.perturb.manager import PerturbManager
 from sglang.srt.kv_canary.perturb.slot_picker import collect_active_slots
 from sglang.srt.kv_canary.runner import canary_runner as runner_module
 from sglang.srt.kv_canary.runner import launch as launch_module
+from sglang.srt.kv_canary.runner import per_forward as per_forward_module
 from sglang.srt.kv_canary.runner.canary_runner import CanaryRunner
 from sglang.srt.kv_canary.state import ViolationLog
 from sglang.test.ci.ci_register import register_cuda_ci
@@ -483,6 +484,19 @@ class TestSelfUnitRunner(CustomTestCase):
         runner._health_checker.step()
         runner._pump_and_allreduce._step_counter = 2000
         runner._health_checker.step()
+
+    def test_enable_warner_skips_host_sync_during_cuda_graph_capture(self):
+        """Verify the enable warner does not synchronize events while CUDA graph capture is active."""
+        warner = per_forward_module._CanaryEnableWarner(
+            verify_capacity=1,
+            d2h_stream=torch.cuda.current_stream(self.device),
+        )
+        enable = torch.ones(1, dtype=torch.int32, device=self.device)
+
+        with patch.object(torch.cuda, "is_current_stream_capturing", return_value=True):
+            warner.tick(enable)
+
+        self.assertIsNone(warner._pending_future)
 
     def test_periodic_stats_log_every_n_step(self):
         """Verify periodic stats are logged at the configured interval."""

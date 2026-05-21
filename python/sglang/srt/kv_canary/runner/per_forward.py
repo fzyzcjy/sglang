@@ -48,6 +48,9 @@ class _CanaryEnableWarner:
         self._overflow_count_total: int = 0
 
     def tick(self, enable_device: torch.Tensor) -> None:
+        if torch.cuda.is_current_stream_capturing():
+            return
+
         self._drain_previous()
         self._pending_future = FutureTensor.create(
             src_device=enable_device,
