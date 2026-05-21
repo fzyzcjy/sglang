@@ -27,7 +27,9 @@ _PLAN_EXTRAS_INNER_BLOCK: int = 64
 
 def _max_entry_j_tiles(*, verify_capacity: int, max_seq_len_per_req: int) -> int:
     max_verify_per_req = min(verify_capacity, max_seq_len_per_req)
-    return (max_verify_per_req + _PLAN_VERIFY_INNER_BLOCK - 1) // _PLAN_VERIFY_INNER_BLOCK
+    return (
+        max_verify_per_req + _PLAN_VERIFY_INNER_BLOCK - 1
+    ) // _PLAN_VERIFY_INNER_BLOCK
 
 
 def _resolve_swa_lut(

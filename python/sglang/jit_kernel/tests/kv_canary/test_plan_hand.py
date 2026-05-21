@@ -30,10 +30,13 @@ _DEVICE = torch.device("cuda")
 
 def test_entry_grid_j_tiles_are_bounded_by_per_req_sequence_width() -> None:
     """Verify large pool-wide capacity does not inflate the per-req launch grid."""
-    assert _max_entry_j_tiles(
-        verify_capacity=78_000_000,
-        max_seq_len_per_req=40_960,
-    ) == 640
+    assert (
+        _max_entry_j_tiles(
+            verify_capacity=78_000_000,
+            max_seq_len_per_req=40_960,
+        )
+        == 640
+    )
 
 
 def _tensor(values: list[int]) -> torch.Tensor:
