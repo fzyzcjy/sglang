@@ -269,10 +269,9 @@ class PerForwardOrchestrator:
             return False
         if torch.cuda.is_current_stream_capturing():
             return False
-        if (
-            forward_batch.forward_mode is not None
-            and forward_batch.forward_mode.is_draft_extend(include_v2=True)
-        ):
+        if forward_batch.forward_mode is not None and getattr(
+            forward_batch.forward_mode, "is_draft_extend", lambda include_v2=False: False
+        )(include_v2=True):
             return False
 
         return True
