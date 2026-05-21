@@ -9,17 +9,17 @@ from sglang.test.kv_canary.utils import CanaryE2EBase
 register_cuda_ci(est_time=300, stage="extra-a", runner_config="1-gpu-large")
 
 
-_GEMMA3_MODEL = "google/gemma-3-1b-it"
+_GEMMA3_MODEL = "google/gemma-3-4b-it"
 
 # DO NOT pass --disable-cuda-graph or --disable-piecewise-cuda-graph in any
 # canary e2e test. The canary kernel must run inside the cuda graph alongside
 # the real attn kernel; disabling the graph silently bypasses the only path
 # that exercises that invariant end-to-end.
 
-# Gemma 3 1B-it sliding_window = 512; any prompt tokenising to >512 tokens
+# Gemma 3 4B-it sliding_window = 4096; any prompt tokenising to >4096 tokens
 # will force the SWA sub-pool to clip to the last window, which is the scenario
 # tested by test_long_prompt_swa_window_clip.
-_LONG_PROMPT = ("The quick brown fox jumps over the lazy dog. " * 200).strip()
+_LONG_PROMPT = ("The quick brown fox jumps over the lazy dog. " * 600).strip()
 
 _CANARY_CAPACITY_CAPS: List[str] = [
     "--cuda-graph-max-bs",
@@ -33,12 +33,12 @@ _CANARY_CAPACITY_CAPS: List[str] = [
 ]
 
 
-class _Gemma3TextSwaBase(CanaryE2EBase):
+class _Gemma3SwaBase(CanaryE2EBase):
     model: ClassVar[str] = _GEMMA3_MODEL
     extra_server_args: ClassVar[List[str]] = list(_CANARY_CAPACITY_CAPS)
 
 
-class TestShortPromptFullSwaBothVerify(_Gemma3TextSwaBase, unittest.TestCase):
+class TestShortPromptFullSwaBothVerify(_Gemma3SwaBase, unittest.TestCase):
     def test_short_prompt_full_swa_both_verify(self) -> None:
         # Step 1: drive enough traffic to clear the cuda-graph warmup window.
         results = self.send_parallel_requests(n=16, max_new_tokens=32)
@@ -58,11 +58,11 @@ class TestShortPromptFullSwaBothVerify(_Gemma3TextSwaBase, unittest.TestCase):
         )
 
 
-class TestLongPromptSwaWindowClip(_Gemma3TextSwaBase, unittest.TestCase):
+class TestLongPromptSwaWindowClip(_Gemma3SwaBase, unittest.TestCase):
     extra_server_args: ClassVar[List[str]] = list(_CANARY_CAPACITY_CAPS)
 
     def test_long_prompt_swa_window_clip(self) -> None:
-        # Step 1: send a prompt that exceeds Gemma 3 1B's SWA window (512 tokens).
+        # Step 1: send a prompt that exceeds Gemma 3's SWA window (4096 tokens).
         # The SWA sub-pool clips verification to the last window; the test confirms
         # the clip path completes without raising a canary violation.
         self.assertFalse(
@@ -93,7 +93,7 @@ class TestLongPromptSwaWindowClip(_Gemma3TextSwaBase, unittest.TestCase):
         )
 
 
-class TestMixedBatchNoViolations(_Gemma3TextSwaBase, unittest.TestCase):
+class TestMixedBatchNoViolations(_Gemma3SwaBase, unittest.TestCase):
     def test_mixed_batch_no_violations(self) -> None:
         # Step 1: fan out concurrent requests with varying prompt lengths so the
         # scheduler sees a mixed batch (some requests in FULL layers, some in SWA).
