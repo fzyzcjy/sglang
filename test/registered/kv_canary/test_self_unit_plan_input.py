@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import torch
 
-from sglang.srt.kv_canary.plan_input import (
+from sglang.srt.kv_canary.plan_input_builder import (
     PlanInput,
     build_plan_input_radix_sweep,
     fill_plan_input_per_forward,
@@ -25,11 +25,11 @@ register_cuda_ci(est_time=30, stage="extra-a", runner_config="1-gpu-large")
 def _make_static_plan_input(*, bs_capacity: int, device) -> PlanInput:
     return PlanInput(
         fb_req_pool_indices=torch.zeros(bs_capacity, dtype=torch.int64, device=device),
-        fb_prefix_lens=torch.zeros(bs_capacity, dtype=torch.int32, device=device),
-        fb_extend_seq_lens=torch.zeros(bs_capacity, dtype=torch.int32, device=device),
-        extra_verify_slot_indices=torch.zeros(0, dtype=torch.int32, device=device),
-        extra_verify_positions=torch.zeros(0, dtype=torch.int32, device=device),
-        extra_verify_prev_slot_indices=torch.zeros(0, dtype=torch.int32, device=device),
+        fb_prefix_lens=torch.zeros(bs_capacity, dtype=torch.int64, device=device),
+        fb_extend_seq_lens=torch.zeros(bs_capacity, dtype=torch.int64, device=device),
+        extra_verify_slot_indices=torch.zeros(0, dtype=torch.int64, device=device),
+        extra_verify_positions=torch.zeros(0, dtype=torch.int64, device=device),
+        extra_verify_prev_slot_indices=torch.zeros(0, dtype=torch.int64, device=device),
         extra_verify_num_valid=torch.zeros(1, dtype=torch.int32, device=device),
     )
 
@@ -59,6 +59,8 @@ class TestSelfUnitPlanInput(CustomTestCase):
         self.assertEqual(plan.fb_req_pool_indices[2:].tolist(), [0, 0])
         self.assertEqual(plan.fb_prefix_lens[:2].tolist(), [3, 5])
         self.assertEqual(plan.fb_extend_seq_lens[:2].tolist(), [7, 7])
+        self.assertEqual(plan.fb_prefix_lens.dtype, torch.int64)
+        self.assertEqual(plan.fb_extend_seq_lens.dtype, torch.int64)
 
     def test_fill_plan_input_per_forward_target_verify(self):
         """Verify target-verify batches derive draft verification spans."""
@@ -136,6 +138,9 @@ class TestSelfUnitPlanInput(CustomTestCase):
             full_to_swa_index_mapping=None,
         )
         self.assertEqual(int(out.extra_verify_num_valid.item()), 3)
+        self.assertEqual(out.extra_verify_slot_indices.dtype, torch.int64)
+        self.assertEqual(out.extra_verify_positions.dtype, torch.int64)
+        self.assertEqual(out.extra_verify_prev_slot_indices.dtype, torch.int64)
         self.assertEqual(out.extra_verify_slot_indices[:3].tolist(), [100, 101, 102])
         self.assertEqual(out.extra_verify_positions[:3].tolist(), [0, 1, 2])
         self.assertEqual(

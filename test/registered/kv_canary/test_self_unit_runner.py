@@ -24,11 +24,14 @@ from sglang.srt.kv_canary import endpoint as endpoint_module
 from sglang.srt.kv_canary.buffer_group import CanaryBufferGroup, PoolKind
 from sglang.srt.kv_canary.capacities import CanaryLaunchCapacities
 from sglang.srt.kv_canary.config import CanaryConfig, CanaryMode
-from sglang.srt.kv_canary.perturb.config import PerturbConfig
+from sglang.srt.kv_canary.expected_inputs import ExpectedInputs
+from sglang.srt.kv_canary.perturb.config import PerturbConfig, TargetGroupKind
 from sglang.srt.kv_canary.perturb.manager import PerturbManager
+from sglang.srt.kv_canary.perturb.slot_picker import collect_active_slots
 from sglang.srt.kv_canary.runner import canary_runner as runner_module
 from sglang.srt.kv_canary.runner import launch as launch_module
 from sglang.srt.kv_canary.runner.canary_runner import CanaryRunner
+from sglang.srt.kv_canary.state import ViolationLog
 from sglang.test.ci.ci_register import register_cuda_ci
 from sglang.test.kv_canary.fixtures import (
     DEFAULT_DEVICE,
@@ -62,8 +65,8 @@ def _make_group(*, device, has_v: bool = True, kind: PoolKind = PoolKind.FULL):
 
 
 def _make_pool(device, max_reqs: int = 4, max_seq: int = 8):
-    table = torch.zeros(max_reqs, max_seq, dtype=torch.int32, device=device)
-    return SimpleNamespace(req_to_token=table, size=max_reqs)
+    req_to_token = torch.zeros(max_reqs, max_seq, dtype=torch.int32, device=device)
+    return SimpleNamespace(req_to_token=req_to_token, size=max_reqs)
 
 
 def _make_config(
@@ -122,7 +125,17 @@ def _make_forward_batch(device, bs: int = 2, seq_lens_list=(3, 4)):
         input_ids=torch.zeros(bs, dtype=torch.int32, device=device),
         positions=torch.zeros(bs, dtype=torch.int32, device=device),
         out_cache_loc=torch.zeros(bs, dtype=torch.int32, device=device),
+        num_token_non_padded_cpu=None,
     )
+
+
+class _RecordingEndpoint:
+    def __init__(self, *, kernel_kind: CanaryLaunchTag) -> None:
+        self.kernel_kind = kernel_kind
+        self.calls: list[dict[str, object]] = []
+
+    def launch_per_forward(self, **kwargs: object) -> None:
+        self.calls.append(kwargs)
 
 
 def _make_runner(
@@ -277,7 +290,7 @@ class TestSelfUnitRunner(CustomTestCase):
                 req_to_token_prob=1.0,
                 real_kv_used_prob=0.0,
                 real_kv_unused_cache_prob=0.0,
-                target_group_kind="any",
+                target_group_kind=TargetGroupKind.ANY,
                 warmup_steps=0,
             ),
             req_to_token_pool=pool,
@@ -305,15 +318,117 @@ class TestSelfUnitRunner(CustomTestCase):
         self.assertNotEqual(replacement, original)
         self.assertFalse(bool(diff[1, 0].item()))
 
+    def test_collect_active_slots_ignores_padded_out_cache_loc(self):
+        """Verify out_cache_loc padding does not exclude a live slot."""
+        pool = _make_pool(self.device, max_reqs=4, max_seq=8)
+        pool.req_to_token[1, :2] = torch.tensor(
+            [0, 7], dtype=torch.int32, device=self.device
+        )
+        forward_batch = _make_forward_batch(self.device, bs=1, seq_lens_list=(2,))
+        forward_batch.out_cache_loc = torch.tensor(
+            [7, 0, 0], dtype=torch.int32, device=self.device
+        )
+        forward_batch.num_token_non_padded_cpu = 1
+
+        targets = collect_active_slots(
+            forward_batch=forward_batch,
+            req_to_token_pool=pool,
+        )
+
+        self.assertEqual([target.value for target in targets], [0])
+
+    def test_launch_endpoints_per_forward_uses_unpadded_token_tensors(self):
+        """Verify endpoint launch receives tensors sliced to the real token count."""
+        group = _make_group(device=self.device)
+        endpoint = _RecordingEndpoint(kernel_kind=CanaryLaunchTag.HEAD_K_FULL)
+        forward_batch = _make_forward_batch(self.device, bs=1, seq_lens_list=(1,))
+        forward_batch.input_ids = torch.tensor(
+            [101, 0, 0], dtype=torch.int64, device=self.device
+        )
+        forward_batch.positions = torch.tensor(
+            [10, 0, 0], dtype=torch.int64, device=self.device
+        )
+        forward_batch.out_cache_loc = torch.tensor(
+            [7, 0, 0], dtype=torch.int64, device=self.device
+        )
+        forward_batch.num_token_non_padded_cpu = 1
+
+        launch_module.launch_endpoints_per_forward(
+            endpoints=(endpoint,),
+            group=group,
+            tag_filter=lambda tag: True,
+            verify_plan=VerifyPlan.allocate(verify_capacity=1, device=self.device),
+            write_plan=WritePlan.allocate(write_req_capacity=1, device=self.device),
+            forward_batch=forward_batch,
+            expected_inputs=ExpectedInputs.allocate(capacity=1, device=self.device),
+            violation_log=ViolationLog.allocate(ring_capacity=2, device=self.device),
+            real_kv_hash_mode=RealKvHashMode.OFF,
+            input_check_mode=False,
+        )
+
+        self.assertEqual(len(endpoint.calls), 1)
+        call = endpoint.calls[0]
+        self.assertTrue(
+            torch.equal(
+                call["fb_input_ids"],
+                torch.tensor([101], dtype=torch.int64, device=self.device),
+            )
+        )
+        self.assertTrue(
+            torch.equal(
+                call["fb_positions"],
+                torch.tensor([10], dtype=torch.int64, device=self.device),
+            )
+        )
+        self.assertTrue(
+            torch.equal(
+                call["fb_out_cache_loc"],
+                torch.tensor([7], dtype=torch.int64, device=self.device),
+            )
+        )
+
+    def test_launch_endpoints_per_forward_accepts_int32_boundary_tensors(self):
+        """Verify int32 ForwardBatch tensors are promoted at the canary boundary."""
+        group = _make_group(device=self.device)
+        endpoint = _RecordingEndpoint(kernel_kind=CanaryLaunchTag.HEAD_K_FULL)
+        forward_batch = _make_forward_batch(self.device, bs=1, seq_lens_list=(1,))
+        forward_batch.input_ids = torch.tensor(
+            [101], dtype=torch.int32, device=self.device
+        )
+        forward_batch.positions = torch.tensor(
+            [10], dtype=torch.int32, device=self.device
+        )
+        forward_batch.out_cache_loc = torch.tensor(
+            [7], dtype=torch.int32, device=self.device
+        )
+
+        launch_module.launch_endpoints_per_forward(
+            endpoints=(endpoint,),
+            group=group,
+            tag_filter=lambda tag: True,
+            verify_plan=VerifyPlan.allocate(verify_capacity=1, device=self.device),
+            write_plan=WritePlan.allocate(write_req_capacity=1, device=self.device),
+            forward_batch=forward_batch,
+            expected_inputs=ExpectedInputs.allocate(capacity=1, device=self.device),
+            violation_log=ViolationLog.allocate(ring_capacity=2, device=self.device),
+            real_kv_hash_mode=RealKvHashMode.OFF,
+            input_check_mode=False,
+        )
+
+        call = endpoint.calls[0]
+        self.assertEqual(call["fb_input_ids"].dtype, torch.int64)
+        self.assertEqual(call["fb_positions"].dtype, torch.int64)
+        self.assertEqual(call["fb_out_cache_loc"].dtype, torch.int64)
+
     def test_kernel_run_counter_watchdog_raises_on_zero(self):
         """Verify the kernel watchdog raises when counters stop advancing."""
         runner = _make_runner(device=self.device)
         runner._pump_and_allreduce._step_counter = 1000
         runner._device_state.kernel_run_counters.zero_()
-        runner._health_and_stats.health_check_step()
+        runner._health_checker.step()
         runner._pump_and_allreduce._step_counter = 2000
         with self.assertRaises(RuntimeError):
-            runner._health_and_stats.health_check_step()
+            runner._health_checker.step()
 
     def test_kernel_run_counter_watchdog_ignores_sweep_when_sweep_is_disabled(self):
         """Verify the watchdog ignores disabled sweep counters."""
@@ -332,9 +447,9 @@ class TestSelfUnitRunner(CustomTestCase):
             runner._device_state.kernel_run_counters[tag.value] = 1
 
         runner._pump_and_allreduce._step_counter = 1000
-        runner._health_and_stats.health_check_step()
+        runner._health_checker.step()
         runner._pump_and_allreduce._step_counter = 2000
-        runner._health_and_stats.health_check_step()
+        runner._health_checker.step()
 
     def test_periodic_stats_log_every_n_step(self):
         """Verify periodic stats are logged at the configured interval."""
@@ -347,7 +462,7 @@ class TestSelfUnitRunner(CustomTestCase):
 
         with self.assertLogs(runner_module.logger.name, level=logging.INFO) as cm:
             for _ in range(11):
-                runner._health_and_stats.print_periodic_stats()
+                runner._stats_logger.step()
                 runner._pump_and_allreduce._step_counter += 1
         log_text = "\n".join(cm.output)
         self.assertIn("protected_tokens=", log_text)
@@ -445,8 +560,28 @@ class TestComputeLaunchCapacities(CustomTestCase):
         )
         self.assertEqual(
             capacities.per_forward_verify_capacity,
-            max(1, int(max_total_num_tokens * 1.2)),
+            int(max_total_num_tokens * 1.2),
         )
+
+    def test_manual_capacities_reject_non_positive_fields(self):
+        """Verify manual launch capacities fail instead of being clamped."""
+        with self.assertRaisesRegex(ValueError, "per_forward_verify_capacity"):
+            CanaryLaunchCapacities(
+                per_forward_verify_capacity=0,
+                per_forward_write_req_capacity=1,
+                per_forward_write_entry_capacity=1,
+                sweep_verify_capacity=1,
+            )
+
+    def test_from_args_rejects_empty_pool_capacity(self):
+        """Verify derived launch capacities reject invalid pool sizing."""
+        with self.assertRaisesRegex(ValueError, "pool_slot_count"):
+            CanaryLaunchCapacities.from_args(
+                server_args=self._make_server_args(max_bs=1),
+                req_to_token_pool_size=1,
+                max_seq_len_per_req=1,
+                pool_slot_count=0,
+            )
 
 
 class TestPlanRefOverflowGate(CustomTestCase):
@@ -456,9 +591,9 @@ class TestPlanRefOverflowGate(CustomTestCase):
     @staticmethod
     def _empty_extras(device):
         return (
-            torch.zeros(1, dtype=torch.int32, device=device),
-            torch.zeros(1, dtype=torch.int32, device=device),
-            torch.zeros(1, dtype=torch.int32, device=device),
+            torch.zeros(1, dtype=torch.int64, device=device),
+            torch.zeros(1, dtype=torch.int64, device=device),
+            torch.zeros(1, dtype=torch.int64, device=device),
             torch.zeros(1, dtype=torch.int32, device=device),
         )
 
@@ -471,12 +606,12 @@ class TestPlanRefOverflowGate(CustomTestCase):
         )
         write_plan = WritePlan.allocate(write_req_capacity=bs, device=self.device)
         fb_req_pool_indices = torch.tensor(
-            list(range(1, bs + 1)), dtype=torch.int32, device=self.device
+            list(range(1, bs + 1)), dtype=torch.int64, device=self.device
         )
         fb_prefix_lens = torch.tensor(
-            prefix_lens, dtype=torch.int32, device=self.device
+            prefix_lens, dtype=torch.int64, device=self.device
         )
-        fb_extend_seq_lens = torch.zeros(bs, dtype=torch.int32, device=self.device)
+        fb_extend_seq_lens = torch.zeros(bs, dtype=torch.int64, device=self.device)
         req_to_token = torch.arange(
             (bs + 1) * max_seq_len, dtype=torch.int32, device=self.device
         ).reshape(bs + 1, max_seq_len)

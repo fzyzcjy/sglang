@@ -125,20 +125,31 @@ def _draw_random_write_inputs(rng: random.Random) -> WriteFuzzInputs:
     )
 
     fb_input_ids = torch.tensor(
-        [rng.randint(-(1 << 31), (1 << 31) - 1) for _ in range(total_tokens)],
-        dtype=torch.int32,
+        [rng.randint(0, 0xFFFFFFFF) for _ in range(total_tokens)],
+        dtype=torch.int64,
         device=_DEVICE,
     )
     fb_positions = torch.tensor(
         [rng.randint(0, 1024) for _ in range(total_tokens)],
-        dtype=torch.int32,
+        dtype=torch.int64,
         device=_DEVICE,
     )
     fb_out_cache_loc = torch.tensor(
-        out_cache_loc_list, dtype=torch.int32, device=_DEVICE
+        out_cache_loc_list, dtype=torch.int64, device=_DEVICE
     )
     expected_input_tokens = fb_input_ids.clone()
     expected_input_positions = fb_positions.clone()
+    if enable_write_verify_inputs:
+        candidate_indices = [
+            idx for idx, slot in enumerate(out_cache_loc_list) if slot >= 0
+        ]
+        rng.shuffle(candidate_indices)
+        mismatch_count = rng.randint(0, len(candidate_indices))
+        for idx in candidate_indices[:mismatch_count]:
+            if rng.choice([False, True]):
+                expected_input_tokens[idx] = expected_input_tokens[idx] + 1
+            else:
+                expected_input_positions[idx] = expected_input_positions[idx] + 1
 
     return WriteFuzzInputs(
         cuda_canary_buf=cuda_buf,

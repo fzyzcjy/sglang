@@ -35,6 +35,7 @@ from sglang.jit_kernel.tests.kv_canary._canary_helpers import (
     stamp_clean_chain,
     stamp_pair,
     to_signed_int64,
+    write_slot_fields,
 )
 from sglang.jit_kernel.tests.kv_canary._differential import (
     _run_both_verify,
@@ -112,8 +113,8 @@ def _stamp_clean_kv_chain(
         num_valid_reqs=1,
         device=_DEVICE,
     )
-    pseudo_tokens = torch.zeros(n, dtype=torch.int32, device=_DEVICE)
-    pseudo_positions = torch.zeros(n, dtype=torch.int32, device=_DEVICE)
+    pseudo_tokens = torch.zeros(n, dtype=torch.int64, device=_DEVICE)
+    pseudo_positions = torch.zeros(n, dtype=torch.int64, device=_DEVICE)
     log = FakeViolationLog.allocate(device=_DEVICE)
     canary_write_step_torch_reference(
         canary_buf=cuda_buf,
@@ -473,9 +474,9 @@ class TestViolationField:
         _stamp_clean_kv_chain(
             buf_pair=buf_pair,
             sources_cuda=sources_cuda,
-            fb_input_ids=torch.tensor([7, 8, 9], dtype=torch.int32, device=_DEVICE),
-            fb_positions=torch.tensor([0, 1, 2], dtype=torch.int32, device=_DEVICE),
-            fb_out_cache_loc=torch.tensor([1, 2, 3], dtype=torch.int32, device=_DEVICE),
+            fb_input_ids=torch.tensor([7, 8, 9], dtype=torch.int64, device=_DEVICE),
+            fb_positions=torch.tensor([0, 1, 2], dtype=torch.int64, device=_DEVICE),
+            fb_out_cache_loc=torch.tensor([1, 2, 3], dtype=torch.int64, device=_DEVICE),
             real_kv_hash_mode=consts.RealKvHashMode.ALL,
         )
 
@@ -534,10 +535,10 @@ class TestViolationField:
             _stamp_clean_kv_chain(
                 buf_pair=buf_pair,
                 sources_cuda=sources_cuda,
-                fb_input_ids=torch.tensor(tokens, dtype=torch.int32, device=_DEVICE),
-                fb_positions=torch.tensor(positions, dtype=torch.int32, device=_DEVICE),
+                fb_input_ids=torch.tensor(tokens, dtype=torch.int64, device=_DEVICE),
+                fb_positions=torch.tensor(positions, dtype=torch.int64, device=_DEVICE),
                 fb_out_cache_loc=torch.tensor(
-                    slot_indices, dtype=torch.int32, device=_DEVICE
+                    slot_indices, dtype=torch.int64, device=_DEVICE
                 ),
                 real_kv_hash_mode=consts.RealKvHashMode.ALL,
             )
@@ -741,9 +742,9 @@ class TestRealKvHash:
         _stamp_clean_kv_chain(
             buf_pair=buf_pair,
             sources_cuda=sources_cuda,
-            fb_input_ids=torch.tensor([10, 20, 30], dtype=torch.int32, device=_DEVICE),
-            fb_positions=torch.tensor([0, 1, 2], dtype=torch.int32, device=_DEVICE),
-            fb_out_cache_loc=torch.tensor([1, 2, 3], dtype=torch.int32, device=_DEVICE),
+            fb_input_ids=torch.tensor([10, 20, 30], dtype=torch.int64, device=_DEVICE),
+            fb_positions=torch.tensor([0, 1, 2], dtype=torch.int64, device=_DEVICE),
+            fb_out_cache_loc=torch.tensor([1, 2, 3], dtype=torch.int64, device=_DEVICE),
             real_kv_hash_mode=mode,
         )
 
@@ -774,9 +775,9 @@ class TestRealKvHash:
         _stamp_clean_kv_chain(
             buf_pair=buf_pair,
             sources_cuda=sources_cuda,
-            fb_input_ids=torch.tensor([1, 2], dtype=torch.int32, device=_DEVICE),
-            fb_positions=torch.tensor([0, 1], dtype=torch.int32, device=_DEVICE),
-            fb_out_cache_loc=torch.tensor([1, 2], dtype=torch.int32, device=_DEVICE),
+            fb_input_ids=torch.tensor([1, 2], dtype=torch.int64, device=_DEVICE),
+            fb_positions=torch.tensor([0, 1], dtype=torch.int64, device=_DEVICE),
+            fb_out_cache_loc=torch.tensor([1, 2], dtype=torch.int64, device=_DEVICE),
             real_kv_hash_mode=consts.RealKvHashMode.ALL,
         )
 
@@ -1116,17 +1117,18 @@ class TestRealKvSource:
             pad_dim1=16,  # 16 trailing pad bytes per row; must be skipped.
             device=_DEVICE,
         )
+        trailing_start = holey_source.page_size * holey_source.num_bytes_per_token
         # Fill those skipped trailing bytes with garbage; CUDA must not read them.
-        holey_source.tensor[:, 8:].fill_(0xAA)
+        holey_source.tensor[:, trailing_start:].fill_(0xAA)
         sources = (holey_source,)
         sources_ref = clone_real_kv_sources(sources)
 
         _stamp_clean_kv_chain(
             buf_pair=buf_pair,
             sources_cuda=sources,
-            fb_input_ids=torch.tensor([1, 2], dtype=torch.int32, device=_DEVICE),
-            fb_positions=torch.tensor([0, 1], dtype=torch.int32, device=_DEVICE),
-            fb_out_cache_loc=torch.tensor([1, 2], dtype=torch.int32, device=_DEVICE),
+            fb_input_ids=torch.tensor([1, 2], dtype=torch.int64, device=_DEVICE),
+            fb_positions=torch.tensor([0, 1], dtype=torch.int64, device=_DEVICE),
+            fb_out_cache_loc=torch.tensor([1, 2], dtype=torch.int64, device=_DEVICE),
             real_kv_hash_mode=consts.RealKvHashMode.ALL,
         )
 
@@ -1173,9 +1175,9 @@ class TestLayoutAndScheduling:
         _stamp_clean_kv_chain(
             buf_pair=buf_pair,
             sources_cuda=sources,
-            fb_input_ids=torch.tensor([1, 2], dtype=torch.int32, device=_DEVICE),
-            fb_positions=torch.tensor([0, 1], dtype=torch.int32, device=_DEVICE),
-            fb_out_cache_loc=torch.tensor([1, 5], dtype=torch.int32, device=_DEVICE),
+            fb_input_ids=torch.tensor([1, 2], dtype=torch.int64, device=_DEVICE),
+            fb_positions=torch.tensor([0, 1], dtype=torch.int64, device=_DEVICE),
+            fb_out_cache_loc=torch.tensor([1, 5], dtype=torch.int64, device=_DEVICE),
             real_kv_hash_mode=consts.RealKvHashMode.ALL,
         )
 
@@ -1233,6 +1235,93 @@ class TestLayoutAndScheduling:
         assert int(cuda_log.write_index[0].item()) == 0
         assert int(cuda_log.slot_run_counter[0].item()) == 0
         assert int(cuda_log.kernel_run_counter[0].item()) == 1
+
+    def test_slot_zero_plan_entry_is_skipped(self) -> None:
+        """slot 0 is reserved padding, so verify skips it even when the plan explicitly names it."""
+        canary_buf = make_canary_buf(num_slots=16, slot_stride_bytes=32, device=_DEVICE)
+        write_slot_fields(
+            canary_buf=canary_buf,
+            slot_idx=0,
+            token=999,
+            position=123,
+            prev_hash=to_signed_int64(0xDEADBEEF),
+            real_kv_hash=0,
+        )
+        plan = make_verify_plan(
+            slot_indices=[0],
+            positions=[0],
+            prev_slot_indices=[-1],
+            device=_DEVICE,
+        )
+        log = FakeViolationLog.allocate(capacity=8, device=_DEVICE)
+
+        canary_verify_step(
+            canary_buf=canary_buf,
+            plan=plan,
+            kernel_kind=CanaryLaunchTag.HEAD_K_FULL,
+            violation_ring=log.ring,
+            violation_write_index=log.write_index,
+            slot_run_counter=log.slot_run_counter,
+            kernel_run_counter=log.kernel_run_counter,
+            real_kv_sources=(),
+            real_kv_hash_mode=consts.RealKvHashMode.OFF,
+        )
+        torch.cuda.synchronize()
+
+        assert int(log.write_index[0].item()) == 0
+        assert int(log.slot_run_counter[0].item()) == 0
+        assert int(log.kernel_run_counter[0].item()) == 1
+
+    def test_disabled_plan_skips_slots_but_counts_kernel(self) -> None:
+        """``VerifyPlan.enable = 0`` skips active entries while still marking the verify launch as run."""
+        canary_buf = make_canary_buf(num_slots=16, slot_stride_bytes=32, device=_DEVICE)
+        slot_idx = 5
+        write_slot_fields(
+            canary_buf=canary_buf,
+            slot_idx=slot_idx,
+            token=42,
+            position=1,
+            prev_hash=to_signed_int64(0x1234),
+            real_kv_hash=0,
+        )
+        plan = make_verify_plan(
+            slot_indices=[slot_idx],
+            positions=[0],
+            prev_slot_indices=[-1],
+            device=_DEVICE,
+        )
+        plan.enable[0] = 0
+
+        log = FakeViolationLog.allocate(capacity=8, device=_DEVICE)
+        log.ring.fill_(-777)
+        log.write_index[0] = 3
+        log.slot_run_counter[0] = 11
+        log.kernel_run_counter[0] = 13
+        ring_before = log.ring.clone()
+        write_index_before = log.write_index.clone()
+        slot_run_before = log.slot_run_counter.clone()
+        kernel_run_before = log.kernel_run_counter.clone()
+
+        canary_verify_step(
+            canary_buf=canary_buf,
+            plan=plan,
+            kernel_kind=CanaryLaunchTag.HEAD_K_FULL,
+            violation_ring=log.ring,
+            violation_write_index=log.write_index,
+            slot_run_counter=log.slot_run_counter,
+            kernel_run_counter=log.kernel_run_counter,
+            real_kv_sources=(),
+            real_kv_hash_mode=consts.RealKvHashMode.OFF,
+        )
+        torch.cuda.synchronize()
+
+        assert torch.equal(log.ring, ring_before)
+        assert torch.equal(log.write_index, write_index_before)
+        assert torch.equal(log.slot_run_counter, slot_run_before)
+        assert (
+            int(log.kernel_run_counter[0].item())
+            == int(kernel_run_before[0].item()) + 1
+        )
 
     def test_paged_layout_page_size_16(self) -> None:
         """page_size=16: slot→page mapping doesn't change verify chain semantics on a clean chain."""

@@ -12,7 +12,6 @@ from sglang.jit_kernel.kv_canary.verify import (
     RealKvSource,
     canary_verify_step,
 )
-from sglang.jit_kernel.kv_canary.verify_ref import _compute_real_kv_hash_scalar
 from sglang.jit_kernel.kv_canary.write import canary_write_step
 from sglang.jit_kernel.tests.kv_canary._canary_helpers import (
     FakeViolationLog,
@@ -55,8 +54,7 @@ _DEVICE = torch.device("cuda")
 
 
 def _int32_tensor(values: list[int]) -> torch.Tensor:
-    signed_values = [((value + (1 << 31)) % (1 << 32)) - (1 << 31) for value in values]
-    return torch.tensor(signed_values, dtype=torch.int32, device=_DEVICE)
+    return torch.tensor(values, dtype=torch.int64, device=_DEVICE)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -443,12 +441,15 @@ class TestChain:
 
         running = splitmix64(consts.CANARY_CHAIN_ANCHOR)
         for slot_idx, token, position in zip(slot_indices, tokens, positions):
-            rkv = _compute_real_kv_hash_scalar(
-                real_kv_sources=sources_cuda,
-                real_kv_hash_mode=consts.RealKvHashMode.ALL,
-                slot_idx=slot_idx,
-                work_device=torch.device("cpu"),
-            )
+            rkv = 0
+            for src in sources_cuda:
+                row_bytes = (
+                    src.tensor[slot_idx, : src.read_bytes].detach().cpu().tolist()
+                )
+                fold = 0
+                for b in row_bytes:
+                    fold = splitmix64(fold ^ int(b))
+                rkv = splitmix64(rkv ^ fold)
             stored_prev_signed = read_slot_fields(
                 canary_buf=cuda_buf, slot_idx=slot_idx
             )[2]
@@ -688,8 +689,8 @@ class TestMockMode:
 class TestSlotHandling:
     def test_negative_slot_skips_entry(self) -> None:
         """``fb_out_cache_loc[i] < 0`` → that entry is skipped: no buf write, no violation, no
-        slot_run_counter bump. Covers both SWA out-of-window (after caller-side LUT gather) and
-        explicit padding intents.
+        canary slot mutation. It still counts as a processed write entry for health accounting.
+        Covers both SWA out-of-window (after caller-side LUT gather) and explicit padding intents.
         """
         buf_pair = make_canary_buf_pair(
             num_slots=16, slot_stride_bytes=32, device=_DEVICE
@@ -714,8 +715,7 @@ class TestSlotHandling:
 
         stored_token, _, _, _ = read_slot_fields(canary_buf=buf_pair[0], slot_idx=4)
         assert stored_token == 42
-        # slot_run_counter counts only non-skipped entries (1, not 2).
-        assert int(cuda_log.slot_run_counter.item()) == 1
+        assert int(cuda_log.slot_run_counter.item()) == 2
 
     def test_pre_translated_slot_writes_normally(self) -> None:
         """``fb_out_cache_loc[i] >= 0`` → the kernel writes to exactly that slot, with no LUT applied. This
@@ -1107,8 +1107,14 @@ class TestRealKvHash:
             num_slots=16,
             device=_DEVICE,
         )
-        sources_cuda[0].tensor[0, 3 * 16 : 4 * 16] = 3
-        sources_cuda[0].tensor[0, 7 * 16 : 8 * 16] = 7
+        pattern_slot3 = bytes(range(1, 17))
+        pattern_slot7 = bytes(range(101, 117))
+        sources_cuda[0].tensor[0, 3 * 16 : 4 * 16] = torch.tensor(
+            list(pattern_slot3), dtype=torch.uint8, device=_DEVICE
+        )
+        sources_cuda[0].tensor[0, 7 * 16 : 8 * 16] = torch.tensor(
+            list(pattern_slot7), dtype=torch.uint8, device=_DEVICE
+        )
         sources_ref = clone_real_kv_sources(sources_cuda)
 
         plan_pair = make_write_plan_pair(
@@ -1132,9 +1138,9 @@ class TestRealKvHash:
 
         slot3 = read_slot_fields(canary_buf=buf_pair[0], slot_idx=3)
         slot7 = read_slot_fields(canary_buf=buf_pair[0], slot_idx=7)
-        assert (
-            slot3[3] != slot7[3] or slot3[3] == 0
-        ), "two distinct slots in the same page must compute their own real_kv_hash"
+        assert slot3[3] == to_signed_int64(_hand_fold_all(pattern_slot3))
+        assert slot7[3] == to_signed_int64(_hand_fold_all(pattern_slot7))
+        assert slot3[3] != slot7[3]
 
     def test_multi_source_real_kv_fold_order_matters(self) -> None:
         """Two sources folded in reverse order yields a different real_kv_hash (fold is ordered)."""
@@ -1175,8 +1181,10 @@ class TestRealKvHash:
 
         fields_a = _run_with(sources_a)
         fields_b = _run_with(sources_b)
+        assert fields_a[3] != 0
+        assert fields_b[3] != 0
         assert (
-            fields_a[3] != fields_b[3] or fields_a[3] == 0
+            fields_a[3] != fields_b[3]
         ), "reversing source order must change real_kv_hash (fold is ordered)"
 
 
@@ -1289,10 +1297,10 @@ class TestMisc:
         )
 
         garbage_expected_tokens = torch.full(
-            (1,), 0x7F7F7F7F, dtype=torch.int32, device=_DEVICE
+            (1,), 0x7F7F7F7F, dtype=torch.int64, device=_DEVICE
         )
         garbage_expected_positions = torch.full(
-            (1,), 0x7F7F7F7F, dtype=torch.int32, device=_DEVICE
+            (1,), 0x7F7F7F7F, dtype=torch.int64, device=_DEVICE
         )
 
         cuda_log, ref_log = run_write_diff(

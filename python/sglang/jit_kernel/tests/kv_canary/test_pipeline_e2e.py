@@ -23,6 +23,7 @@ from sglang.jit_kernel.tests.kv_canary._canary_helpers import (
     assert_canary_state_equal,
     make_canary_buf,
     make_real_kv_sources,
+    stamp_clean_chain,
     write_slot_fields,
 )
 from sglang.jit_kernel.tests.kv_canary._fixtures import (
@@ -143,6 +144,7 @@ def _run_both_and_assert_pipeline_equal(
     verify_capacity: int = 256,
     write_req_capacity: int = 16,
     assert_ring_equal: bool = True,
+    initial_canary_buf: Optional[torch.Tensor] = None,
 ) -> tuple[
     torch.Tensor,
     torch.Tensor,
@@ -156,15 +158,18 @@ def _run_both_and_assert_pipeline_equal(
     total_tokens = int(fb_input_ids.shape[0])
     if expected_input_tokens is None:
         expected_input_tokens = torch.zeros(
-            total_tokens, dtype=torch.int32, device=_DEVICE
+            total_tokens, dtype=torch.int64, device=_DEVICE
         )
     if expected_input_positions is None:
         expected_input_positions = torch.zeros(
-            total_tokens, dtype=torch.int32, device=_DEVICE
+            total_tokens, dtype=torch.int64, device=_DEVICE
         )
 
-    buf_real = make_canary_buf(num_slots=num_slots, device=_DEVICE)
-    buf_ref = make_canary_buf(num_slots=num_slots, device=_DEVICE)
+    if initial_canary_buf is None:
+        buf_real = make_canary_buf(num_slots=num_slots, device=_DEVICE)
+    else:
+        buf_real = initial_canary_buf.clone()
+    buf_ref = buf_real.clone()
     log_real = FakeViolationLog.allocate(capacity=ring_capacity, device=_DEVICE)
     log_ref = FakeViolationLog.allocate(capacity=ring_capacity, device=_DEVICE)
 
@@ -235,11 +240,11 @@ def test_pipeline_basic_5_step_single_req() -> None:
     req_to_token = make_req_to_token(
         kind="linear", max_reqs=4, max_seq_len=max_seq_len, device=_DEVICE
     )
-    fb_req_pool_indices = torch.tensor([1], dtype=torch.int32, device=_DEVICE)
-    fb_prefix_lens = torch.tensor([0], dtype=torch.int32, device=_DEVICE)
-    fb_extend_seq_lens = torch.tensor([5], dtype=torch.int32, device=_DEVICE)
-    fb_input_ids = torch.tensor([10, 20, 30, 40, 50], dtype=torch.int32, device=_DEVICE)
-    fb_positions = torch.tensor([0, 1, 2, 3, 4], dtype=torch.int32, device=_DEVICE)
+    fb_req_pool_indices = torch.tensor([1], dtype=torch.int64, device=_DEVICE)
+    fb_prefix_lens = torch.tensor([0], dtype=torch.int64, device=_DEVICE)
+    fb_extend_seq_lens = torch.tensor([5], dtype=torch.int64, device=_DEVICE)
+    fb_input_ids = torch.tensor([10, 20, 30, 40, 50], dtype=torch.int64, device=_DEVICE)
+    fb_positions = torch.tensor([0, 1, 2, 3, 4], dtype=torch.int64, device=_DEVICE)
     fb_out_cache_loc = torch.tensor(
         [
             1 * max_seq_len + 0,
@@ -248,7 +253,7 @@ def test_pipeline_basic_5_step_single_req() -> None:
             1 * max_seq_len + 3,
             1 * max_seq_len + 4,
         ],
-        dtype=torch.int32,
+        dtype=torch.int64,
         device=_DEVICE,
     )
 
@@ -273,11 +278,11 @@ def test_pipeline_multi_req_mixed_extend_decode() -> None:
     req_to_token = make_req_to_token(
         kind="linear", max_reqs=8, max_seq_len=max_seq_len, device=_DEVICE
     )
-    fb_req_pool_indices = torch.tensor([1, 2, 0], dtype=torch.int32, device=_DEVICE)
-    fb_prefix_lens = torch.tensor([0, 5, 0], dtype=torch.int32, device=_DEVICE)
-    fb_extend_seq_lens = torch.tensor([4, 1, 0], dtype=torch.int32, device=_DEVICE)
-    fb_input_ids = torch.tensor([11, 12, 13, 14, 21], dtype=torch.int32, device=_DEVICE)
-    fb_positions = torch.tensor([0, 1, 2, 3, 5], dtype=torch.int32, device=_DEVICE)
+    fb_req_pool_indices = torch.tensor([1, 2, 0], dtype=torch.int64, device=_DEVICE)
+    fb_prefix_lens = torch.tensor([0, 5, 0], dtype=torch.int64, device=_DEVICE)
+    fb_extend_seq_lens = torch.tensor([4, 1, 0], dtype=torch.int64, device=_DEVICE)
+    fb_input_ids = torch.tensor([11, 12, 13, 14, 21], dtype=torch.int64, device=_DEVICE)
+    fb_positions = torch.tensor([0, 1, 2, 3, 5], dtype=torch.int64, device=_DEVICE)
     fb_out_cache_loc = torch.tensor(
         [
             1 * max_seq_len + 0,
@@ -286,7 +291,7 @@ def test_pipeline_multi_req_mixed_extend_decode() -> None:
             1 * max_seq_len + 3,
             2 * max_seq_len + 5,
         ],
-        dtype=torch.int32,
+        dtype=torch.int64,
         device=_DEVICE,
     )
 
@@ -319,20 +324,20 @@ def test_pipeline_swa_window() -> None:
     full_pool_size = max_reqs * max_seq_len
 
     full_to_swa_index_mapping = torch.arange(
-        full_pool_size + 1, dtype=torch.int32, device=_DEVICE
+        full_pool_size + 1, dtype=torch.int64, device=_DEVICE
     )
 
-    fb_req_pool_indices = torch.tensor([1], dtype=torch.int32, device=_DEVICE)
-    fb_prefix_lens = torch.tensor([6], dtype=torch.int32, device=_DEVICE)
-    fb_extend_seq_lens = torch.tensor([2], dtype=torch.int32, device=_DEVICE)
-    fb_input_ids = torch.tensor([100, 101], dtype=torch.int32, device=_DEVICE)
-    fb_positions = torch.tensor([6, 7], dtype=torch.int32, device=_DEVICE)
+    fb_req_pool_indices = torch.tensor([1], dtype=torch.int64, device=_DEVICE)
+    fb_prefix_lens = torch.tensor([6], dtype=torch.int64, device=_DEVICE)
+    fb_extend_seq_lens = torch.tensor([2], dtype=torch.int64, device=_DEVICE)
+    fb_input_ids = torch.tensor([100, 101], dtype=torch.int64, device=_DEVICE)
+    fb_positions = torch.tensor([6, 7], dtype=torch.int64, device=_DEVICE)
     fb_out_cache_loc = torch.tensor(
         [
             full_to_swa_index_mapping[1 * max_seq_len + 6].item(),
             full_to_swa_index_mapping[1 * max_seq_len + 7].item(),
         ],
-        dtype=torch.int32,
+        dtype=torch.int64,
         device=_DEVICE,
     )
 
@@ -354,30 +359,54 @@ def test_pipeline_swa_window() -> None:
 def test_pipeline_sweep_no_write() -> None:
     """All extend_seq_lens=0: write_step is no-op, verify sweeps prefix, buf unchanged."""
     max_seq_len = 16
+    prefix_len = 4
     req_to_token = make_req_to_token(
         kind="linear", max_reqs=4, max_seq_len=max_seq_len, device=_DEVICE
     )
 
-    fb_req_pool_indices = torch.tensor([1], dtype=torch.int32, device=_DEVICE)
-    fb_prefix_lens = torch.tensor([0], dtype=torch.int32, device=_DEVICE)
-    fb_extend_seq_lens = torch.tensor([0], dtype=torch.int32, device=_DEVICE)
-    fb_input_ids = torch.zeros(1, dtype=torch.int32, device=_DEVICE)
-    fb_positions = torch.zeros(1, dtype=torch.int32, device=_DEVICE)
-    fb_out_cache_loc = torch.zeros(1, dtype=torch.int32, device=_DEVICE)
+    fb_req_pool_indices = torch.tensor([1], dtype=torch.int64, device=_DEVICE)
+    fb_prefix_lens = torch.tensor([prefix_len], dtype=torch.int64, device=_DEVICE)
+    fb_extend_seq_lens = torch.tensor([0], dtype=torch.int64, device=_DEVICE)
+    fb_input_ids = torch.zeros(1, dtype=torch.int64, device=_DEVICE)
+    fb_positions = torch.zeros(1, dtype=torch.int64, device=_DEVICE)
+    fb_out_cache_loc = torch.zeros(1, dtype=torch.int64, device=_DEVICE)
 
-    _run_both_and_assert_pipeline_equal(
-        fb_req_pool_indices=fb_req_pool_indices,
-        fb_prefix_lens=fb_prefix_lens,
-        fb_extend_seq_lens=fb_extend_seq_lens,
-        fb_input_ids=fb_input_ids,
-        fb_positions=fb_positions,
-        fb_out_cache_loc=fb_out_cache_loc,
-        req_to_token=req_to_token,
-        num_slots=64,
-        extras=_empty_extras(),
-        swa_window_size=0,
-        full_to_swa_index_mapping=None,
+    initial_buf = make_canary_buf(num_slots=64, device=_DEVICE)
+    initial_ref = initial_buf.clone()
+    prefix_slots = [1 * max_seq_len + pos for pos in range(prefix_len)]
+    stamp_clean_chain(
+        cuda_buf=initial_buf,
+        ref_buf=initial_ref,
+        slot_indices=prefix_slots,
+        tokens=[100 + pos for pos in range(prefix_len)],
+        positions=list(range(prefix_len)),
     )
+
+    buf_real, buf_ref, log_real, log_ref, plan_v_real, plan_w_real, _, _ = (
+        _run_both_and_assert_pipeline_equal(
+            fb_req_pool_indices=fb_req_pool_indices,
+            fb_prefix_lens=fb_prefix_lens,
+            fb_extend_seq_lens=fb_extend_seq_lens,
+            fb_input_ids=fb_input_ids,
+            fb_positions=fb_positions,
+            fb_out_cache_loc=fb_out_cache_loc,
+            req_to_token=req_to_token,
+            num_slots=64,
+            extras=_empty_extras(),
+            swa_window_size=0,
+            full_to_swa_index_mapping=None,
+            initial_canary_buf=initial_buf,
+        )
+    )
+
+    assert int(plan_v_real.verify_num_valid[0].item()) == prefix_len
+    assert int(plan_w_real.write_num_valid_reqs[0].item()) == 0
+    assert torch.equal(buf_real, initial_buf)
+    assert torch.equal(buf_ref, initial_buf)
+    assert int(log_real.write_index[0].item()) == 0
+    assert int(log_ref.write_index[0].item()) == 0
+    assert int(log_real.slot_run_counter[0].item()) == prefix_len
+    assert int(log_ref.slot_run_counter[0].item()) == prefix_len
 
 
 @pytest.mark.parametrize(
@@ -394,14 +423,14 @@ def test_pipeline_real_kv_mode(real_kv_hash_mode: consts.RealKvHashMode) -> None
     req_to_token = make_req_to_token(
         kind="linear", max_reqs=4, max_seq_len=max_seq_len, device=_DEVICE
     )
-    fb_req_pool_indices = torch.tensor([1], dtype=torch.int32, device=_DEVICE)
-    fb_prefix_lens = torch.tensor([0], dtype=torch.int32, device=_DEVICE)
-    fb_extend_seq_lens = torch.tensor([3], dtype=torch.int32, device=_DEVICE)
-    fb_input_ids = torch.tensor([5, 6, 7], dtype=torch.int32, device=_DEVICE)
-    fb_positions = torch.tensor([0, 1, 2], dtype=torch.int32, device=_DEVICE)
+    fb_req_pool_indices = torch.tensor([1], dtype=torch.int64, device=_DEVICE)
+    fb_prefix_lens = torch.tensor([0], dtype=torch.int64, device=_DEVICE)
+    fb_extend_seq_lens = torch.tensor([3], dtype=torch.int64, device=_DEVICE)
+    fb_input_ids = torch.tensor([5, 6, 7], dtype=torch.int64, device=_DEVICE)
+    fb_positions = torch.tensor([0, 1, 2], dtype=torch.int64, device=_DEVICE)
     fb_out_cache_loc = torch.tensor(
         [1 * max_seq_len + 0, 1 * max_seq_len + 1, 1 * max_seq_len + 2],
-        dtype=torch.int32,
+        dtype=torch.int64,
         device=_DEVICE,
     )
 
@@ -430,11 +459,11 @@ def test_pipeline_pseudo_mode_on_match() -> None:
     req_to_token = make_req_to_token(
         kind="linear", max_reqs=4, max_seq_len=max_seq_len, device=_DEVICE
     )
-    fb_req_pool_indices = torch.tensor([1], dtype=torch.int32, device=_DEVICE)
-    fb_prefix_lens = torch.tensor([0], dtype=torch.int32, device=_DEVICE)
-    fb_extend_seq_lens = torch.tensor([4], dtype=torch.int32, device=_DEVICE)
-    fb_input_ids = torch.tensor([1, 2, 3, 4], dtype=torch.int32, device=_DEVICE)
-    fb_positions = torch.tensor([0, 1, 2, 3], dtype=torch.int32, device=_DEVICE)
+    fb_req_pool_indices = torch.tensor([1], dtype=torch.int64, device=_DEVICE)
+    fb_prefix_lens = torch.tensor([0], dtype=torch.int64, device=_DEVICE)
+    fb_extend_seq_lens = torch.tensor([4], dtype=torch.int64, device=_DEVICE)
+    fb_input_ids = torch.tensor([1, 2, 3, 4], dtype=torch.int64, device=_DEVICE)
+    fb_positions = torch.tensor([0, 1, 2, 3], dtype=torch.int64, device=_DEVICE)
     fb_out_cache_loc = torch.tensor(
         [
             1 * max_seq_len + 0,
@@ -442,7 +471,7 @@ def test_pipeline_pseudo_mode_on_match() -> None:
             1 * max_seq_len + 2,
             1 * max_seq_len + 3,
         ],
-        dtype=torch.int32,
+        dtype=torch.int64,
         device=_DEVICE,
     )
     expected_input_tokens = fb_input_ids.clone()
@@ -473,19 +502,19 @@ def test_pipeline_pseudo_mode_on_token_mismatch_then_verify_clean() -> None:
     req_to_token = make_req_to_token(
         kind="linear", max_reqs=4, max_seq_len=max_seq_len, device=_DEVICE
     )
-    fb_req_pool_indices = torch.tensor([1], dtype=torch.int32, device=_DEVICE)
-    fb_prefix_lens = torch.tensor([0], dtype=torch.int32, device=_DEVICE)
-    fb_extend_seq_lens = torch.tensor([3], dtype=torch.int32, device=_DEVICE)
+    fb_req_pool_indices = torch.tensor([1], dtype=torch.int64, device=_DEVICE)
+    fb_prefix_lens = torch.tensor([0], dtype=torch.int64, device=_DEVICE)
+    fb_extend_seq_lens = torch.tensor([3], dtype=torch.int64, device=_DEVICE)
     n_tokens = 3
-    fb_input_ids = torch.tensor([10, 20, 30], dtype=torch.int32, device=_DEVICE)
-    fb_positions = torch.tensor([0, 1, 2], dtype=torch.int32, device=_DEVICE)
+    fb_input_ids = torch.tensor([10, 20, 30], dtype=torch.int64, device=_DEVICE)
+    fb_positions = torch.tensor([0, 1, 2], dtype=torch.int64, device=_DEVICE)
     fb_out_cache_loc = torch.tensor(
         [1 * max_seq_len + 0, 1 * max_seq_len + 1, 1 * max_seq_len + 2],
-        dtype=torch.int32,
+        dtype=torch.int64,
         device=_DEVICE,
     )
     expected_input_tokens = torch.tensor(
-        [99, 99, 99], dtype=torch.int32, device=_DEVICE
+        [99, 99, 99], dtype=torch.int64, device=_DEVICE
     )
     expected_input_positions = fb_positions.clone()
 
@@ -517,12 +546,12 @@ def test_pipeline_empty_batch() -> None:
     req_to_token = make_req_to_token(
         kind="linear", max_reqs=4, max_seq_len=max_seq_len, device=_DEVICE
     )
-    fb_req_pool_indices = torch.tensor([0], dtype=torch.int32, device=_DEVICE)
-    fb_prefix_lens = torch.tensor([0], dtype=torch.int32, device=_DEVICE)
-    fb_extend_seq_lens = torch.tensor([0], dtype=torch.int32, device=_DEVICE)
-    fb_input_ids = torch.zeros(1, dtype=torch.int32, device=_DEVICE)
-    fb_positions = torch.zeros(1, dtype=torch.int32, device=_DEVICE)
-    fb_out_cache_loc = torch.zeros(1, dtype=torch.int32, device=_DEVICE)
+    fb_req_pool_indices = torch.tensor([0], dtype=torch.int64, device=_DEVICE)
+    fb_prefix_lens = torch.tensor([0], dtype=torch.int64, device=_DEVICE)
+    fb_extend_seq_lens = torch.tensor([0], dtype=torch.int64, device=_DEVICE)
+    fb_input_ids = torch.zeros(1, dtype=torch.int64, device=_DEVICE)
+    fb_positions = torch.zeros(1, dtype=torch.int64, device=_DEVICE)
+    fb_out_cache_loc = torch.zeros(1, dtype=torch.int64, device=_DEVICE)
 
     _, _, log_real, log_ref, _, _, _, _ = _run_both_and_assert_pipeline_equal(
         fb_req_pool_indices=fb_req_pool_indices,
@@ -552,19 +581,19 @@ def test_pipeline_negative_slot_swa_out_of_window() -> None:
     swa_window_size = 4
 
     full_to_swa_index_mapping = torch.arange(
-        full_pool_size + 1, dtype=torch.int32, device=_DEVICE
+        full_pool_size + 1, dtype=torch.int64, device=_DEVICE
     )
     full_to_swa_index_mapping[1 * max_seq_len + 6] = -1
     full_to_swa_index_mapping[1 * max_seq_len + 7] = -1
 
-    fb_req_pool_indices = torch.tensor([1], dtype=torch.int32, device=_DEVICE)
-    fb_prefix_lens = torch.tensor([6], dtype=torch.int32, device=_DEVICE)
-    fb_extend_seq_lens = torch.tensor([4], dtype=torch.int32, device=_DEVICE)
-    fb_input_ids = torch.tensor([100, 101, 102, 103], dtype=torch.int32, device=_DEVICE)
-    fb_positions = torch.tensor([6, 7, 8, 9], dtype=torch.int32, device=_DEVICE)
+    fb_req_pool_indices = torch.tensor([1], dtype=torch.int64, device=_DEVICE)
+    fb_prefix_lens = torch.tensor([6], dtype=torch.int64, device=_DEVICE)
+    fb_extend_seq_lens = torch.tensor([4], dtype=torch.int64, device=_DEVICE)
+    fb_input_ids = torch.tensor([100, 101, 102, 103], dtype=torch.int64, device=_DEVICE)
+    fb_positions = torch.tensor([6, 7, 8, 9], dtype=torch.int64, device=_DEVICE)
     fb_out_cache_loc = torch.tensor(
         [-1, -1, 1 * max_seq_len + 8, 1 * max_seq_len + 9],
-        dtype=torch.int32,
+        dtype=torch.int64,
         device=_DEVICE,
     )
 
@@ -592,12 +621,12 @@ def test_pipeline_ring_overflow_via_real_plan() -> None:
     )
     n_slots = 8
 
-    fb_req_pool_indices = torch.tensor([1], dtype=torch.int32, device=_DEVICE)
-    fb_prefix_lens = torch.tensor([n_slots], dtype=torch.int32, device=_DEVICE)
-    fb_extend_seq_lens = torch.tensor([0], dtype=torch.int32, device=_DEVICE)
-    fb_input_ids = torch.zeros(1, dtype=torch.int32, device=_DEVICE)
-    fb_positions = torch.zeros(1, dtype=torch.int32, device=_DEVICE)
-    fb_out_cache_loc = torch.zeros(1, dtype=torch.int32, device=_DEVICE)
+    fb_req_pool_indices = torch.tensor([1], dtype=torch.int64, device=_DEVICE)
+    fb_prefix_lens = torch.tensor([n_slots], dtype=torch.int64, device=_DEVICE)
+    fb_extend_seq_lens = torch.tensor([0], dtype=torch.int64, device=_DEVICE)
+    fb_input_ids = torch.zeros(1, dtype=torch.int64, device=_DEVICE)
+    fb_positions = torch.zeros(1, dtype=torch.int64, device=_DEVICE)
+    fb_out_cache_loc = torch.zeros(1, dtype=torch.int64, device=_DEVICE)
 
     num_slots = max_reqs * max_seq_len
 
@@ -694,18 +723,25 @@ def test_pipeline_ring_overflow_via_real_plan() -> None:
 )
 def test_pipeline_kernel_kind_propagates(kernel_kind: CanaryLaunchTag) -> None:
     """Different CanaryLaunchTag values: violation ring's kernel_kind field matches on both sides."""
-
     max_seq_len = 16
     req_to_token = make_req_to_token(
         kind="linear", max_reqs=4, max_seq_len=max_seq_len, device=_DEVICE
     )
-    fb_req_pool_indices = torch.tensor([1], dtype=torch.int32, device=_DEVICE)
-    fb_prefix_lens = torch.tensor([0], dtype=torch.int32, device=_DEVICE)
-    fb_extend_seq_lens = torch.tensor([1], dtype=torch.int32, device=_DEVICE)
-    fb_input_ids = torch.tensor([7], dtype=torch.int32, device=_DEVICE)
-    fb_positions = torch.tensor([0], dtype=torch.int32, device=_DEVICE)
-    fb_out_cache_loc = torch.tensor(
-        [1 * max_seq_len + 0], dtype=torch.int32, device=_DEVICE
+    fb_req_pool_indices = torch.tensor([1], dtype=torch.int64, device=_DEVICE)
+    fb_prefix_lens = torch.tensor([1], dtype=torch.int64, device=_DEVICE)
+    fb_extend_seq_lens = torch.tensor([0], dtype=torch.int64, device=_DEVICE)
+    fb_input_ids = torch.zeros(1, dtype=torch.int64, device=_DEVICE)
+    fb_positions = torch.zeros(1, dtype=torch.int64, device=_DEVICE)
+    fb_out_cache_loc = torch.zeros(1, dtype=torch.int64, device=_DEVICE)
+
+    initial_buf = make_canary_buf(num_slots=64, device=_DEVICE)
+    write_slot_fields(
+        canary_buf=initial_buf,
+        slot_idx=1 * max_seq_len,
+        token=7,
+        position=99,
+        prev_hash=0,
+        real_kv_hash=0,
     )
 
     _, _, log_real, log_ref, _, _, _, _ = _run_both_and_assert_pipeline_equal(
@@ -719,7 +755,14 @@ def test_pipeline_kernel_kind_propagates(kernel_kind: CanaryLaunchTag) -> None:
         num_slots=64,
         extras=_empty_extras(),
         kernel_kind=kernel_kind,
+        initial_canary_buf=initial_buf,
     )
 
-    assert int(log_real.write_index[0].item()) == 0
-    assert int(log_ref.write_index[0].item()) == 0
+    assert int(log_real.write_index[0].item()) == 1
+    assert int(log_ref.write_index[0].item()) == 1
+    assert int(log_real.ring[0, consts.VIOLATION_FIELD_KERNEL_KIND].item()) == int(
+        kernel_kind
+    )
+    assert int(log_ref.ring[0, consts.VIOLATION_FIELD_KERNEL_KIND].item()) == int(
+        kernel_kind
+    )
