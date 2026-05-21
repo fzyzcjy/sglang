@@ -166,7 +166,10 @@ class PerForwardOrchestrator:
         self._perturb_manager.perturb_real_kv_used(forward_batch)
         self._perturb_manager.perturb_real_kv_unused_cache(forward_batch)
 
-        if self._config.input_check_mode:
+        if (
+            self._config.input_check_mode
+            and not torch.cuda.is_current_stream_capturing()
+        ):
             manager = self._token_oracle_manager
             if manager is None:
                 raise RuntimeError(
