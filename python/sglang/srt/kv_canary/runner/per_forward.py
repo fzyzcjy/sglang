@@ -261,6 +261,8 @@ class PerForwardOrchestrator:
             return False
         if self._input_check_suspension_depth > 0:
             return False
+        if torch.cuda.is_current_stream_capturing():
+            return False
 
         if (
             forward_batch.forward_mode is not None

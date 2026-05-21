@@ -95,6 +95,9 @@ def _make_config(
 
 
 class _FakeDecodeForwardMode:
+    def is_decode(self) -> bool:
+        return True
+
     def is_extend(self) -> bool:
         return False
 
@@ -114,6 +117,11 @@ class _FakeDecodeForwardMode:
         return False
 
     def is_extend_or_draft_extend_or_mixed(self) -> bool:
+        return False
+
+
+class _FakeExtendForwardMode:
+    def is_decode(self) -> bool:
         return False
 
 
@@ -234,6 +242,18 @@ class TestSelfUnitRunner(CustomTestCase):
                 if isinstance(c, tuple)
             )
         )
+
+    def test_input_check_is_disabled_while_cuda_graph_captures(self):
+        """Verify graph capture cannot bake request-oracle input checks into replay."""
+        config = _make_config(input_check_mode=True)
+        runner = _make_runner(device=self.device, config=config)
+        fb = _make_forward_batch(self.device)
+        fb.forward_mode = _FakeExtendForwardMode()
+        orchestrator = runner._per_forward_orchestrator
+
+        self.assertTrue(orchestrator._should_enable_input_check_for_launch(fb))
+        with patch.object(torch.cuda, "is_current_stream_capturing", return_value=True):
+            self.assertFalse(orchestrator._should_enable_input_check_for_launch(fb))
 
     def test_sweep_every_n_cadence(self):
         """Verify sweep execution follows the configured step cadence."""
