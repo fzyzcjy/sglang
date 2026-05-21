@@ -125,23 +125,6 @@ class _FakeExtendForwardMode:
         return False
 
 
-class _FakeDraftExtendV2ForwardMode:
-    def is_decode(self) -> bool:
-        return False
-
-    def is_target_verify(self) -> bool:
-        return False
-
-    def is_draft_extend(self, include_v2: bool = False) -> bool:
-        return include_v2
-
-    def is_draft_extend_v2(self) -> bool:
-        return True
-
-    def is_extend(self) -> bool:
-        return False
-
-
 def _make_forward_batch(device, bs: int = 2, seq_lens_list=(3, 4)):
     seq_lens_list = list(seq_lens_list[:bs])
     return SimpleNamespace(
@@ -271,6 +254,21 @@ class TestSelfUnitRunner(CustomTestCase):
         self.assertTrue(orchestrator._should_enable_input_check_for_launch(fb))
         with patch.object(torch.cuda, "is_current_stream_capturing", return_value=True):
             self.assertFalse(orchestrator._should_enable_input_check_for_launch(fb))
+
+    def test_input_check_is_disabled_for_draft_extend(self):
+        """Verify generated draft-extend writes do not use request-oracle input checks."""
+        mode = SimpleNamespace(
+            is_decode=lambda: False,
+            is_draft_extend=lambda include_v2=False: include_v2,
+        )
+        config = _make_config(input_check_mode=True)
+        runner = _make_runner(device=self.device, config=config)
+        fb = _make_forward_batch(self.device)
+        fb.forward_mode = mode
+
+        self.assertFalse(
+            runner._per_forward_orchestrator._should_enable_input_check_for_launch(fb)
+        )
 
     def test_sweep_every_n_cadence(self):
         """Verify sweep execution follows the configured step cadence."""
@@ -567,44 +565,6 @@ class TestSelfUnitRunner(CustomTestCase):
             torch.equal(
                 expected_inputs.positions[:4],
                 torch.tensor([10, 10, 20, 20], dtype=torch.int64, device=self.device),
-            )
-        )
-
-    def test_token_oracle_offsets_decode_draft_extend_positions(self):
-        """Verify EAGLE decode draft-extend accepts its post-verify position layout."""
-        forward_batch = SimpleNamespace(
-            forward_mode=_FakeDraftExtendV2ForwardMode(),
-            spec_info=SimpleNamespace(
-                num_tokens_per_req=2,
-                num_correct_drafts=torch.tensor(
-                    [1, 1], dtype=torch.int32, device=self.device
-                ),
-            ),
-            rids_int=torch.tensor([3, 7], dtype=torch.int64, device=self.device),
-            input_ids=torch.tensor(
-                [101, 102, 201, 202], dtype=torch.int64, device=self.device
-            ),
-            positions=torch.tensor(
-                [64, 65, 80, 81], dtype=torch.int64, device=self.device
-            ),
-            extend_prefix_lens=None,
-            extend_seq_lens=None,
-        )
-        expected_inputs = ExpectedInputs.allocate(capacity=4, device=self.device)
-        manager = TokenOracleManager(oracle=HashOracle(vocab_size=32000))
-
-        manager.fill_expected_inputs(
-            forward_batch=forward_batch,
-            expected_inputs_out=expected_inputs,
-        )
-
-        self.assertTrue(
-            torch.equal(expected_inputs.tokens[:4], forward_batch.input_ids)
-        )
-        self.assertTrue(
-            torch.equal(
-                expected_inputs.positions[:4],
-                torch.tensor([65, 66, 81, 82], dtype=torch.int64, device=self.device),
             )
         )
 
