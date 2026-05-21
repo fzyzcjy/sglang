@@ -25,7 +25,6 @@ from sglang.srt.kv_canary.runner.launch import (
 )
 from sglang.srt.kv_canary.state import CanaryDeviceState
 from sglang.srt.kv_canary.token_oracle.oracle_manager import TokenOracleManager
-from sglang.srt.speculative.spec_info import SpecInputType
 
 if TYPE_CHECKING:
     from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
@@ -263,12 +262,9 @@ class PerForwardOrchestrator:
         if self._input_check_suspension_depth > 0:
             return False
 
-        spec_info = forward_batch.spec_info
         if (
             forward_batch.forward_mode is not None
             and forward_batch.forward_mode.is_decode()
-            and spec_info is not None
-            and spec_info.spec_input_type == SpecInputType.EAGLE_DRAFT
         ):
             return False
 
