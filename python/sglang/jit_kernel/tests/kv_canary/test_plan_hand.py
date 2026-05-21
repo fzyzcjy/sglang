@@ -5,7 +5,7 @@ import random
 import pytest
 import torch
 
-from sglang.jit_kernel.kv_canary.plan import canary_plan_step
+from sglang.jit_kernel.kv_canary.plan import _max_entry_j_tiles, canary_plan_step
 from sglang.jit_kernel.kv_canary.plan_ref import canary_plan_step_torch_reference
 from sglang.jit_kernel.kv_canary.verify import VerifyPlan
 from sglang.jit_kernel.kv_canary.write import WritePlan
@@ -26,6 +26,14 @@ register_cuda_ci(est_time=120, suite="nightly-kernel-1-gpu", nightly=True)
 
 
 _DEVICE = torch.device("cuda")
+
+
+def test_entry_grid_j_tiles_are_bounded_by_per_req_sequence_width() -> None:
+    """Verify large pool-wide capacity does not inflate the per-req launch grid."""
+    assert _max_entry_j_tiles(
+        verify_capacity=78_000_000,
+        max_seq_len_per_req=40_960,
+    ) == 640
 
 
 def _tensor(values: list[int]) -> torch.Tensor:

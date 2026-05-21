@@ -25,6 +25,11 @@ _PLAN_VERIFY_INNER_BLOCK: int = 64
 _PLAN_EXTRAS_INNER_BLOCK: int = 64
 
 
+def _max_entry_j_tiles(*, verify_capacity: int, max_seq_len_per_req: int) -> int:
+    max_verify_per_req = min(verify_capacity, max_seq_len_per_req)
+    return (max_verify_per_req + _PLAN_VERIFY_INNER_BLOCK - 1) // _PLAN_VERIFY_INNER_BLOCK
+
+
 def _resolve_swa_lut(
     lut: Optional[torch.Tensor], device: torch.device
 ) -> tuple[torch.Tensor, int, bool]:
@@ -199,6 +204,7 @@ def canary_plan_step(
     )
 
     req_to_token_stride0 = int(req_to_token.stride(0))
+    max_seq_len_per_req = int(req_to_token.shape[1])
 
     # Match the ref's tail-reset semantics: write_offsets positions past index bs are zeroed so a smaller
     # batch never leaks stale prefix-sum entries from a larger previous call. In-place .zero_() is
@@ -232,12 +238,13 @@ def canary_plan_step(
     )
 
     # Entries kernel: per-(req, j-tile) verify entry materialization. The j-axis upper bound is
-    # verify_capacity (each req cannot contribute more than verify_capacity entries); we mask per-req actual
-    # count read back from verify_offsets_scratch inside the kernel.
+    # the per-req table width (each req cannot contribute more than max_seq_len_per_req entries); we mask
+    # per-req actual count read back from verify_offsets_scratch inside the kernel.
     if bs > 0 and verify_capacity > 0:
-        max_j_tiles = (
-            verify_capacity + _PLAN_VERIFY_INNER_BLOCK - 1
-        ) // _PLAN_VERIFY_INNER_BLOCK
+        max_j_tiles = _max_entry_j_tiles(
+            verify_capacity=verify_capacity,
+            max_seq_len_per_req=max_seq_len_per_req,
+        )
         grid_entries = (bs, max_j_tiles)
         _plan_entries_kernel[grid_entries](
             fb_req_pool_indices,
