@@ -28,6 +28,10 @@ def _make_server_args(*, canary_on: bool) -> ServerArgs:
     extra = [
         "--model-path",
         _QWEN3_MODEL,
+        "--mem-fraction-static",
+        "0.99",
+        "--max-total-tokens",
+        "1310720",
     ]
     if canary_on:
         extra += ["--kv-canary", "raise"]
