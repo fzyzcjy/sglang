@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from sglang.srt.arg_groups.speculative_hook import handle_speculative_decoding
+from sglang.srt.configs.model_config import AttentionArch
 from sglang.srt.server_args import PortArgs, ServerArgs, prepare_server_args
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import (
@@ -20,17 +21,21 @@ _mock_device.start()
 
 class TestPrepareServerArgs(CustomTestCase):
     def test_prepare_server_args(self):
-        server_args = prepare_server_args(
-            [
-                "--model-path",
-                DEFAULT_SMALL_MODEL_NAME_FOR_TEST_QWEN,
-                "--json-model-override-args",
-                '{"rope_scaling": {"factor": 2.0, "rope_type": "linear"}}',
-                "--enforce-piecewise-cuda-graph",
-                "--piecewise-cuda-graph-max-tokens",
-                "8192",
-            ]
-        )
+        model_config = MagicMock(attention_arch=AttentionArch.MHA)
+        with patch.object(
+            ServerArgs, "get_model_config", return_value=model_config
+        ):
+            server_args = prepare_server_args(
+                [
+                    "--model-path",
+                    DEFAULT_SMALL_MODEL_NAME_FOR_TEST_QWEN,
+                    "--json-model-override-args",
+                    '{"rope_scaling": {"factor": 2.0, "rope_type": "linear"}}',
+                    "--enforce-piecewise-cuda-graph",
+                    "--piecewise-cuda-graph-max-tokens",
+                    "8192",
+                ]
+            )
         self.assertEqual(server_args.model_path, DEFAULT_SMALL_MODEL_NAME_FOR_TEST_QWEN)
         self.assertEqual(
             json.loads(server_args.json_model_override_args),
@@ -657,17 +662,21 @@ class TestSamplingBackendTokenOracleEnvGate(CustomTestCase):
         reloaded = self._reload_server_args_with_env(enabled=True)
         self.assertIn("token_oracle", reloaded.SAMPLING_BACKEND_CHOICES)
 
-        parsed = reloaded.prepare_server_args(
-            [
-                "--model-path",
-                DEFAULT_SMALL_MODEL_NAME_FOR_TEST_QWEN,
-                "--sampling-backend",
-                "token_oracle",
-                "--enforce-piecewise-cuda-graph",
-                "--piecewise-cuda-graph-max-tokens",
-                "8192",
-            ]
-        )
+        model_config = MagicMock(attention_arch=AttentionArch.MHA)
+        with patch.object(
+            reloaded.ServerArgs, "get_model_config", return_value=model_config
+        ):
+            parsed = reloaded.prepare_server_args(
+                [
+                    "--model-path",
+                    DEFAULT_SMALL_MODEL_NAME_FOR_TEST_QWEN,
+                    "--sampling-backend",
+                    "token_oracle",
+                    "--enforce-piecewise-cuda-graph",
+                    "--piecewise-cuda-graph-max-tokens",
+                    "8192",
+                ]
+            )
         self.assertEqual(parsed.sampling_backend, "token_oracle")
 
 
