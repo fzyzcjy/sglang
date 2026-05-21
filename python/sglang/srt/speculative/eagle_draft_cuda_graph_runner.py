@@ -240,6 +240,9 @@ class EAGLEDraftCudaGraphRunner:
         )
         with ctx:
             self.graphs[self.bs].replay()
+        canary_runner = self.model_runner.canary_runner
+        if canary_runner is not None:
+            canary_runner.finish_replayed_forward()
 
     def capture(self):
         CudaGraphRunner.capture(self)

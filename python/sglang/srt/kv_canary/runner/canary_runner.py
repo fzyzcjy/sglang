@@ -184,6 +184,9 @@ class CanaryRunner:
         """TAIL endpoint launches. Same captured region as ``launch_head_kernels``."""
         self._per_forward_orchestrator.launch_tail_kernels(forward_batch)
 
+    def finish_replayed_forward(self) -> None:
+        self._end_of_step()
+
     def _end_of_step(self) -> None:
         if self.config.mode == "off":
             return
