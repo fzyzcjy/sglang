@@ -28,8 +28,8 @@ def _make_server_args(*, canary_on: bool) -> ServerArgs:
     extra = [
         "--model-path",
         _QWEN3_MODEL,
-        "--cpu-offload-gb",
-        "2",
+        "--kv-cache-dtype",
+        "fp8_e5m2",
         "--mem-fraction-static",
         "0.99",
         "--max-total-tokens",
