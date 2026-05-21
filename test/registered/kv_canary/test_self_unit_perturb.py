@@ -124,7 +124,9 @@ def _make_group(*, kind: PoolKind, has_real_kv: bool) -> CanaryBufferGroup:
         v_tail=torch.zeros(4, CANARY_SLOT_BYTES, dtype=torch.uint8),
         real_kv_sources_k=real_kv_sources,
         real_kv_sources_v=real_kv_sources,
-        swa_index_lut=torch.tensor([3, 2, 1, 0], dtype=torch.int64)
-        if kind is PoolKind.SWA
-        else None,
+        swa_index_lut=(
+            torch.tensor([3, 2, 1, 0], dtype=torch.int64)
+            if kind is PoolKind.SWA
+            else None
+        ),
     )
