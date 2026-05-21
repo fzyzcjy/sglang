@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import bisect
+import contextlib
 import gc
 import logging
 import warnings
@@ -646,9 +647,16 @@ class PiecewiseCudaGraphRunner:
         for _ in range(2):
             self.device_module.synchronize()
             self.model_runner.tp_group.barrier()
-            run_once()
+            with self._suspend_canary_input_check():
+                run_once()
 
         return
+
+    def _suspend_canary_input_check(self):
+        canary_runner = self.model_runner.canary_runner
+        if canary_runner is None:
+            return contextlib.nullcontext()
+        return canary_runner.suspend_input_check()
 
     def replay_prepare(
         self,

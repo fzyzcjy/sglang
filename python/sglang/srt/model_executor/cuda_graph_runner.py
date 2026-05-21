@@ -907,9 +907,17 @@ class CudaGraphRunner:
         else:
             captured_fn = run_once_fn
 
-        with graph_ctx(cuda_graph=graph, pool=pool, stream=stream):
+        with self._suspend_canary_input_check(), graph_ctx(
+            cuda_graph=graph, pool=pool, stream=stream
+        ):
             out = captured_fn()
         return out
+
+    def _suspend_canary_input_check(self):
+        canary_runner = self.model_runner.canary_runner
+        if canary_runner is None:
+            return contextlib.nullcontext()
+        return canary_runner.suspend_input_check()
 
     def _create_device_graph(self):
         if envs.SGLANG_USE_BREAKABLE_CUDA_GRAPH.get():
@@ -1131,7 +1139,8 @@ class CudaGraphRunner:
         for _ in range(2):
             self.device_module.synchronize()
             self.model_runner.tp_group.barrier()
-            run_once()
+            with self._suspend_canary_input_check():
+                run_once()
             attn_backend.on_after_cuda_graph_warmup()
 
         if get_global_graph_memory_pool() is None:
