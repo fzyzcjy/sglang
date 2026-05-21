@@ -9,7 +9,7 @@ from sglang.test.kv_canary.utils import CanaryE2EBase
 register_cuda_ci(est_time=210, stage="extra-a", runner_config="1-gpu-large")
 
 
-_MHA_MODEL = "HuggingFaceTB/SmolLM-135M-Instruct"
+_QWEN3_MODEL = "Qwen/Qwen3-0.6B"
 
 # DO NOT pass --disable-cuda-graph or --disable-piecewise-cuda-graph in any
 # canary e2e test. The canary kernel must run inside the cuda graph alongside
@@ -36,7 +36,7 @@ _CANARY_CAPACITY_CAPS: List[str] = [
 
 
 class _MhaFullBase(CanaryE2EBase):
-    model: ClassVar[str] = _MHA_MODEL
+    model: ClassVar[str] = _QWEN3_MODEL
     extra_server_args: ClassVar[List[str]] = list(_CANARY_CAPACITY_CAPS)
 
 
