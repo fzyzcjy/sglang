@@ -516,6 +516,10 @@ class TestSelfUnitRunner(CustomTestCase):
 
         with patch.object(torch.cuda, "is_current_stream_capturing", return_value=True):
             with patch.object(
+                runner._per_forward_orchestrator,
+                "end_of_step",
+                lambda: None,
+            ), patch.object(
                 pump_module.FutureTensor,
                 "create",
                 lambda **kwargs: (_ for _ in ()).throw(
@@ -542,7 +546,11 @@ class TestSelfUnitRunner(CustomTestCase):
         with patch.object(
             torch.cuda, "is_current_stream_capturing", return_value=False
         ):
-            with patch.object(pump_module.FutureTensor, "create", _record_create):
+            with patch.object(
+                runner._per_forward_orchestrator,
+                "end_of_step",
+                lambda: None,
+            ), patch.object(pump_module.FutureTensor, "create", _record_create):
                 with self.assertRaisesRegex(RuntimeError, "kv_canary violation"):
                     runner._end_of_step()
 
