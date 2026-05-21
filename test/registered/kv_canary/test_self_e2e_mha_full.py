@@ -11,10 +11,12 @@ register_cuda_ci(est_time=210, stage="extra-a", runner_config="1-gpu-large")
 
 _QWEN3_MODEL = "Qwen/Qwen3-0.6B"
 
-# DO NOT pass --disable-cuda-graph or --disable-piecewise-cuda-graph in any
-# canary e2e test. The canary kernel must run inside the cuda graph alongside
-# the real attn kernel; disabling the graph silently bypasses the only path
-# that exercises that invariant end-to-end.
+# DO NOT pass --disable-cuda-graph in any canary e2e test. The canary kernel
+# must run inside the main cuda graph alongside the real attn kernel; disabling
+# the main graph silently bypasses the only path that exercises that invariant
+# end-to-end. --disable-piecewise-cuda-graph is used here because full-layer
+# Qwen3-0.6B currently hits an upstream FusedAddRMSNorm IMA during piecewise
+# graph warmup even without kv canary enabled.
 
 # Cap canary install-time capacities below the cuda-grid-safe ceiling
 # enforced by install_canary (4M, see capacities.py::_MAX_CUDA_GRID_SAFE_VERIFY_CAPACITY).
@@ -32,6 +34,7 @@ _CANARY_CAPACITY_CAPS: List[str] = [
     "2048",
     "--max-total-tokens",
     "16384",
+    "--disable-piecewise-cuda-graph",
 ]
 
 
