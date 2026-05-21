@@ -97,7 +97,11 @@ class TestEaglePositionsMisalignRegression(CustomTestCase):
                     self.base_url + "/generate",
                     json={
                         "input_ids": list(range(1, 65)),
-                        "sampling_params": {"max_new_tokens": 4, "temperature": 0.0},
+                        "sampling_params": {
+                            "max_new_tokens": 32,
+                            "temperature": 0.0,
+                            "ignore_eos": True,
+                        },
                     },
                     timeout=60.0,
                 )
@@ -142,7 +146,11 @@ class TestEaglePositionsMatchWithFix(CustomTestCase):
             self.base_url + "/generate",
             json={
                 "input_ids": list(range(1, 65)),
-                "sampling_params": {"max_new_tokens": 4, "temperature": 0.0},
+                "sampling_params": {
+                    "max_new_tokens": 32,
+                    "temperature": 0.0,
+                    "ignore_eos": True,
+                },
             },
             timeout=60.0,
         )
