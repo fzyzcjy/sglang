@@ -374,6 +374,7 @@ class TestSelfUnitRunner(CustomTestCase):
             buffer_groups=(),
             pump_and_allreduce=SimpleNamespace(step_counter=10),
             swa_window_size=0,
+            sweep_interval=0,
         )
         forward_batch = _make_forward_batch(self.device, bs=2, seq_lens_list=(3, 3))
         forward_batch.out_cache_loc = torch.tensor(
