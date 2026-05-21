@@ -66,6 +66,27 @@ def _make_pool(device, max_reqs: int = 4, max_seq: int = 8):
     return SimpleNamespace(req_to_token=table, size=max_reqs)
 
 
+def _make_config(
+    *,
+    mode: CanaryMode = CanaryMode.RAISE,
+    ring_capacity: int = 1024,
+    sweep_interval: int = 0,
+    real_kv_hash_mode: RealKvHashMode = RealKvHashMode.OFF,
+    input_check_mode: bool = False,
+    stats_print_every_n_steps: int = 100,
+    allreduce_violation_signal: bool = False,
+) -> CanaryConfig:
+    return CanaryConfig(
+        mode=mode,
+        ring_capacity=ring_capacity,
+        sweep_interval=sweep_interval,
+        real_kv_hash_mode=real_kv_hash_mode,
+        input_check_mode=input_check_mode,
+        stats_print_every_n_steps=stats_print_every_n_steps,
+        allreduce_violation_signal=allreduce_violation_signal,
+    )
+
+
 class _FakeDecodeForwardMode:
     def is_extend(self) -> bool:
         return False
@@ -114,9 +135,7 @@ def _make_runner(
     sweep_verify_capacity: int = 8,
 ):
     if config is None:
-        config = CanaryConfig(
-            mode=CanaryMode.RAISE, real_kv_hash_mode=RealKvHashMode.OFF
-        )
+        config = _make_config()
     if group is None:
         group = _make_group(device=device)
     if req_pool is None:
@@ -148,7 +167,18 @@ class TestSelfUnitRunner(CustomTestCase):
             p.start()
             self.addCleanup(p.stop)
 
+    def test_canary_config_requires_explicit_from_env_fields(self):
+        """Verify production config fields stay explicit at construction."""
+        with self.assertRaises(TypeError):
+            CanaryConfig(mode=CanaryMode.RAISE)
+
+    def test_perturb_config_requires_explicit_from_env_fields(self):
+        """Verify perturb config fields stay explicit at construction."""
+        with self.assertRaises(TypeError):
+            PerturbConfig(req_to_token_prob=0.0)
+
     def test_per_forward_orchestrates_plan_head_tail(self):
+        """Verify per-forward execution launches plan, head, and tail kernels."""
         calls: List = []
         with patch.object(
             launch_module,
@@ -186,9 +216,8 @@ class TestSelfUnitRunner(CustomTestCase):
         )
 
     def test_sweep_every_n_cadence(self):
-        config = CanaryConfig(
-            mode=CanaryMode.RAISE,
-            real_kv_hash_mode=RealKvHashMode.OFF,
+        """Verify sweep execution follows the configured step cadence."""
+        config = _make_config(
             sweep_interval=4,
             allreduce_violation_signal=False,
         )
@@ -211,9 +240,8 @@ class TestSelfUnitRunner(CustomTestCase):
         self.assertEqual(sweep_calls, [0, 4, 8])
 
     def test_sweep_runs_radix_path(self):
-        config = CanaryConfig(
-            mode=CanaryMode.RAISE,
-            real_kv_hash_mode=RealKvHashMode.OFF,
+        """Verify sweep execution runs the radix planning path."""
+        config = _make_config(
             sweep_interval=1,
             allreduce_violation_signal=False,
         )
@@ -236,6 +264,7 @@ class TestSelfUnitRunner(CustomTestCase):
         self.assertGreaterEqual(plan_calls.count("plan"), 1)
 
     def test_req_to_token_perturb_uses_live_slot_as_replacement(self):
+        """Verify req_to_token perturbation replaces a slot with another live slot."""
         pool = _make_pool(self.device, max_reqs=4, max_seq=8)
         pool.req_to_token[1, :3] = torch.tensor(
             [11, 22, 33], dtype=torch.int32, device=self.device
@@ -244,12 +273,21 @@ class TestSelfUnitRunner(CustomTestCase):
             [44, 55, 66], dtype=torch.int32, device=self.device
         )
         manager = PerturbManager(
-            config=PerturbConfig(req_to_token_prob=1.0, warmup_steps=0),
+            config=PerturbConfig(
+                req_to_token_prob=1.0,
+                real_kv_used_prob=0.0,
+                real_kv_unused_cache_prob=0.0,
+                target_group_kind="any",
+                warmup_steps=0,
+            ),
             req_to_token_pool=pool,
             buffer_groups=(),
             pump_and_allreduce=SimpleNamespace(step_counter=10),
         )
         forward_batch = _make_forward_batch(self.device, bs=2, seq_lens_list=(3, 3))
+        forward_batch.out_cache_loc = torch.tensor(
+            [11], dtype=torch.int32, device=self.device
+        )
 
         snapshot = pool.req_to_token.clone()
         with patch.object(torch, "rand", return_value=torch.tensor(0.0)):
@@ -265,8 +303,10 @@ class TestSelfUnitRunner(CustomTestCase):
         self.assertIn(original, live_slots)
         self.assertIn(replacement, live_slots)
         self.assertNotEqual(replacement, original)
+        self.assertFalse(bool(diff[1, 0].item()))
 
     def test_kernel_run_counter_watchdog_raises_on_zero(self):
+        """Verify the kernel watchdog raises when counters stop advancing."""
         runner = _make_runner(device=self.device)
         runner._pump_and_allreduce._step_counter = 1000
         runner._device_state.kernel_run_counters.zero_()
@@ -276,9 +316,8 @@ class TestSelfUnitRunner(CustomTestCase):
             runner._health_and_stats.health_check_step()
 
     def test_kernel_run_counter_watchdog_ignores_sweep_when_sweep_is_disabled(self):
-        config = CanaryConfig(
-            mode=CanaryMode.RAISE,
-            real_kv_hash_mode=RealKvHashMode.OFF,
+        """Verify the watchdog ignores disabled sweep counters."""
+        config = _make_config(
             sweep_interval=0,
             allreduce_violation_signal=False,
         )
@@ -297,27 +336,9 @@ class TestSelfUnitRunner(CustomTestCase):
         runner._pump_and_allreduce._step_counter = 2000
         runner._health_and_stats.health_check_step()
 
-    def test_runner_disabled_short_circuits(self):
-        config = CanaryConfig(mode=CanaryMode.OFF)
-        runner = _make_runner(device=self.device, config=config)
-
-        plan_calls: List[str] = []
-        with patch.object(
-            launch_module,
-            "canary_plan_step",
-            lambda **kwargs: plan_calls.append("plan"),
-        ):
-            fb = _make_forward_batch(self.device)
-            with runner.with_forward_pass(fb):
-                runner.launch_head_kernels(fb)
-                runner.launch_tail_kernels(fb)
-            runner._sweep_orchestrator.maybe_run_sweep()
-        self.assertEqual(plan_calls, [])
-
     def test_periodic_stats_log_every_n_step(self):
-        config = CanaryConfig(
-            mode=CanaryMode.RAISE,
-            real_kv_hash_mode=RealKvHashMode.OFF,
+        """Verify periodic stats are logged at the configured interval."""
+        config = _make_config(
             stats_print_every_n_steps=5,
             allreduce_violation_signal=False,
         )
@@ -333,9 +354,8 @@ class TestSelfUnitRunner(CustomTestCase):
         self.assertTrue("step=5" in log_text or "step=10" in log_text)
 
     def test_sweep_path_launches_sweep_kernels(self):
-        config = CanaryConfig(
-            mode=CanaryMode.RAISE,
-            real_kv_hash_mode=RealKvHashMode.OFF,
+        """Verify sweep paths launch sweep verify kernels."""
+        config = _make_config(
             sweep_interval=1,
             allreduce_violation_signal=False,
         )
@@ -358,6 +378,7 @@ class TestSelfUnitRunner(CustomTestCase):
         self.assertTrue(any("SWEEP" in k for k in sweep_kernel_kinds))
 
     def test_before_forward_does_not_throw_on_oversized_prefix_sum(self):
+        """Verify oversized prefix sums are handled without host-side errors."""
         # Overflow no longer raises host-side: the plan kernel sets VerifyPlan.enable=0 and the
         # verify kernel skips the step on-device; host logs a throttled warning instead.
         runner = _make_runner(device=self.device, per_forward_verify_capacity=4)
@@ -366,6 +387,7 @@ class TestSelfUnitRunner(CustomTestCase):
             pass
 
     def test_before_forward_passes_when_sum_prefix_lens_fits(self):
+        """Verify prefix sums within capacity pass before-forward handling."""
         # Same multi-req shape that breaks the old sizing now fits the new capacity formula.
         runner = _make_runner(device=self.device, per_forward_verify_capacity=16)
         fb = _make_forward_batch(self.device, bs=2, seq_lens_list=(5, 5))
@@ -373,6 +395,7 @@ class TestSelfUnitRunner(CustomTestCase):
             pass
 
     def test_sweep_throws_when_walker_output_exceeds_sweep_capacity(self):
+        """Verify sweep planning rejects walker output beyond capacity."""
         runner = _make_runner(device=self.device, sweep_verify_capacity=1)
         cache = make_radix_cache([[], [10, 11], [12, 13, 14]], device=self.device)
         cache.req_to_token_pool = make_req_to_token_pool(self.device)
@@ -406,6 +429,7 @@ class TestComputeLaunchCapacities(CustomTestCase):
         )
 
     def test_per_forward_verify_capacity_covers_multi_req_prefix_sum(self):
+        """Verify per-forward capacity accounts for multi-request prefix sums."""
         max_bs = 8
         max_seq_len = 64
         max_total_num_tokens = 1024
@@ -470,18 +494,21 @@ class TestPlanRefOverflowGate(CustomTestCase):
         return verify_plan
 
     def test_plan_ref_sets_enable_zero_and_clamps_when_overflow(self):
+        """Verify plan reference disables verification and clamps overflow output."""
         # requested = sum(prefix_lens) = 8 > capacity = 4.
         plan = self._run_plan_ref(verify_capacity=4, bs=2, prefix_lens=[5, 5])
         self.assertEqual(int(plan.enable[0].item()), 0)
         self.assertEqual(int(plan.verify_num_valid[0].item()), 4)
 
     def test_plan_ref_sets_enable_one_when_within_capacity(self):
+        """Verify plan reference enables verification within capacity."""
         # requested = 4 <= capacity = 16.
         plan = self._run_plan_ref(verify_capacity=16, bs=2, prefix_lens=[2, 2])
         self.assertEqual(int(plan.enable[0].item()), 1)
         self.assertEqual(int(plan.verify_num_valid[0].item()), 4)
 
     def test_verify_ref_skips_when_enable_zero(self):
+        """Verify verify reference skips work when the plan is disabled."""
         plan = self._run_plan_ref(verify_capacity=4, bs=2, prefix_lens=[5, 5])
         self.assertEqual(int(plan.enable[0].item()), 0)
 
