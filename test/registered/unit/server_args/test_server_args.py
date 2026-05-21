@@ -24,7 +24,7 @@ class TestPrepareServerArgs(CustomTestCase):
     def test_prepare_server_args(self):
         model_config = SimpleNamespace(
             attention_arch=AttentionArch.MHA,
-            hf_config=SimpleNamespace(),
+            hf_config=SimpleNamespace(architectures=["Qwen3ForCausalLM"]),
             is_multimodal=False,
         )
         with patch.object(ServerArgs, "get_model_config", return_value=model_config):
@@ -667,7 +667,7 @@ class TestSamplingBackendTokenOracleEnvGate(CustomTestCase):
 
         model_config = SimpleNamespace(
             attention_arch=AttentionArch.MHA,
-            hf_config=SimpleNamespace(),
+            hf_config=SimpleNamespace(architectures=["Qwen3ForCausalLM"]),
             is_multimodal=False,
         )
         with patch.object(
