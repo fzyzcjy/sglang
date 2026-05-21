@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import unittest
 
 from sglang.test.ci.ci_register import register_cuda_ci
@@ -16,8 +15,6 @@ class TestE2EPipelineParallel(CustomTestCase):
             extra_server_args=[
                 "--pp-size",
                 "2",
-                "--json-model-override-args",
-                json.dumps({"num_hidden_layers": 2}),
             ],
         )
 

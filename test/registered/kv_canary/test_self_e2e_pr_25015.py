@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import io
-import json
 import logging
 import os
 import unittest
@@ -26,13 +25,10 @@ register_cuda_ci(est_time=60, suite="extra-a-test-1-gpu-large")
 
 
 _MOCK_MODEL = "Qwen/Qwen3-0.6B"
-_NUM_LAYERS_OVERRIDE = json.dumps({"num_hidden_layers": 1})
 
 
 def _spec_eagle_server_args() -> List[str]:
     return [
-        "--json-model-override-args",
-        _NUM_LAYERS_OVERRIDE,
         "--sampling-backend",
         "token_oracle",
         "--kv-canary",
@@ -49,11 +45,6 @@ def _spec_eagle_server_args() -> List[str]:
         "2048",
         "--max-total-tokens",
         "16384",
-        # sglang piecewise CUDA graph crashes on 1-layer Qwen3 with FusedAddRMSNorm
-        # IMA during warmup_compile (reproduces with --kv-canary off). Disable
-        # piecewise only; the main cuda graph is still on and still exercises the
-        # in-graph canary kernel path.
-        "--disable-piecewise-cuda-graph",
     ]
 
 
