@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from typing import ClassVar, List
 
@@ -10,6 +11,21 @@ register_cuda_ci(est_time=300, stage="extra-a", runner_config="1-gpu-large")
 
 
 _GEMMA3_MODEL = "google/gemma-3-1b-it"
+_GEMMA3_ROPE_OVERRIDE = json.dumps(
+    {
+        "rope_parameters": {
+            "sliding_attention": {
+                "rope_type": "default",
+                "rope_theta": 10000,
+            },
+            "full_attention": {
+                "rope_type": "default",
+                "rope_theta": 1000000,
+                "factor": 8.0,
+            },
+        },
+    }
+)
 
 # DO NOT pass --disable-cuda-graph or --disable-piecewise-cuda-graph in any
 # canary e2e test. The canary kernel must run inside the cuda graph alongside
@@ -35,7 +51,11 @@ _CANARY_CAPACITY_CAPS: List[str] = [
 
 class _Gemma3SwaBase(CanaryE2EBase):
     model: ClassVar[str] = _GEMMA3_MODEL
-    extra_server_args: ClassVar[List[str]] = list(_CANARY_CAPACITY_CAPS)
+    extra_server_args: ClassVar[List[str]] = [
+        "--json-model-override-args",
+        _GEMMA3_ROPE_OVERRIDE,
+        *_CANARY_CAPACITY_CAPS,
+    ]
 
 
 class TestShortPromptFullSwaBothVerify(_Gemma3SwaBase, unittest.TestCase):
@@ -59,7 +79,11 @@ class TestShortPromptFullSwaBothVerify(_Gemma3SwaBase, unittest.TestCase):
 
 
 class TestLongPromptSwaWindowClip(_Gemma3SwaBase, unittest.TestCase):
-    extra_server_args: ClassVar[List[str]] = list(_CANARY_CAPACITY_CAPS)
+    extra_server_args: ClassVar[List[str]] = [
+        "--json-model-override-args",
+        _GEMMA3_ROPE_OVERRIDE,
+        *_CANARY_CAPACITY_CAPS,
+    ]
 
     def test_long_prompt_swa_window_clip(self) -> None:
         # Step 1: send a prompt that exceeds Gemma 3 1B's SWA window (512 tokens).
