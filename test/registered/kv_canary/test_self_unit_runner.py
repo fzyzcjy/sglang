@@ -539,7 +539,9 @@ class TestSelfUnitRunner(CustomTestCase):
         self.assertEqual(calls, [])
         self.assertEqual(created_signals, [])
 
-        with patch.object(torch.cuda, "is_current_stream_capturing", return_value=False):
+        with patch.object(
+            torch.cuda, "is_current_stream_capturing", return_value=False
+        ):
             with patch.object(pump_module.FutureTensor, "create", _record_create):
                 with self.assertRaisesRegex(RuntimeError, "kv_canary violation"):
                     runner._end_of_step()
