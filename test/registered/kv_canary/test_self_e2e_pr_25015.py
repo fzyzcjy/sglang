@@ -54,7 +54,7 @@ def _spec_eagle_server_args() -> List[str]:
 
 def _spec_eagle_env() -> dict[str, str]:
     env = os.environ.copy()
-    env["SGLANG_KV_CANARY_INPUT_CHECK"] = "0"
+    env["SGLANG_KV_CANARY_INPUT_CHECK"] = "1"
     env["SGLANG_KV_CANARY_ENABLE_TOKEN_ORACLE"] = "1"
     return env
 
