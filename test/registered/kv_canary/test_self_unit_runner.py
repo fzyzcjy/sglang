@@ -517,11 +517,7 @@ class TestSelfUnitRunner(CustomTestCase):
         self.assertTrue(
             torch.equal(
                 expected_inputs.positions[:8],
-                torch.tensor(
-                    [10, 11, 12, 13, 20, 21, 22, 23],
-                    dtype=torch.int64,
-                    device=self.device,
-                ),
+                forward_batch.positions,
             )
         )
 

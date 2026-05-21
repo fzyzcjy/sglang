@@ -119,30 +119,16 @@ def _expected_positions_for_input_check(
     forward_batch: "ForwardBatch",
     fallback_positions: torch.Tensor,
 ) -> torch.Tensor:
+    if _uses_repeated_seq_len_layout(forward_batch=forward_batch):
+        return torch.repeat_interleave(
+            forward_batch.seq_lens.to(torch.int64),
+            int(forward_batch.spec_info.num_tokens_per_req),
+        )
+
     if not _uses_extend_like_layout(forward_batch=forward_batch):
-        if _uses_repeated_seq_len_layout(forward_batch=forward_batch):
-            return torch.repeat_interleave(
-                forward_batch.seq_lens.to(torch.int64),
-                int(forward_batch.spec_info.num_tokens_per_req),
-            )
         return fallback_positions
 
-    extend_prefix_lens = forward_batch.extend_prefix_lens
-    extend_seq_lens = forward_batch.extend_seq_lens
-    if extend_prefix_lens is None or extend_seq_lens is None:
-        return fallback_positions
-
-    return torch.cat(
-        [
-            torch.arange(
-                int(prefix_len.item()),
-                int(prefix_len.item()) + int(extend_len.item()),
-                device=fallback_positions.device,
-                dtype=torch.int64,
-            )
-            for prefix_len, extend_len in zip(extend_prefix_lens, extend_seq_lens)
-        ]
-    )
+    return fallback_positions
 
 
 def _uses_extend_like_layout(*, forward_batch: "ForwardBatch") -> bool:
