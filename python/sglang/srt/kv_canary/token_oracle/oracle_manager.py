@@ -86,6 +86,11 @@ def _build_req_id_per_token(
             rids_per_row, int(forward_batch.spec_info.draft_token_num)
         )
         result = torch.repeat_interleave(rids_per_row, lens)
+    elif _uses_repeated_seq_len_layout(forward_batch=forward_batch):
+        lens = torch.full_like(
+            rids_per_row, int(forward_batch.spec_info.num_tokens_per_req)
+        )
+        result = torch.repeat_interleave(rids_per_row, lens)
     elif forward_mode is not None and forward_mode.is_draft_extend(include_v2=True):
         lens = torch.full_like(
             rids_per_row, int(forward_batch.spec_info.num_tokens_per_req)

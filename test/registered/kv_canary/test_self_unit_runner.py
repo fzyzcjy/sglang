@@ -483,6 +483,7 @@ class TestSelfUnitRunner(CustomTestCase):
     def test_token_oracle_uses_actual_draft_extend_input_tokens(self):
         """Verify EAGLE draft extend checks generated inputs against themselves."""
         mode = SimpleNamespace(
+            is_decode=lambda: False,
             is_target_verify=lambda: False,
             is_draft_extend=lambda include_v2=False: True,
             is_extend=lambda: False,
