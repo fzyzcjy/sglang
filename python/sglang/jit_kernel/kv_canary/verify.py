@@ -328,6 +328,33 @@ def launch_canary_verify_kernel(
     )
 
 
+def canary_verify_step(
+    *,
+    canary_buf: torch.Tensor,
+    plan: VerifyPlan,
+    kernel_kind: CanaryLaunchTag,
+    violation_ring: torch.Tensor,
+    violation_write_index: torch.Tensor,
+    slot_run_counter: torch.Tensor,
+    kernel_run_counter: torch.Tensor,
+    real_kv_sources: tuple[RealKvSource, ...],
+    real_kv_hash_mode: consts.RealKvHashMode,
+) -> None:
+    launch_canary_verify_kernel(
+        context=VerifyOrWriteContext(
+            canary_buf=canary_buf,
+            kernel_kind=kernel_kind,
+            violation_ring=violation_ring,
+            violation_write_index=violation_write_index,
+            slot_run_counter=slot_run_counter,
+            kernel_run_counter=kernel_run_counter,
+            real_kv_sources=real_kv_sources,
+            real_kv_hash_mode=real_kv_hash_mode,
+        ),
+        plan=plan,
+    )
+
+
 @cache_once
 def _jit_canary_verify_module() -> "Module":
     return load_jit(
