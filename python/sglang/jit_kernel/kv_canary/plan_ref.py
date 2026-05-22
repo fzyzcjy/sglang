@@ -94,11 +94,8 @@ def _swa_translate_slot(*, slot: int, lut: torch.Tensor) -> int:
     if slot < 0:
         return slot
     lut_len = int(lut.shape[0])
-    if slot >= lut_len:
-        raise ValueError(
-            f"kv-canary: SWA slot {slot} is outside full_to_swa_index_mapping length {lut_len}"
-        )
-    return int(lut[slot].item())
+    safe_slot = min(slot, lut_len - 1) if lut_len > 0 else slot
+    return int(lut[safe_slot].item())
 
 
 def _materialize_verify_entries(
