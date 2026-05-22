@@ -237,10 +237,10 @@ class TestRealKvUsedPerturb(CustomTestCase):
     ) -> None:
         """Verify SWA groups map logical slots through swa_index_lut before flipping bytes."""
         source = RealKvSource(
-            tensor=torch.arange(32, dtype=torch.uint8).view(2, 16),
+            tensor=torch.arange(64, dtype=torch.uint8).view(2, 32),
             page_size=2,
-            num_bytes_per_token=8,
-            read_bytes=8,
+            num_bytes_per_token=16,
+            read_bytes=16,
         )
         group = _make_group(
             kind=PoolKind.SWA,
@@ -252,9 +252,9 @@ class TestRealKvUsedPerturb(CustomTestCase):
         snapshot = source.tensor.clone()
         result = flip_first_byte_in_source(group=group, source=source, slot_idx=1)
 
-        self.assertEqual(result, (1, 8, int(snapshot[1, 8].item())))
+        self.assertEqual(result, (1, 16, int(snapshot[1, 16].item())))
         expected = snapshot.clone()
-        expected[1, 8] = int(snapshot[1, 8].item()) ^ 0xFF
+        expected[1, 16] = int(snapshot[1, 16].item()) ^ 0xFF
         self.assertTrue(torch.equal(source.tensor, expected))
 
     def test_flip_first_byte_in_physical_swa_slot_does_not_translate_twice(
