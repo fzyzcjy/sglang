@@ -257,6 +257,13 @@ def canary_write_step(
     real_kv_sources: tuple[RealKvSource, ...],
     real_kv_hash_mode: consts.RealKvHashMode,
 ) -> None:
+    launch_expected_input_tokens = (
+        expected_input_tokens if enable_write_verify_inputs else None
+    )
+    launch_expected_input_positions = (
+        expected_input_positions if enable_write_verify_inputs else None
+    )
+
     launch_canary_write_kernel(
         context=VerifyOrWriteContext(
             canary_buf=canary_buf,
@@ -273,8 +280,8 @@ def canary_write_step(
         positions=positions,
         out_cache_loc=out_cache_loc,
         enable_assert_inputs=enable_write_verify_inputs,
-        expected_input_tokens=expected_input_tokens,
-        expected_input_positions=expected_input_positions,
+        expected_input_tokens=launch_expected_input_tokens,
+        expected_input_positions=launch_expected_input_positions,
     )
 
 

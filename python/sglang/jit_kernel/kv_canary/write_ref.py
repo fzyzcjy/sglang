@@ -85,10 +85,6 @@ def launch_canary_write_kernel_torch_reference(
             device=work_device, dtype=torch.int64
         )
     else:
-        if expected_input_tokens is not None or expected_input_positions is not None:
-            raise ValueError(
-                "kv-canary: expected input tensors must be None when enable_write_verify_inputs=False"
-            )
         expected_input_tokens_host = None
         expected_input_positions_host = None
 
