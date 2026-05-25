@@ -185,9 +185,7 @@ class PseudoEngine:
                 f"PseudoEngine.admit: max_new_tokens must be >= 1, got {max_new_tokens}"
             )
         if any(t < 0 for t in prompt):
-            raise ValueError(
-                "PseudoEngine.admit: prompt contains negative token ids"
-            )
+            raise ValueError("PseudoEngine.admit: prompt contains negative token ids")
         if eos_at is not None:
             # The oracle decides EOS placement from max_new_tokens; an
             # explicit ``eos_at`` is not yet wired through the IPC.

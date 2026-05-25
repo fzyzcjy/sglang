@@ -234,7 +234,9 @@ class TestCase7SpecDecodingDraftV1(unittest.TestCase):
         # Draft worker and target worker query the same oracle; predict_output_token
         # is a pure function of (seed, req_id, step), so both see identical answers.
         steps = [oracle.predict_output_token(req_id="r0", step=k) for k in range(4)]
-        steps_again = [oracle.predict_output_token(req_id="r0", step=k) for k in range(4)]
+        steps_again = [
+            oracle.predict_output_token(req_id="r0", step=k) for k in range(4)
+        ]
         self.assertEqual(steps, steps_again)
 
 

@@ -48,9 +48,9 @@ from test.registered.pseudo_mode._test_utils import (
     PSEUDO_MODE_MODEL,
     requires_cuda,
 )
+from typing import List, Set
 
 from sglang.test.ci.ci_register import register_cuda_ci
-from typing import List, Set
 
 logger = logging.getLogger(__name__)
 

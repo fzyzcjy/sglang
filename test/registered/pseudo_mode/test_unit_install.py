@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 from unittest import mock
 
 import torch
@@ -96,15 +96,11 @@ class _StubScheduler:
         self.queued: List[_StubReq] = []
         self.processed_results: List[Any] = []
 
-    def _add_request_to_queue(
-        self, req: _StubReq, is_retracted: bool = False
-    ) -> None:
+    def _add_request_to_queue(self, req: _StubReq, is_retracted: bool = False) -> None:
         if not is_retracted:
             self.queued.append(req)
 
-    def process_batch_result(
-        self, batch: _StubScheduleBatch, result: Any
-    ) -> None:
+    def process_batch_result(self, batch: _StubScheduleBatch, result: Any) -> None:
         self.processed_results.append((batch, result))
 
 
@@ -155,9 +151,7 @@ class TestPlanPatchFillsExpectedFields(unittest.TestCase):
         from sglang.srt.pseudo_mode import install as install_mod
 
         oracle = _fresh_oracle()
-        oracle.admit(
-            req_id="r0", origin_input_ids=[10, 20, 30], max_new_tokens=4
-        )
+        oracle.admit(req_id="r0", origin_input_ids=[10, 20, 30], max_new_tokens=4)
         oracle.register_chunk_commit(req_id="r0", chunk_size=3)
         oracle.register_req_pool_mapping(req_pool_idx=0, req_id="r0")
         oracle.commit_step(req_id="r0", output_token=42)
@@ -202,9 +196,7 @@ class TestPlanPatchFillsExpectedFields(unittest.TestCase):
                 ),
             ):
                 patched = _canary_host_state.plan_batch_from_forward_batch
-                result = patched(
-                    forward_batch=fb, config=_StubCanaryConfig()
-                )
+                result = patched(forward_batch=fb, config=_StubCanaryConfig())
 
             self.assertIsNotNone(result.expected_write_token_ids)
             self.assertIsNotNone(result.expected_write_positions)

@@ -125,9 +125,7 @@ class TestBatchCompositionCrossBatch(unittest.TestCase):
             engine.assert_no_canary_violations()
             return [list(r.active_rids) for r in results]
 
-    def _run_multi_batch(
-        self, prompt: list[int]
-    ) -> tuple[list[list[str]], str]:
+    def _run_multi_batch(self, prompt: list[int]) -> tuple[list[list[str]], str]:
         """Run ``prompt`` alongside two filler reqs; return per-step active rids."""
         with PseudoEngine.launch(
             model=PSEUDO_MODE_MODEL,
