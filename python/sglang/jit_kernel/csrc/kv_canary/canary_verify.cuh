@@ -91,8 +91,7 @@ __global__ void canary_verify_kernel(const VerifyKernelParams __grid_constant__ 
     // (e.g. attach_dsv4 — only swa_kv_pool, c4/c128 left uncovered) flood log mode with
     // false-positive violations on slots the plan asks about but no canary write ever
     // touched. See agent-context bug report 2026-05-26-bug-kv-canary-on-dsv4-disagg.md.
-    if (stored_token == 0 && stored_position == 0 && stored_chain_hash == 0 &&
-        stored_real_kv_hash == 0) {
+    if (stored_token == 0 && stored_position == 0 && stored_chain_hash == 0 && stored_real_kv_hash == 0) {
       continue;
     }
 

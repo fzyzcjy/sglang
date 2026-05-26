@@ -90,8 +90,7 @@ __global__ void canary_write_kernel(const WriteKernelParams __grid_constant__ p)
   // running_prev_position+1 != actual_position. See agent-context bug report
   // 2026-05-26-bug-kv-canary-on-dsv4-disagg.md.
   const bool seed_is_untouched =
-      (seed_slot_idx >= 0) &&
-      canary_slot_is_untouched(p.canary_buf, p.slot_stride_bytes, seed_slot_idx);
+      (seed_slot_idx >= 0) && canary_slot_is_untouched(p.canary_buf, p.slot_stride_bytes, seed_slot_idx);
   const bool do_chain_position_assert =
       (seed_slot_idx >= 0) && !seed_is_untouched && (*p.enable_chain_position_assert != 0);
   int64_t running_prev_position = 0;
