@@ -20,9 +20,11 @@ def _host_debug(msg: str) -> None:
         print(msg, flush=True)
 
 
-# debug=True so tl.device_assert below actually raises. Without it the assert
-# is stripped at compile time and only tl.device_print fires (the assert is
-# gated on the TRITON_DEBUG env var by default — see tl.device_assert docstring).
+# debug=True so tl.device_print below fires unconditionally on mismatch. Note we deliberately
+# do *not* call tl.device_assert: hitting a device_assert kills the CUDA context and floods
+# the log with one FAIL per thread (128 lines per launch) without giving the upstream Python
+# exception a chance to surface. We always advance the phase tensor regardless of mismatch so
+# a single bracketing miss does not keep tripping subsequent checks.
 @triton.jit(debug=True)
 def _phase_check_kernel(
     phase_ptr,
@@ -33,6 +35,8 @@ def _phase_check_kernel(
 ):
     cur = tl.load(phase_ptr)
     enable_assert = tl.load(enable_assert_ptr)
+    # Always advance first, so a single mismatched check does not poison every later check.
+    tl.store(phase_ptr, NEXT_PHASE)
     if enable_assert != 0:
         if cur != EXPECT_PHASE:
             # constexpr values get baked into the prefix string at compile time;
@@ -42,8 +46,6 @@ def _phase_check_kernel(
                 f"expect={EXPECT_PHASE} next={NEXT_PHASE} actual=",
                 cur,
             )
-        tl.device_assert(cur == EXPECT_PHASE, "SimplePhaseChecker: phase mismatch")
-    tl.store(phase_ptr, NEXT_PHASE)
 
 
 class SimplePhaseChecker:

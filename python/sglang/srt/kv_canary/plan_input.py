@@ -107,8 +107,13 @@ def _extract_prefix_lens_and_extend_seq_lens(
         # pre-bump so deriving prefix_lens from seq_lens is off-by-one. Padding tail (positions
         # shorter than bs under cuda-graph padding) keeps whatever stale data it had; the offsets
         # kernel masks those rows via ``is_active`` before using prefix_lens.
+        # On the EAGLE _draft_extend_for_decode IDLE path, ``positions`` is laid out per
+        # draft step rather than per req (shape [bs * speculative_num_draft_tokens]), so
+        # positions can exceed bs. Take the first bs entries — those are the per-req prefix
+        # starts; the trailing draft-step positions don't go into prefix_lens.
         positions = forward_batch.positions
-        out_prefix_lens[: positions.shape[0]].copy_(positions.to(torch.int64))
+        n = min(int(positions.shape[0]), bs)
+        out_prefix_lens[:n].copy_(positions[:n].to(torch.int64))
         out_extend_seq_lens.fill_(1)
     elif forward_mode.is_target_verify():
         # Evidence: EagleVerifyInputV2Mixin.prepare_for_v2_verify assigns out_cache_loc in
