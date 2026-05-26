@@ -114,6 +114,29 @@ class SingleForwardManager:
             device=device,
         )
 
+        # Pre-allocate per-forward plan tensors once. With cuda-graph capture iterating
+        # ~35 batch sizes, fresh per-call allocation accumulates ~6 GB of canary plan
+        # tensors that the captured graphs keep alive — borderline OOM during DeepGEMM
+        # warmup. The plan kernels overwrite every byte each step, so reuse is safe.
+        self._verify_plans = tuple(
+            VerifyPlan.allocate(
+                verify_capacity=self._verify_capacity, device=self._device
+            )
+            for _ in self._buffer_groups
+        )
+        self._write_plans = tuple(
+            WritePlan.allocate(
+                write_req_capacity=self._write_req_capacity, device=self._device
+            )
+            for _ in self._buffer_groups
+        )
+        self._expected_inputs = ExpectedInputs.allocate(
+            capacity=self._write_entry_capacity, device=self._device
+        )
+        self._plan_input = PlanInput.allocate(
+            bs_capacity=self._write_req_capacity, device=self._device
+        )
+
     @property
     def phase_checker(self) -> SimplePhaseChecker:
         return self._phase_checker
@@ -158,24 +181,10 @@ class SingleForwardManager:
             caller_name="SingleForwardManager.pre_ops_maybe_inside_graph",
         )
 
-        verify_plans = tuple(
-            VerifyPlan.allocate(
-                verify_capacity=self._verify_capacity, device=self._device
-            )
-            for _ in self._buffer_groups
-        )
-        write_plans = tuple(
-            WritePlan.allocate(
-                write_req_capacity=self._write_req_capacity, device=self._device
-            )
-            for _ in self._buffer_groups
-        )
-        expected_inputs = ExpectedInputs.allocate(
-            capacity=self._write_entry_capacity, device=self._device
-        )
-        plan_input = PlanInput.allocate(
-            bs_capacity=self._write_req_capacity, device=self._device
-        )
+        verify_plans = self._verify_plans
+        write_plans = self._write_plans
+        expected_inputs = self._expected_inputs
+        plan_input = self._plan_input
 
         enable_write_input_assert = self._should_enable_write_input_assert_for_launch(
             forward_batch
