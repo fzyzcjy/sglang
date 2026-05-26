@@ -105,8 +105,15 @@ def _patch_model_forward(
         ), "kv-canary: patched model.forward called without a ForwardBatch"
 
         canary_pre_ops_output = manager.pre_ops_maybe_inside_graph(forward_batch)
-        output = original(*args, **kwargs)
-        manager.post_ops_maybe_inside_graph(forward_batch, canary_pre_ops_output)
+        # Always close the (pre,post)_ops_maybe_inside_graph bracket, even if model.forward
+        # raises. Otherwise the SingleForwardManager phase FSM is left stuck at
+        # AFTER_PRE_MAYBE_IN, and the outer with_ops_outside_graph's finally then trips
+        # the SimplePhaseChecker assertion (caller_tag=4 expect=3 actual=2) and floods
+        # the log with a device_assert that kills the CUDA context.
+        try:
+            output = original(*args, **kwargs)
+        finally:
+            manager.post_ops_maybe_inside_graph(forward_batch, canary_pre_ops_output)
         return output
 
     wrap_method(model_runner.model, "forward", wrapper=_with_canary_bracketing)
