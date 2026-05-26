@@ -33,9 +33,7 @@ _EAGLE_SPEC_ARGS = [
     "2",
 ]
 
-_KV_CANARY_ARGS = (
-    []
-)  # disabled: DSV4 KV pool (DeepSeekV4TokenToKVPool) not yet supported by kv-canary attachers
+_KV_CANARY_ARGS = ["--kv-canary", "log"]
 
 
 class TestDisaggregationDSV4(PDDisaggregationServerBase, GSM8KMixin):
