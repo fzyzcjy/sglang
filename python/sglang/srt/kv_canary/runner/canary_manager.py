@@ -55,8 +55,10 @@ class CanaryManager:
         token_oracle_manager: Optional[TokenOracleManager] = None,
         swa_allocator: Optional["SWATokenToKVPoolAllocator"] = None,
         speculative_num_steps: int = 1,
+        speculative_num_draft_tokens: int = 1,
         is_eagle_draft_decode: bool = False,
     ) -> None:
+        self._speculative_num_draft_tokens = speculative_num_draft_tokens
         self.config = config
         self._req_to_token_pool = req_to_token_pool
         self._swa_window_size = swa_window_size
@@ -268,7 +270,19 @@ class CanaryManager:
     def mark_init_finished(self) -> None:
         for single_forward_manager in self._single_forward_managers:
             single_forward_manager.phase_checker.enable_assert()
-        self._device_state.enable_chain_position_assert.fill_(1)
+        # The chain-step position assert (running_prev_position + 1 == position) assumes
+        # a contiguous linear chain. With EAGLE multi-draft-token (speculative_num_draft_tokens
+        # > 1), partial acceptance and padding entries leave gaps in the chain so the
+        # invariant produces false positives on TAIL_K_SWA write_position. Keep it off in
+        # that case; the chain_hash check still validates correctness end-to-end.
+        if self._speculative_num_draft_tokens <= 1:
+            self._device_state.enable_chain_position_assert.fill_(1)
+        else:
+            logger.info(
+                "kv-canary: skipping enable_chain_position_assert "
+                "(speculative_num_draft_tokens=%d > 1; chain has gaps from partial accept / padding)",
+                self._speculative_num_draft_tokens,
+            )
 
     def attach_radix_cache(self, radix_cache: "BasePrefixCache") -> None:
         self._sweep_orchestrator.attach_radix_cache(radix_cache)

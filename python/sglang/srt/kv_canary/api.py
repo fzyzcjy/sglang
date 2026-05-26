@@ -61,6 +61,7 @@ def install_canary(
     )
     swa_window_size = model_runner.sliding_window_size or 0
     speculative_num_steps = int(server_args.speculative_num_steps or 1)
+    speculative_num_draft_tokens = int(server_args.speculative_num_draft_tokens or 1)
     manager = CanaryManager(
         config=config,
         perturb_config=perturb_config,
@@ -72,6 +73,7 @@ def install_canary(
         token_oracle_manager=token_oracle_manager,
         swa_allocator=swa_allocator,
         speculative_num_steps=speculative_num_steps,
+        speculative_num_draft_tokens=speculative_num_draft_tokens,
         is_eagle_draft_decode=model_runner.is_draft_worker,
     )
 
