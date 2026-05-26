@@ -98,8 +98,8 @@ __global__ void canary_write_kernel(const WriteKernelParams __grid_constant__ p)
   const bool seed_is_padding = (seed_slot_idx == kTokenToKvSlotPadding);
   const bool seed_is_untouched =
       (seed_slot_idx >= 0) && canary_slot_is_untouched(p.canary_buf, p.slot_stride_bytes, seed_slot_idx);
-  const bool do_chain_position_assert = (seed_slot_idx >= 0) && !seed_is_padding && !seed_is_untouched &&
-                                        (*p.enable_chain_position_assert != 0);
+  const bool do_chain_position_assert =
+      (seed_slot_idx >= 0) && !seed_is_padding && !seed_is_untouched && (*p.enable_chain_position_assert != 0);
   int64_t running_prev_position = 0;
   if (do_chain_position_assert) {
     running_prev_position = canary_load_field(p.canary_buf, seed_slot_idx, p.slot_stride_bytes, kCanaryFieldPosition);

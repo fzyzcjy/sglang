@@ -182,7 +182,7 @@ class TestBasicShape:
         assert int(triton_v.verify_num_valid[0].item()) == 14
 
 
-class TestSeedSlot:
+class TestPlanSeedSlot:
     def test_prefix_zero_seed_is_minus_one(self) -> None:
         """prefix=0 → seed_slot_idx = -1 (no predecessor to anchor on)."""
         req_to_token = make_req_to_token(
