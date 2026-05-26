@@ -136,11 +136,6 @@ SGL_DEVICE uint64_t compute_slot_hash(const uint8_t* canary_buf, int64_t slot_st
   if (source_slot_idx < 0) {
     return splitmix64(kCanaryChainAnchor);
   }
-  // Untouched source slot — treat as chain anchor so verify/write don't trip on slots that
-  // an attacher with partial pool coverage (e.g. attach_dsv4) never wrote.
-  if (canary_slot_is_untouched(canary_buf, slot_stride_bytes, source_slot_idx)) {
-    return splitmix64(kCanaryChainAnchor);
-  }
   const int64_t token = canary_load_field(canary_buf, source_slot_idx, slot_stride_bytes, kCanaryFieldToken);
   const int64_t position = canary_load_field(canary_buf, source_slot_idx, slot_stride_bytes, kCanaryFieldPosition);
   const int64_t prev_hash = canary_load_field(canary_buf, source_slot_idx, slot_stride_bytes, kCanaryFieldPrevHash);

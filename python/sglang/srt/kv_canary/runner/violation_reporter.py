@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 
+from sglang.jit_kernel.kv_canary import consts
 from sglang.jit_kernel.kv_canary.consts import FailReason
 from sglang.jit_kernel.kv_canary.verify import CanaryLaunchTag
 from sglang.srt.kv_canary.config import CanaryConfig
@@ -47,16 +48,40 @@ class ViolationReporter:
         if start >= valid_count:
             return
 
+        # Drop "untouched slot" false positives: a verify hit where stored fields are
+        # all-zero is the alloc_canary_buf init pattern, meaning canary_write_kernel
+        # never touched this slot. Partial-coverage attachers (e.g. attach_dsv4 only
+        # wires swa_kv_pool; c4/c128 left uncovered) produce hundreds of such hits per
+        # step during PD warmup and decode. The kernel keeps emitting them because the
+        # CUDA contract treats init-zero as a real corruption signal for fully-covered
+        # pools (existing unit tests verify this). Filter at the host so log mode stays
+        # actionable on partial-coverage configs without changing the kernel ABI. A real
+        # canary write always derives stored_chain_hash from a splitmix64 chain seeded
+        # by the non-zero kCanaryChainAnchor, so a legitimately-written slot cannot
+        # collide with this pattern.
+        rows: list[list[int]] = []
+        for i in range(start, valid_count):
+            row = ring[i].tolist()
+            stored_token = int(row[consts.VIOLATION_FIELD_STORED_TOKEN])
+            stored_chain_hash = int(row[consts.VIOLATION_FIELD_STORED_CHAIN_HASH])
+            # `position` here is the stored_position (per _format_violation's mapping).
+            stored_position = int(row[consts.VIOLATION_FIELD_POSITION])
+            if stored_token == 0 and stored_position == 0 and stored_chain_hash == 0:
+                continue
+            rows.append(row)
+        self._last_logged_write_index = valid_count
+        if not rows:
+            return
+
         messages: list[str] = [
             _format_violation(
-                row=ring[i].tolist(),
+                row=row,
                 total=write_index,
                 ring_overflow=ring_overflow,
                 step_when_pumped=outer_step_counter,
             )
-            for i in range(start, valid_count)
+            for row in rows
         ]
-        self._last_logged_write_index = valid_count
 
         # log mode: always surface every violation as WARNING.
         if self._config.mode == "log":
