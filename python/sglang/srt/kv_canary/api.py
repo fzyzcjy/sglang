@@ -53,11 +53,18 @@ def install_canary(
     swa_allocator = (
         allocator if isinstance(allocator, SWATokenToKVPoolAllocator) else None
     )
+    # Size verify_capacity to the canary's actual coverage, not the model's full
+    # max_total_num_tokens. Partial-coverage attachers (e.g. attach_dsv4 hooks only
+    # swa_kv_pool) make the canary's visible slot count substantially smaller than
+    # the full token-to-KV pool. Using max_total_num_tokens here over-allocates
+    # verify_capacity ~10× on DSV4 (5.5M vs 558K) and adds ~160 MB of persistent
+    # int64 plan tensors that push DeepGEMM precompile over its memory budget.
+    canary_slot_count = sum(int(g.k_head.shape[0]) for g in buffer_groups)
     launch_capacities = CanaryLaunchCapacities.from_args(
         server_args=model_runner.server_args,
         req_to_token_pool_size=model_runner.req_to_token_pool.size,
         max_seq_len_per_req=model_runner.req_to_token_pool.req_to_token.shape[1],
-        pool_slot_count=model_runner.max_total_num_tokens,
+        pool_slot_count=canary_slot_count,
     )
     swa_window_size = model_runner.sliding_window_size or 0
     speculative_num_steps = int(server_args.speculative_num_steps or 1)
