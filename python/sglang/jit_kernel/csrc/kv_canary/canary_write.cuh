@@ -84,7 +84,16 @@ __global__ void canary_write_kernel(const WriteKernelParams __grid_constant__ p)
 
   // Assumes eagle topk=1 (linear chain). Under topk>1 target_verify would be a tree and
   // sibling positions share parent.pos+1, breaking this invariant.
-  const bool do_chain_position_assert = (seed_slot_idx >= 0) && (*p.enable_chain_position_assert != 0);
+  // Also skip the assert if the seed slot is fully untouched (alloc_canary_buf init pattern):
+  // partial-coverage attachers (e.g. attach_dsv4) hand out seed slots that no canary write
+  // ever filled, so loading stored_position from them is meaningless and would always trip
+  // running_prev_position+1 != actual_position. See agent-context bug report
+  // 2026-05-26-bug-kv-canary-on-dsv4-disagg.md.
+  const bool seed_is_untouched =
+      (seed_slot_idx >= 0) &&
+      canary_slot_is_untouched(p.canary_buf, p.slot_stride_bytes, seed_slot_idx);
+  const bool do_chain_position_assert =
+      (seed_slot_idx >= 0) && !seed_is_untouched && (*p.enable_chain_position_assert != 0);
   int64_t running_prev_position = 0;
   if (do_chain_position_assert) {
     running_prev_position = canary_load_field(p.canary_buf, seed_slot_idx, p.slot_stride_bytes, kCanaryFieldPosition);

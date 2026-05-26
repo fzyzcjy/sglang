@@ -122,8 +122,24 @@ canary_store_field(uint8_t* buf, int64_t slot_idx, int64_t slot_stride_bytes, in
   p[field] = value;
 }
 
+SGL_DEVICE bool canary_slot_is_untouched(
+    const uint8_t* canary_buf, int64_t slot_stride_bytes, int64_t slot_idx) {
+  // alloc_canary_buf zero-fills, so a slot that has never been touched by canary_write_kernel
+  // has all four int64 fields == 0. A real write always derives stored_chain_hash from a
+  // splitmix64 chain seeded by kCanaryChainAnchor (non-zero), so a legitimately-written slot
+  // cannot collide with this pattern.
+  const int64_t* p = reinterpret_cast<const int64_t*>(canary_buf + slot_idx * slot_stride_bytes);
+  return p[kCanaryFieldToken] == 0 && p[kCanaryFieldPosition] == 0 &&
+         p[kCanaryFieldPrevHash] == 0 && p[kCanaryFieldRealKvHash] == 0;
+}
+
 SGL_DEVICE uint64_t compute_slot_hash(const uint8_t* canary_buf, int64_t slot_stride_bytes, int64_t source_slot_idx) {
   if (source_slot_idx < 0) {
+    return splitmix64(kCanaryChainAnchor);
+  }
+  // Untouched source slot — treat as chain anchor so verify/write don't trip on slots that
+  // an attacher with partial pool coverage (e.g. attach_dsv4) never wrote.
+  if (canary_slot_is_untouched(canary_buf, slot_stride_bytes, source_slot_idx)) {
     return splitmix64(kCanaryChainAnchor);
   }
   const int64_t token = canary_load_field(canary_buf, source_slot_idx, slot_stride_bytes, kCanaryFieldToken);

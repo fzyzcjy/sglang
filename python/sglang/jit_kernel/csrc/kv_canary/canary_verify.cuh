@@ -84,6 +84,18 @@ __global__ void canary_verify_kernel(const VerifyKernelParams __grid_constant__ 
     const int64_t stored_real_kv_hash =
         canary_load_field(p.canary_buf, slot_idx, p.slot_stride_bytes, kCanaryFieldRealKvHash);
 
+    // Skip slots that look fully untouched (the alloc_canary_buf init pattern: all-zero).
+    // A real canary write always derives stored_chain_hash from a splitmix64 chain seeded
+    // by kCanaryChainAnchor, which is non-zero, so a legitimately-written slot cannot land
+    // on this pattern. Without this guard, attachers that only partially cover their pool
+    // (e.g. attach_dsv4 — only swa_kv_pool, c4/c128 left uncovered) flood log mode with
+    // false-positive violations on slots the plan asks about but no canary write ever
+    // touched. See agent-context bug report 2026-05-26-bug-kv-canary-on-dsv4-disagg.md.
+    if (stored_token == 0 && stored_position == 0 && stored_chain_hash == 0 &&
+        stored_real_kv_hash == 0) {
+      continue;
+    }
+
     const int64_t expected_chain_hash =
         static_cast<int64_t>(compute_slot_hash(p.canary_buf, p.slot_stride_bytes, prev_slot_idx));
 
