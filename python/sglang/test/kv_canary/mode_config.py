@@ -17,4 +17,7 @@ _MODE_CONFIGS: dict[str, _ModeConfig] = {
     "swa": _ModeConfig(
         model_path="google/gemma-4-E2B-it",
     ),
+    "dsv4": _ModeConfig(
+        model_path="deepseek-ai/DeepSeek-V4-Flash",
+    ),
 }

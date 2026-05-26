@@ -20,6 +20,9 @@ def launch_canary_plan_kernels_torch_reference(
     swa_window_size: int,
     full_to_swa_index_mapping: Optional[torch.Tensor],
     verify_capacity: int,
+    req_to_verify_expected_tokens: Optional[torch.Tensor],
+    req_to_verify_expected_tokens_valid_lens: Optional[torch.Tensor],
+    kv_token_id_vs_position_offset: int,
 ) -> None:
     """Python reference for :func:`launch_canary_plan_kernels`. Same signature & byte-equal semantics."""
     bs = int(req_pool_indices.shape[0])
@@ -46,6 +49,23 @@ def launch_canary_plan_kernels_torch_reference(
     if full_to_swa_index_mapping is not None:
         lut = full_to_swa_index_mapping.detach().to(device=work_device)
 
+    expected_token_pool_host: Optional[torch.Tensor] = None
+    req_to_verify_expected_tokens_valid_lens_host: Optional[torch.Tensor] = None
+    if req_to_verify_expected_tokens is not None:
+        expected_token_pool_host = req_to_verify_expected_tokens.detach().to(
+            device=work_device, dtype=torch.int64
+        )
+        if req_to_verify_expected_tokens_valid_lens is None:
+            raise ValueError(
+                "kv-canary: launch_canary_plan_kernels_torch_reference requires "
+                "req_to_verify_expected_tokens_valid_lens when req_to_verify_expected_tokens is set"
+            )
+        req_to_verify_expected_tokens_valid_lens_host = (
+            req_to_verify_expected_tokens_valid_lens.detach().to(
+                device=work_device, dtype=torch.int64
+            )
+        )
+
     total_verify = _materialize_verify_entries(
         verify_plan_out=verify_plan_out,
         req_pool_indices_host=req_pool_indices_host,
@@ -56,6 +76,9 @@ def launch_canary_plan_kernels_torch_reference(
         verify_capacity=verify_capacity,
         work_device=work_device,
         bs=bs,
+        expected_token_pool_host=expected_token_pool_host,
+        req_to_verify_expected_tokens_valid_lens_host=req_to_verify_expected_tokens_valid_lens_host,
+        kv_token_id_vs_position_offset=int(kv_token_id_vs_position_offset),
     )
 
     _materialize_write_metadata(
@@ -112,9 +135,13 @@ def _materialize_verify_entries(
     verify_capacity: int,
     work_device: torch.device,
     bs: int,
+    expected_token_pool_host: Optional[torch.Tensor],
+    req_to_verify_expected_tokens_valid_lens_host: Optional[torch.Tensor],
+    kv_token_id_vs_position_offset: int,
 ) -> int:
     out_slots: list[int] = []
     out_positions: list[int] = []
+    out_expected_input_ids: list[int] = []
     out_prev_slots: list[int] = []
 
     for r in range(bs):
@@ -129,6 +156,12 @@ def _materialize_verify_entries(
         else:
             window_start = 0
         verify_len = max(0, prefix_len - window_start)
+
+        valid_len_r = (
+            int(req_to_verify_expected_tokens_valid_lens_host[r].item())
+            if req_to_verify_expected_tokens_valid_lens_host is not None
+            else 0
+        )
 
         for j in range(verify_len):
             position = window_start + j
@@ -149,8 +182,17 @@ def _materialize_verify_entries(
                 else:
                     prev_slot = prev_slot_full
 
+            expected_input_id = -1
+            if expected_token_pool_host is not None:
+                sot_pos = position + kv_token_id_vs_position_offset
+                if 0 <= sot_pos < valid_len_r:
+                    expected_input_id = int(
+                        expected_token_pool_host[rpi, sot_pos].item()
+                    )
+
             out_slots.append(slot)
             out_positions.append(position)
+            out_expected_input_ids.append(expected_input_id)
             out_prev_slots.append(prev_slot)
 
     total_verify = len(out_slots)
@@ -163,6 +205,9 @@ def _materialize_verify_entries(
 
     slots_t = torch.tensor(out_slots, dtype=torch.int64, device=work_device)
     positions_t = torch.tensor(out_positions, dtype=torch.int64, device=work_device)
+    expected_input_ids_t = torch.tensor(
+        out_expected_input_ids, dtype=torch.int64, device=work_device
+    )
     prev_slots_t = torch.tensor(out_prev_slots, dtype=torch.int64, device=work_device)
 
     verify_plan_out.verify_slot_indices[:total_verify].copy_(
@@ -170,9 +215,14 @@ def _materialize_verify_entries(
             verify_plan_out.verify_slot_indices.device
         )
     )
-    verify_plan_out.verify_positions[:total_verify].copy_(
-        positions_t.to(verify_plan_out.verify_positions.dtype).to(
-            verify_plan_out.verify_positions.device
+    verify_plan_out.verify_expected_tokens[:total_verify].copy_(
+        expected_input_ids_t.to(verify_plan_out.verify_expected_tokens.dtype).to(
+            verify_plan_out.verify_expected_tokens.device
+        )
+    )
+    verify_plan_out.verify_expected_positions[:total_verify].copy_(
+        positions_t.to(verify_plan_out.verify_expected_positions.dtype).to(
+            verify_plan_out.verify_expected_positions.device
         )
     )
     verify_plan_out.verify_prev_slot_indices[:total_verify].copy_(

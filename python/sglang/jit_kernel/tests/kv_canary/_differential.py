@@ -50,9 +50,25 @@ def _run_both_plan(
     assert_equal: bool = True,
     active_verify_entries: Optional[int] = None,
     active_write_reqs: Optional[int] = None,
+    req_to_verify_expected_tokens: Optional[torch.Tensor] = None,
+    req_to_verify_expected_tokens_valid_lens: Optional[torch.Tensor] = None,
+    kv_token_id_vs_position_offset: int = 0,
 ) -> None:
     _ = extras
     verify_capacity = int(triton_verify.verify_slot_indices.shape[0])
+    # Default lens to "no tighter bound than pool width" so existing kernel tests that
+    # only care about gather wiring keep their old semantics without each call site
+    # explicitly building a per-req lens tensor.
+    if (
+        req_to_verify_expected_tokens is not None
+        and req_to_verify_expected_tokens_valid_lens is None
+    ):
+        req_to_verify_expected_tokens_valid_lens = torch.full(
+            (int(req_pool_indices.shape[0]),),
+            int(req_to_verify_expected_tokens.shape[1]),
+            dtype=torch.int64,
+            device=req_pool_indices.device,
+        )
     launch_canary_plan_kernels(
         verify_plan_out=triton_verify,
         write_plan_out=triton_write,
@@ -63,6 +79,9 @@ def _run_both_plan(
         swa_window_size=swa_window_size,
         full_to_swa_index_mapping=full_to_swa_index_mapping,
         verify_capacity=verify_capacity,
+        req_to_verify_expected_tokens=req_to_verify_expected_tokens,
+        req_to_verify_expected_tokens_valid_lens=req_to_verify_expected_tokens_valid_lens,
+        kv_token_id_vs_position_offset=kv_token_id_vs_position_offset,
     )
     launch_canary_plan_kernels_torch_reference(
         verify_plan_out=ref_verify,
@@ -74,6 +93,9 @@ def _run_both_plan(
         swa_window_size=swa_window_size,
         full_to_swa_index_mapping=full_to_swa_index_mapping,
         verify_capacity=int(ref_verify.verify_slot_indices.shape[0]),
+        req_to_verify_expected_tokens=req_to_verify_expected_tokens,
+        req_to_verify_expected_tokens_valid_lens=req_to_verify_expected_tokens_valid_lens,
+        kv_token_id_vs_position_offset=kv_token_id_vs_position_offset,
     )
     torch.cuda.synchronize()
 
@@ -126,8 +148,12 @@ def _assert_plans_byte_equal(
             ref_verify.verify_slot_indices[:n_verify],
         )
         assert torch.equal(
-            triton_verify.verify_positions[:n_verify],
-            ref_verify.verify_positions[:n_verify],
+            triton_verify.verify_expected_tokens[:n_verify],
+            ref_verify.verify_expected_tokens[:n_verify],
+        )
+        assert torch.equal(
+            triton_verify.verify_expected_positions[:n_verify],
+            ref_verify.verify_expected_positions[:n_verify],
         )
         assert torch.equal(
             triton_verify.verify_prev_slot_indices[:n_verify],
@@ -167,6 +193,7 @@ def _run_both_verify(
     real_kv_hash_mode: consts.RealKvHashMode,
     kernel_kind: CanaryLaunchTag = CanaryLaunchTag.HEAD_K_FULL,
     assert_equal: bool = True,
+    check_verify_expected_token: bool = True,
 ) -> None:
     launch_canary_verify_kernel(
         context=VerifyOrWriteContext(
@@ -181,6 +208,7 @@ def _run_both_verify(
             real_kv_hash_mode=real_kv_hash_mode,
         ),
         plan=plan_cuda,
+        check_verify_expected_token=check_verify_expected_token,
     )
     launch_canary_verify_kernel_torch_reference(
         context=VerifyOrWriteContext(
@@ -195,6 +223,7 @@ def _run_both_verify(
             real_kv_hash_mode=real_kv_hash_mode,
         ),
         plan=plan_ref,
+        check_verify_expected_token=check_verify_expected_token,
     )
     torch.cuda.synchronize()
 
@@ -244,7 +273,7 @@ def _run_both_write(
         input_ids=input_ids,
         positions=positions,
         out_cache_loc=out_cache_loc,
-        enable_assert_inputs=enable_write_verify_inputs,
+        enable_write_input_assert=enable_write_verify_inputs,
         expected_input_tokens=expected_tokens_for_launch,
         expected_input_positions=expected_positions_for_launch,
     )
@@ -264,7 +293,7 @@ def _run_both_write(
         input_ids=input_ids,
         positions=positions,
         out_cache_loc=out_cache_loc,
-        enable_assert_inputs=enable_write_verify_inputs,
+        enable_write_input_assert=enable_write_verify_inputs,
         expected_input_tokens=expected_tokens_for_launch,
         expected_input_positions=expected_positions_for_launch,
     )
@@ -407,6 +436,7 @@ def run_verify_diff(
     kernel_kind: CanaryLaunchTag = CanaryLaunchTag.HEAD_K_FULL,
     device: torch.device = _DEVICE,
     assert_equal: bool = True,
+    check_verify_expected_token: bool = True,
 ) -> tuple[FakeViolationLog, FakeViolationLog]:
     """Thin wrapper around ``_run_both_verify`` that creates a fresh log pair and packs (cuda, ref)
     buf/plan/source arguments into 2-tuples to drop ~8 lines of boilerplate per call site.
@@ -424,6 +454,7 @@ def run_verify_diff(
         real_kv_hash_mode=real_kv_hash_mode,
         kernel_kind=kernel_kind,
         assert_equal=assert_equal,
+        check_verify_expected_token=check_verify_expected_token,
     )
     return cuda_log, ref_log
 
@@ -486,6 +517,9 @@ def run_plan_diff(
     assert_equal: bool = True,
     active_verify_entries: Optional[int] = None,
     active_write_reqs: Optional[int] = None,
+    req_to_verify_expected_tokens: Optional[torch.Tensor] = None,
+    req_to_verify_expected_tokens_valid_lens: Optional[torch.Tensor] = None,
+    kv_token_id_vs_position_offset: int = 0,
 ) -> None:
     """Thin wrapper around ``_run_both_plan`` that unpacks ``((triton_v, triton_w), (ref_v, ref_w))``
     plan pairs to drop the per-call-site ``triton_verify=.../triton_write=.../ref_verify=...`` block.
@@ -506,4 +540,7 @@ def run_plan_diff(
         assert_equal=assert_equal,
         active_verify_entries=active_verify_entries,
         active_write_reqs=active_write_reqs,
+        req_to_verify_expected_tokens=req_to_verify_expected_tokens,
+        req_to_verify_expected_tokens_valid_lens=req_to_verify_expected_tokens_valid_lens,
+        kv_token_id_vs_position_offset=kv_token_id_vs_position_offset,
     )
