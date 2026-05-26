@@ -109,8 +109,24 @@ def launch_canary_write_kernel_torch_reference(
         seed_slot = int(seed_slot_indices_host[r].item())
         running_prev_hash = compute_slot_hash(buf_i64, seed_slot)
 
-        do_chain_position_assert = (seed_slot >= 0) and (
-            enable_chain_position_assert_value != 0
+        # Mirror the seed_is_padding / seed_is_untouched gates from
+        # canary_write_kernel (see python/sglang/jit_kernel/csrc/kv_canary/
+        # canary_write.cuh). Partial-coverage attachers and the padding
+        # slot leak stored_position=0, so the chain assert is suppressed
+        # to avoid spurious write_position fails on legitimately-reused
+        # init-zero seeds.
+        seed_is_padding = seed_slot == consts.TOKEN_TO_KV_SLOT_PADDING
+        seed_is_untouched = (seed_slot >= 0) and bool(
+            (buf_i64[seed_slot, consts.CANARY_FIELD_TOKEN].item() == 0)
+            and (buf_i64[seed_slot, consts.CANARY_FIELD_POSITION].item() == 0)
+            and (buf_i64[seed_slot, consts.CANARY_FIELD_PREV_HASH].item() == 0)
+            and (buf_i64[seed_slot, consts.CANARY_FIELD_REAL_KV_HASH].item() == 0)
+        )
+        do_chain_position_assert = (
+            (seed_slot >= 0)
+            and not seed_is_padding
+            and not seed_is_untouched
+            and (enable_chain_position_assert_value != 0)
         )
         if do_chain_position_assert:
             running_prev_position = int(
