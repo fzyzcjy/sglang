@@ -103,7 +103,12 @@ __global__ void canary_write_kernel(const WriteKernelParams __grid_constant__ p)
     const int64_t entry_idx = entry_start + entry_offset;
     const int64_t slot = p.out_cache_loc[entry_idx];
 
-    if (slot < 0) {
+    // Skip the SWA padding sentinel (-1) and the TokenToKVPool padding slot (0). Matches
+    // canary_verify_kernel which also skips slot 0. Without this, writes from one request's
+    // padded entries collide on slot 0 and a later request reading slot 0 as a chain seed
+    // sees a non-zero hash that mismatches the expected_position, surfacing as a spurious
+    // write_position fail on slot_idx=0.
+    if (slot < 0 || slot == kTokenToKvSlotPadding) {
       continue;
     }
     ++entries_written;
