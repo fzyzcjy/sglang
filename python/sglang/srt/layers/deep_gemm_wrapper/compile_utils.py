@@ -235,6 +235,15 @@ class _BaseWarmupExecutor:
             DeepGemmKernelType.GROUPED_GEMM_NT_BF16_MASKED: _BF16GroupedMaskedWarmupExecutor,
         }[kernel_type](**kwargs)
 
+    # Each executor.execute(m=m) call into deep_gemm may transiently allocate hidden
+    # cuBLAS / scratch workspaces (typically a few GB for grouped-masked kernels) that
+    # the formulas below do not account for. Inflate the estimate so max_m gets halved
+    # earlier when the GPU is tight, avoiding the 8 GB OOM we observed during DSV4
+    # disagg warmup where the formula said "fits in 16 GB free" but the actual peak
+    # was ~24 GB. The extra inflation cost is just an earlier max_m halving — warmup
+    # explores smaller shapes but the JIT outcome is identical.
+    _WORKSPACE_OVERHEAD_FACTOR = 2.0
+
     @staticmethod
     def get_memory_requirement(
         kernel_type: DeepGemmKernelType, max_m: int, n: int, k: int, num_groups: int
@@ -242,15 +251,15 @@ class _BaseWarmupExecutor:
         # Return the required memory space in GB for warmup executor
         _GB = 1 << 30
         if kernel_type == DeepGemmKernelType.GEMM_NT_F8F8BF16:
-            return (max_m * k + n * k + max_m * n * 2) / _GB
+            base = (max_m * k + n * k + max_m * n * 2) / _GB
         elif kernel_type == DeepGemmKernelType.GROUPED_GEMM_NT_F8F8BF16_CONTIG:
-            return (max_m * k + num_groups * n * k + max_m * 4 + max_m * n * 2) / _GB
+            base = (max_m * k + num_groups * n * k + max_m * 4 + max_m * n * 2) / _GB
         elif kernel_type == DeepGemmKernelType.GROUPED_GEMM_NT_BF16_CONTIG:
-            return (
+            base = (
                 max_m * k * 2 + num_groups * n * k * 2 + max_m * 4 + max_m * n * 2
             ) / _GB
         elif kernel_type == DeepGemmKernelType.GROUPED_GEMM_NT_F8F8BF16_MASKED:
-            return (
+            base = (
                 num_groups * max_m * k
                 + num_groups * n * k
                 + num_groups * 4
@@ -258,9 +267,9 @@ class _BaseWarmupExecutor:
             ) / _GB
         elif kernel_type == DeepGemmKernelType.GEMM_NT_BF16BF16F32:
             # bf16 lhs + bf16 rhs + fp32 out
-            return (max_m * k * 2 + n * k * 2 + max_m * n * 4) / _GB
+            base = (max_m * k * 2 + n * k * 2 + max_m * n * 4) / _GB
         elif kernel_type == DeepGemmKernelType.GROUPED_GEMM_NT_BF16_MASKED:
-            return (
+            base = (
                 num_groups * max_m * k * 2
                 + num_groups * n * k * 2
                 + num_groups * 4
@@ -268,6 +277,7 @@ class _BaseWarmupExecutor:
             ) / _GB
         else:
             raise ValueError(f"Invalid kernel type: {kernel_type}")
+        return base * _BaseWarmupExecutor._WORKSPACE_OVERHEAD_FACTOR
 
     def execute(self, m):
         raise NotImplementedError
