@@ -33,6 +33,8 @@ _EAGLE_SPEC_ARGS = [
     "2",
 ]
 
+_KV_CANARY_ARGS = []  # disabled: DSV4 KV pool (DeepSeekV4TokenToKVPool) not yet supported by kv-canary attachers
+
 
 class TestDisaggregationDSV4(PDDisaggregationServerBase, GSM8KMixin):
 
@@ -74,6 +76,7 @@ class TestDisaggregationDSV4(PDDisaggregationServerBase, GSM8KMixin):
             "--max-running-requests",
             "128",
             *_EAGLE_SPEC_ARGS,
+            *_KV_CANARY_ARGS,
             "--watchdog-timeout",
             "900",
         ]
@@ -110,6 +113,7 @@ class TestDisaggregationDSV4(PDDisaggregationServerBase, GSM8KMixin):
             "--max-running-requests",
             "128",
             *_EAGLE_SPEC_ARGS,
+            *_KV_CANARY_ARGS,
             "--watchdog-timeout",
             "900",
         ]
