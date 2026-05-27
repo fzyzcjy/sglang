@@ -1499,6 +1499,9 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
 
     # For chunked prefill in PP
     chunked_req: Optional[Req] = None
+    # Snapshot at batch ctor of `origin_input_ids[len(fill_ids)]` for the chunked
+    # req when it still has prompt tokens remaining; consumed by the EAGLE prefill
+    # rotation (see PR #26329).
     chunked_req_next_prompt_token: Optional[int] = None
     contains_last_prefill_chunk: bool = True
 
