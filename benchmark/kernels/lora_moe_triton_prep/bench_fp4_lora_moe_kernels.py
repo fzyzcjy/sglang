@@ -8,23 +8,13 @@ kernels that live inside FP4BlockScaleLoraLauncher::run (EP8 bs64 Kimi decode):
 These have NO standalone python binding, so the overlay module exports three
 single-kernel runners (bench_permute / bench_nvfp4_quant / bench_activation);
 this script pre-allocates the in/out tensors (shapes from SHAPE_REPORT.md decode
-bs64) and calls them directly.
-
-Timing = CUDA-graph-replay over `inner` back-to-back calls, divided by inner
-(amortizes the per-replay launch overhead). These kernels are MEMORY-BOUND, so
-to avoid measuring warm-L2 (a graph that reuses ONE buffer set keeps the working
-set resident in L2 and reports an unrealistically fast number), the calls ROTATE
-over `--n-sets` independent buffer sets whose combined footprint exceeds the L2
-(GB200 L2 = 135 MB). Each call therefore reads data that the intervening calls
-have already evicted -> cold-L2 / true-HBM steady state, matching the e2e where
-every kernel invocation reads freshly-written HBM.
+bs64) and calls them directly. Timing + cold-L2 buffer rotation: see common_bench.
 
 Decode bs64 (per-rank EP8): num_tokens=64 top_k=8 hidden=7168 inter=2048
 gate_up_n=4096 num_experts=384 local_experts=48 tile=8 max_num_padded_tokens=3200.
 
 Usage (on the GPU pod):
   python3 bench_fp4_lora_moe_kernels.py --mode bench
-  python3 bench_fp4_lora_moe_kernels.py --mode bench --n-sets 1   # warm-L2, for comparison
   python3 bench_fp4_lora_moe_kernels.py --mode correctness
 """
 
@@ -33,8 +23,7 @@ from __future__ import annotations
 import argparse
 
 import torch
-import triton
-import triton.testing
+from common_bench import bench_kernel, pick_n_sets, report_sets, set_bytes
 
 from sglang.jit_kernel.flashinfer_trtllm_moe.core import (
     get_sgl_trtllm_moe_sm100_raw_module,
@@ -80,26 +69,42 @@ def make_one_set(num_tokens, top_k, hidden, inter, gate_up_n, maxpad, tile, dev)
     )
 
 
-def bench_rotating(call, n_sets, inner=160, warmup=25, rep=100):
-    """Per-call ms. `call(i)` runs the kernel on buffer set i; the graph rotates over
-    n_sets sets so each call reads L2-cold data (sets together exceed L2)."""
-    torch.cuda.synchronize()
-    s = torch.cuda.Stream()
-    s.wait_stream(torch.cuda.current_stream())
-    with torch.cuda.stream(s):
-        for _ in range(2):
-            for j in range(inner):
-                call(j % n_sets)
-    torch.cuda.current_stream().wait_stream(s)
-    torch.cuda.synchronize()
-    g = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(g):
-        for j in range(inner):
-            call(j % n_sets)
-    torch.cuda.synchronize()
-    ms = triton.testing.do_bench(g.replay, warmup=warmup, rep=rep) / inner
-    torch.cuda.synchronize()
-    return float(ms)
+_E2M1 = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]
+_E2M1 = _E2M1 + [-v for v in _E2M1]  # codes 8..15 are the negatives
+
+
+def dequant_rel_err(input_bf16, fp4_u8, sf_u8, ptsf, m, n, tile, e):
+    """Dequantize the kernel's NVFP4 output and return ||deq-input||/||input|| over the
+    e real rows. Per the quant kernel (quantization.cuh:nvfp4QuantAndPerTokenScaleKernel):
+    x ~= e2m1(fp4) * e4m3(block_sf) * per_token_sf, where per_token_sf[row]=rowamax/(448*6),
+    block_sf is the per-16-elt e4m3 scale stored in the SWIZZLED_8x4 layout
+    (get_sf_out_offset_8x4), and fp4 is row-major (2 codes/byte, even col = low nibble).
+    """
+    assert tile < 128, "this dequant decodes SWIZZLED_8x4 (tile<128)"
+    dev = input_bf16.device
+    lut = torch.tensor(_E2M1, dtype=torch.float32, device=dev)
+    lo = (fp4_u8 & 0xF).long()
+    hi = (fp4_u8 >> 4).long()
+    vals = lut[torch.stack([lo, hi], -1).reshape(m, n)]  # [m, n], even col=low nibble
+
+    num_vecs = n // 16
+    rows = torch.arange(m, device=dev)[:, None]
+    vecs = torch.arange(num_vecs, device=dev)[None, :]
+    num_k_tiles = (num_vecs + 3) // 4
+    off = (
+        (rows // 8) * (num_k_tiles * 32)
+        + (vecs // 4) * 32
+        + (rows % 8) * 4
+        + (vecs % 4)
+    )  # get_sf_out_offset_8x4
+    block_sf = sf_u8.view(torch.float8_e4m3fn).float()[off]  # [m, num_vecs]
+    block_sf = block_sf.repeat_interleave(16, dim=1)[:, :n]
+
+    deq = vals * block_sf * ptsf[:, None]
+    inp = input_bf16.float()
+    num = (deq[:e] - inp[:e]).norm()
+    den = inp[:e].norm() + 1e-9
+    return float((num / den).item())
 
 
 def main():
@@ -111,97 +116,127 @@ def main():
     ap.add_argument("--inter", type=int, default=2048)
     ap.add_argument("--maxpad", type=int, default=3200)
     ap.add_argument("--tile", type=int, default=8)
-    ap.add_argument(
-        "--n-sets",
-        type=int,
-        default=16,
-        help="rotate over this many buffer sets so each call is L2-cold (GB200 L2=135MB; "
-        "permute working set ~47MB -> 16 sets ~752MB). Use 1 to measure warm-L2.",
-    )
+    ap.add_argument("--budget-gb", type=float, default=16.0)
+    ap.add_argument("--n-sets", type=int, default=0, help="0 = auto (fill --budget-gb)")
     args = ap.parse_args()
     dev = "cuda"
     nt, tk, H, I = args.num_tokens, args.top_k, args.hidden, args.inter
-    gun = 2 * I
-    mp = args.maxpad
+    gun, mp = 2 * I, args.maxpad
     m = get_sgl_trtllm_moe_sm100_raw_module()
-    n_sets = max(1, args.n_sets)
-    S = [make_one_set(nt, tk, H, I, gun, mp, args.tile, dev) for _ in range(n_sets)]
+    mk = lambda: make_one_set(nt, tk, H, I, gun, mp, args.tile, dev)
 
-    def permute(i):
-        t = S[i]
-        return m.bench_permute(
-            t["hidden_in"], t["idx_map"], t["total_pad"], t["permuted"], nt, tk, H
-        )
-
-    def quant1(i):
-        t = S[i]
-        return m.bench_nvfp4_quant(
-            t["permuted"], None, t["q1_fp4"], t["q1_sf"], t["q1_ptsf"], mp, H, args.tile
-        )
-
-    def activation(i):
-        t = S[i]
-        return m.bench_activation(
-            t["gate_up"],
-            t["lora_delta"],
-            t["idx_map"],
-            t["total_pad"],
-            t["activated"],
-            t["lora_input"],
-            gun,
-            nt,
-            tk,
-        )
-
-    def quant2(i):
-        t = S[i]
-        return m.bench_nvfp4_quant(
-            t["activated"],
-            t["idx_map"],
-            t["q2_fp4"],
-            t["q2_sf"],
-            t["q2_ptsf"],
-            nt * tk,
-            I,
-            args.tile,
-        )
+    def runners(S):
+        return {
+            "permuteKernel": lambda i: m.bench_permute(
+                S[i]["hidden_in"],
+                S[i]["idx_map"],
+                S[i]["total_pad"],
+                S[i]["permuted"],
+                nt,
+                tk,
+                H,
+            ),
+            f"nvfp4 quant #1 (gate_up, m={mp})": lambda i: m.bench_nvfp4_quant(
+                S[i]["permuted"],
+                None,
+                S[i]["q1_fp4"],
+                S[i]["q1_sf"],
+                S[i]["q1_ptsf"],
+                mp,
+                H,
+                args.tile,
+            ),
+            "activationKernel": lambda i: m.bench_activation(
+                S[i]["gate_up"],
+                S[i]["lora_delta"],
+                S[i]["idx_map"],
+                S[i]["total_pad"],
+                S[i]["activated"],
+                S[i]["lora_input"],
+                gun,
+                nt,
+                tk,
+            ),
+            f"nvfp4 quant #2 (down, m={nt*tk})": lambda i: m.bench_nvfp4_quant(
+                S[i]["activated"],
+                S[i]["idx_map"],
+                S[i]["q2_fp4"],
+                S[i]["q2_sf"],
+                S[i]["q2_ptsf"],
+                nt * tk,
+                I,
+                args.tile,
+            ),
+        }
 
     if args.mode == "correctness":
-        permute(0)
-        torch.cuda.synchronize()
-        e = nt * tk
-        ref = S[0]["hidden_in"][torch.arange(e, device=dev) // tk]
-        perr = int((S[0]["permuted"][:e] != ref).sum().item())
-        print(f"{'PASS' if perr == 0 else 'FAIL'} permute gather mismatches={perr}")
-        quant1(0)
-        activation(0)
-        quant2(0)
-        torch.cuda.synchronize()
-        fin = (
-            torch.isfinite(S[0]["q1_ptsf"]).all().item()
-            and torch.isfinite(S[0]["activated"][:e].float()).all().item()
-            and torch.isfinite(S[0]["q2_ptsf"][:e]).all().item()
-        )
-        print(
-            f"{'PASS' if fin else 'FAIL'} quant/activation finiteness={fin} "
-            f"(q1_fp4{tuple(S[0]['q1_fp4'].shape)} activated{tuple(S[0]['activated'].shape)} "
-            f"q2_fp4{tuple(S[0]['q2_fp4'].shape)})"
-        )
-        raise SystemExit(0 if (perr == 0 and fin) else 1)
+        import torch.nn.functional as F
 
-    l2 = "L2-cold (rotated)" if n_sets > 1 else "WARM-L2 (n_sets=1)"
-    us_p = bench_rotating(permute, n_sets) * 1000
-    us_q1 = bench_rotating(quant1, n_sets) * 1000
-    us_a = bench_rotating(activation, n_sets) * 1000
-    us_q2 = bench_rotating(quant2, n_sets) * 1000
+        S = [mk()]
+        s0 = S[0]
+        r = list(runners(S).values())
+        e = nt * tk  # idx_map = arange(e): permuted row s <- token s//tk, k s%tk
+
+        # permute: bitwise-exact gather.
+        r[0](0)
+        torch.cuda.synchronize()
+        ref_perm = s0["hidden_in"][torch.arange(e, device=dev) // tk]
+        perr = int((s0["permuted"][:e] != ref_perm).sum().item())
+        print(
+            f"{'PASS' if perr == 0 else 'FAIL'} permute bitwise gather mismatches={perr}"
+        )
+
+        # activation: torch ref of activationKernel (dev_kernel.cu). gate_up is interleaved;
+        # per the kernel: up = even col + lora_delta[h+inner]; gate = odd col + lora_delta[h];
+        # out = silu(gate) * up. (lora_delta indexed contiguously, NOT interleaved.) bf16 -> num tol.
+        r[2](0)
+        torch.cuda.synchronize()
+        gu = s0["gate_up"][:e].float()
+        ld = s0["lora_delta"].reshape(e, gun).float()
+        inner = gun // 2
+        up = gu[:, 0::2] + ld[:, inner:]
+        ga = gu[:, 1::2] + ld[:, :inner]
+        ref_act = F.silu(ga) * up
+        got_act = s0["activated"][:e].float()
+        aerr = float((got_act - ref_act).abs().max().item())
+        arel = aerr / float(ref_act.abs().max().item() + 1e-9)
+        act_ok = arel <= 2e-2
+        print(
+            f"{'PASS' if act_ok else 'FAIL'} activation vs SwiGLU+lora ref: "
+            f"max_abs_err={aerr:.4e} rel={arel:.2e} (tol 2e-2, bf16)"
+        )
+
+        # quant: dequantize the kernel output and compare to the bf16 input (fp4 has no
+        # bitwise ref; assert the round-trip error is within fp4 precision).
+        r[1](0)
+        torch.cuda.synchronize()
+        qrel = dequant_rel_err(
+            s0["permuted"],
+            s0["q1_fp4"],
+            s0["q1_sf"],
+            s0["q1_ptsf"],
+            mp,
+            H,
+            args.tile,
+            e,
+        )
+        q_ok = qrel <= 0.20
+        print(
+            f"{'PASS' if q_ok else 'FAIL'} nvfp4 quant#1 dequant vs input: "
+            f"rel_err={qrel:.3e} (tol 0.20, e2m1 ~2^-1 mantissa)"
+        )
+        raise SystemExit(0 if (perr == 0 and act_ok and q_ok) else 1)
+
+    per = set_bytes(mk())
+    n_sets = pick_n_sets(per, args.budget_gb, args.n_sets)
     print(
-        f"BENCH fp4_lora_moe_kernels decode num_tokens={nt} maxpad={mp} hidden={H} inter={I} "
-        f"[{l2}, n_sets={n_sets}]:\n"
-        f"  permuteKernel                 = {us_p:7.2f} us\n"
-        f"  nvfp4 quant #1 (gate_up, m={mp})  = {us_q1:7.2f} us\n"
-        f"  activationKernel              = {us_a:7.2f} us\n"
-        f"  nvfp4 quant #2 (down, m={nt*tk})  = {us_q2:7.2f} us"
+        f"BENCH fp4_lora_moe_kernels decode num_tokens={nt} maxpad={mp} hidden={H} inter={I}"
     )
+    print(f"  per_set={per/1e6:.1f}MB {report_sets(per, n_sets)}")
+    S = [mk() for _ in range(n_sets)]
+    for name, call in runners(S).items():
+        us = bench_kernel(call, n_sets) * 1000
+        print(f"  {name:30s} = {us:7.2f} us")
 
 
 if __name__ == "__main__":

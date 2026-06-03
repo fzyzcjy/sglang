@@ -1,22 +1,23 @@
 """Self-contained perf-bench + correctness-test for the triton-gemm PREP group
-(3 kernels, ONE script) on the EP8 bs64 Kimi-K2.5-NVFP4 LoRA decode path:
+on the EP8 bs64 Kimi-K2.5-NVFP4 LoRA decode path. The 3 prep kernels run
+back-to-back and are benched as ONE combined pipeline (not individually), so a
+future fused replacement can be compared apples-to-apples:
 
-    _fused_virtual_topk_ids_kernel   (virtual_experts.py, ~1.5us)
-    moe_align_block_size_kernel      (sgl_kernel moe_align, ~2.7us)
-    count_and_sort_expert_tokens_kernel (same sgl_kernel call, ~4.7us)
+    topk_ids --_fused_virtual_topk_ids_kernel--> virtual_topk_ids        (~1.5us)
+             --moe_align_block_size (sgl_kernel)--> sorted/expert/post_pad
+               (this one launches BOTH moe_align_block_size_kernel ~2.7us
+                and count_and_sort_expert_tokens_kernel ~4.7us)
 
-The three run back-to-back as the LoRA virtual-experts routing prep:
-    topk_ids --_fused_virtual_topk_ids--> virtual_topk_ids
-             --moe_align_block_size(native, sgl_kernel)--> sorted_token_ids/expert_ids/num_post_pad
-(`moe_align_block_size` internally launches BOTH the align kernel and the
-count_and_sort kernel, so the two P2 align kernels are one Python call.)
-
-Production decode shapes (from SHAPE_REPORT.md, decode bs64, per-rank EP8):
+Production decode shapes (SHAPE_REPORT.md, decode bs64, per-rank EP8):
     bs=64, top_k=8, num_experts=384, max_loras=1, local_num_experts=48 (384/8),
-    block_size=16 -> virtual_num_experts=384; e2e: topk_ids (64,8) i32 (numel 512)
-    -> virtual_topk_ids (64,8) i32 -> sorted_ids (6287,) expert_ids (393,).
+    block_size=16 -> virtual_num_experts=384.
 
-Usage (run on the GPU pod):
+These kernels read only a few KB/call (topk_ids is 64x8 i32), i.e. they are
+latency/launch bound and their working set is far below L2 -> L2 state does not
+affect the number (common_bench will print WARN: footprint<L2). Timing + buffer
+rotation come from common_bench (CUDA-graph via triton do_bench_cudagraph).
+
+Usage (on the GPU pod):
     python3 bench_triton_gemm_prep.py --mode bench
     python3 bench_triton_gemm_prep.py --mode correctness
 """
@@ -26,8 +27,7 @@ from __future__ import annotations
 import argparse
 
 import torch
-import triton
-import triton.testing
+from common_bench import bench_kernel, pick_n_sets, report_sets, set_bytes
 
 from sglang.srt.layers.moe.moe_runner.triton_utils.moe_align_block_size import (
     moe_align_block_size,
@@ -35,74 +35,62 @@ from sglang.srt.layers.moe.moe_runner.triton_utils.moe_align_block_size import (
 from sglang.srt.lora.triton_ops.virtual_experts import _fused_virtual_topk_ids
 
 
-def make_inputs(bs, top_k, num_experts, local_num_experts, device):
-    """Decode routing inputs. token_lora_mapping=0 (single adapter, lora id 0)."""
-    torch.manual_seed(0)
+def make_input_set(bs, top_k, num_experts, device):
+    """Routing inputs for one rotation slot. token_lora_mapping=0 (single adapter)."""
     topk_ids = torch.stack(
         [torch.randperm(num_experts, device=device)[:top_k] for _ in range(bs)]
     ).to(torch.int32)
     token_lora_mapping = torch.zeros(bs, device=device, dtype=torch.int32)
-    return topk_ids, token_lora_mapping
+    return {"topk_ids": topk_ids, "tlm": token_lora_mapping}
 
 
-def virtual_topk(topk_ids, token_lora_mapping, num_experts, local_num_experts):
-    """kernel 1: _fused_virtual_topk_ids_kernel (EP-local, single adapter)."""
-    return _fused_virtual_topk_ids(
-        topk_ids,
-        token_lora_mapping,
+def prep_pipeline(s, num_experts, local_num_experts, block_size):
+    """The full triton-gemm prep: virtual topk ids -> native align (+count_and_sort)."""
+    vtopk, _, vne = _fused_virtual_topk_ids(
+        s["topk_ids"],
+        s["tlm"],
         num_experts,
         shared_outer=False,
         max_loras=1,
         local_expert_offset=0,
         local_num_experts=local_num_experts,
     )
+    return moe_align_block_size(vtopk, block_size, vne)
 
 
-def align(virtual_topk_ids, block_size, virtual_num_experts):
-    """kernels 2+3: moe_align_block_size_kernel + count_and_sort_expert_tokens_kernel
-    (one sgl_kernel::moe_align_block_size call)."""
-    return moe_align_block_size(virtual_topk_ids, block_size, virtual_num_experts)
-
-
-def ref_virtual_topk(topk_ids, token_lora_mapping, num_experts, local_num_experts):
-    """fp reference for _fused_virtual_topk_ids (single adapter, EP-local mask)."""
+def ref_virtual_topk(topk_ids, tlm, num_experts, local_num_experts):
     bs, top_k = topk_ids.shape
     out = torch.empty_like(topk_ids)
-    mask = torch.empty(bs, dtype=torch.bool, device=topk_ids.device)
-    off, n_local = 0, local_num_experts
-    for m in range(bs):
-        lora = int(token_lora_mapping[m].item())
-        mask[m] = lora >= 0
+    for mrow in range(bs):
+        lora = int(tlm[mrow].item())
         safe = max(lora, 0)
         for k in range(top_k):
-            base = int(topk_ids[m, k].item())
-            owned = off <= base < off + n_local
+            base = int(topk_ids[mrow, k].item())
+            owned = 0 <= base < local_num_experts
             base = base if owned else -1
             res = base if base < 0 else base + safe * num_experts
-            out[m, k] = res if (lora >= 0) else -1
+            out[mrow, k] = res if lora >= 0 else -1
     return out
 
 
-def bench_ms(fn, warmup=25, rep=100, inner=200):
-    """Per-call ms via CUDA-graph capture of `inner` back-to-back calls / inner
-    (amortizes the fixed per-replay launch overhead -> true device time)."""
-    torch.cuda.synchronize()
-    s = torch.cuda.Stream()
-    s.wait_stream(torch.cuda.current_stream())
-    with torch.cuda.stream(s):
-        for _ in range(3):
-            for _ in range(inner):
-                fn()
-    torch.cuda.current_stream().wait_stream(s)
-    torch.cuda.synchronize()
-    g = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(g):
-        for _ in range(inner):
-            fn()
-    torch.cuda.synchronize()
-    ms = triton.testing.do_bench(g.replay, warmup=warmup, rep=rep) / inner
-    torch.cuda.synchronize()
-    return float(ms)
+def ref_align(vtopk, block, vne):
+    """torch reference for sgl_kernel::moe_align_block_size (native wrapper passes
+    num_experts+1 and the kernel uses the +1 offset: id -> id+1, so -1 maps to the
+    sentinel bucket 0 and expert e to bucket e+1; each bucket is padded up to a
+    block multiple; expert_ids labels each block bucket-1). Returns
+    (num_tokens_post_padded, expert_ids_multiset)."""
+    from collections import Counter
+
+    buckets = (vtopk.reshape(-1) + 1).clamp(min=0)  # -1 -> 0 (sentinel), e -> e+1
+    counts = torch.bincount(buckets, minlength=vne + 1)
+    blocks = (counts + block - 1) // block
+    post = int((blocks * block).sum().item())
+    eids = Counter()
+    for b in range(vne + 1):
+        nb = int(blocks[b].item())
+        if nb:
+            eids[b - 1] += nb  # bucket 0 -> -1 sentinel label
+    return post, eids
 
 
 def main():
@@ -113,68 +101,55 @@ def main():
     ap.add_argument("--num-experts", type=int, default=384)
     ap.add_argument("--local-num-experts", type=int, default=48)
     ap.add_argument("--block-size", type=int, default=16)
+    ap.add_argument("--budget-gb", type=float, default=16.0)
+    ap.add_argument("--n-sets", type=int, default=0, help="0 = auto (fill --budget-gb)")
     args = ap.parse_args()
     dev = "cuda"
-
-    topk_ids, tlm = make_inputs(
-        args.bs, args.top_k, args.num_experts, args.local_num_experts, dev
-    )
-    vtopk, _, vne = virtual_topk(
-        topk_ids, tlm, args.num_experts, args.local_num_experts
-    )
+    ne, lne, blk = args.num_experts, args.local_num_experts, args.block_size
+    mk = lambda: make_input_set(args.bs, args.top_k, ne, dev)
 
     if args.mode == "correctness":
-        ref = ref_virtual_topk(topk_ids, tlm, args.num_experts, args.local_num_experts)
-        err = int((vtopk != ref).sum().item())
-        print(f"{'PASS' if err == 0 else 'FAIL'} virtual_topk_ids mismatches={err}")
-        # align invariants: post_pad divisible by block_size; expert_ids length = post_pad/block.
-        sorted_ids, expert_ids, post_pad = align(vtopk, args.block_size, vne)
-        pp = int(post_pad.item())
-        ok = (pp % args.block_size == 0) and (
-            expert_ids.numel() >= pp // args.block_size
+        s = mk()
+        vtopk, _, vne = _fused_virtual_topk_ids(
+            s["topk_ids"],
+            s["tlm"],
+            ne,
+            shared_outer=False,
+            max_loras=1,
+            local_expert_offset=0,
+            local_num_experts=lne,
         )
+        ref = ref_virtual_topk(s["topk_ids"], s["tlm"], ne, lne)
+        verr = int((vtopk != ref).sum().item())  # bitwise exact (integer ids)
         print(
-            f"{'PASS' if ok else 'FAIL'} align post_pad={pp} "
-            f"(%block={pp % args.block_size}) expert_ids={expert_ids.numel()} "
-            f"sorted_ids={sorted_ids.numel()}"
+            f"{'PASS' if verr == 0 else 'FAIL'} virtual_topk_ids bitwise mismatches={verr}"
         )
-        raise SystemExit(0 if (err == 0 and ok) else 1)
+        from collections import Counter
 
-    # bench: shapes echo for the 2-ii cross-check.
-    sorted_ids, expert_ids, post_pad = align(vtopk, args.block_size, vne)
-    print(
-        f"SHAPES vtopk={tuple(vtopk.shape)}/{vtopk.dtype} "
-        f"sorted_ids={tuple(sorted_ids.shape)} expert_ids={tuple(expert_ids.shape)} "
-        f"virtual_num_experts={vne}"
-    )
-    us_vtopk = (
-        bench_ms(
-            lambda: virtual_topk(
-                topk_ids, tlm, args.num_experts, args.local_num_experts
-            )
+        sorted_ids, expert_ids, post_pad = moe_align_block_size(vtopk, blk, vne)
+        post_ref, eids_ref = ref_align(vtopk, blk, vne)
+        pp = int(post_pad.item())
+        nblk = pp // blk
+        eids_k = Counter(e for e in expert_ids[:nblk].tolist())
+        post_ok = pp == post_ref
+        eids_ok = eids_k == eids_ref
+        print(
+            f"{'PASS' if (post_ok and eids_ok) else 'FAIL'} align vs ref: "
+            f"post_pad={pp} (ref {post_ref}) expert_ids_multiset_match={eids_ok}"
         )
-        * 1000
-    )
-    us_align = bench_ms(lambda: align(vtopk, args.block_size, vne)) * 1000
-    us_all = (
-        bench_ms(
-            lambda: align(
-                virtual_topk(topk_ids, tlm, args.num_experts, args.local_num_experts)[
-                    0
-                ],
-                args.block_size,
-                vne,
-            )
-        )
-        * 1000
-    )
+        raise SystemExit(0 if (verr == 0 and post_ok and eids_ok) else 1)
+
+    per = set_bytes(mk())
+    n_sets = pick_n_sets(per, args.budget_gb, args.n_sets)
+    S = [mk() for _ in range(n_sets)]
+    call = lambda i: prep_pipeline(S[i], ne, lne, blk)
+    us = bench_kernel(call, n_sets) * 1000
     print(
-        f"BENCH prep bs={args.bs} top_k={args.top_k} experts={args.num_experts} "
-        f"local_experts={args.local_num_experts} block={args.block_size}:\n"
-        f"  _fused_virtual_topk_ids        = {us_vtopk:7.2f} us\n"
-        f"  moe_align (+count_and_sort)    = {us_align:7.2f} us\n"
-        f"  combined (vtopk+align)         = {us_all:7.2f} us"
+        f"BENCH triton-gemm prep (COMBINED: virtual_topk_ids + moe_align + count_and_sort) "
+        f"bs={args.bs} top_k={args.top_k} experts={ne} local_experts={lne} block={blk}"
     )
+    print(f"  per_set={per/1e3:.1f}KB {report_sets(per, n_sets)}")
+    print(f"  combined prep pipeline        = {us:7.2f} us")
 
 
 if __name__ == "__main__":
