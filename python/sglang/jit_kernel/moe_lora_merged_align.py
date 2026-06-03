@@ -80,6 +80,15 @@ def moe_lora_merged_align(
     # Only for small numel (the scatter is single-block); large numel (prefill)
     # keeps the 2-kernel multi-block path. Default auto by numel.
     fuse_eff = (numel <= 2048) if fuse_scatter is None else fuse_scatter
+    if fuse_eff:
+        # The fused kernel's dynamic shared memory must fit the 48KB default limit
+        # (no cudaFuncSetAttribute opt-in). Layout matches the kernel exactly:
+        # shared_counts + prefix + scan_buf + warp_sums + cursor + svids.
+        nb = bucket_experts + 1  # bucket count (the kernel's num_experts)
+        scan_size = 1 << (nb - 1).bit_length() if nb > 1 else 1
+        fused_shmem = (nb + (nb + 1) + scan_size + 32 + nb + numel) * 4
+        if fused_shmem > 47 * 1024:
+            fuse_eff = False  # too big -> fall back to the 2-kernel path
 
     # Allocation mirrors moe_align_block_size.py (the kernel uses a +1 sentinel
     # bucket, so the padded buffers are sized with bucket_experts + 1).
