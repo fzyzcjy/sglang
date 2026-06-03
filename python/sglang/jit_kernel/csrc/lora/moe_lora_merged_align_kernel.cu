@@ -80,7 +80,8 @@ __device__ __forceinline__ int compute_virtual_id(
     int local_expert_offset,
     int local_num_experts,
     bool ep_local,
-    bool shared_outer) {
+    bool shared_outer,
+    bool compact) {
   int m = static_cast<int>(i) / top_k;
   int lora_id = token_lora_mapping[m];
   bool mask_val = lora_id >= 0;
@@ -91,10 +92,13 @@ __device__ __forceinline__ int compute_virtual_id(
     bool owned = base >= local_expert_offset && base < local_expert_offset + local_num_experts;
     base = owned ? base : -1;
   }
-  int shifted = base + safe_lora * num_experts_for_weight;
-  int result = base < 0 ? base : shifted;
-  result = mask_val ? result : -1;
-  return result;
+  if (!mask_val || base < 0) return -1;
+  // compact: dense LOCAL expert id in [0, local_num_experts) so the histogram
+  // spans only local_num_experts buckets instead of the full global virtual
+  // space (337/385 empty under EP). Assumes max_loras==1 (safe_lora shift is 0;
+  // the wrapper guards). expert_ids is converted back to global at write time.
+  if (compact) return base - local_expert_offset;
+  return base + safe_lora * num_experts_for_weight;
 }
 
 template <typename scalar_t>
@@ -110,14 +114,15 @@ __global__ void count_and_sort_expert_tokens_kernel(
     int local_num_experts,
     bool ep_local,
     bool shared_outer,
-    bool do_skip) {
+    bool do_skip,
+    bool compact) {
   const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   const size_t stride = blockDim.x * gridDim.x;
 
   for (size_t i = tid; i < numel; i += stride) {
     int vid = compute_virtual_id<scalar_t>(
         topk_ids, token_lora_mapping, i, top_k, num_experts_for_weight,
-        local_expert_offset, local_num_experts, ep_local, shared_outer);
+        local_expert_offset, local_num_experts, ep_local, shared_outer, compact);
     // EP skip: dropped/masked slots (vid < 0) produce no delta on this rank, so
     // they never need a slot in sorted_token_ids -> skip the global atomicAdd
     // (kills the sentinel-bucket-0 contention). When do_skip is off they fall
@@ -150,7 +155,8 @@ __global__ void moe_align_block_size_kernel(
     int local_num_experts,
     bool ep_local,
     bool shared_outer,
-    bool do_skip) {
+    bool do_skip,
+    bool compact) {
   // Use a separate thread block to populate sorted_token_ids
   if (blockIdx.x == 1) {
     if (pad_sorted_token_ids) {
@@ -183,7 +189,7 @@ __global__ void moe_align_block_size_kernel(
   for (size_t i = tid; i < numel; i += stride) {
     int vid = compute_virtual_id<scalar_t>(
         topk_ids, token_lora_mapping, i, top_k, num_experts_for_weight,
-        local_expert_offset, local_num_experts, ep_local, shared_outer);
+        local_expert_offset, local_num_experts, ep_local, shared_outer, compact);
     // EP skip: dropped/masked slots don't increment any bucket (sentinel bucket
     // 0 stays empty), so they never get a block and never reach count_and_sort.
     if (!do_skip || vid >= 0) {
@@ -269,7 +275,9 @@ __global__ void moe_align_block_size_kernel(
         right = mid;
       }
     }
-    expert_ids[i] = left - 2;
+    // compact buckets hold LOCAL expert ids; restore the global id (+offset) so
+    // the downstream GEMM still indexes the global contiguous LoRA weight.
+    expert_ids[i] = left - 2 + (compact ? local_expert_offset : 0);
   }
 }
 
@@ -296,7 +304,8 @@ struct MoeLoraMergedAlignKernel {
       int64_t local_num_experts,
       bool ep_local,
       bool shared_outer,
-      bool do_skip) {
+      bool do_skip,
+      bool compact) {
     using namespace host;
 
     auto device = topk_ids.device();
@@ -307,12 +316,13 @@ struct MoeLoraMergedAlignKernel {
 
     int64_t max_num_tokens_padded = sorted_token_ids.size(0);
 
-    // num_experts here is the bucket count (virtual_num_experts + 1). Commit 1
-    // only handles the (64, 1024] branch; the Python dispatcher routes the
-    // small-batch (<=64) and v2 (>1024) regimes to the old path.
+    // num_experts here is the bucket count. Non-compact: virtual_num_experts+1
+    // (typically 385). Compact: local_num_experts+1 (typically 49). Both use the
+    // same single-block align path (valid for any bucket count <= 1024 that fits
+    // shared memory); the v2 (>1024) regime keeps the old path via the wrapper.
     RuntimeCheck(
-        num_experts > 64 && num_experts <= 1024,
-        "moe_lora_merged_align: num_experts (bucket count) must be in (64, 1024], got ",
+        num_experts <= 1024,
+        "moe_lora_merged_align: num_experts (bucket count) must be <= 1024, got ",
         num_experts);
 
     const scalar_t* topk_ids_ptr = static_cast<const scalar_t*>(topk_ids.data_ptr());
@@ -349,7 +359,8 @@ struct MoeLoraMergedAlignKernel {
         (int)local_num_experts,
         ep_local,
         shared_outer,
-        do_skip);
+        do_skip,
+        compact);
 
     const int block_threads = std::min(256, threads);
     const int num_blocks = (numel + block_threads - 1) / block_threads;
@@ -370,7 +381,8 @@ struct MoeLoraMergedAlignKernel {
         (int)local_num_experts,
         ep_local,
         shared_outer,
-        do_skip);
+        do_skip,
+        compact);
   }
 };
 
