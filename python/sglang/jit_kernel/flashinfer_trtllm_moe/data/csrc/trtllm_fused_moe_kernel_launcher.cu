@@ -3202,7 +3202,8 @@ int64_t bench_activation(
     int64_t inner_dim,
     int64_t num_tokens,
     int64_t top_k,
-    int64_t grid_x_override) {
+    int64_t grid_x_override,
+    int64_t opt_mode) {
   cudaStream_t stream = get_stream(gate_up.device());
   moe::dev::activation::Data d;
   d.mDtypeElt = btg::Dtype::Bfloat16;
@@ -3221,6 +3222,7 @@ int64_t bench_activation(
   d.expandedIdxToPermutedIdx = static_cast<int*>(idx_map.data_ptr());
   d.totalNumPaddedTokens = static_cast<int*>(total_pad.data_ptr());
   d.actGridXOverride = static_cast<int32_t>(grid_x_override);
+  d.actOptMode = static_cast<int32_t>(opt_mode);
   moe::dev::activation::run(d, stream);
   return 0;
 }

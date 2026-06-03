@@ -157,6 +157,7 @@ def main():
                 nt,
                 tk,
                 0,  # grid_x_override=0 -> default grid.x = innerDim/128
+                0,  # opt_mode=0 -> scalar activationKernel
             ),
             f"nvfp4 quant #2 (down, m={nt*tk})": lambda i: m.bench_nvfp4_quant(
                 S[i]["activated"],
@@ -214,13 +215,40 @@ def main():
         li_ref = s0["lora_input"].clone()
         m.bench_activation(
             s0["gate_up"], s0["lora_delta"], s0["idx_map"], s0["total_pad"],
-            s0["activated"], s0["lora_input"], gun, nt, tk, 2,  # grid_x_override=2
+            s0["activated"], s0["lora_input"], gun, nt, tk, 2, 0,  # grid_x_override=2, opt_mode=0
         )
         torch.cuda.synchronize()
         gx_eq = bool(
             torch.equal(s0["activated"], act_ref) and torch.equal(s0["lora_input"], li_ref)
         )
         print(f"{'PASS' if gx_eq else 'FAIL'} activation grid.x=2 bitwise == default grid.x")
+
+        # activation opt (vectorized activationKernelOpt) must be BITWISE-identical to the scalar
+        # kernel: same per-element float math (bf16->float silu), only loads/stores are vectorized.
+        m.bench_activation(
+            s0["gate_up"], s0["lora_delta"], s0["idx_map"], s0["total_pad"],
+            s0["activated"], s0["lora_input"], gun, nt, tk, 0, 1,  # grid_x_override=0, opt_mode=1
+        )
+        torch.cuda.synchronize()
+        opt_eq = bool(
+            torch.equal(s0["activated"], act_ref) and torch.equal(s0["lora_input"], li_ref)
+        )
+        print(f"{'PASS' if opt_eq else 'FAIL'} activation opt (vectorized) bitwise == scalar")
+
+        # opt vs scalar with permutedIdx=-1 padding slots (real EP8 drops ~7/8 of slots to -1;
+        # idx_map=arange above never exercises that branch). Inject -1s, run both kernels from the
+        # SAME buffer state, assert bitwise-equal (padding writes 0 to lora_input, skips activated).
+        idx_pad = s0["idx_map"].clone()
+        idx_pad[1::3] = -1
+        a0, l0 = s0["activated"].clone(), s0["lora_input"].clone()
+        a_sc, l_sc = a0.clone(), l0.clone()
+        a_op, l_op = a0.clone(), l0.clone()
+        args_pad = (s0["gate_up"], s0["lora_delta"], idx_pad, s0["total_pad"])
+        m.bench_activation(*args_pad, a_sc, l_sc, gun, nt, tk, 0, 0)  # scalar
+        m.bench_activation(*args_pad, a_op, l_op, gun, nt, tk, 0, 1)  # opt
+        torch.cuda.synchronize()
+        pad_eq = bool(torch.equal(a_sc, a_op) and torch.equal(l_sc, l_op))
+        print(f"{'PASS' if pad_eq else 'FAIL'} activation opt bitwise == scalar with -1 padding")
 
         # quant: dequantize the kernel output and compare to the bf16 input (fp4 has no
         # bitwise ref; assert the round-trip error is within fp4 precision).
@@ -241,7 +269,11 @@ def main():
             f"{'PASS' if q_ok else 'FAIL'} nvfp4 quant#1 dequant vs input: "
             f"rel_err={qrel:.3e} (tol 0.20, e2m1 ~2^-1 mantissa)"
         )
-        raise SystemExit(0 if (perr == 0 and act_ok and q_ok and gx_eq) else 1)
+        raise SystemExit(
+            0
+            if (perr == 0 and act_ok and q_ok and gx_eq and opt_eq and pad_eq)
+            else 1
+        )
 
     per = set_bytes(mk())
     n_sets = pick_n_sets(per, args.budget_gb, args.n_sets)
@@ -254,13 +286,12 @@ def main():
         us = bench_kernel(call, n_sets) * 1000
         print(f"  {name:30s} = {us:7.2f} us")
 
-    # activationKernel grid.x sweep (config-bound test): the hidden-dim grid-stride loop
-    # makes any grid.x bitwise-identical, so smaller grid.x removes empty blocks and gives
-    # each thread a longer strip (more in-flight loads). default grid.x = innerDim/128.
-    print("  -- activationKernel grid.x sweep (bitwise-identical to default) --")
-    default_gx = gun // 128
-    for gx in [default_gx, 16, 8, 4, 2, 1]:
-        call = lambda i, gx=gx: m.bench_activation(
+    # activation sweeps (all bitwise-identical to the default scalar kernel; asserted in
+    # --mode correctness). scalar: grid.x sweep (config-bound test, empty-block removal +
+    # longer per-thread strip). opt: vectorized activationKernelOpt (128-bit gate/up + 64-bit
+    # delta/store, 4 pairs/thread) which additionally raises memory-level parallelism.
+    def act_call(gx, opt):
+        return lambda i, gx=gx, opt=opt: m.bench_activation(
             S[i]["gate_up"],
             S[i]["lora_delta"],
             S[i]["idx_map"],
@@ -271,11 +302,22 @@ def main():
             nt,
             tk,
             gx,
+            opt,
         )
-        us = bench_kernel(call, n_sets) * 1000
+
+    default_gx = gun // 128
+    print("  -- activationKernel scalar grid.x sweep --")
+    for gx in [default_gx, 16, 8, 4, 2, 1]:
+        us = bench_kernel(act_call(gx, 0), n_sets) * 1000
         strip = (gun // 2 + 256 * gx - 1) // (256 * gx)
         tag = " (default)" if gx == default_gx else ""
         print(f"    grid.x={gx:3d}  (~{strip} elt/thread) = {us:7.2f} us{tag}")
+
+    print("  -- activationKernelOpt vectorized (4 pairs/thread) grid.x sweep --")
+    for gx in [0, 8, 4, 2, 1]:  # 0 -> opt default grid.x = ceil(innerHalf/4/256)
+        us = bench_kernel(act_call(gx, 1), n_sets) * 1000
+        gxs = "auto" if gx == 0 else f"{gx:4d}"
+        print(f"    grid.x={gxs:>4s} = {us:7.2f} us")
 
 
 if __name__ == "__main__":
