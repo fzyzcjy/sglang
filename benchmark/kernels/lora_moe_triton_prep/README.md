@@ -8,8 +8,9 @@ Kimi-K2.5-NVFP4 LoRA decode path, so each kernel can be benchmarked and checked 
 
 Per-rank shapes of an **EP8, batch-size-64 decode** step (Kimi-K2.5-NVFP4, `tp8 ep8 dp1 nnodes2`,
 LoRA on, `modelopt_fp4`): 48 experts/rank, `top_k=8`, `hidden=7168`, `inter=2048`,
-`num_tokens=64`, `max_num_padded_tokens=3200`. These were captured from a real e2e run; the exact
-per-kernel in/out shape+dtype+stride+device evidence is in the shape report (see *References*).
+`num_tokens=64`, `max_num_padded_tokens=3200`. These were captured from a real e2e run (one-off
+print instrumentation, since reverted) and are hard-coded as the script defaults; per-kernel in/out
+shapes/dtypes are documented inline in each script's docstring and asserted in `--mode correctness`.
 
 ## Kernels covered (8 kernels, 3 scripts)
 
@@ -19,8 +20,9 @@ per-kernel in/out shape+dtype+stride+device evidence is in the shape report (see
 | `bench_kimi_gate.py` | `kimi_k2_moe_fused_gate` | `sgl_kernel.kimi_k2_moe_fused_gate` (the Kimi routing gate) |
 | `bench_fp4_lora_moe_kernels.py` | `permuteKernel`, `nvfp4QuantAndPerTokenScaleKernel` (×2: gate_up + down), `activationKernel` | the standalone runner shim (see below) |
 
-The "triton-gemm prep" three kernels are intentionally in **one** script (they run back-to-back as
-the LoRA virtual-experts routing prep).
+The "triton-gemm prep" three kernels are benched as **one combined pipeline** (one script, one
+number), not individually — they run back-to-back as the LoRA virtual-experts routing prep, so a
+future fused replacement can be compared 1:1.
 
 ## The standalone-runner shim (for the fp4-LoRA compute kernels)
 
@@ -118,7 +120,9 @@ root cause of the slow quant, and the same amplification applies to `permute` an
 
 ## References
 
-- Per-kernel e2e shape evidence (the shapes these testbeds reproduce): the shape-capture report,
-  captured from a real EP8 bs64 decode run with adhoc instrumentation (since reverted).
 - Timing template: `benchmark/kernels/lora_moe_expand/bench_expand_add_down.py`.
+- Kernel sources: `sgl_kernel` (`kimi_k2_moe_fused_gate`, `moe_align_block_size`),
+  `python/sglang/srt/lora/triton_ops/virtual_experts.py` (`_fused_virtual_topk_ids`), and
+  `python/sglang/jit_kernel/flashinfer_trtllm_moe/data/csrc/` (permute / nvfp4-quant / activation,
+  exposed via the `bench_*` runners in `trtllm_fused_moe_kernel_launcher.cu`).
 </content>
