@@ -3728,6 +3728,95 @@ Array<int64_t> sgl_trtllm_fp4_probe_gemm2(
   return {pt[0], pt[1], npt[0], npt[1]};
 }
 
+// ===== [SHAPECAP] standalone single-kernel runners for self-contained testbeds =====
+// Adhoc (revert after the testbed work). Each takes PRE-ALLOCATED in/out tensors and only
+// builds the Data + launches the kernel (no device alloc -> CUDA-graph-capture-safe timing).
+// Data setup mirrors FP4BlockScaleLoraLauncher::run verbatim.
+int64_t shapecap_permute(
+    TensorView hidden_in,
+    TensorView idx_map,
+    TensorView total_pad,
+    TensorView permuted_out,
+    int64_t num_tokens,
+    int64_t top_k,
+    int64_t hidden_size) {
+  cudaStream_t stream = get_stream(hidden_in.device());
+  moe::dev::permute::Data d;
+  d.mDtypeElt = btg::Dtype::Bfloat16;
+  d.mUsePdl = false;
+  d.mUseDeepSeekFp8 = false;
+  d.inPtr = hidden_in.data_ptr();
+  d.outPtr = permuted_out.data_ptr();
+  d.inDqSfsPtr = nullptr;
+  d.outDqSfsPtr = nullptr;
+  d.expandedIdxToPermutedIdx = static_cast<int*>(idx_map.data_ptr());
+  d.hiddenDim = hidden_size;
+  d.numTokens = num_tokens;
+  d.topK = top_k;
+  d.totalNumPaddedTokens = static_cast<int*>(total_pad.data_ptr());
+  moe::dev::permute::run(d, stream);
+  return 0;
+}
+
+int64_t shapecap_nvfp4_quant(
+    TensorView in_bf16,
+    Optional<TensorView> idx_map,
+    TensorView out_fp4,
+    TensorView out_sf,
+    TensorView out_ptsf,
+    int64_t m,
+    int64_t n,
+    int64_t tile) {
+  cudaStream_t stream = get_stream(in_bf16.device());
+  auto sfLayout = tile >= 128 ? tensorrt_llm::QuantizationSFLayout::SWIZZLED_128x4
+                              : tensorrt_llm::QuantizationSFLayout::SWIZZLED_8x4;
+  float const gsi = 1.f / 448.f / 6.f;
+  int* map = idx_map.has_value() ? static_cast<int*>(idx_map.value().data_ptr()) : nullptr;
+  tensorrt_llm::kernels::invokeNvfp4QuantAndPerTokenScale<__nv_bfloat16>(
+      m,
+      n,
+      reinterpret_cast<__nv_bfloat16 const*>(in_bf16.data_ptr()),
+      gsi,
+      map,
+      reinterpret_cast<uint8_t*>(out_fp4.data_ptr()),
+      reinterpret_cast<uint8_t*>(out_sf.data_ptr()),
+      reinterpret_cast<float*>(out_ptsf.data_ptr()),
+      sfLayout,
+      stream);
+  return 0;
+}
+
+int64_t shapecap_activation(
+    TensorView gate_up,
+    TensorView lora_delta,
+    TensorView idx_map,
+    TensorView total_pad,
+    TensorView activated_out,
+    TensorView lora_input_out,
+    int64_t inner_dim,
+    int64_t num_tokens,
+    int64_t top_k) {
+  cudaStream_t stream = get_stream(gate_up.device());
+  moe::dev::activation::Data d;
+  d.mDtypeElt = btg::Dtype::Bfloat16;
+  d.mUsePdl = false;
+  d.mUseDeepSeekFp8 = false;
+  d.inPtr = gate_up.data_ptr();
+  d.interleavedGateUpInput = true;
+  d.outPtr = activated_out.data_ptr();
+  d.inDqSfsPtr = nullptr;
+  d.outDqSfsPtr = nullptr;
+  d.gateUpLoraDeltaPtr = static_cast<cutlass::bfloat16_t const*>(lora_delta.data_ptr());
+  d.activationLoraInputOutPtr = static_cast<cutlass::bfloat16_t*>(lora_input_out.data_ptr());
+  d.innerDim = inner_dim;
+  d.numTokens = num_tokens;
+  d.topK = top_k;
+  d.expandedIdxToPermutedIdx = static_cast<int*>(idx_map.data_ptr());
+  d.totalNumPaddedTokens = static_cast<int*>(total_pad.data_ptr());
+  moe::dev::activation::run(d, stream);
+  return 0;
+}
+
 namespace trtllm_cubin_loader {
 #include <flashinfer/cubin_loader.h>
 }
@@ -3744,6 +3833,9 @@ TVM_FFI_DLL_EXPORT_TYPED_FUNC(
     sgl_trtllm_fp4_block_scale_moe_lora_finalize, sgl_trtllm_fp4_block_scale_moe_lora_finalize);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(sgl_trtllm_fp4_probe_unfused, sgl_trtllm_fp4_probe_unfused);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(sgl_trtllm_fp4_probe_gemm2, sgl_trtllm_fp4_probe_gemm2);
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(shapecap_permute, shapecap_permute);
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(shapecap_nvfp4_quant, shapecap_nvfp4_quant);
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(shapecap_activation, shapecap_activation);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(trtllm_mxint4_block_scale_moe, trtllm_mxint4_block_scale_moe);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(trtllm_get_valid_moe_configs, trtllm_get_valid_moe_configs);
 
