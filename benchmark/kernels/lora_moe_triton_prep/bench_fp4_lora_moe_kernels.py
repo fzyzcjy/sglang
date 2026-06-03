@@ -269,9 +269,47 @@ def main():
             f"{'PASS' if q_ok else 'FAIL'} nvfp4 quant#1 dequant vs input: "
             f"rel_err={qrel:.3e} (tol 0.20, e2m1 ~2^-1 mantissa)"
         )
+
+        # fused act+quant: BITWISE-identical to the separate (scalar activation -> quant#2) chain.
+        # The fused kernel rounds activated to bf16 before quantizing (same as the separate path),
+        # so fp4 + SF + per-token-sf + activation_lora_input must all match bit-for-bit.
+        # golden: scalar activation -> s0["activated"]/lora_input, then quant#2 on activated.
+        m.bench_activation(
+            s0["gate_up"], s0["lora_delta"], s0["idx_map"], s0["total_pad"],
+            s0["activated"], s0["lora_input"], gun, nt, tk, 0, 0,
+        )
+        g_li = s0["lora_input"].clone()
+        r[3](0)  # quant#2 on s0["activated"] -> s0["q2_fp4"]/q2_sf/q2_ptsf (golden)
+        torch.cuda.synchronize()
+        g_fp4, g_sf, g_ptsf = s0["q2_fp4"].clone(), s0["q2_sf"].clone(), s0["q2_ptsf"].clone()
+        f_fp4 = torch.empty_like(s0["q2_fp4"])
+        f_sf = torch.empty_like(s0["q2_sf"])
+        f_ptsf = torch.empty_like(s0["q2_ptsf"])
+        f_li = torch.empty_like(s0["lora_input"])
+        m.bench_fused_act_quant(
+            s0["gate_up"], s0["lora_delta"], s0["idx_map"],
+            f_fp4, f_sf, f_ptsf, f_li, I, gun, nt, tk, args.tile,
+        )
+        torch.cuda.synchronize()
+        # SF is swizzled (8x4); compare only the written offsets for the e real rows (n=inter).
+        nv2 = I // 16
+        rr = torch.arange(e, device=dev)[:, None]
+        vv = torch.arange(nv2, device=dev)[None, :]
+        nkt = (nv2 + 3) // 4
+        sfo = (rr // 8) * (nkt * 32) + (vv // 4) * 32 + (rr % 8) * 4 + (vv % 4)
+        fp4_eq = torch.equal(f_fp4[:e], g_fp4[:e])
+        sf_eq = torch.equal(f_sf[sfo], g_sf[sfo])
+        ptsf_eq = torch.equal(f_ptsf[:e], g_ptsf[:e])
+        li_eq = torch.equal(f_li, g_li)
+        fused_ok = fp4_eq and sf_eq and ptsf_eq and li_eq
+        print(
+            f"{'PASS' if fused_ok else 'FAIL'} fused act+quant bitwise == scalar act->quant#2: "
+            f"fp4={fp4_eq} sf={sf_eq} ptsf={ptsf_eq} lora_input={li_eq}"
+        )
+
         raise SystemExit(
             0
-            if (perr == 0 and act_ok and q_ok and gx_eq and opt_eq and pad_eq)
+            if (perr == 0 and act_ok and q_ok and gx_eq and opt_eq and pad_eq and fused_ok)
             else 1
         )
 
@@ -318,6 +356,48 @@ def main():
         us = bench_kernel(act_call(gx, 1), n_sets) * 1000
         gxs = "auto" if gx == 0 else f"{gx:4d}"
         print(f"    grid.x={gxs:>4s} = {us:7.2f} us")
+
+    # fused act+quant vs the separate (opt activation + quant#2) pair it replaces.
+    print("  -- fused act+quant (aggressive fusion) vs separate pair --")
+    us_actopt = bench_kernel(act_call(0, 1), n_sets) * 1000  # opt activation alone
+    us_q2 = (
+        bench_kernel(
+            lambda i: m.bench_nvfp4_quant(
+                S[i]["activated"],
+                S[i]["idx_map"],
+                S[i]["q2_fp4"],
+                S[i]["q2_sf"],
+                S[i]["q2_ptsf"],
+                nt * tk,
+                I,
+                args.tile,
+            ),
+            n_sets,
+        )
+        * 1000
+    )
+    us_fused = (
+        bench_kernel(
+            lambda i: m.bench_fused_act_quant(
+                S[i]["gate_up"],
+                S[i]["lora_delta"],
+                S[i]["idx_map"],
+                S[i]["q2_fp4"],
+                S[i]["q2_sf"],
+                S[i]["q2_ptsf"],
+                S[i]["lora_input"],
+                I,
+                gun,
+                nt,
+                tk,
+                args.tile,
+            ),
+            n_sets,
+        )
+        * 1000
+    )
+    print(f"    separate: opt activation {us_actopt:6.2f} + quant#2 {us_q2:6.2f} = {us_actopt + us_q2:6.2f} us")
+    print(f"    fused act+quant                                   = {us_fused:6.2f} us")
 
 
 if __name__ == "__main__":

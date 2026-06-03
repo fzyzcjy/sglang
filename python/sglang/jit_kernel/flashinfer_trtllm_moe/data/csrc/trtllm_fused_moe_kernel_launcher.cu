@@ -32,6 +32,7 @@
 #include "flashinfer/trtllm/fused_moe/RoutingKernel.h"
 #include "flashinfer/trtllm/fused_moe/runner.h"
 #include "nv_internal/tensorrt_llm/kernels/quantization.h"
+#include "fused_activation_quant.cuh"
 #include "nv_internal/tensorrt_llm/thop/utils.h"
 #include "tvm_ffi_utils.h"
 
@@ -3238,6 +3239,40 @@ int64_t bench_activation(
   return 0;
 }
 
+// Standalone runner for the fused SwiGLU+LoRA activation -> NVFP4 per-token quant kernel
+// (FP4 MoE LoRA aggressive fusion). Mirrors step 6 (activation) + step 7 (quant#2) of
+// FP4BlockScaleLoraLauncher::run but skips materializing activated_bf16. Output is
+// bitwise-identical to bench_activation -> bench_nvfp4_quant(#2). disableFastMath is fixed to
+// the default (false) here, matching the testbed (no SGLANG fp4 fast-math env set).
+int64_t bench_fused_act_quant(
+    TensorView gate_up,         // interleaved gate/up [.., inner_dim] bf16, by permutedIdx
+    TensorView lora_delta,      // [num_tokens, top_k, inner_dim] bf16, by expandedIdx
+    TensorView idx_map,         // [num_tokens*top_k] int32 (expanded -> permuted, -1 = padding)
+    TensorView fp4_out,         // [.., inner_half/2] uint8
+    TensorView sf_out,          // swizzled e4m3 SF, uint8
+    TensorView ptsf_out,        // [..] float32 (per-token scale, by permutedIdx)
+    TensorView lora_input_out,  // [num_tokens, top_k, inner_half] bf16, by expandedIdx
+    int64_t inner_half,
+    int64_t inner_dim,
+    int64_t num_tokens,
+    int64_t top_k,
+    int64_t tile) {
+  cudaStream_t stream = get_stream(gate_up.device());
+  auto sfLayout = tile >= 128 ? tensorrt_llm::QuantizationSFLayout::SWIZZLED_128x4
+                              : tensorrt_llm::QuantizationSFLayout::SWIZZLED_8x4;
+  float const globalScaleInv = 1.f / 448.f / 6.f;
+  flashinfer::sgl_fused_act_quant::launchFusedActivationQuant(
+      static_cast<int>(num_tokens * top_k), static_cast<int>(inner_half),
+      static_cast<int>(inner_dim), reinterpret_cast<__nv_bfloat16 const*>(gate_up.data_ptr()),
+      reinterpret_cast<__nv_bfloat16 const*>(lora_delta.data_ptr()),
+      reinterpret_cast<__nv_bfloat16*>(lora_input_out.data_ptr()),
+      static_cast<int32_t const*>(idx_map.data_ptr()), globalScaleInv,
+      reinterpret_cast<uint8_t*>(fp4_out.data_ptr()),
+      reinterpret_cast<uint8_t*>(sf_out.data_ptr()),
+      reinterpret_cast<float*>(ptsf_out.data_ptr()), sfLayout, /*disableFp4FastMath=*/false, stream);
+  return 0;
+}
+
 namespace trtllm_cubin_loader {
 #include <flashinfer/cubin_loader.h>
 }
@@ -3259,6 +3294,7 @@ TVM_FFI_DLL_EXPORT_TYPED_FUNC(sgl_trtllm_fp4_probe_gemm2, sgl_trtllm_fp4_probe_g
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(bench_permute, bench_permute);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(bench_nvfp4_quant, bench_nvfp4_quant);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(bench_activation, bench_activation);
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(bench_fused_act_quant, bench_fused_act_quant);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(trtllm_mxint4_block_scale_moe, trtllm_mxint4_block_scale_moe);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(trtllm_get_valid_moe_configs, trtllm_get_valid_moe_configs);
 
