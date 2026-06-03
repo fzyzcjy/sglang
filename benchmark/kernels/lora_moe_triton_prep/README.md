@@ -40,14 +40,24 @@ kernel (no device allocation → safe to capture in a CUDA graph for timing). Th
 `FP4BlockScaleLoraLauncher::run` exactly. They are accessed from Python via
 `get_sgl_trtllm_moe_sm100_raw_module()` (see `bench_fp4_lora_moe_kernels.py`).
 
-## Timing methodology
+## Timing methodology (cold-L2, in `common_bench.py`)
 
-`bench_ms()` (identical in all 3 scripts) captures **`inner=200` back-to-back kernel calls in one
-CUDA graph** and divides the replayed time by `inner`. This amortizes the fixed per-replay launch /
-dispatch overhead to ~0 and exposes the true steady-state device time — a single-call
-`do_bench(graph.replay)` floors at ~8-10 µs for any tiny op (it measures launch overhead, not the
-kernel). This matches graph-on e2e semantics; do **not** replace it with per-iter `cudaSynchronize`
-CPU timing (systematically inflates ~µs kernels and dilutes speedups).
+`bench_kernel()` captures one sweep over **N rotation buffer sets** into a CUDA graph via
+`triton.testing.do_bench_cudagraph` and divides by N:
+
+- **Amortize launch overhead:** the graph replays all N calls back-to-back, so the per-replay
+  launch/dispatch overhead (which alone floors a single tiny op at ~8-10 µs) is divided away —
+  exposing true steady-state device time. Matches graph-on e2e; do **not** use per-iter
+  `cudaSynchronize` CPU timing (it inflates ~µs kernels and dilutes speedups).
+- **Cold L2 (matters for the memory-bound kernels):** each call reads a *different* buffer set.
+  These kernels are memory-bound, so if you reuse one buffer the data stays resident in L2 and you
+  measure an unrealistically fast warm-L2 number (the fp4 kernels read ~15-20% faster warm). The e2e
+  sees cold/HBM (each kernel reads freshly-written HBM). `pick_n_sets` auto-sizes N to FILL a memory
+  budget (default 16 GB) so the footprint vastly exceeds the GB200 L2 (135 MB) — and it **auto-grows
+  if a future optimization shrinks the per-call working set**, so you never hand-tune it up. Each run
+  prints `n_sets`, footprint, and an `L2-COLD` / `WARN: footprint<L2` flag. (For the sub-L2,
+  latency-bound prep/gate kernels the footprint can't exceed L2, but their time is launch/compute
+  bound and L2-state-independent anyway — the WARN says so.)
 
 ## How to run (single GPU)
 
@@ -68,37 +78,40 @@ Each script defaults to the decode-bs64 production shapes; shape knobs are CLI f
 (`--bs/--num-tokens/--hidden/...`). `bench_fp4_lora_moe_kernels.py` triggers a one-time JIT rebuild
 of the overlay module on first import (the shim lives there).
 
-## Measured results (B200, decode bs64)
+## Measured results (GB200, decode bs64)
 
-`--mode bench` device time vs the e2e profile (profile numbers are the per-kernel times observed in
-production traces):
+`--mode bench` device time (cold-L2) vs the e2e profile (per-kernel times observed in production
+traces):
 
-| kernel | testbed | e2e profile | correctness |
+| kernel | testbed (cold-L2) | e2e profile | correctness (ref-based) |
 |---|---|---|---|
-| `_fused_virtual_topk_ids` | 1.23 µs | 1.5 | PASS (vs torch ref, 0 mismatch) |
-| `moe_align` + `count_and_sort` | 4.75 µs | 2.7 + 4.7 | PASS (output invariants) |
-| `kimi_k2_moe_fused_gate` | 4.85 µs | 5 | PASS (expert-set exact; weight err 3e-8) |
-| `permuteKernel` | 3.39 µs | 7 | PASS (gather, 0 mismatch) |
-| `nvfp4 quant #1` (gate_up, m=3200) | 11.66 µs | 14 | PASS (finite) |
-| `activationKernel` | 11.64 µs | 14-16 | PASS (finite) |
-| `nvfp4 quant #2` (down, m=512) | 2.82 µs | (part of the 14) | PASS (finite) |
+| triton-gemm prep (combined) | 5.98 µs | 1.5 + 2.7 + 4.7 | see below |
+| └ `_fused_virtual_topk_ids` | (in combined) | 1.5 | **bitwise** vs torch ref |
+| └ `moe_align` + `count_and_sort` | (in combined) | 2.7 + 4.7 | vs torch ref: post_pad exact + expert_ids multiset |
+| `kimi_k2_moe_fused_gate` | 5.87 µs | 5 | expert-ids **bitwise**; weights vs torch ref (err 3e-8) |
+| `permuteKernel` | 4.21 µs | 7 | **bitwise** gather vs torch ref |
+| `nvfp4 quant #1` (gate_up, m=3200) | 13.40 µs | 14 | dequant vs input, rel 9.5e-2 (e2m1+8x4-sf decoded) |
+| `activationKernel` | 13.89 µs | 14-16 | vs SwiGLU+lora torch ref, rel 2.5e-3 |
+| `nvfp4 quant #2` (down, m=512) | 3.68 µs | (part of the 14) | dequant (same as #1) |
 
-- **Correctness modes** compare against a torch reference where one exists cleanly
-  (`_fused_virtual_topk_ids`, `kimi_k2_moe_fused_gate` expert selection + weights, `permute` gather);
-  for the fp4 quant / activation (no easy independent fp4 reference) they assert output
-  shape + finiteness. All shapes are asserted to match the captured e2e shapes.
-- **Speed vs profile:** most match within measurement noise. `permute` and `moe_align+count_and_sort`
-  measure faster than the profile sum — expected, because the testbed is isolated warm steady-state
-  (graph replay) whereas the e2e profile includes launch gaps and cross-stream contention.
+- **Correctness** is ref-based for every kernel: a torch reference is computed and compared. Integer /
+  copy kernels (`_fused_virtual_topk_ids`, `permute`, gate expert-ids) assert **bitwise** equality;
+  `moe_align` asserts post_pad + the per-expert block multiset; arithmetic kernels assert a small
+  numerical error (gate weights 3e-8; activation SwiGLU+lora rel 2.5e-3; nvfp4 quant round-trips the
+  output back through a torch dequant — e2m1 codes × swizzled-8x4 e4m3 block scale × per-token scale —
+  and asserts rel error within fp4 precision, 9.5e-2). All shapes match the captured e2e shapes.
+- **Speed vs profile:** the fp4 quant/activation match the profile closely now that L2 is cold
+  (warm-L2 measured ~15-20% faster). `permute` is still below the profile (its e2e cost includes the
+  scatter/index work). The prep + gate are below/near the profile and are latency-bound (sub-L2).
 
 ## Key finding (optimization lead)
 
 The nvfp4 quant is invoked twice. **quant #1** (gate_up input) processes
-`max_num_padded_tokens = 3200` rows → **11.66 µs**, but only `num_tokens*top_k = 512` of those are
+`max_num_padded_tokens = 3200` rows → **13.40 µs**, but only `num_tokens*top_k = 512` of those are
 real tokens (the rest are padding). **quant #2** (down input) uses the
-`expanded_idx_to_permuted_idx` map to process only the **512** real rows → **2.82 µs**.
+`expanded_idx_to_permuted_idx` map to process only the **512** real rows → **3.68 µs**.
 
-→ If quant #1 also used the index map to skip padding rows, it would scale to ~2 µs — matching the
+→ If quant #1 also used the index map to skip padding rows, it would scale toward quant #2 / the
 baseline cutlass NVFP4 quantize (`<3 µs`). The ~6.25× padding amplification (3200 vs 512) is the
 root cause of the slow quant, and the same amplification applies to `permute` and `activation`
 (all three run on the 3200-row padded buffer).
