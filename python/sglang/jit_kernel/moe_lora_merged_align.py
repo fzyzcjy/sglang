@@ -83,9 +83,13 @@ def moe_lora_merged_align(
         max_num_tokens_padded = numel + (bucket_experts + 1) * (block_size - 1)
     max_num_m_blocks = (max_num_tokens_padded + block_size - 1) // block_size
 
-    sorted_token_ids = torch.empty(
-        (max_num_tokens_padded,), dtype=torch.int32, device=device
-    )
+    # The align kernel's block-1 fill writes sorted_token_ids with vectorized int4
+    # stores; the last store can spill up to 3 int32 past the logical end. Pad the
+    # standalone allocation to a multiple of VEC_SIZE (4) so the spill stays in
+    # bounds (matches _align_block_size_jit's _A4). block_size=16 is already a
+    # multiple of 4 in production; this guards non-multiple-of-4 block sizes.
+    sorted_alloc = (max_num_tokens_padded + 3) & ~3
+    sorted_token_ids = torch.empty((sorted_alloc,), dtype=torch.int32, device=device)
     expert_ids = torch.empty((max_num_m_blocks,), dtype=torch.int32, device=device)
     num_tokens_post_pad = torch.empty((1,), dtype=torch.int32, device=device)
     # No memset: the align kernel writes cumsum[0..num_buckets] before

@@ -324,6 +324,12 @@ struct MoeLoraMergedAlignKernel {
         num_experts <= 1024,
         "moe_lora_merged_align: num_experts (bucket count) must be <= 1024, got ",
         num_experts);
+    // compact buckets hold LOCAL ids and restore global expert ids as
+    // (left-2+offset). For the sentinel bucket 0 that yields (offset-1), NOT the
+    // -1 the GEMM expects to skip -- only safe when do_skip empties bucket 0.
+    RuntimeCheck(
+        !compact || do_skip,
+        "moe_lora_merged_align: compact requires do_skip (sentinel bucket must be empty)");
 
     const scalar_t* topk_ids_ptr = static_cast<const scalar_t*>(topk_ids.data_ptr());
     const int32_t* tlm_ptr = static_cast<const int32_t*>(token_lora_mapping.data_ptr());

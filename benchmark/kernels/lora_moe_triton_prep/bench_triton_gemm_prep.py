@@ -79,7 +79,7 @@ def prep_pipeline_new(s, num_experts, local_num_experts, block_size, compact=Fal
     return sorted_ids, expert_ids, post_pad
 
 
-def ref_virtual_topk(topk_ids, tlm, num_experts, local_num_experts):
+def ref_virtual_topk(topk_ids, tlm, num_experts, local_num_experts, local_offset=0):
     bs, top_k = topk_ids.shape
     out = torch.empty_like(topk_ids)
     for mrow in range(bs):
@@ -87,7 +87,7 @@ def ref_virtual_topk(topk_ids, tlm, num_experts, local_num_experts):
         safe = max(lora, 0)
         for k in range(top_k):
             base = int(topk_ids[mrow, k].item())
-            owned = 0 <= base < local_num_experts
+            owned = local_offset <= base < local_offset + local_num_experts
             base = base if owned else -1
             res = base if base < 0 else base + safe * num_experts
             out[mrow, k] = res if lora >= 0 else -1
@@ -140,12 +140,14 @@ def main():
     ap.add_argument("--top-k", type=int, default=8)
     ap.add_argument("--num-experts", type=int, default=384)
     ap.add_argument("--local-num-experts", type=int, default=48)
+    ap.add_argument("--local-expert-offset", type=int, default=0)
     ap.add_argument("--block-size", type=int, default=16)
     ap.add_argument("--budget-gb", type=float, default=16.0)
     ap.add_argument("--n-sets", type=int, default=0, help="0 = auto (fill --budget-gb)")
     args = ap.parse_args()
     dev = "cuda"
     ne, lne, blk = args.num_experts, args.local_num_experts, args.block_size
+    loff = args.local_expert_offset
     mk = lambda: make_input_set(args.bs, args.top_k, ne, dev)
 
     if args.mode == "correctness":
@@ -156,10 +158,10 @@ def main():
             ne,
             shared_outer=False,
             max_loras=1,
-            local_expert_offset=0,
+            local_expert_offset=loff,
             local_num_experts=lne,
         )
-        ref = ref_virtual_topk(s["topk_ids"], s["tlm"], ne, lne)
+        ref = ref_virtual_topk(s["topk_ids"], s["tlm"], ne, lne, loff)
         verr = int((vtopk != ref).sum().item())  # bitwise exact (integer ids)
         print(
             f"{'PASS' if verr == 0 else 'FAIL'} virtual_topk_ids bitwise mismatches={verr}"
@@ -217,7 +219,7 @@ def main():
         def _check_new(do_skip, ref_post, ref_eids, owned_only, compact=False):
             ns, ne_, np_, nm_, _ = moe_lora_merged_align(
                 s["topk_ids"], s["tlm"], ne, shared_outer=False, max_loras=1,
-                block_size=blk, local_expert_offset=0, local_num_experts=lne,
+                block_size=blk, local_expert_offset=loff, local_num_experts=lne,
                 do_skip=do_skip, compact=compact,
             )
             pp = int(np_.item())
