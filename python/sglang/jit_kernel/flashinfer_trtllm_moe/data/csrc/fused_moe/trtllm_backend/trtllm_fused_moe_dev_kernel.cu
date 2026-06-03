@@ -503,7 +503,7 @@ void run(Data const& data, void* stream) {
     int const gridX = data.actGridXOverride > 0 ? data.actGridXOverride : defaultGx;
     const dim3 grid(gridX, data.topK, std::min(8192, data.numTokens));
 
-    activationKernelOpt<<<grid, numThreads, 0, stream>>>(
+    activationKernelOpt<<<grid, numThreads, 0, (cudaStream_t)stream>>>(
         static_cast<cutlass::bfloat16_t const*>(data.inPtr),
         static_cast<cutlass::bfloat16_t*>(data.outPtr), data.gateUpLoraDeltaPtr,
         data.activationLoraInputOutPtr, data.expandedIdxToPermutedIdx, data.innerDim,

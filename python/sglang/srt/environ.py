@@ -458,6 +458,12 @@ class Envs:
     # Correctness-neutral (acc at the atomic-add noise floor, coherent). On GB200 this hand-tune currently
     # beats PR #26899's B200-tuned auto-configs; for the auto-tuned path, re-run that PR's tuner on GB200.
     SGLANG_OPT_LORA_SHRINK_TUNE = EnvBool(False)
+    # Use the vectorized activationKernelOpt (128-bit gate/up + 64-bit delta/store, 4 pairs/thread)
+    # instead of the scalar activationKernel in the FP4 MoE LoRA path. Bitwise-identical output,
+    # ~3.25x faster on the EP8 bs64 Kimi decode activation (13.9->4.3us, B200). Read C++-side via
+    # getenv in trtllm_fused_moe_kernel_launcher.cu (FP4BlockScaleLoraLauncher::run), since the JIT
+    # kernel has no Python->C++ config channel. Default OFF for A/B bisection; set =1 to enable.
+    SGLANG_OPT_FUSED_MOE_ACTIVATION_VEC = EnvBool(False)
     # Skip-softmax threshold scale factor for TRT-LLM attention (prefill and decode separately).
     # None = standard attention. See https://arxiv.org/abs/2512.12087
     SGLANG_SKIP_SOFTMAX_PREFILL_THRESHOLD_SCALE_FACTOR = EnvFloat(None)

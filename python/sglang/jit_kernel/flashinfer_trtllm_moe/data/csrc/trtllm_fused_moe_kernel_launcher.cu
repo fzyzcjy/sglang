@@ -2675,6 +2675,17 @@ class FP4BlockScaleLoraLauncher {
       actData.expandedIdxToPermutedIdx =
           static_cast<int*>(expanded_idx_to_permuted_idx.data_ptr());
       actData.totalNumPaddedTokens = static_cast<int*>(total_num_padded_tokens.data_ptr());
+      // SGLANG_OPT_FUSED_MOE_ACTIVATION_VEC (registered in environ.py): select the vectorized
+      // activationKernelOpt over the scalar kernel. Read once per process via getenv (the JIT
+      // kernel has no Python->C++ config channel). Bitwise-identical output; ~3.25x faster.
+      static int const actOptMode = [] {
+        char const* e = std::getenv("SGLANG_OPT_FUSED_MOE_ACTIVATION_VEC");
+        return (e != nullptr && (e[0] == '1' || e[0] == 't' || e[0] == 'T' || e[0] == 'y' ||
+                                 e[0] == 'Y'))
+                   ? 1
+                   : 0;
+      }();
+      actData.actOptMode = actOptMode;
       moe::dev::activation::run(actData, stream);
     }
 
