@@ -375,6 +375,7 @@ __global__ void fused_align_scatter_kernel(
   if (tid < num_experts) {
     prefix[tid] = my_prefix;
     cumsum[tid] = my_prefix;
+    cursor[tid] = my_prefix;  // scatter cursor inits to the bucket start offset
   }
   if (tid == num_experts - 1) {
     int total = my_prefix + padded_count;
@@ -400,8 +401,9 @@ __global__ void fused_align_scatter_kernel(
     }
     expert_ids[i] = left - 2 + (compact ? local_expert_offset : 0);
   }
-  if (tid < num_experts) cursor[tid] = prefix[tid];
-  __syncthreads();
+  // No barrier: cursor was initialized in phase 3 (before its __syncthreads) and
+  // the expert_ids loop above touches neither cursor nor sorted_token_ids, so the
+  // scatter can proceed directly.
 
   // Phase 5: scatter owned tokens using the cached virtual ids + shared cursor.
   for (size_t i = tid; i < numel; i += stride) {
