@@ -22,6 +22,54 @@ __device__ __forceinline__ float sigmoid_accurate(float x) {
   return 1.0f / (1.0f + expf(-x));
 }
 
+// Scalar widening: input/bias may arrive as fp32, bf16, or fp16; the kernel math
+// always runs in fp32. Widening bf16/fp16 -> fp32 is exact, so results are
+// bitwise identical to upcasting on the host first (the casts we are removing).
+__device__ __forceinline__ float to_float(float x) {
+  return x;
+}
+__device__ __forceinline__ float to_float(__nv_bfloat16 x) {
+  return __bfloat162float(x);
+}
+__device__ __forceinline__ float to_float(__half x) {
+  return __half2float(x);
+}
+
+// Vectorized load of 4 consecutive elements of type T at vector index `vec_idx`,
+// widened to a float4. fp32 reads a 16B float4; bf16/fp16 read an 8B float2 and
+// expand. Used only by the large-token kernel's lane-strided loads.
+template <typename T>
+struct VecLoader;
+
+template <>
+struct VecLoader<float> {
+  __device__ __forceinline__ static float4 load(const float* base, int vec_idx) {
+    return reinterpret_cast<const float4*>(base)[vec_idx];
+  }
+};
+
+template <>
+struct VecLoader<__nv_bfloat16> {
+  __device__ __forceinline__ static float4 load(const __nv_bfloat16* base, int vec_idx) {
+    float2 raw = reinterpret_cast<const float2*>(base)[vec_idx];  // 4 bf16 = 8 bytes
+    const __nv_bfloat162* packed = reinterpret_cast<const __nv_bfloat162*>(&raw);
+    float2 lo = __bfloat1622float2(packed[0]);
+    float2 hi = __bfloat1622float2(packed[1]);
+    return make_float4(lo.x, lo.y, hi.x, hi.y);
+  }
+};
+
+template <>
+struct VecLoader<__half> {
+  __device__ __forceinline__ static float4 load(const __half* base, int vec_idx) {
+    float2 raw = reinterpret_cast<const float2*>(base)[vec_idx];  // 4 fp16 = 8 bytes
+    const __half2* packed = reinterpret_cast<const __half2*>(&raw);
+    float2 lo = __half22float2(packed[0]);
+    float2 hi = __half22float2(packed[1]);
+    return make_float4(lo.x, lo.y, hi.x, hi.y);
+  }
+};
+
 template <int N>
 struct GateConfig {
   static_assert(
@@ -42,10 +90,10 @@ struct GateConfig {
 };
 
 // Small-token kernel: 1 block per token, NUM_EXPERTS threads (1 thread = 1 expert).
-template <int N>
+template <int N, typename InputT, typename BiasT>
 __global__ void kimi_k2_moe_fused_gate_kernel_small_token(
-    float* input,
-    float* bias,
+    const InputT* input,
+    const BiasT* bias,
     float* output_ptr,
     int32_t* indices_ptr,
     int64_t num_rows,
@@ -74,8 +122,8 @@ __global__ void kimi_k2_moe_fused_gate_kernel_small_token(
 
   // Keep biased_val in register; mask the winner in-place each iteration to
   // avoid round-tripping through shared memory.
-  float input_val = input[row_idx * NUM_EXPERTS + tid];
-  float bias_val = bias[tid];
+  float input_val = to_float(input[row_idx * NUM_EXPERTS + tid]);
+  float bias_val = to_float(bias[tid]);
   float sigmoid_val = sigmoid_accurate(input_val);
   float biased_val = sigmoid_val + bias_val;
   shared_original_scores[tid] = sigmoid_val;
@@ -152,10 +200,10 @@ __global__ void kimi_k2_moe_fused_gate_kernel_small_token(
 }
 
 // Large-token kernel: 1 warp per token, WARPS_PER_CTA warps per block.
-template <int N>
+template <int N, typename InputT, typename BiasT>
 __global__ void kimi_k2_moe_fused_gate_kernel(
-    float* input,
-    float* bias,
+    const InputT* input,
+    const BiasT* bias,
     float* output_ptr,
     int32_t* indices_ptr,
     int64_t num_rows,
@@ -184,16 +232,15 @@ __global__ void kimi_k2_moe_fused_gate_kernel(
   float4* warp_scores_v4 = reinterpret_cast<float4*>(warp_scores);
   float4* warp_original_scores_v4 = reinterpret_cast<float4*>(warp_original_scores);
 
-  float4* input_vec = reinterpret_cast<float4*>(input + row_idx * NUM_EXPERTS);
-  float4* bias_vec = reinterpret_cast<float4*>(bias);
+  const InputT* input_row = input + row_idx * NUM_EXPERTS;
 
   // Lane-strided vec_idx (each lane k stores at vec_idx k, k+32, k+64, ...) so each
   // iteration's STS.128 is lane-contiguous, avoiding shared-mem bank conflicts.
 #pragma unroll
   for (int i = 0; i < VEC_PER_LANE; i++) {
     int vec_idx = lane_id + i * WARP_SIZE;
-    float4 input_val = input_vec[vec_idx];
-    float4 bias_val = bias_vec[vec_idx];
+    float4 input_val = VecLoader<InputT>::load(input_row, vec_idx);
+    float4 bias_val = VecLoader<BiasT>::load(bias, vec_idx);
 
     float4 sigmoid_v4;
     float4 biased_v4;
@@ -267,48 +314,85 @@ __global__ void kimi_k2_moe_fused_gate_kernel(
   }
 }
 
-template <int N>
-void launch_for_n(
-    float* input,
-    float* bias,
-    float* output,
-    int32_t* indices,
-    int64_t num_rows,
-    int64_t topk,
-    bool renormalize,
-    double routed_scaling_factor,
-    bool apply_routed_scaling_factor_on_output,
-    DLDevice device) {
+// Bundles the dtype-agnostic launch parameters so the templated dispatch below
+// only has to thread the typed input/bias pointers.
+struct GateLaunchArgs {
+  float* output;
+  int32_t* indices;
+  int64_t num_rows;
+  int64_t topk;
+  bool renormalize;
+  double routed_scaling_factor;
+  bool apply_routed_scaling_factor_on_output;
+  DLDevice device;
+};
+
+template <int N, typename InputT, typename BiasT>
+void launch_for_n(const InputT* input, const BiasT* bias, const GateLaunchArgs& args) {
   using namespace host;
   using Cfg = GateConfig<N>;
-  bool use_small_token_kernel = num_rows <= Cfg::SMALL_TOKEN_THRESHOLD;
+  bool use_small_token_kernel = args.num_rows <= Cfg::SMALL_TOKEN_THRESHOLD;
 
   if (use_small_token_kernel) {
-    LaunchKernel(static_cast<uint32_t>(num_rows), static_cast<uint32_t>(Cfg::THREADS_PER_BLOCK_SMALL), device)(
-        kimi_k2_moe_fused_gate_kernel_small_token<N>,
+    LaunchKernel(
+        static_cast<uint32_t>(args.num_rows), static_cast<uint32_t>(Cfg::THREADS_PER_BLOCK_SMALL), args.device)(
+        kimi_k2_moe_fused_gate_kernel_small_token<N, InputT, BiasT>,
         input,
         bias,
-        output,
-        indices,
-        num_rows,
-        topk,
-        renormalize,
-        routed_scaling_factor,
-        apply_routed_scaling_factor_on_output);
+        args.output,
+        args.indices,
+        args.num_rows,
+        args.topk,
+        args.renormalize,
+        args.routed_scaling_factor,
+        args.apply_routed_scaling_factor_on_output);
   } else {
-    uint32_t num_blocks = div_ceil(num_rows, static_cast<int64_t>(Cfg::WARPS_PER_CTA));
+    uint32_t num_blocks = div_ceil(args.num_rows, static_cast<int64_t>(Cfg::WARPS_PER_CTA));
     dim3 block_dim(Cfg::WARP_SIZE, Cfg::WARPS_PER_CTA);
-    LaunchKernel(num_blocks, block_dim, device)(
-        kimi_k2_moe_fused_gate_kernel<N>,
+    LaunchKernel(num_blocks, block_dim, args.device)(
+        kimi_k2_moe_fused_gate_kernel<N, InputT, BiasT>,
         input,
         bias,
-        output,
-        indices,
-        num_rows,
-        topk,
-        renormalize,
-        routed_scaling_factor,
-        apply_routed_scaling_factor_on_output);
+        args.output,
+        args.indices,
+        args.num_rows,
+        args.topk,
+        args.renormalize,
+        args.routed_scaling_factor,
+        args.apply_routed_scaling_factor_on_output);
+  }
+}
+
+// input/bias each independently arrive as fp32, bf16, or fp16; widen both to
+// fp32 inside the kernel so the host no longer has to upcast. Dispatch is nested:
+// num_experts -> input dtype -> bias dtype.
+template <int N, typename InputT>
+void dispatch_bias(
+    const InputT* input, const void* bias, const host::SymbolicDType& bias_dtype, const GateLaunchArgs& args) {
+  using namespace host;
+  if (bias_dtype.is_type<float>()) {
+    launch_for_n<N, InputT, float>(input, static_cast<const float*>(bias), args);
+  } else if (bias_dtype.is_type<bf16_t>()) {
+    launch_for_n<N, InputT, bf16_t>(input, static_cast<const bf16_t*>(bias), args);
+  } else {
+    launch_for_n<N, InputT, fp16_t>(input, static_cast<const fp16_t*>(bias), args);
+  }
+}
+
+template <int N>
+void dispatch_input(
+    const void* input,
+    const host::SymbolicDType& input_dtype,
+    const void* bias,
+    const host::SymbolicDType& bias_dtype,
+    const GateLaunchArgs& args) {
+  using namespace host;
+  if (input_dtype.is_type<float>()) {
+    dispatch_bias<N, float>(static_cast<const float*>(input), bias, bias_dtype, args);
+  } else if (input_dtype.is_type<bf16_t>()) {
+    dispatch_bias<N, bf16_t>(static_cast<const bf16_t*>(input), bias, bias_dtype, args);
+  } else {
+    dispatch_bias<N, fp16_t>(static_cast<const fp16_t*>(input), bias, bias_dtype, args);
   }
 }
 
@@ -327,12 +411,14 @@ struct KimiK2MoEFusedGateKernel {
     auto N = SymbolicSize{"num_rows"};
     auto E = SymbolicSize{"num_experts"};
     auto K = SymbolicSize{"topk"};
+    auto input_dtype = SymbolicDType{};
+    auto bias_dtype = SymbolicDType{};
     auto device = SymbolicDevice{};
     K.set_value(topk);
     device.set_options<kDLCUDA>();
 
-    TensorMatcher({N, E}).with_dtype<float>().with_device(device).verify(input);
-    TensorMatcher({E}).with_dtype<float>().with_device(device).verify(bias);
+    TensorMatcher({N, E}).with_dtype<float, bf16_t, fp16_t>(input_dtype).with_device(device).verify(input);
+    TensorMatcher({E}).with_dtype<float, bf16_t, fp16_t>(bias_dtype).with_device(device).verify(bias);
     TensorMatcher({N, K}).with_dtype<float>().with_device(device).verify(output);
     TensorMatcher({N, K}).with_dtype<int32_t>().with_device(device).verify(indices);
 
@@ -341,38 +427,22 @@ struct KimiK2MoEFusedGateKernel {
 
     RuntimeCheck(topk <= 8, "kimi_k2_moe_fused_gate only supports topk <= 8, got ", topk);
 
-    float* input_ptr = static_cast<float*>(input.data_ptr());
-    float* bias_ptr = static_cast<float*>(bias.data_ptr());
-    float* output_ptr = static_cast<float*>(output.data_ptr());
-    int32_t* indices_ptr = static_cast<int32_t*>(indices.data_ptr());
-    const DLDevice dev = device.unwrap();
+    const GateLaunchArgs args{
+        .output = static_cast<float*>(output.data_ptr()),
+        .indices = static_cast<int32_t*>(indices.data_ptr()),
+        .num_rows = num_rows,
+        .topk = topk,
+        .renormalize = renormalize,
+        .routed_scaling_factor = routed_scaling_factor,
+        .apply_routed_scaling_factor_on_output = apply_routed_scaling_factor_on_output,
+        .device = device.unwrap()};
 
     switch (num_experts) {
       case 256:
-        launch_for_n<256>(
-            input_ptr,
-            bias_ptr,
-            output_ptr,
-            indices_ptr,
-            num_rows,
-            topk,
-            renormalize,
-            routed_scaling_factor,
-            apply_routed_scaling_factor_on_output,
-            dev);
+        dispatch_input<256>(input.data_ptr(), input_dtype, bias.data_ptr(), bias_dtype, args);
         break;
       case 384:
-        launch_for_n<384>(
-            input_ptr,
-            bias_ptr,
-            output_ptr,
-            indices_ptr,
-            num_rows,
-            topk,
-            renormalize,
-            routed_scaling_factor,
-            apply_routed_scaling_factor_on_output,
-            dev);
+        dispatch_input<384>(input.data_ptr(), input_dtype, bias.data_ptr(), bias_dtype, args);
         break;
       default:
         Panic("kimi_k2_moe_fused_gate only supports num_experts in {256, 384}, got ", num_experts);

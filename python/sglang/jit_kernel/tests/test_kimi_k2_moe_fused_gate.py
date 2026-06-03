@@ -134,6 +134,47 @@ def test_jit_kimi_output_shapes_and_renorm():
     )
 
 
+@pytest.mark.parametrize("seq_length", [1, 7, 64, 512, 513, 4096])
+@pytest.mark.parametrize("config", _CONFIGS, ids=["kimi384", "mimo256"])
+@pytest.mark.parametrize("low_dtype", [torch.bfloat16, torch.float16])
+@pytest.mark.parametrize(
+    "mixed_bias", [False, True], ids=["same_dtype", "fp32_bias"]
+)
+def test_jit_kimi_low_precision_input_matches_fp32(
+    seq_length, config, low_dtype, mixed_bias
+):
+    """bf16/fp16 input is widened exactly, so it matches the fp32-upcast path bitwise."""
+    num_experts, topk, routed_scaling_factor = config
+    renormalize = True
+
+    torch.manual_seed(seq_length)
+    tensor_low = torch.rand(
+        (seq_length, num_experts), dtype=torch.float32, device="cuda"
+    ).to(low_dtype)
+    bias_low = torch.rand(num_experts, dtype=torch.float32, device="cuda").to(low_dtype)
+    # Mixed dtype: bf16/fp16 input with an fp32 correction bias (kernel allows it).
+    bias_in = bias_low.to(torch.float32) if mixed_bias else bias_low
+
+    low_output, low_indices = jit_kimi_k2_moe_fused_gate(
+        tensor_low,
+        bias_in,
+        topk=topk,
+        renormalize=renormalize,
+        routed_scaling_factor=routed_scaling_factor,
+    )
+    # Host-side upcast is the exact same widening the kernel does internally.
+    ref_output, ref_indices = jit_kimi_k2_moe_fused_gate(
+        tensor_low.to(torch.float32),
+        bias_in.to(torch.float32),
+        topk=topk,
+        renormalize=renormalize,
+        routed_scaling_factor=routed_scaling_factor,
+    )
+
+    torch.testing.assert_close(low_output, ref_output, rtol=0, atol=0)
+    torch.testing.assert_close(low_indices, ref_indices, rtol=0, atol=0)
+
+
 def test_jit_kimi_unsupported_num_experts():
     """num_experts outside {256, 384} raises instead of silently mis-routing."""
     tensor = torch.rand((4, 128), dtype=torch.float32, device="cuda")

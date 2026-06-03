@@ -1219,20 +1219,25 @@ def biased_grouped_topk_gpu(
         # Use optimized path for Kimi K2 (384 experts with num_expert_group=1)
         num_experts = gating_output.shape[1]
         if _is_cuda and num_experts == 384 and num_expert_group == 1:
-            # kimi_k2_moe_fused_gate requires input and bias to share a dtype; gating_output is
-            # upcast to fp32, so match the bias too. These fp32 tensors are the kernel's real inputs.
-            _gi = gating_output.to(dtype=torch.float32)
-            _cb = (
-                correction_bias.to(dtype=torch.float32)
-                if correction_bias is not None
-                else correction_bias
-            )
             if envs.SGLANG_OPT_USE_JIT_KERNEL_KIMI_GATE.get():
+                # The JIT kernel widens bf16/fp16 inputs to fp32 internally, so pass
+                # gating_output and correction_bias through untouched. This avoids the
+                # two host-side elementwise upcast kernels the AOT path needs.
                 from sglang.jit_kernel.kimi_k2_moe_fused_gate import (
                     kimi_k2_moe_fused_gate as _kimi_k2_moe_fused_gate,
                 )
+
+                _gi = gating_output
+                _cb = correction_bias
             else:
+                # The AOT kernel requires fp32 input and bias; upcast both to match.
                 _kimi_k2_moe_fused_gate = kimi_k2_moe_fused_gate
+                _gi = gating_output.to(dtype=torch.float32)
+                _cb = (
+                    correction_bias.to(dtype=torch.float32)
+                    if correction_bias is not None
+                    else correction_bias
+                )
             _ret = _kimi_k2_moe_fused_gate(
                 _gi,
                 _cb,

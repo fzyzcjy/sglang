@@ -32,11 +32,15 @@ def kimi_k2_moe_fused_gate(
     """
     Kimi K2 MoE fused gate (num_expert_group=1, DeepSeek noaux_tc routing).
 
-    Supports num_experts in {256, 384} and topk <= 8. input and bias must both
-    be float32 CUDA tensors. Returns (output_weights, expert_indices).
+    Supports num_experts in {256, 384} and topk <= 8. input and bias are CUDA
+    tensors of float32, bfloat16, or float16 (dtypes may differ between the two);
+    they are widened to fp32 inside the kernel, so callers no longer need to
+    upcast bf16/fp16 router logits or correction bias on the host. Returns
+    (output_weights, expert_indices).
     """
-    assert input.dtype == torch.float32, "input must be float32"
-    assert bias.dtype == torch.float32, "bias must be float32"
+    _supported = (torch.float32, torch.bfloat16, torch.float16)
+    assert input.dtype in _supported, f"input must be float32/bfloat16/float16, got {input.dtype}"
+    assert bias.dtype in _supported, f"bias must be float32/bfloat16/float16, got {bias.dtype}"
     assert input.ndim == 2, "input must be 2D"
     assert bias.ndim == 1, "bias must be 1D"
     assert input.size(1) == bias.size(0), "input and bias must have same num_experts"
