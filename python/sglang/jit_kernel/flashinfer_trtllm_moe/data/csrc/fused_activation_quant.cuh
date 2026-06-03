@@ -87,15 +87,36 @@ __global__ void fusedActivationQuantKernel(
 
     InType vec;
     __nv_bfloat162 amax2 = __float2bfloat162_rn(0.0f);
+    // Vectorized loads: 32 interleaved gate/up bf16 = 4x 128-bit; each delta half = 2x 128-bit.
+    union {
+      int4 v[4];
+      __nv_bfloat16 b[32];
+    } gu;
+    union {
+      int4 v[2];
+      __nv_bfloat16 b[16];
+    } dl, dh;
+    int4 const* gp = reinterpret_cast<int4 const*>(g);
+#pragma unroll
+    for (int k = 0; k < 4; ++k) gu.v[k] = gp[k];
+    if (loraDelta != nullptr) {
+      int4 const* dlp = reinterpret_cast<int4 const*>(dlo);
+      int4 const* dhp = reinterpret_cast<int4 const*>(dhi);
+#pragma unroll
+      for (int k = 0; k < 2; ++k) {
+        dl.v[k] = dlp[k];
+        dh.v[k] = dhp[k];
+      }
+    }
 #pragma unroll
     for (int i = 0; i < SF_VEC_SIZE / 2; ++i) {  // 8 bf162 = 16 output elements
       int const j0 = 2 * i, j1 = 2 * i + 1;
-      float even0 = (float)g[2 * j0], odd0 = (float)g[2 * j0 + 1];
-      float even1 = (float)g[2 * j1], odd1 = (float)g[2 * j1 + 1];
+      float even0 = (float)gu.b[2 * j0], odd0 = (float)gu.b[2 * j0 + 1];
+      float even1 = (float)gu.b[2 * j1], odd1 = (float)gu.b[2 * j1 + 1];
       float a0 = odd0, b0 = even0, a1 = odd1, b1 = even1;
       if (loraDelta != nullptr) {
-        a0 += (float)dlo[j0]; b0 += (float)dhi[j0];
-        a1 += (float)dlo[j1]; b1 += (float)dhi[j1];
+        a0 += (float)dl.b[j0]; b0 += (float)dh.b[j0];
+        a1 += (float)dl.b[j1]; b1 += (float)dh.b[j1];
       }
       float act0 = fused_silu(a0) * b0;
       float act1 = fused_silu(a1) * b1;
