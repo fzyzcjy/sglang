@@ -378,14 +378,32 @@ def trtllm_fp4_block_scale_routed_moe_lora(
     )
     if _sig not in _seen:
         _seen.add(_sig)
+
+        def _ti(t):
+            return (
+                "None"
+                if t is None
+                else f"shape={tuple(t.shape)} dtype={t.dtype} stride={tuple(t.stride())} device={t.device}"
+            )
+
         print(
-            f"[SHAPECAP fp4_lora_moe_py] hidden_states={tuple(hidden_states.shape)}/{hidden_states.dtype} "
-            f"topk_ids={tuple(topk_ids.shape)}/{topk_ids.dtype} "
-            f"gemm1_weights={tuple(gemm1_weights.shape)}/{gemm1_weights.dtype} "
-            f"gemm2_weights={tuple(gemm2_weights.shape)}/{gemm2_weights.dtype} "
-            f"gate_up_lora_delta={tuple(gate_up_lora_delta.shape)}/{gate_up_lora_delta.dtype} "
-            f"activation_lora_input={tuple(activation_lora_input.shape)}/{activation_lora_input.dtype} "
-            f"num_experts={num_experts} top_k={top_k} intermediate_size={intermediate_size} "
+            "[SHAPECAP fp4_lora_moe_py]\n"
+            f"  IN  hidden_states: {_ti(hidden_states)}\n"
+            f"  IN  hidden_states_scale: {_ti(hidden_states_scale)}\n"
+            f"  IN  topk_ids: {_ti(topk_ids)}\n"
+            f"  IN  routing_bias: {_ti(routing_bias)}\n"
+            f"  IN  gemm1_weights: {_ti(gemm1_weights)}\n"
+            f"  IN  gemm1_weights_scale: {_ti(gemm1_weights_scale)}\n"
+            f"  IN  gemm2_weights: {_ti(gemm2_weights)}\n"
+            f"  IN  gemm2_weights_scale: {_ti(gemm2_weights_scale)}\n"
+            f"  IN  output1_scales_scalar: {_ti(output1_scales_scalar)}\n"
+            f"  IN  output1_scales_gate_scalar: {_ti(output1_scales_gate_scalar)}\n"
+            f"  IN  output2_scales_scalar: {_ti(output2_scales_scalar)}\n"
+            f"  IN  gate_up_lora_delta: {_ti(gate_up_lora_delta)}\n"
+            f"  IN  activation_lora_input: {_ti(activation_lora_input)}\n"
+            f"  OUT output: {_ti(output)}\n"
+            f"  scalars: num_experts={num_experts} top_k={top_k} "
+            f"intermediate_size={intermediate_size} local_expert_offset={local_expert_offset} "
             f"local_num_experts={local_num_experts} num_tokens={num_tokens} hidden_size={hidden_size}",
             flush=True,
         )

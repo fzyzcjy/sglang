@@ -1219,34 +1219,49 @@ def biased_grouped_topk_gpu(
         # Use optimized path for Kimi K2 (384 experts with num_expert_group=1)
         num_experts = gating_output.shape[1]
         if _is_cuda and num_experts == 384 and num_expert_group == 1:
-            # [SHAPECAP] adhoc shape-capture print (committed for trace; reverted after the run).
-            _seen = biased_grouped_topk_gpu.__dict__.setdefault("_shapecap_seen", set())
-            _sig = (tuple(gating_output.shape), str(gating_output.dtype), int(topk))
-            if _sig not in _seen:
-                _seen.add(_sig)
-                print(
-                    f"[SHAPECAP kimi_k2_moe_fused_gate_py] "
-                    f"gating_output={tuple(gating_output.shape)}/{gating_output.dtype} "
-                    f"correction_bias="
-                    f"{None if correction_bias is None else tuple(correction_bias.shape)} "
-                    f"num_experts={num_experts} topk={topk} num_expert_group={num_expert_group} "
-                    f"renormalize={renormalize}",
-                    flush=True,
-                )
-            return kimi_k2_moe_fused_gate(
-                gating_output.to(dtype=torch.float32),
-                # kimi_k2_moe_fused_gate requires input and bias to share a dtype;
-                # gating_output is upcast to fp32 above, so match the bias too.
-                (
-                    correction_bias.to(dtype=torch.float32)
-                    if correction_bias is not None
-                    else correction_bias
-                ),
+            # kimi_k2_moe_fused_gate requires input and bias to share a dtype; gating_output is
+            # upcast to fp32, so match the bias too. These fp32 tensors are the kernel's real inputs.
+            _gi = gating_output.to(dtype=torch.float32)
+            _cb = (
+                correction_bias.to(dtype=torch.float32)
+                if correction_bias is not None
+                else correction_bias
+            )
+            _ret = kimi_k2_moe_fused_gate(
+                _gi,
+                _cb,
                 topk=topk,
                 renormalize=renormalize,
                 routed_scaling_factor=routed_scaling_factor,
                 apply_routed_scaling_factor_on_output=apply_routed_scaling_factor_on_output,
             )
+            # [SHAPECAP] adhoc shape-capture print (committed for trace; reverted after the run).
+            _seen = biased_grouped_topk_gpu.__dict__.setdefault("_shapecap_seen", set())
+            _sig = (tuple(_gi.shape), str(_gi.dtype), int(topk))
+            if _sig not in _seen:
+                _seen.add(_sig)
+
+                def _ti(t):
+                    return (
+                        "None"
+                        if t is None
+                        else f"shape={tuple(t.shape)} dtype={t.dtype} stride={tuple(t.stride())} device={t.device}"
+                    )
+
+                _outs = _ret if isinstance(_ret, (tuple, list)) else (_ret,)
+                print(
+                    "[SHAPECAP kimi_k2_moe_fused_gate_py]\n"
+                    f"  IN  input(gating_output.fp32): {_ti(_gi)}\n"
+                    f"  IN  bias(correction_bias.fp32): {_ti(_cb)}\n"
+                    + "".join(
+                        f"  OUT[{_k}]: {_ti(_o)}\n" for _k, _o in enumerate(_outs)
+                    )
+                    + f"  scalars: num_experts={num_experts} topk={topk} "
+                    f"num_expert_group={num_expert_group} renormalize={renormalize} "
+                    f"routed_scaling_factor={routed_scaling_factor}",
+                    flush=True,
+                )
+            return _ret
         elif (
             _is_cuda
             and num_expert_group == 1

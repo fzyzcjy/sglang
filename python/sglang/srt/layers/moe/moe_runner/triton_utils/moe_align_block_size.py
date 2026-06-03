@@ -84,13 +84,24 @@ def moe_align_block_size(
     )
     if _sig not in _seen:
         _seen.add(_sig)
+
+        def _ti(t):
+            return (
+                "None"
+                if t is None
+                else f"shape={tuple(t.shape)} dtype={t.dtype} stride={tuple(t.stride())} device={t.device}"
+            )
+
         print(
-            f"[SHAPECAP moe_align_native_py] topk_ids={tuple(topk_ids.shape)}/{topk_ids.dtype} "
-            f"numel={topk_ids.numel()} num_experts(arg)={num_experts} "
-            f"num_experts_passed={num_experts + 1} block_size={block_size} "
-            f"max_num_tokens_padded={max_num_tokens_padded} max_num_m_blocks={max_num_m_blocks} "
-            f"sorted_ids={tuple(sorted_ids.shape)} expert_ids={tuple(expert_ids.shape)} "
-            f"cumsum_buffer={tuple(cumsum_buffer.shape)}",
+            "[SHAPECAP moe_align_native_py]\n"
+            f"  IN  topk_ids: {_ti(topk_ids)} numel={topk_ids.numel()}\n"
+            f"  OUT sorted_ids: {_ti(sorted_ids)}\n"
+            f"  OUT expert_ids: {_ti(expert_ids)}\n"
+            f"  OUT num_tokens_post_pad: {_ti(num_tokens_post_pad)}\n"
+            f"  scratch cumsum_buffer: {_ti(cumsum_buffer)}\n"
+            f"  scalars: num_experts(arg)={num_experts} num_experts_passed={num_experts + 1} "
+            f"block_size={block_size} max_num_tokens_padded={max_num_tokens_padded} "
+            f"max_num_m_blocks={max_num_m_blocks}",
             flush=True,
         )
 
