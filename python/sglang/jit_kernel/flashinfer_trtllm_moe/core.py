@@ -364,38 +364,6 @@ def trtllm_fp4_block_scale_routed_moe_lora(
             (num_tokens, hidden_size), dtype=torch.bfloat16, device=hidden_states.device
         )
 
-    # [SHAPECAP] adhoc shape-capture print (committed for trace; reverted after the run).
-    if True:  # [SHAPECAP] no dedup -- print EVERY call (prefill and decode)
-
-        def _ti(t):
-            return (
-                "None"
-                if t is None
-                else f"shape={tuple(t.shape)} dtype={t.dtype} stride={tuple(t.stride())} device={t.device}"
-            )
-
-        print(
-            "[SHAPECAP fp4_lora_moe_py] "
-            f"IN hidden_states={_ti(hidden_states)} | "
-            f"IN hidden_states_scale={_ti(hidden_states_scale)} | "
-            f"IN topk_ids={_ti(topk_ids)} | "
-            f"IN routing_bias={_ti(routing_bias)} | "
-            f"IN gemm1_weights={_ti(gemm1_weights)} | "
-            f"IN gemm1_weights_scale={_ti(gemm1_weights_scale)} | "
-            f"IN gemm2_weights={_ti(gemm2_weights)} | "
-            f"IN gemm2_weights_scale={_ti(gemm2_weights_scale)} | "
-            f"IN output1_scales_scalar={_ti(output1_scales_scalar)} | "
-            f"IN output1_scales_gate_scalar={_ti(output1_scales_gate_scalar)} | "
-            f"IN output2_scales_scalar={_ti(output2_scales_scalar)} | "
-            f"IN gate_up_lora_delta={_ti(gate_up_lora_delta)} | "
-            f"IN activation_lora_input={_ti(activation_lora_input)} | "
-            f"OUT output={_ti(output)} | "
-            f"scalars: num_experts={num_experts} top_k={top_k} "
-            f"intermediate_size={intermediate_size} local_expert_offset={local_expert_offset} "
-            f"local_num_experts={local_num_experts} num_tokens={num_tokens} hidden_size={hidden_size}",
-            flush=True,
-        )
-
     assert gate_up_lora_delta.is_contiguous()
     assert activation_lora_input.is_contiguous()
     empty_expert_weights = torch.empty(

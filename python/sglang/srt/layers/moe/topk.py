@@ -1241,27 +1241,6 @@ def biased_grouped_topk_gpu(
                 routed_scaling_factor=routed_scaling_factor,
                 apply_routed_scaling_factor_on_output=apply_routed_scaling_factor_on_output,
             )
-            # [SHAPECAP] adhoc shape-capture print (committed for trace; reverted after the run).
-            if True:  # [SHAPECAP] no dedup -- print EVERY call (prefill and decode)
-
-                def _ti(t):
-                    return (
-                        "None"
-                        if t is None
-                        else f"shape={tuple(t.shape)} dtype={t.dtype} stride={tuple(t.stride())} device={t.device}"
-                    )
-
-                _outs = _ret if isinstance(_ret, (tuple, list)) else (_ret,)
-                print(
-                    "[SHAPECAP kimi_k2_moe_fused_gate_py] "
-                    f"IN input(gating_output.fp32)={_ti(_gi)} | "
-                    f"IN bias(correction_bias.fp32)={_ti(_cb)} | "
-                    + "".join(f"OUT[{_k}]={_ti(_o)} | " for _k, _o in enumerate(_outs))
-                    + f"scalars: num_experts={num_experts} topk={topk} "
-                    f"num_expert_group={num_expert_group} renormalize={renormalize} "
-                    f"routed_scaling_factor={routed_scaling_factor}",
-                    flush=True,
-                )
             return _ret
         elif (
             _is_cuda

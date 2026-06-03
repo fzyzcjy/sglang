@@ -114,13 +114,13 @@ def main():
     m = get_sgl_trtllm_moe_sm100_raw_module()
     t = make_tensors(nt, tk, H, I, gun, mp, dev)
 
-    permute = lambda: m.shapecap_permute(
+    permute = lambda: m.bench_permute(
         t["hidden_in"], t["idx_map"], t["total_pad"], t["permuted"], nt, tk, H
     )
-    quant1 = lambda: m.shapecap_nvfp4_quant(
+    quant1 = lambda: m.bench_nvfp4_quant(
         t["permuted"], None, t["q1_fp4"], t["q1_sf"], t["q1_ptsf"], mp, H, args.tile
     )
-    activation = lambda: m.shapecap_activation(
+    activation = lambda: m.bench_activation(
         t["gate_up"],
         t["lora_delta"],
         t["idx_map"],
@@ -131,7 +131,7 @@ def main():
         nt,
         tk,
     )
-    quant2 = lambda: m.shapecap_nvfp4_quant(
+    quant2 = lambda: m.bench_nvfp4_quant(
         t["activated"],
         t["idx_map"],
         t["q2_fp4"],

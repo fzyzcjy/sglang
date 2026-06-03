@@ -128,28 +128,6 @@ def _fused_virtual_topk_ids(
     )
 
     virtual_num_experts = num_experts_for_weight * max_loras
-
-    # [SHAPECAP] no dedup -- print EVERY call (prefill and decode).
-    def _ti(t):
-        return (
-            "None"
-            if t is None
-            else f"shape={tuple(t.shape)} dtype={t.dtype} stride={tuple(t.stride())} device={t.device}"
-        )
-
-    print(
-        "[SHAPECAP fused_virtual_topk_ids_py] "
-        f"IN input_topk={_ti(input_topk)} | "
-        f"IN token_lora_mapping={_ti(token_lora_mapping)} | "
-        f"OUT virtual_topk_ids={_ti(virtual_topk_ids)} | "
-        f"OUT token_lora_mask={_ti(token_lora_mask)} | "
-        f"scalars: M={M} top_k={top_k} num_experts={num_experts} "
-        f"num_experts_for_weight={num_experts_for_weight} shared_outer={shared_outer} "
-        f"max_loras={max_loras} virtual_num_experts={virtual_num_experts} "
-        f"local_expert_offset={local_expert_offset} local_num_experts={local_num_experts} "
-        f"ep_local={ep_local}",
-        flush=True,
-    )
     return virtual_topk_ids, token_lora_mask, virtual_num_experts
 
 

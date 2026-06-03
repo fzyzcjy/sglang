@@ -23,7 +23,6 @@
 #include "tvm_ffi_utils.h"
 #include <algorithm>
 #include <cmath>
-#include <cstdio>  // [SHAPECAP] for printf in the adhoc shape-capture block (reverted after the run)
 #include <cstdlib>
 #include <cstring>
 #include <cuda_bf16.h>
@@ -2897,46 +2896,6 @@ class FP4BlockScaleLoraLauncher {
     Tensor hidden_fp4_sf = alloc_tensor({hidden_sf_size}, dl_uint8, device);
     Tensor hidden_per_token_sf = alloc_tensor({max_num_padded_tokens}, dl_float32, device);
 
-    // [SHAPECAP] adhoc shape-capture instrumentation (committed for trace; reverted after the run).
-    // _ti() prints shape/dtype/stride/device of a tensor; it is called on EVERY real input/output
-    // tensor of the in-op permute / NvFP4-quant / activation kernels at each kernel's call site
-    // No dedup, no cap: print EVERY call (prefill and decode). Log size is not a concern; a missing
-    // shape is. (_shapecap kept as an always-true flag so the per-kernel blocks below read uniformly.)
-    bool const _shapecap = true;
-    auto _ti = [](const char* tag, auto const& t) {
-      auto dt = t.dtype();
-      auto dev = t.device();
-      printf("[SHAPECAP fp4_lora_cu]   %s: ndim=%d shape=[", tag, (int)t.ndim());
-      for (int _i = 0; _i < (int)t.ndim(); ++_i)
-        printf("%s%ld", _i ? "," : "", (long)t.size(_i));
-      printf("] strides=[");
-      for (int _i = 0; _i < (int)t.ndim(); ++_i)
-        printf("%s%ld", _i ? "," : "", (long)t.strides()[_i]);
-      printf(
-          "] dtype=(code=%d,bits=%d,lanes=%d) device=(type=%d,id=%d)\n",
-          (int)dt.code,
-          (int)dt.bits,
-          (int)dt.lanes,
-          (int)dev.device_type,
-          (int)dev.device_id);
-    };
-    if (_shapecap) {
-      printf(
-          "[SHAPECAP fp4_lora_cu] === scalars: num_tokens=%ld max_num_padded_tokens=%d hidden_size=%ld "
-          "inter=%ld gate_up_n=%ld top_k=%ld num_experts=%ld local_num_experts=%ld tile=%ld | "
-          "quant1.m=max_num_padded_tokens quant2.m=num_tokens*top_k=%ld activation.numTokens=num_tokens ===\n",
-          (long)num_tokens,
-          max_num_padded_tokens,
-          (long)hidden_size,
-          (long)inter,
-          (long)gate_up_n,
-          (long)top_k,
-          (long)num_experts,
-          (long)local_num_experts,
-          (long)tile,
-          (long)(num_tokens * top_k));
-      fflush(stdout);
-    }
     {
       // ---- 3) permute (gather) bf16 hidden -> [max_padded, hidden] (transient, freed at block end)
       Tensor permuted_hidden_bf16 = alloc_tensor({max_num_padded_tokens, hidden_size}, dl_bfloat16, device);
@@ -2962,18 +2921,6 @@ class FP4BlockScaleLoraLauncher {
         moe::dev::permute::run(permData, stream);
       }
 
-      if (_shapecap) {
-        printf(
-            "[SHAPECAP fp4_lora_cu] -- permuteKernel (numTokens=%ld topK=%ld hiddenDim=%ld) --\n",
-            (long)num_tokens,
-            (long)top_k,
-            (long)hidden_size);
-        _ti("permute.IN  hidden_states", hidden_states_);
-        _ti("permute.IN  expanded_idx_to_permuted_idx", expanded_idx_to_permuted_idx);
-        _ti("permute.OUT permuted_hidden_bf16", permuted_hidden_bf16);
-        fflush(stdout);
-      }
-
       // ---- 4) NvFP4 quant of permuted bf16 hidden -> permuted fp4 + swizzled sf + per-token sf ----
       float const gu_globalScaleInv = 1.f / 448.f / 6.f;
       // input is already permuted, so map=nullptr and m=max_padded (process all rows; padding=0).
@@ -2989,17 +2936,6 @@ class FP4BlockScaleLoraLauncher {
           gu_sfLayout,
           stream);
 
-      if (_shapecap) {
-        printf(
-            "[SHAPECAP fp4_lora_cu] -- nvfp4QuantAndPerTokenScale #1 gate_up-input (m=%d hidden=%ld) --\n",
-            max_num_padded_tokens,
-            (long)hidden_size);
-        _ti("quant1.IN  permuted_hidden_bf16", permuted_hidden_bf16);
-        _ti("quant1.OUT hidden_fp4", hidden_fp4);
-        _ti("quant1.OUT hidden_fp4_sf", hidden_fp4_sf);
-        _ti("quant1.OUT hidden_per_token_sf", hidden_per_token_sf);
-        fflush(stdout);
-      }
     }  // permuted_hidden_bf16 frees here -> its ~4 GB block is reused by gemm2_output (step 8).
 
     // ---- 5) gate_up GEMM: raw Gemm2::Runner(E2m1,E2m1,bf16, K=hidden, N=2*inter). ----
@@ -3088,19 +3024,6 @@ class FP4BlockScaleLoraLauncher {
       actData.expandedIdxToPermutedIdx = static_cast<int*>(expanded_idx_to_permuted_idx.data_ptr());
       actData.totalNumPaddedTokens = static_cast<int*>(total_num_padded_tokens.data_ptr());
       moe::dev::activation::run(actData, stream);
-
-      if (_shapecap) {
-        printf(
-            "[SHAPECAP fp4_lora_cu] -- activationKernel (innerDim=%ld topK=%ld numTokens=%ld) --\n",
-            (long)gate_up_n,
-            (long)top_k,
-            (long)num_tokens);
-        _ti("activation.IN  gate_up_bf16", gate_up_bf16);
-        _ti("activation.IN  gate_up_lora_delta", gate_up_lora_delta_);
-        _ti("activation.OUT activated_bf16", activated_bf16);
-        _ti("activation.OUT activation_lora_input", activation_lora_input_);
-        fflush(stdout);
-      }
     }
 
     // ---- 7) NvFP4 quant of activated bf16 (already permuted) -> permuted fp4 + sf + per-token ----
@@ -3128,18 +3051,6 @@ class FP4BlockScaleLoraLauncher {
         reinterpret_cast<float*>(act_per_token_sf.data_ptr()),
         sfLayout,
         stream);
-
-    if (_shapecap) {
-      printf(
-          "[SHAPECAP fp4_lora_cu] -- nvfp4QuantAndPerTokenScale #2 down-input (m=num_tokens*top_k=%ld inter=%ld) --\n",
-          (long)(num_tokens * top_k),
-          (long)inter);
-      _ti("quant2.IN  activated_bf16", activated_bf16);
-      _ti("quant2.OUT act_fp4", act_fp4);
-      _ti("quant2.OUT act_fp4_sf", act_fp4_sf);
-      _ti("quant2.OUT act_per_token_sf", act_per_token_sf);
-      fflush(stdout);
-    }
 
     // ---- 8) down GEMM: Gemm2::Runner(E2m1,E2m1,bf16, K=inter, N=hidden) ----
     // We run in per-token-activation mode (SGLANG_FLASHINFER_NVFP4_PER_TOKEN_ACTIVATION), where
@@ -3728,11 +3639,12 @@ Array<int64_t> sgl_trtllm_fp4_probe_gemm2(
   return {pt[0], pt[1], npt[0], npt[1]};
 }
 
-// ===== [SHAPECAP] standalone single-kernel runners for self-contained testbeds =====
-// Adhoc (revert after the testbed work). Each takes PRE-ALLOCATED in/out tensors and only
-// builds the Data + launches the kernel (no device alloc -> CUDA-graph-capture-safe timing).
-// Data setup mirrors FP4BlockScaleLoraLauncher::run verbatim.
-int64_t shapecap_permute(
+// ===== Standalone single-kernel runners (for the lora_moe_triton_prep testbeds) =====
+// Expose the in-op permute / NvFP4-quant / activation kernels (which otherwise only run inside
+// FP4BlockScaleLoraLauncher::run) so a self-contained bench/correctness script can drive them.
+// Each takes PRE-ALLOCATED in/out tensors and only builds the Data + launches the kernel (no
+// device alloc -> CUDA-graph-capture-safe timing). Data setup mirrors FP4BlockScaleLoraLauncher::run.
+int64_t bench_permute(
     TensorView hidden_in,
     TensorView idx_map,
     TensorView total_pad,
@@ -3758,7 +3670,7 @@ int64_t shapecap_permute(
   return 0;
 }
 
-int64_t shapecap_nvfp4_quant(
+int64_t bench_nvfp4_quant(
     TensorView in_bf16,
     Optional<TensorView> idx_map,
     TensorView out_fp4,
@@ -3786,7 +3698,7 @@ int64_t shapecap_nvfp4_quant(
   return 0;
 }
 
-int64_t shapecap_activation(
+int64_t bench_activation(
     TensorView gate_up,
     TensorView lora_delta,
     TensorView idx_map,
@@ -3833,9 +3745,9 @@ TVM_FFI_DLL_EXPORT_TYPED_FUNC(
     sgl_trtllm_fp4_block_scale_moe_lora_finalize, sgl_trtllm_fp4_block_scale_moe_lora_finalize);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(sgl_trtllm_fp4_probe_unfused, sgl_trtllm_fp4_probe_unfused);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(sgl_trtllm_fp4_probe_gemm2, sgl_trtllm_fp4_probe_gemm2);
-TVM_FFI_DLL_EXPORT_TYPED_FUNC(shapecap_permute, shapecap_permute);
-TVM_FFI_DLL_EXPORT_TYPED_FUNC(shapecap_nvfp4_quant, shapecap_nvfp4_quant);
-TVM_FFI_DLL_EXPORT_TYPED_FUNC(shapecap_activation, shapecap_activation);
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(bench_permute, bench_permute);
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(bench_nvfp4_quant, bench_nvfp4_quant);
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(bench_activation, bench_activation);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(trtllm_mxint4_block_scale_moe, trtllm_mxint4_block_scale_moe);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(trtllm_get_valid_moe_configs, trtllm_get_valid_moe_configs);
 

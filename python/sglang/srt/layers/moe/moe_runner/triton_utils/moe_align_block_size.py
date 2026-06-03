@@ -75,29 +75,6 @@ def moe_align_block_size(
         (num_experts + 2,), dtype=torch.int32, device=topk_ids.device
     )
 
-    # [SHAPECAP] adhoc shape-capture print (committed for trace; reverted after the run).
-    if True:  # [SHAPECAP] no dedup -- print EVERY call (prefill and decode)
-
-        def _ti(t):
-            return (
-                "None"
-                if t is None
-                else f"shape={tuple(t.shape)} dtype={t.dtype} stride={tuple(t.stride())} device={t.device}"
-            )
-
-        print(
-            "[SHAPECAP moe_align_native_py] "
-            f"IN topk_ids={_ti(topk_ids)} numel={topk_ids.numel()} | "
-            f"OUT sorted_ids={_ti(sorted_ids)} | "
-            f"OUT expert_ids={_ti(expert_ids)} | "
-            f"OUT num_tokens_post_pad={_ti(num_tokens_post_pad)} | "
-            f"scratch cumsum_buffer={_ti(cumsum_buffer)} | "
-            f"scalars: num_experts(arg)={num_experts} num_experts_passed={num_experts + 1} "
-            f"block_size={block_size} max_num_tokens_padded={max_num_tokens_padded} "
-            f"max_num_m_blocks={max_num_m_blocks}",
-            flush=True,
-        )
-
     if envs.SGLANG_OPT_USE_JIT_KERNEL_MOE_ALIGN.get():
         from sglang.jit_kernel.moe_align import (
             moe_align_block_size as jit_moe_align_block_size,
