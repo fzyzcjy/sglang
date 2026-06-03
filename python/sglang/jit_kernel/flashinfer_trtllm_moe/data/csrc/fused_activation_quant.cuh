@@ -15,6 +15,8 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
+
 #include <cub/block/block_reduce.cuh>
 #include <cuda/functional>
 #include <cuda_bf16.h>
@@ -137,13 +139,14 @@ __global__ void fusedActivationQuantKernel(
     int64_t const vecOffset = (int64_t)permutedIdx * num_vecs_per_row + vecIdx;
     reinterpret_cast<PackedFp4Type*>(weightOutput)[vecOffset] = fp4Vals;
 
+    // Match nvfp4QuantAndPerTokenScaleKernel exactly (it passes the kernel's `m` as numRows).
     int64_t sfOffset;
     if constexpr (SF_LAYOUT == tensorrt_llm::QuantizationSFLayout::LINEAR) {
       sfOffset = (int64_t)permutedIdx * num_vecs_per_row + vecIdx;
     } else if constexpr (SF_LAYOUT == tensorrt_llm::QuantizationSFLayout::SWIZZLED_128x4) {
-      sfOffset = tk::get_sf_out_offset_128x4(permutedIdx, vecIdx, num_vecs_per_row);
+      sfOffset = tk::get_sf_out_offset_128x4(std::nullopt, permutedIdx, vecIdx, m, num_vecs_per_row);
     } else {
-      sfOffset = tk::get_sf_out_offset_8x4(permutedIdx, vecIdx, num_vecs_per_row);
+      sfOffset = tk::get_sf_out_offset_8x4(std::nullopt, permutedIdx, vecIdx, m, num_vecs_per_row);
     }
     scaleOutput[sfOffset] = fp8Scale;
   }
