@@ -440,6 +440,12 @@ class Envs:
     # lora/trtllm_moe/lora_dispatch.py path-3 comment). Leaving it OFF for no-lora avoids the
     # ~9-13% per-token overhead on the no-lora base.
     SGLANG_FLASHINFER_NVFP4_PER_TOKEN_ACTIVATION = EnvBool(False)
+    # Fuse the gate_up permute + NvFP4 per-token quant into one kernel on the NvFP4 MoE-LoRA decode
+    # path: read UN-permuted hidden and scatter-write fp4 + block-sf + per-token-sf to the permuted
+    # positions, de-padding (only num_tokens*top_k rows) and dropping the bf16 permuted round-trip.
+    # Bitwise-identical to the plain permuteKernel + nvfp4QuantAndPerTokenScale chain; only takes
+    # effect for the decode (SWIZZLED_8x4 / tile<128) path — prefill keeps the plain chain.
+    SGLANG_OPT_FUSED_PERMUTE_QUANT = EnvBool(False)
     # Token-count ceiling for the trtllm-LoRA decode two-stream overlap (now ALWAYS-ON): decode batches
     # with <= this many tokens run two-stream; larger batches run single-stream. NOTE: the LoRA
     # two-stream (attention + gate_up) overlap and the permute-memset skip are now unconditional

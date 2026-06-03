@@ -2483,7 +2483,7 @@ class FP4BlockScaleLoraLauncher {
                     int64_t local_expert_offset, int64_t local_num_experts,
                     double routed_scaling_factor, int64_t routing_method_type,
                     int64_t tile_tokens_dim, bool norm_topk_prob, bool do_finalize,
-                    bool enable_pdl) {
+                    bool enable_pdl, bool use_fused_permute_quant) {
     namespace moe_ns = tensorrt_llm::kernels::trtllmgen_moe;
     auto device = hidden_states_.device();
     int dev_id = device.device_id;
@@ -2564,7 +2564,22 @@ class FP4BlockScaleLoraLauncher {
     Tensor hidden_fp4 = alloc_tensor({max_num_padded_tokens, hidden_size / 2}, dl_uint8, device);
     Tensor hidden_fp4_sf = alloc_tensor({hidden_sf_size}, dl_uint8, device);
     Tensor hidden_per_token_sf = alloc_tensor({max_num_padded_tokens}, dl_float32, device);
-    {
+    if (use_fused_permute_quant && tile < 128) {
+      // ---- 3+4 FUSED ---- read UN-permuted hidden and scatter-write fp4 + swizzled block-sf +
+      // per-token-sf to the permuted positions in one kernel: de-pads (only num_tokens*top_k rows)
+      // and drops the bf16 permuted round-trip. Bitwise-identical to the plain permute->quant chain
+      // (else branch) for the valid rows. Gated to tile<128 (SWIZZLED_8x4) — the validated decode
+      // path; prefill (tile>=128, 128x4) keeps the plain chain.
+      float const gu_globalScaleInv = 1.f / 448.f / 6.f;
+      sgl_fused_permute_quant::invokeFusedPermuteNvfp4Quant<__nv_bfloat16>(
+          num_tokens, top_k, hidden_size, max_num_padded_tokens,
+          reinterpret_cast<__nv_bfloat16 const*>(hidden_bf16_ptr), gu_globalScaleInv,
+          static_cast<int32_t const*>(expanded_idx_to_permuted_idx.data_ptr()),
+          reinterpret_cast<uint8_t*>(hidden_fp4.data_ptr()),
+          reinterpret_cast<uint8_t*>(hidden_fp4_sf.data_ptr()),
+          reinterpret_cast<float*>(hidden_per_token_sf.data_ptr()), gu_sfLayout, /*dedup=*/false,
+          stream);
+    } else {
       // ---- 3) permute (gather) bf16 hidden -> [max_padded, hidden] (transient, freed at block end)
       Tensor permuted_hidden_bf16 =
           alloc_tensor({max_num_padded_tokens, hidden_size}, dl_bfloat16, device);
@@ -2814,7 +2829,7 @@ Array<Tensor> sgl_trtllm_fp4_block_scale_moe_lora(
     Optional<double> routed_scaling_factor, int64_t routing_method_type, bool do_finalize,
     bool enable_pdl, int64_t act_type, TensorView output, Array<int64_t> config_index,
     bool norm_topk_prob, Optional<TensorView> routing_replay_out, TensorView gate_up_lora_delta,
-    TensorView activation_lora_input, int64_t lora_ready_event) {
+    TensorView activation_lora_input, int64_t lora_ready_event, bool use_fused_permute_quant) {
   auto activation_type = validateAndCastActivationType(act_type);
   TVM_FFI_ICHECK(isGatedActivation(activation_type))
       << "sgl_trtllm_fp4_block_scale_moe_lora currently supports gated (SwiGLU) activation only.";
@@ -2864,7 +2879,7 @@ Array<Tensor> sgl_trtllm_fp4_block_scale_moe_lora(
       output, lora_ready_event);
   return launcher.run(num_experts, top_k, intermediate_size, local_expert_offset, local_num_experts,
                       routed_scaling_factor.value_or(1.0), routing_method_type, tile_tokens_dim,
-                      norm_topk_prob, do_finalize, enable_pdl);
+                      norm_topk_prob, do_finalize, enable_pdl, use_fused_permute_quant);
 }
 
 // bf16 combine + down-lora-delta merge — NvFP4 analog of the FP8 finalize op.
