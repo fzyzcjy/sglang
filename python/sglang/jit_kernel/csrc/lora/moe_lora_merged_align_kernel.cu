@@ -490,7 +490,13 @@ struct MoeLoraMergedAlignKernel {
           (num_experts + (num_experts + 1) + scan_size + WARP_SIZE + num_experts + numel) *
           sizeof(int32_t);
       auto fused = moe_lora_merged::fused_align_scatter_kernel<scalar_t>;
-      LaunchKernel(dim3(1), dim3(threads), stream, shmem)(
+      // Single block on one SM: 1024 threads is overkill for the small decode
+      // work (compact ~49 buckets, ~numel/EP owned tokens) and makes every
+      // __syncthreads wait on 32 warps. Use just enough to cover the scan width.
+      int fused_threads = std::max((int)scan_size, 256);
+      fused_threads = std::min(fused_threads, threads);
+      fused_threads = ((fused_threads + WARP_SIZE - 1) / WARP_SIZE) * WARP_SIZE;
+      LaunchKernel(dim3(1), dim3(fused_threads), stream, shmem)(
           fused,
           topk_ids_ptr,
           tlm_ptr,
