@@ -375,9 +375,7 @@ struct KimiK2MoEFusedGateKernel {
             dev);
         break;
       default:
-        Panic(
-            "kimi_k2_moe_fused_gate only supports num_experts in {256, 384}, got ",
-            num_experts);
+        Panic("kimi_k2_moe_fused_gate only supports num_experts in {256, 384}, got ", num_experts);
     }
   }
 };
