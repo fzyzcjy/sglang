@@ -32,6 +32,7 @@
 #include "flashinfer/trtllm/fused_moe/RoutingKernel.h"
 #include "flashinfer/trtllm/fused_moe/runner.h"
 #include "nv_internal/tensorrt_llm/kernels/quantization.h"
+#include "fused_permute_quant.cuh"  // fused permute+nvfp4-quant (gate_up de-pad), used by bench_fused_permute_quant
 #include "nv_internal/tensorrt_llm/thop/utils.h"
 #include "tvm_ffi_utils.h"
 
@@ -3225,6 +3226,41 @@ int64_t bench_activation(
   return 0;
 }
 
+// Fused permute + NvFP4-per-token-quant: reads UN-permuted bf16 hidden ([num_tokens, hidden]) and
+// scatter-writes fp4 + swizzled block-sf + per-token-sf to the permuted positions, replacing the
+// plain permuteKernel + nvfp4QuantAndPerTokenScale #1 pair. dedup!=0 picks the per-token-grid
+// (quantize once, scatter) variant; dedup==0 picks the per-pair-grid (re-quantize per pair) variant.
+int64_t bench_fused_permute_quant(
+    TensorView hidden_in,
+    TensorView idx_map,
+    TensorView out_fp4,
+    TensorView out_sf,
+    TensorView out_ptsf,
+    int64_t num_tokens,
+    int64_t top_k,
+    int64_t hidden_size,
+    int64_t tile,
+    int64_t dedup) {
+  cudaStream_t stream = get_stream(hidden_in.device());
+  auto sfLayout = tile >= 128 ? tensorrt_llm::QuantizationSFLayout::SWIZZLED_128x4
+                              : tensorrt_llm::QuantizationSFLayout::SWIZZLED_8x4;
+  float const gsi = 1.f / 448.f / 6.f;
+  sgl_fused_permute_quant::invokeFusedPermuteNvfp4Quant<__nv_bfloat16>(
+      static_cast<uint32_t>(num_tokens),
+      static_cast<uint32_t>(top_k),
+      static_cast<uint32_t>(hidden_size),
+      reinterpret_cast<__nv_bfloat16 const*>(hidden_in.data_ptr()),
+      gsi,
+      static_cast<int32_t const*>(idx_map.data_ptr()),
+      reinterpret_cast<uint8_t*>(out_fp4.data_ptr()),
+      reinterpret_cast<uint8_t*>(out_sf.data_ptr()),
+      reinterpret_cast<float*>(out_ptsf.data_ptr()),
+      sfLayout,
+      dedup != 0,
+      stream);
+  return 0;
+}
+
 namespace trtllm_cubin_loader {
 #include <flashinfer/cubin_loader.h>
 }
@@ -3246,6 +3282,7 @@ TVM_FFI_DLL_EXPORT_TYPED_FUNC(sgl_trtllm_fp4_probe_gemm2, sgl_trtllm_fp4_probe_g
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(bench_permute, bench_permute);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(bench_nvfp4_quant, bench_nvfp4_quant);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(bench_activation, bench_activation);
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(bench_fused_permute_quant, bench_fused_permute_quant);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(trtllm_mxint4_block_scale_moe, trtllm_mxint4_block_scale_moe);
 TVM_FFI_DLL_EXPORT_TYPED_FUNC(trtllm_get_valid_moe_configs, trtllm_get_valid_moe_configs);
 

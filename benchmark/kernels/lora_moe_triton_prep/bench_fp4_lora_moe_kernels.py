@@ -7,8 +7,8 @@ kernels that live inside FP4BlockScaleLoraLauncher::run (EP8 bs64 Kimi decode):
 
 These have NO standalone python binding, so the overlay module exports three
 single-kernel runners (bench_permute / bench_nvfp4_quant / bench_activation);
-this script pre-allocates the in/out tensors (shapes from SHAPE_REPORT.md decode
-bs64) and calls them directly. Timing + cold-L2 buffer rotation: see common_bench.
+this script pre-allocates the in/out tensors (decode-bs64 shapes, hard-coded as the
+defaults below) and calls them directly. Timing + cold-L2 buffer rotation: see common_bench.
 
 Decode bs64 (per-rank EP8): num_tokens=64 top_k=8 hidden=7168 inter=2048
 gate_up_n=4096 num_experts=384 local_experts=48 tile=8 max_num_padded_tokens=3200.
@@ -31,8 +31,11 @@ from sglang.jit_kernel.flashinfer_trtllm_moe.core import (
 
 
 def swizzled_sf_size(m, n, tile):
-    """computeSwizzledLayoutSFSize: round m to (8 if tile<128 else 128), n/16 to 4."""
-    m_round = ((m + 7) // 8) * 8 if tile < 128 else ((m + 127) // 128) * 128
+    """SF buffer size, mirroring the launcher's computeSwizzledLayoutSFSize(m, n/16) calls,
+    which use the DEFAULT rowSize=128 regardless of tile -> round m to 128, n/16 to 4. (Always
+    128-rounding never under-allocates vs the 8x4 read index used in dequant.)"""
+    del tile  # launcher always rounds rows to 128 for the buffer size
+    m_round = ((m + 127) // 128) * 128
     nsf = ((n // 16 + 3) // 4) * 4
     return m_round * nsf
 
@@ -44,7 +47,11 @@ def make_one_set(num_tokens, top_k, hidden, inter, gate_up_n, maxpad, tile, dev)
     total_pad = torch.tensor([maxpad], dtype=torch.int32, device=dev)
     return dict(
         hidden_in=torch.randn(num_tokens, hidden, dtype=torch.bfloat16, device=dev),
-        permuted=torch.zeros(maxpad, hidden, dtype=torch.bfloat16, device=dev),
+        # permuted / activated are randn (NOT zeros): in production the [e:maxpad] padding
+        # rows are left UNINITIALIZED (non-zero garbage), and quant #1 processes all maxpad
+        # rows. Zero-filling them would hit the quant's zero-row fast path and undercount the
+        # quant timing. permute/activation overwrite the real [0:e) rows; padding stays randn.
+        permuted=torch.randn(maxpad, hidden, dtype=torch.bfloat16, device=dev),
         idx_map=idx_map,
         total_pad=total_pad,
         q1_fp4=torch.empty(maxpad, hidden // 2, dtype=torch.uint8, device=dev),
@@ -57,7 +64,7 @@ def make_one_set(num_tokens, top_k, hidden, inter, gate_up_n, maxpad, tile, dev)
             num_tokens, top_k, gate_up_n, dtype=torch.bfloat16, device=dev
         )
         * 0.1,
-        activated=torch.zeros(maxpad, inter, dtype=torch.bfloat16, device=dev),
+        activated=torch.randn(maxpad, inter, dtype=torch.bfloat16, device=dev),
         lora_input=torch.zeros(
             num_tokens, top_k, inter, dtype=torch.bfloat16, device=dev
         ),
@@ -168,6 +175,32 @@ def main():
                 I,
                 args.tile,
             ),
+            # fused permute+quant (replaces permuteKernel + quant#1): reads unpermuted hidden_in,
+            # scatter-writes to the permuted q1 buffers. Compare its time to permute+quant#1 summed.
+            "FUSED permute+quant (no-dedup)": lambda i: m.bench_fused_permute_quant(
+                S[i]["hidden_in"],
+                S[i]["idx_map"],
+                S[i]["q1_fp4"],
+                S[i]["q1_sf"],
+                S[i]["q1_ptsf"],
+                nt,
+                tk,
+                H,
+                args.tile,
+                0,  # dedup=0
+            ),
+            "FUSED permute+quant (dedup)": lambda i: m.bench_fused_permute_quant(
+                S[i]["hidden_in"],
+                S[i]["idx_map"],
+                S[i]["q1_fp4"],
+                S[i]["q1_sf"],
+                S[i]["q1_ptsf"],
+                nt,
+                tk,
+                H,
+                args.tile,
+                1,  # dedup=1
+            ),
         }
 
     if args.mode == "correctness":
@@ -241,7 +274,54 @@ def main():
             f"{'PASS' if q_ok else 'FAIL'} nvfp4 quant#1 dequant vs input: "
             f"rel_err={qrel:.3e} (tol 0.20, e2m1 ~2^-1 mantissa)"
         )
-        raise SystemExit(0 if (perr == 0 and act_ok and q_ok and gx_eq) else 1)
+
+        # quant #2 (down input): exercises the MAPPED path (m=num_tokens*top_k with
+        # expanded_idx_to_permuted_idx). Reads `activated` rows via the map; same dequant check.
+        r[3](0)
+        torch.cuda.synchronize()
+        q2rel = dequant_rel_err(
+            s0["activated"], s0["q2_fp4"], s0["q2_sf"], s0["q2_ptsf"], mp, I, args.tile, e
+        )
+        q2_ok = q2rel <= 0.20
+        print(
+            f"{'PASS' if q2_ok else 'FAIL'} nvfp4 quant#2 (mapped) dequant vs input: "
+            f"rel_err={q2rel:.3e} (tol 0.20)"
+        )
+
+        # fused permute+quant: NEW kernel vs the OLD permute->quant chain (= golden). The fused
+        # kernel reads UN-permuted hidden_in and scatter-writes fp4+swizzled-sf+per-token-sf to the
+        # permuted positions; quant#1 above read the permuted buffer (which permute filled from the
+        # SAME hidden_in). It is a lossless refactor, so for the e valid rows the output must be
+        # BITWISE-identical to quant#1's. Both dedup variants must match. Padding rows [e:maxpad)
+        # are intentionally not written by the fused kernel, so compare only [0:e).
+        num_vecs = H // 16
+        rws = torch.arange(e, device=dev)[:, None]
+        vcs = torch.arange(num_vecs, device=dev)[None, :]
+        n_k_tiles = (num_vecs + 3) // 4
+        sf_off = (rws // 8) * (n_k_tiles * 32) + (vcs // 4) * 32 + (rws % 8) * 4 + (vcs % 4)
+        fused_ok = True
+        for dedup in (0, 1):
+            f_fp4 = torch.empty_like(s0["q1_fp4"])
+            f_sf = torch.empty_like(s0["q1_sf"])
+            f_ptsf = torch.empty_like(s0["q1_ptsf"])
+            m.bench_fused_permute_quant(
+                s0["hidden_in"], s0["idx_map"], f_fp4, f_sf, f_ptsf, nt, tk, H, args.tile, dedup
+            )
+            torch.cuda.synchronize()
+            fp4_eq = torch.equal(f_fp4[:e], s0["q1_fp4"][:e])
+            ptsf_eq = torch.equal(f_ptsf[:e], s0["q1_ptsf"][:e])
+            sf_eq = torch.equal(f_sf[sf_off], s0["q1_sf"][sf_off])
+            ok = fp4_eq and ptsf_eq and sf_eq
+            fused_ok = fused_ok and ok
+            tag = "dedup" if dedup else "no-dedup"
+            print(
+                f"{'PASS' if ok else 'FAIL'} fused permute+quant ({tag}) vs old chain "
+                f"[0:e) bitwise: fp4={fp4_eq} sf={sf_eq} ptsf={ptsf_eq}"
+            )
+
+        raise SystemExit(
+            0 if (perr == 0 and act_ok and q_ok and q2_ok and gx_eq and fused_ok) else 1
+        )
 
     per = set_bytes(mk())
     n_sets = pick_n_sets(per, args.budget_gb, args.n_sets)
