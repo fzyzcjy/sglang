@@ -49,8 +49,6 @@ __global__ void fusedActivationQuantKernel(
   constexpr int SF_VEC_SIZE = 16;
   using InType = tk::PackedVec<__nv_bfloat16, SF_VEC_SIZE>;  // 16 bf16 == 8 __nv_bfloat162
   using PackedFp4Type = uint64_t;                            // SF_VEC_SIZE == 16
-  constexpr uint32_t BANKS_PER_THREAD = sizeof(InType) / sizeof(uint32_t);  // 8
-  constexpr uint32_t STRIDE = BANKS_PER_THREAD + 1;                         // bank-conflict pad
 
   int const expandedIdx = blockIdx.x;
   if (expandedIdx >= m) return;
@@ -72,22 +70,24 @@ __global__ void fusedActivationQuantKernel(
     return;
   }
 
-  extern __shared__ uint32_t smem[];
   int64_t const permBase = (int64_t)permutedIdx * innerDim;  // gate_up row (interleaved)
   int64_t const expBase = (int64_t)expandedIdx * innerDim;   // delta row (contiguous gate|up)
+  (void)DISABLE_FP4_FAST_MATH;
 
+  // 1 SF block (16 outputs) per thread, held in registers across the amax barrier (no smem cache):
+  // requires num_vecs_per_row <= BLOCK_SIZE (inter=2048 -> 128 == BLOCK_SIZE). With
+  // CVT_ELTS_PER_THREAD == SF_VEC_SIZE the cvt needs no cross-thread shuffle, so masking is safe.
+  int const vecIdx = threadIdx.x;
+  bool const active = vecIdx < num_vecs_per_row;
+
+  InType vec;
   float localAmax = 0.f;
-
-  // ---- pass 1: compute SwiGLU+LoRA -> bf16 -> smem + activation_lora_input + per-token amax ----
-  for (int vecIdx = threadIdx.x; vecIdx < num_vecs_per_row; vecIdx += BLOCK_SIZE) {
-    int const h0 = vecIdx * SF_VEC_SIZE;                       // first output element of this SF block
-    __nv_bfloat16 const* g = gateUp + permBase + (int64_t)2 * h0;   // 32 interleaved bf16
-    __nv_bfloat16 const* dlo = loraDelta + expBase + h0;           // silu-arg delta (lower half)
+  if (active) {
+    int const h0 = vecIdx * SF_VEC_SIZE;
+    __nv_bfloat16 const* g = gateUp + permBase + (int64_t)2 * h0;     // 32 interleaved bf16
+    __nv_bfloat16 const* dlo = loraDelta + expBase + h0;             // silu-arg delta (lower half)
     __nv_bfloat16 const* dhi = loraDelta + expBase + innerHalf + h0;  // multiplier delta (upper half)
-
-    InType vec;
     __nv_bfloat162 amax2 = __float2bfloat162_rn(0.0f);
-    // Vectorized loads: 32 interleaved gate/up bf16 = 4x 128-bit; each delta half = 2x 128-bit.
     union {
       int4 v[4];
       __nv_bfloat16 b[32];
@@ -124,48 +124,39 @@ __global__ void fusedActivationQuantKernel(
       vec.elts[i] = e;
       amax2 = __hmax2(amax2, __habs2(e));
     }
-    localAmax = fmaxf(localAmax, (float)__hmax(amax2.x, amax2.y));
-
-#pragma unroll
-    for (uint32_t bank = 0; bank < BANKS_PER_THREAD; ++bank) {
-      smem[(uint32_t)vecIdx * STRIDE + bank] = reinterpret_cast<uint32_t*>(&vec)[bank];
-    }
+    localAmax = (float)__hmax(amax2.x, amax2.y);
     if (loraInputOut != nullptr) {
       *reinterpret_cast<InType*>(&loraInputOut[liBaseRow + h0]) = vec;
     }
   }
 
-  // ---- per-token scale (matches nvfp4QuantAndPerTokenScaleKernel default fast-math path) ----
+  // ---- per-token scale: blockReduce amax, broadcast via smem (no gmem round-trip) ----
   using BlockReduce = cub::BlockReduce<float, BLOCK_SIZE>;
   __shared__ typename BlockReduce::TempStorage tempStorage;
-  float globalAmax = BlockReduce(tempStorage).Reduce(localAmax, cuda::maximum<>{});
-
-  float perTokenScale = globalAmax * globalScaleInv;
-  if (threadIdx.x == 0) perTokenScaleOutput[permutedIdx] = perTokenScale;
+  __shared__ float sScale;
+  float const globalAmax = BlockReduce(tempStorage).Reduce(localAmax, cuda::maximum<>{});
+  if (threadIdx.x == 0) {
+    float const pts = globalAmax * globalScaleInv;
+    perTokenScaleOutput[permutedIdx] = pts;
+    sScale = pts;
+  }
   __syncthreads();
-  perTokenScale = perTokenScaleOutput[permutedIdx];
-  float const globalEncodeScale = tk::reciprocal_approximate_ftz(perTokenScale);
+  float const globalEncodeScale = tk::reciprocal_approximate_ftz(sScale);
 
-  // ---- pass 2: quantize from smem (identical to the reference quant kernel) ----
-  for (int vecIdx = threadIdx.x; vecIdx < num_vecs_per_row; vecIdx += BLOCK_SIZE) {
-    InType vec;
-#pragma unroll
-    for (uint32_t bank = 0; bank < BANKS_PER_THREAD; ++bank) {
-      reinterpret_cast<uint32_t*>(&vec)[bank] = smem[(uint32_t)vecIdx * STRIDE + bank];
-    }
+  // ---- quantize from registers (cvt computes the per-16 e4m3 block scale internally) ----
+  if (active) {
     uint8_t fp8Scale;
     // 5 template args on this flashinfer build: Type, SF_VEC_SIZE, CVT_ELTS_PER_THREAD,
     // UE8M0_SF=false, TE_EXACT_NVFP4=false (the default nvfp4 quant path).
     auto fp4Vals = tk::cvt_warp_fp16_to_fp4<__nv_bfloat16, SF_VEC_SIZE, SF_VEC_SIZE, false, false>(
         vec, globalEncodeScale, &fp8Scale);
-    (void)DISABLE_FP4_FAST_MATH;
     int64_t const vecOffset = (int64_t)permutedIdx * num_vecs_per_row + vecIdx;
     reinterpret_cast<PackedFp4Type*>(weightOutput)[vecOffset] = fp4Vals;
 
     // Match nvfp4QuantAndPerTokenScaleKernel exactly (it passes the kernel's `m` as numRows).
     int64_t sfOffset;
     if constexpr (SF_LAYOUT == tensorrt_llm::QuantizationSFLayout::LINEAR) {
-      sfOffset = (int64_t)permutedIdx * num_vecs_per_row + vecIdx;
+      sfOffset = vecOffset;
     } else if constexpr (SF_LAYOUT == tensorrt_llm::QuantizationSFLayout::SWIZZLED_128x4) {
       sfOffset = tk::get_sf_out_offset_128x4(std::nullopt, permutedIdx, vecIdx, m, num_vecs_per_row);
     } else {
@@ -175,25 +166,21 @@ __global__ void fusedActivationQuantKernel(
   }
 }
 
-// Host launch: smem = num_vecs_per_row * STRIDE * 4 bytes. globalScaleInv = 1/448/6.
+// Host launch: globalScaleInv = 1/448/6. BLOCK_SIZE must be >= innerHalf/16 (one SF block/thread).
 inline void launchFusedActivationQuant(
     int m, int innerHalf, int innerDim, __nv_bfloat16 const* gateUp,
     __nv_bfloat16 const* loraDelta, __nv_bfloat16* loraInputOut,
     int32_t const* expandedIdxToPermutedIdx, float globalScaleInv, uint8_t* weightOutput,
     uint8_t* scaleOutput, float* perTokenScaleOutput, tensorrt_llm::QuantizationSFLayout sfLayout,
     bool disableFp4FastMath, cudaStream_t stream) {
-  constexpr uint32_t BLOCK_SIZE = 128;
-  using InType = tk::PackedVec<__nv_bfloat16, 16>;
-  int const num_vecs_per_row = innerHalf / 16;
-  uint32_t const smemSize = (uint32_t)num_vecs_per_row * (sizeof(InType) / sizeof(uint32_t) + 1) *
-                            sizeof(uint32_t);
+  constexpr uint32_t BLOCK_SIZE = 128;  // == innerHalf/16 for inter=2048 (one SF block per thread)
   dim3 const grid(m), block(BLOCK_SIZE);
 
   auto launch = [&](auto layoutTag, auto fastMathTag) {
     fusedActivationQuantKernel<BLOCK_SIZE, decltype(layoutTag)::value, decltype(fastMathTag)::value>
-        <<<grid, block, smemSize, stream>>>(m, innerHalf, innerDim, gateUp, loraDelta, loraInputOut,
-                                            expandedIdxToPermutedIdx, globalScaleInv, weightOutput,
-                                            scaleOutput, perTokenScaleOutput);
+        <<<grid, block, 0, stream>>>(m, innerHalf, innerDim, gateUp, loraDelta, loraInputOut,
+                                     expandedIdxToPermutedIdx, globalScaleInv, weightOutput,
+                                     scaleOutput, perTokenScaleOutput);
   };
   auto withFastMath = [&](auto layoutTag) {
     if (disableFp4FastMath) {
