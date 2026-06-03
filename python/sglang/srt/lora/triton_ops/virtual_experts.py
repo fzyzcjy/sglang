@@ -674,11 +674,14 @@ def _merged_experts_fused_moe_lora_add_impl(
         # compact (local experts) + single-block scatter, replacing the 3-kernel
         # (_fused_virtual_topk_ids + moe_align + count_and_sort) pipeline. Only the
         # supported per-expert single-adapter EP path; everything else falls back.
+        # Decode-only: the fused kernel's single-block scatter targets the small
+        # decode batch; prefill (>= 512 tokens) keeps the multi-block old path.
         if (
             envs.SGLANG_OPT_LORA_FUSED_MERGED_ALIGN.get()
             and max_loras == 1
             and not shared_outer
             and ep_local
+            and topk_ids.shape[0] < 512
         ):
             from sglang.jit_kernel.moe_lora_merged_align import moe_lora_merged_align
 
