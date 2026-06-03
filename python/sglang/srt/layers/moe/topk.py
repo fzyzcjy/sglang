@@ -1219,6 +1219,20 @@ def biased_grouped_topk_gpu(
         # Use optimized path for Kimi K2 (384 experts with num_expert_group=1)
         num_experts = gating_output.shape[1]
         if _is_cuda and num_experts == 384 and num_expert_group == 1:
+            # [SHAPECAP] adhoc shape-capture print (committed for trace; reverted after the run).
+            _seen = biased_grouped_topk_gpu.__dict__.setdefault("_shapecap_seen", set())
+            _sig = (tuple(gating_output.shape), str(gating_output.dtype), int(topk))
+            if _sig not in _seen:
+                _seen.add(_sig)
+                print(
+                    f"[SHAPECAP kimi_k2_moe_fused_gate_py] "
+                    f"gating_output={tuple(gating_output.shape)}/{gating_output.dtype} "
+                    f"correction_bias="
+                    f"{None if correction_bias is None else tuple(correction_bias.shape)} "
+                    f"num_experts={num_experts} topk={topk} num_expert_group={num_expert_group} "
+                    f"renormalize={renormalize}",
+                    flush=True,
+                )
             return kimi_k2_moe_fused_gate(
                 gating_output.to(dtype=torch.float32),
                 # kimi_k2_moe_fused_gate requires input and bias to share a dtype;

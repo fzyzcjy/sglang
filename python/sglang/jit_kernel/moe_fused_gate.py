@@ -66,23 +66,6 @@ def moe_fused_gate(
     indices = torch.empty(num_rows, topk, dtype=torch.int32, device=device)
 
     module = _jit_moe_fused_gate_module()
-    # [SHAPECAP] adhoc shape-capture print (committed for trace; reverted after the run).
-    _seen = moe_fused_gate.__dict__.setdefault("_shapecap_seen", set())
-    _sig = (
-        tuple(input.shape),
-        str(input.dtype),
-        int(topk),
-        int(num_fused_shared_experts),
-    )
-    if _sig not in _seen:
-        _seen.add(_sig)
-        print(
-            f"[SHAPECAP moe_fused_gate_py] input={tuple(input.shape)}/{input.dtype} "
-            f"bias={tuple(bias.shape)}/{bias.dtype} num_rows={num_rows} "
-            f"num_experts={input.size(1)} topk={topk} scoring_func={scoring_func} "
-            f"num_fused_shared_experts={num_fused_shared_experts} renormalize={renormalize}",
-            flush=True,
-        )
     module.moe_fused_gate(
         input,
         bias,

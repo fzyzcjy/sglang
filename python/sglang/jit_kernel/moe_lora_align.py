@@ -43,25 +43,6 @@ def moe_lora_align_block_size(
 ) -> None:
     module = _jit_moe_align_module(topk_ids.dtype)
 
-    # [SHAPECAP] adhoc shape-capture print (committed for trace; reverted after the run).
-    _seen = moe_lora_align_block_size.__dict__.setdefault("_shapecap_seen", set())
-    _sig = (
-        tuple(topk_ids.shape),
-        str(topk_ids.dtype),
-        int(num_experts),
-        int(block_size),
-        int(max_loras),
-    )
-    if _sig not in _seen:
-        _seen.add(_sig)
-        print(
-            f"[SHAPECAP moe_lora_align_py] topk_ids={tuple(topk_ids.shape)}/{topk_ids.dtype} "
-            f"seg_indptr={tuple(seg_indptr.shape)} req_to_lora={tuple(req_to_lora.shape)} "
-            f"num_experts={num_experts} block_size={block_size} max_loras={max_loras} "
-            f"max_num_tokens_padded={max_num_tokens_padded} max_num_m_blocks={max_num_m_blocks}",
-            flush=True,
-        )
-
     if cumsum_buffer is None:
         cumsum_buffer = torch.zeros(
             max_loras * (num_experts + 1), dtype=torch.int32, device=topk_ids.device

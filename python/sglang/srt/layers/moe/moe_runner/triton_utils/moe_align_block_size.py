@@ -74,6 +74,21 @@ def moe_align_block_size(
         (num_experts + 2,), dtype=torch.int32, device=topk_ids.device
     )
 
+    # [SHAPECAP] adhoc shape-capture print (committed for trace; reverted after the run).
+    _seen = moe_align_block_size.__dict__.setdefault("_shapecap_seen", set())
+    _sig = (tuple(topk_ids.shape), str(topk_ids.dtype), int(num_experts), int(block_size))
+    if _sig not in _seen:
+        _seen.add(_sig)
+        print(
+            f"[SHAPECAP moe_align_native_py] topk_ids={tuple(topk_ids.shape)}/{topk_ids.dtype} "
+            f"numel={topk_ids.numel()} num_experts(arg)={num_experts} "
+            f"num_experts_passed={num_experts + 1} block_size={block_size} "
+            f"max_num_tokens_padded={max_num_tokens_padded} max_num_m_blocks={max_num_m_blocks} "
+            f"sorted_ids={tuple(sorted_ids.shape)} expert_ids={tuple(expert_ids.shape)} "
+            f"cumsum_buffer={tuple(cumsum_buffer.shape)}",
+            flush=True,
+        )
+
     sgl_moe_align_block_size(
         topk_ids,
         num_experts + 1,
