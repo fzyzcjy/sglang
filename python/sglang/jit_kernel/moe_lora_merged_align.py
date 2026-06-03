@@ -109,9 +109,7 @@ def moe_lora_merged_align(
     num_tokens_post_pad = torch.empty((1,), dtype=torch.int32, device=device)
     # No memset: the align kernel writes cumsum[0..num_buckets] before
     # count_and_sort reads it (same as moe_align_block_size.py's empty cumsum).
-    cumsum_buffer = torch.empty(
-        (bucket_experts + 2,), dtype=torch.int32, device=device
-    )
+    cumsum_buffer = torch.empty((bucket_experts + 2,), dtype=torch.int32, device=device)
     token_lora_mask = torch.empty((M,), dtype=torch.bool, device=device)
 
     module = _jit_module(flat_topk_ids.dtype)

@@ -303,8 +303,12 @@ class TestFusedMergedAlignE2EWiring(CustomTestCase):
         dt = torch.bfloat16
 
         hidden = torch.randn(num_tokens, K, device=dev, dtype=dt)
-        lora_a = torch.randn(max_loras, num_experts, rank, K, device=dev, dtype=dt) * 0.05
-        lora_b = torch.randn(max_loras, num_experts, N, rank, device=dev, dtype=dt) * 0.05
+        lora_a = (
+            torch.randn(max_loras, num_experts, rank, K, device=dev, dtype=dt) * 0.05
+        )
+        lora_b = (
+            torch.randn(max_loras, num_experts, N, rank, device=dev, dtype=dt) * 0.05
+        )
         topk_ids = torch.stack(
             [torch.randperm(num_experts, device=dev)[:top_k] for _ in range(num_tokens)]
         ).to(torch.int32)
@@ -317,7 +321,13 @@ class TestFusedMergedAlignE2EWiring(CustomTestCase):
             out = base_out.clone()
             with envs.SGLANG_OPT_LORA_FUSED_MERGED_ALIGN.override(flag):
                 merged_experts_fused_moe_lora_add(
-                    out, hidden, lora_a, lora_b, topk_ids, topk_weights, tlm,
+                    out,
+                    hidden,
+                    lora_a,
+                    lora_b,
+                    topk_ids,
+                    topk_weights,
+                    tlm,
                     mul_routed_weight=True,
                     experts_shared_outer_loras_a=False,
                     experts_shared_outer_loras_b=False,

@@ -219,12 +219,21 @@ def main():
 
         ref_mask = (s["tlm"] >= 0).to(torch.bool)
 
-        def _check_new(do_skip, ref_post, ref_eids, owned_only, compact=False,
-                       fuse_scatter=False):
+        def _check_new(
+            do_skip, ref_post, ref_eids, owned_only, compact=False, fuse_scatter=False
+        ):
             ns, ne_, np_, nm_, _ = moe_lora_merged_align(
-                s["topk_ids"], s["tlm"], ne, shared_outer=False, max_loras=1,
-                block_size=blk, local_expert_offset=loff, local_num_experts=lne,
-                do_skip=do_skip, compact=compact, fuse_scatter=fuse_scatter,
+                s["topk_ids"],
+                s["tlm"],
+                ne,
+                shared_outer=False,
+                max_loras=1,
+                block_size=blk,
+                local_expert_offset=loff,
+                local_num_experts=lne,
+                do_skip=do_skip,
+                compact=compact,
+                fuse_scatter=fuse_scatter,
             )
             pp = int(np_.item())
             nblk = pp // blk
@@ -325,7 +334,9 @@ def main():
     print(f"  OLD combined prep pipeline       = {us:7.2f} us")
     print(f"  NEW 2-kernel (skip)              = {us_new:7.2f} us   ({us/us_new:.2f}x)")
     print(f"  NEW 2-kernel (skip + compact)    = {us_cmp:7.2f} us   ({us/us_cmp:.2f}x)")
-    print(f"  NEW 1-kernel (skip+compact+FUSE) = {us_fuse:7.2f} us   ({us/us_fuse:.2f}x)")
+    print(
+        f"  NEW 1-kernel (skip+compact+FUSE) = {us_fuse:7.2f} us   ({us/us_fuse:.2f}x)"
+    )
 
 
 if __name__ == "__main__":
