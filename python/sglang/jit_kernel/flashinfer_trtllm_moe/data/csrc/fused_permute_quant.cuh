@@ -12,12 +12,19 @@
 // materializes the bf16 permuted buffer.
 //
 // It mirrors `nvfp4QuantAndPerTokenScaleKernel` (quantization.cuh) — same amax, same per-token-scale
-// recipe (the default !TE_EXACT branch: perTokenScale = globalAmax*globalScaleInv), same
-// `cvt_warp_fp16_to_fp4`, same swizzled-sf offset (`get_sf_out_offset_8x4`) — with the single
-// `rowIdx` split into a READ row (the unpermuted source token) and a WRITE row (the permuted
-// destination). For the valid rows the result equals the plain permute->quant chain to within fp4
-// precision (the chain's quant reads permuted_hidden[writeRow], filled by permute from
-// hidden[readRow]; we read hidden[readRow] directly).
+// recipe, same `cvt_warp_fp16_to_fp4`, same swizzled-sf offset (`get_sf_out_offset_8x4`) — with the
+// single `rowIdx` split into a READ row (the unpermuted source token) and a WRITE row (the permuted
+// destination). For the valid rows the result is BITWISE-identical to the plain permute->quant chain
+// (the chain's quant reads permuted_hidden[writeRow], filled by permute from hidden[readRow]; we
+// read hidden[readRow] directly), verified by the bench's fused-vs-old guard.
+//
+// PER-TOKEN-SCALE BRANCH: uses TE_EXACT (globalEncodeScale = __fdiv_rn(globalScale, globalAmax),
+// stored scale = 1/globalEncodeScale, cvt TE_EXACT_NVFP4=true). This matches the installed
+// flashinfer 0.6.11.post1, whose DISPATCH macro hard-codes the bf16 kernel to TE_EXACT_NVFP4=true
+// (quantization.cu DISPATCH_NVP4_QUANT_AND_PER_TOKEN_SCALE_KERNEL). NOTE: if a future flashinfer
+// reverts the bf16 path to the fast-math branch (reciprocal_approximate / TE_EXACT=false), or if
+// FLASHINFER_NVFP4_4OVER6 is enabled, this fused kernel would diverge — re-validate the bench's
+// fused-vs-old bitwise guard against the deployed flashinfer before trusting it there.
 //
 // Two variants (both kept, selectable, for cross-scenario perf comparison):
 //   - no-dedup: grid over the num_tokens*top_k pairs; each block re-reads+re-quantizes its source
@@ -247,10 +254,13 @@ void invokeFusedPermuteNvfp4Quant(
     tensorrt_llm::QuantizationSFLayout sfLayout,
     bool dedup,
     cudaStream_t stream) {
-  // [opt] 7168/16 = 448 vecs/row; BLOCK_SIZE=128 -> each thread handles ~3.5 vecs and the grid
-  // underfills (ncu: 19.8% achieved occupancy, 0.21 waves/SM). 256 threads/row -> ~2x the threads,
-  // higher occupancy / better latency hiding for this occupancy-bound kernel.
-  constexpr uint32_t BLOCK_SIZE = 256;
+  // [opt] Occupancy tuning (ncu: kernel is occupancy-bound, not DRAM-bound — DRAM <1%, achieved
+  // occupancy was 19.8% no-dedup / 5.5% dedup at BLOCK_SIZE=128). The dedup variant launches only
+  // num_tokens CTAs (=64 at decode bs64), so it is the most CTA-starved; widening the block raises
+  // threads/CTA and hides the per-row amax-reduction + scatter latency. Decode bs64 dedup sweep:
+  // 128 -> 5.52us, 256 -> 4.09us, 512 -> 3.71us. 512 is the chosen default (the prod path uses
+  // dedup). (7168/16 = 448 vecs/row, so >448 threads idle on the tail, but the win dominates.)
+  constexpr uint32_t BLOCK_SIZE = 512;
   dim3 const block(BLOCK_SIZE);
 
   auto dispatch = [&](auto layoutTag) {

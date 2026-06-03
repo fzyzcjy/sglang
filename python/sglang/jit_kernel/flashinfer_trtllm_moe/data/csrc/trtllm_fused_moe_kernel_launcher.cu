@@ -2570,6 +2570,12 @@ class FP4BlockScaleLoraLauncher {
       // and drops the bf16 permuted round-trip. Bitwise-identical to the plain permute->quant chain
       // (else branch) for the valid rows. Gated to tile<128 (SWIZZLED_8x4) — the validated decode
       // path; prefill (tile>=128, 128x4) keeps the plain chain.
+      // Padding rows of hidden_fp4/_sf are left UNwritten (fused touches only valid rows). Safe by
+      // the down-quant precedent: step-7 quant#2 likewise writes only valid rows (m=num_tokens*top_k
+      // + the map) and step-8 Gemm2 consumes it fine — both GEMMs bound work by num_non_exiting_ctas
+      // / total_num_padded_tokens / cta_idx_xy and never read padding rows.
+      // dedup=true: the per-token-grid variant (quantize each token once, scatter) — fewer reads and
+      // (with BLOCK_SIZE=512) faster than no-dedup at decode (3.71us vs 6.25us, bench).
       float const gu_globalScaleInv = 1.f / 448.f / 6.f;
       sgl_fused_permute_quant::invokeFusedPermuteNvfp4Quant<__nv_bfloat16>(
           num_tokens, top_k, hidden_size, max_num_padded_tokens,
@@ -2577,7 +2583,7 @@ class FP4BlockScaleLoraLauncher {
           static_cast<int32_t const*>(expanded_idx_to_permuted_idx.data_ptr()),
           reinterpret_cast<uint8_t*>(hidden_fp4.data_ptr()),
           reinterpret_cast<uint8_t*>(hidden_fp4_sf.data_ptr()),
-          reinterpret_cast<float*>(hidden_per_token_sf.data_ptr()), gu_sfLayout, /*dedup=*/false,
+          reinterpret_cast<float*>(hidden_per_token_sf.data_ptr()), gu_sfLayout, /*dedup=*/true,
           stream);
     } else {
       // ---- 3) permute (gather) bf16 hidden -> [max_padded, hidden] (transient, freed at block end)
