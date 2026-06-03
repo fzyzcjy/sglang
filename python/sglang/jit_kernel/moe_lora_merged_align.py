@@ -43,6 +43,7 @@ def moe_lora_merged_align(
     local_num_experts: Optional[int] = None,
     do_skip: bool = True,
     compact: bool = False,
+    fuse_scatter: Optional[bool] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int]:
     """Fused replacement for (_fused_virtual_topk_ids + _align_block_size) on the
     merged-virtual-expert LoRA path.
@@ -74,6 +75,11 @@ def moe_lora_merged_align(
     # remappable by a single -offset). expert_ids is restored to global in-kernel.
     compact_eff = compact and ep_local and max_loras == 1 and not shared_outer
     bucket_experts = local_num_experts if compact_eff else virtual_num_experts
+
+    # fuse_scatter: do the whole align+scatter in one threadblock (one launch).
+    # Only for small numel (the scatter is single-block); large numel (prefill)
+    # keeps the 2-kernel multi-block path. Default auto by numel.
+    fuse_eff = (numel <= 2048) if fuse_scatter is None else fuse_scatter
 
     # Allocation mirrors moe_align_block_size.py (the kernel uses a +1 sentinel
     # bucket, so the padded buffers are sized with bucket_experts + 1).
@@ -119,6 +125,7 @@ def moe_lora_merged_align(
         shared_outer,
         do_skip,
         compact_eff,
+        fuse_eff,
     )
 
     return (

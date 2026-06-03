@@ -58,9 +58,11 @@ def prep_pipeline(s, num_experts, local_num_experts, block_size):
     return moe_align_block_size(vtopk, block_size, vne)
 
 
-def prep_pipeline_new(s, num_experts, local_num_experts, block_size, compact=False):
-    """Fused replacement: single LoRA-local kernel computes virtual id inline +
-    aligns (inline virtual + EP skip; compact=True histograms over local experts).
+def prep_pipeline_new(
+    s, num_experts, local_num_experts, block_size, compact=False, fuse_scatter=False
+):
+    """Fused replacement (inline virtual + EP skip; compact histograms over local
+    experts; fuse_scatter does the whole thing in one threadblock/launch).
     Returns the same 3 outputs as prep_pipeline for apples-to-apples."""
     from sglang.jit_kernel.moe_lora_merged_align import moe_lora_merged_align
 
@@ -75,6 +77,7 @@ def prep_pipeline_new(s, num_experts, local_num_experts, block_size, compact=Fal
         local_num_experts=local_num_experts,
         do_skip=True,
         compact=compact,
+        fuse_scatter=fuse_scatter,
     )
     return sorted_ids, expert_ids, post_pad
 
@@ -216,11 +219,12 @@ def main():
 
         ref_mask = (s["tlm"] >= 0).to(torch.bool)
 
-        def _check_new(do_skip, ref_post, ref_eids, owned_only, compact=False):
+        def _check_new(do_skip, ref_post, ref_eids, owned_only, compact=False,
+                       fuse_scatter=False):
             ns, ne_, np_, nm_, _ = moe_lora_merged_align(
                 s["topk_ids"], s["tlm"], ne, shared_outer=False, max_loras=1,
                 block_size=blk, local_expert_offset=loff, local_num_experts=lne,
-                do_skip=do_skip, compact=compact,
+                do_skip=do_skip, compact=compact, fuse_scatter=fuse_scatter,
             )
             pp = int(np_.item())
             nblk = pp // blk
@@ -281,7 +285,20 @@ def main():
             f"(ref {post_skip}) eids={c_eids_ok} placement(owned-only)={c_place_ok} "
             f"mask={c_mask_ok}"
         )
-        new_ok = a_ok and b_ok and c_ok
+
+        # mode D (skip + compact + fuse_scatter): single-block fused kernel (fill +
+        # histogram + scan + expert_ids + scatter in one launch) -> same observable
+        # result as mode C.
+        d_post_ok, d_eids_ok, d_place_ok, d_mask_ok, d_pp = _check_new(
+            True, post_skip, eids_skip, owned_only=True, compact=True, fuse_scatter=True
+        )
+        d_ok = d_post_ok and d_eids_ok and d_place_ok and d_mask_ok
+        print(
+            f"{'PASS' if d_ok else 'FAIL'} NEW(skip+compact+FUSE 1-kernel) vs ref_skip: "
+            f"post_pad={d_pp} (ref {post_skip}) eids={d_eids_ok} "
+            f"placement(owned-only)={d_place_ok} mask={d_mask_ok}"
+        )
+        new_ok = a_ok and b_ok and c_ok and d_ok
 
         raise SystemExit(
             0 if (verr == 0 and post_ok and eids_ok and all_once and new_ok) else 1
@@ -296,14 +313,19 @@ def main():
     us_new = bench_kernel(call_new, n_sets) * 1000
     call_cmp = lambda i: prep_pipeline_new(S[i], ne, lne, blk, compact=True)
     us_cmp = bench_kernel(call_cmp, n_sets) * 1000
+    call_fuse = lambda i: prep_pipeline_new(
+        S[i], ne, lne, blk, compact=True, fuse_scatter=True
+    )
+    us_fuse = bench_kernel(call_fuse, n_sets) * 1000
     print(
         f"BENCH triton-gemm prep (COMBINED: virtual_topk_ids + moe_align + count_and_sort) "
         f"bs={args.bs} top_k={args.top_k} experts={ne} local_experts={lne} block={blk}"
     )
     print(f"  per_set={per/1e3:.1f}KB {report_sets(per, n_sets)}")
-    print(f"  OLD combined prep pipeline    = {us:7.2f} us")
-    print(f"  NEW fused (skip)              = {us_new:7.2f} us   ({us/us_new:.2f}x)")
-    print(f"  NEW fused (skip + compact)    = {us_cmp:7.2f} us   ({us/us_cmp:.2f}x)")
+    print(f"  OLD combined prep pipeline       = {us:7.2f} us")
+    print(f"  NEW 2-kernel (skip)              = {us_new:7.2f} us   ({us/us_new:.2f}x)")
+    print(f"  NEW 2-kernel (skip + compact)    = {us_cmp:7.2f} us   ({us/us_cmp:.2f}x)")
+    print(f"  NEW 1-kernel (skip+compact+FUSE) = {us_fuse:7.2f} us   ({us/us_fuse:.2f}x)")
 
 
 if __name__ == "__main__":
