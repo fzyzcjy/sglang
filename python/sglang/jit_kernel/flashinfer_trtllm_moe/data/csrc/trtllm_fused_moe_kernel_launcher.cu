@@ -2565,6 +2565,13 @@ class FP4BlockScaleLoraLauncher {
     Tensor hidden_fp4_sf = alloc_tensor({hidden_sf_size}, dl_uint8, device);
     Tensor hidden_per_token_sf = alloc_tensor({max_num_padded_tokens}, dl_float32, device);
     if (use_fused_permute_quant && tile < 128) {
+      // Invariants the fused kernel relies on (review hardening): hidden must be a multiple of the
+      // 16-wide PackedVec load, and top_k must fit the dedup per-token-scale write (threadIdx<topK
+      // over BLOCK_SIZE=512 threads). Both always hold for the supported models; check loudly.
+      TVM_FFI_ICHECK(hidden_size % 16 == 0)
+          << "fused permute+quant requires hidden_size % 16 == 0, got " << hidden_size;
+      TVM_FFI_ICHECK(top_k <= 512)
+          << "fused permute+quant dedup requires top_k <= BLOCK_SIZE(512), got " << top_k;
       // ---- 3+4 FUSED ---- read UN-permuted hidden and scatter-write fp4 + swizzled block-sf +
       // per-token-sf to the permuted positions in one kernel: de-pads (only num_tokens*top_k rows)
       // and drops the bf16 permuted round-trip. Bitwise-identical to the plain permute->quant chain
