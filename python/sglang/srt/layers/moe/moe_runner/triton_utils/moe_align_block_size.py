@@ -86,13 +86,13 @@ def moe_align_block_size(
             )
 
         print(
-            "[SHAPECAP moe_align_native_py]\n"
-            f"  IN  topk_ids: {_ti(topk_ids)} numel={topk_ids.numel()}\n"
-            f"  OUT sorted_ids: {_ti(sorted_ids)}\n"
-            f"  OUT expert_ids: {_ti(expert_ids)}\n"
-            f"  OUT num_tokens_post_pad: {_ti(num_tokens_post_pad)}\n"
-            f"  scratch cumsum_buffer: {_ti(cumsum_buffer)}\n"
-            f"  scalars: num_experts(arg)={num_experts} num_experts_passed={num_experts + 1} "
+            "[SHAPECAP moe_align_native_py] "
+            f"IN topk_ids={_ti(topk_ids)} numel={topk_ids.numel()} | "
+            f"OUT sorted_ids={_ti(sorted_ids)} | "
+            f"OUT expert_ids={_ti(expert_ids)} | "
+            f"OUT num_tokens_post_pad={_ti(num_tokens_post_pad)} | "
+            f"scratch cumsum_buffer={_ti(cumsum_buffer)} | "
+            f"scalars: num_experts(arg)={num_experts} num_experts_passed={num_experts + 1} "
             f"block_size={block_size} max_num_tokens_padded={max_num_tokens_padded} "
             f"max_num_m_blocks={max_num_m_blocks}",
             flush=True,
