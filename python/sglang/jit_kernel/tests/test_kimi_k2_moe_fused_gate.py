@@ -137,9 +137,7 @@ def test_jit_kimi_output_shapes_and_renorm():
 @pytest.mark.parametrize("seq_length", [1, 7, 64, 512, 513, 4096])
 @pytest.mark.parametrize("config", _CONFIGS, ids=["kimi384", "mimo256"])
 @pytest.mark.parametrize("low_dtype", [torch.bfloat16, torch.float16])
-@pytest.mark.parametrize(
-    "mixed_bias", [False, True], ids=["same_dtype", "fp32_bias"]
-)
+@pytest.mark.parametrize("mixed_bias", [False, True], ids=["same_dtype", "fp32_bias"])
 def test_jit_kimi_low_precision_input_matches_fp32(
     seq_length, config, low_dtype, mixed_bias
 ):
