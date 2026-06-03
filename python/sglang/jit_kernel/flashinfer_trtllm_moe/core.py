@@ -364,6 +364,23 @@ def trtllm_fp4_block_scale_routed_moe_lora(
             (num_tokens, hidden_size), dtype=torch.bfloat16, device=hidden_states.device
         )
 
+    # [SHAPECAP] adhoc shape-capture print (committed for trace; reverted after the run).
+    _seen = trtllm_fp4_block_scale_routed_moe_lora.__dict__.setdefault("_shapecap_seen", set())
+    _sig = (tuple(hidden_states.shape), str(hidden_states.dtype), int(num_experts), int(top_k), int(intermediate_size), int(local_num_experts))
+    if _sig not in _seen:
+        _seen.add(_sig)
+        print(
+            f"[SHAPECAP fp4_lora_moe_py] hidden_states={tuple(hidden_states.shape)}/{hidden_states.dtype} "
+            f"topk_ids={tuple(topk_ids.shape)}/{topk_ids.dtype} "
+            f"gemm1_weights={tuple(gemm1_weights.shape)}/{gemm1_weights.dtype} "
+            f"gemm2_weights={tuple(gemm2_weights.shape)}/{gemm2_weights.dtype} "
+            f"gate_up_lora_delta={tuple(gate_up_lora_delta.shape)}/{gate_up_lora_delta.dtype} "
+            f"activation_lora_input={tuple(activation_lora_input.shape)}/{activation_lora_input.dtype} "
+            f"num_experts={num_experts} top_k={top_k} intermediate_size={intermediate_size} "
+            f"local_num_experts={local_num_experts} num_tokens={num_tokens} hidden_size={hidden_size}",
+            flush=True,
+        )
+
     assert gate_up_lora_delta.is_contiguous()
     assert activation_lora_input.is_contiguous()
     empty_expert_weights = torch.empty(

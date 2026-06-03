@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>  // [SHAPECAP] for printf in the adhoc shape-capture block (reverted after the run)
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
@@ -2563,6 +2564,29 @@ class FP4BlockScaleLoraLauncher {
     Tensor hidden_fp4 = alloc_tensor({max_num_padded_tokens, hidden_size / 2}, dl_uint8, device);
     Tensor hidden_fp4_sf = alloc_tensor({hidden_sf_size}, dl_uint8, device);
     Tensor hidden_per_token_sf = alloc_tensor({max_num_padded_tokens}, dl_float32, device);
+
+    // [SHAPECAP] adhoc shape-capture print (committed for trace; reverted after the run).
+    // Covers the in-op permute / NvFP4 quant / activation kernels (their shapes derive from these
+    // dims) plus max_num_padded_tokens, the one value not visible from the python entry.
+    {
+      static int s_shapecap_count = 0;
+      if (s_shapecap_count++ < 64) {
+        printf(
+            "[SHAPECAP fp4_lora_moe_cu] num_tokens=%ld hidden_size=%ld inter=%ld gate_up_n=%ld "
+            "num_experts=%ld top_k=%ld local_num_experts=%ld tile=%ld max_num_padded_tokens=%d "
+            "|| permute: in[%ld,%ld]bf16 -> out[%d,%ld]bf16 "
+            "|| nvfp4quant: in[%d,%ld]bf16 -> fp4[%d,%ld]u8 + per_token_sf[%d] "
+            "|| activation(non-DeepSeek): innerDim=%ld topK=%ld numTokens=%ld outDim=%ld "
+            "grid(%ld,%ld,min(8192,%ld)) threads=256\n",
+            (long)num_tokens, (long)hidden_size, (long)inter, (long)gate_up_n, (long)num_experts,
+            (long)top_k, (long)local_num_experts, (long)tile, max_num_padded_tokens,
+            (long)num_tokens, (long)hidden_size, max_num_padded_tokens, (long)hidden_size,
+            max_num_padded_tokens, (long)hidden_size, max_num_padded_tokens, (long)hidden_size / 2,
+            max_num_padded_tokens, (long)gate_up_n, (long)top_k, (long)max_num_padded_tokens,
+            (long)gate_up_n / 2, (long)gate_up_n / 128, (long)top_k, (long)max_num_padded_tokens);
+        fflush(stdout);
+      }
+    }
     {
       // ---- 3) permute (gather) bf16 hidden -> [max_padded, hidden] (transient, freed at block end)
       Tensor permuted_hidden_bf16 =
