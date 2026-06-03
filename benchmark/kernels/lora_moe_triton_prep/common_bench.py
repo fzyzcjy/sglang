@@ -36,7 +36,7 @@ def set_bytes(one_set: dict) -> int:
 
 def pick_n_sets(per_set_bytes: int, budget_gb: float = 16.0, requested: int = 0) -> int:
     """Number of rotation sets. requested>0 forces it; else fill the budget (so it
-    auto-grows when per_set shrinks). Bounded to never OOM and capped at 4096."""
+    auto-grows when per_set shrinks). Bounded to never OOM and capped at 2048."""
     free = torch.cuda.mem_get_info()[0]
     budget = min(int(budget_gb * 1024**3), int(0.5 * free))
     per = max(1, per_set_bytes)

@@ -76,17 +76,21 @@ def main():
         s = mk()
         w, ids = gate(s, args.topk, True, args.rsf)
         rw, rids = ref_gate(s["gating"], s["bias"], args.topk, True)
-        set_ok = all(
-            set(ids[mrow].tolist()) == set(rids[mrow].tolist())
-            for mrow in range(args.bs)
-        )
-        werr = float(
-            (torch.sort(w, -1).values - torch.sort(rw, -1).values).abs().max().item()
-        )
-        ok = set_ok and werr <= 1e-3
+        # PAIRED check: sort each row by expert id, then compare. If the id sets match the
+        # sorted-id tensors are bitwise-equal, AND the per-position weights are then paired to
+        # their own expert id -> this catches a kernel that returns right ids + right weight
+        # multiset but the WRONG id<->weight pairing (a real MoE bug a set/sorted check misses).
+        ki, ri = torch.argsort(ids, -1), torch.argsort(rids.to(torch.int32), -1)
+        ids_s = torch.gather(ids, -1, ki)
+        rids_s = torch.gather(rids.to(torch.int32), -1, ri)
+        w_s = torch.gather(w, -1, ki)
+        rw_s = torch.gather(rw, -1, ri)
+        id_ok = bool(torch.equal(ids_s, rids_s))  # expert ids bitwise (as sorted sets)
+        werr = float((w_s - rw_s).abs().max().item())  # weights PAIRED to their ids
+        ok = id_ok and werr <= 1e-3
         print(
-            f"{'PASS' if ok else 'FAIL'} gate: topk_id_set_match={set_ok} "
-            f"max_weight_err={werr:.4e} (tol 1e-3)"
+            f"{'PASS' if ok else 'FAIL'} gate: expert_ids_bitwise={id_ok} "
+            f"paired_max_weight_err={werr:.4e} (tol 1e-3)"
         )
         raise SystemExit(0 if ok else 1)
 

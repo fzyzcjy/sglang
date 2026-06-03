@@ -137,7 +137,33 @@ def main():
             f"{'PASS' if (post_ok and eids_ok) else 'FAIL'} align vs ref: "
             f"post_pad={pp} (ref {post_ref}) expert_ids_multiset_match={eids_ok}"
         )
-        raise SystemExit(0 if (verr == 0 and post_ok and eids_ok) else 1)
+
+        # count_and_sort placement: verify sorted_token_ids actually scatters every token to
+        # the right expert. Per block j (label expert_ids[j]=bucket-1), each non-sentinel slot
+        # must belong to bucket eid+1; and every slot 0..numel-1 must appear exactly once.
+        numel = vtopk.numel()
+        buckets = (vtopk.reshape(-1) + 1).clamp(min=0).tolist()  # bucket per slot
+        st = sorted_ids[:pp].tolist()
+        eids_list = expert_ids[:nblk].tolist()
+        seen = []
+        place_ok = True
+        for j in range(nblk):
+            eid = eids_list[j]
+            for slot in st[j * blk : (j + 1) * blk]:
+                if slot == numel:  # padding sentinel
+                    continue
+                if not (0 <= slot < numel) or buckets[slot] != eid + 1:
+                    place_ok = False
+                    break
+                seen.append(slot)
+            if not place_ok:
+                break
+        all_once = place_ok and (sorted(seen) == list(range(numel)))
+        print(
+            f"{'PASS' if all_once else 'FAIL'} count_and_sort placement: "
+            f"every token in correct expert block + each of {numel} slots exactly once={all_once}"
+        )
+        raise SystemExit(0 if (verr == 0 and post_ok and eids_ok and all_once) else 1)
 
     per = set_bytes(mk())
     n_sets = pick_n_sets(per, args.budget_gb, args.n_sets)
