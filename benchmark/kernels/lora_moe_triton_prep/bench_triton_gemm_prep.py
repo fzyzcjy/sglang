@@ -58,6 +58,25 @@ def prep_pipeline(s, num_experts, local_num_experts, block_size):
     return moe_align_block_size(vtopk, block_size, vne)
 
 
+def prep_pipeline_new(s, num_experts, local_num_experts, block_size):
+    """Fused replacement: single LoRA-local kernel computes virtual id inline +
+    aligns (commit 1: inline virtual, no skip). Returns the same 3 outputs as
+    prep_pipeline (drops token_lora_mask + vne) for apples-to-apples."""
+    from sglang.jit_kernel.moe_lora_merged_align import moe_lora_merged_align
+
+    sorted_ids, expert_ids, post_pad, _mask, _vne = moe_lora_merged_align(
+        s["topk_ids"],
+        s["tlm"],
+        num_experts,
+        shared_outer=False,
+        max_loras=1,
+        block_size=block_size,
+        local_expert_offset=0,
+        local_num_experts=local_num_experts,
+    )
+    return sorted_ids, expert_ids, post_pad
+
+
 def ref_virtual_topk(topk_ids, tlm, num_experts, local_num_experts):
     bs, top_k = topk_ids.shape
     out = torch.empty_like(topk_ids)
@@ -90,6 +109,25 @@ def ref_align(vtopk, block, vne):
         nb = int(blocks[b].item())
         if nb:
             eids[b - 1] += nb  # bucket 0 -> -1 sentinel label
+    return post, eids
+
+
+def ref_align_skip(vtopk, block, vne):
+    """torch reference for the EP-skip variant: dropped/masked slots (vid < 0 ->
+    sentinel bucket 0) are NOT placed, so bucket 0 contributes no tokens/blocks
+    (post_pad shrinks, no -1 sentinel block)."""
+    from collections import Counter
+
+    buckets = (vtopk.reshape(-1) + 1).clamp(min=0)
+    counts = torch.bincount(buckets, minlength=vne + 1)
+    counts[0] = 0  # EP skip: sentinel bucket gets nothing
+    blocks = (counts + block - 1) // block
+    post = int((blocks * block).sum().item())
+    eids = Counter()
+    for b in range(vne + 1):
+        nb = int(blocks[b].item())
+        if nb:
+            eids[b - 1] += nb
     return post, eids
 
 
@@ -163,19 +201,89 @@ def main():
             f"{'PASS' if all_once else 'FAIL'} count_and_sort placement: "
             f"every token in correct expert block + each of {numel} slots exactly once={all_once}"
         )
-        raise SystemExit(0 if (verr == 0 and post_ok and eids_ok and all_once) else 1)
+
+        # === NEW fused kernel: two modes ===
+        # mode A (do_skip=False): bucket-for-bucket identical to the old path
+        #   -> validated against the same ref (bitwise-equivalence guardrail).
+        # mode B (do_skip=True): EP skip -> dropped/masked slots are not placed,
+        #   sentinel bucket emptied -> validated against ref_align_skip + the
+        #   placement set must equal exactly the OWNED slots.
+        from sglang.jit_kernel.moe_lora_merged_align import moe_lora_merged_align
+
+        ref_mask = (s["tlm"] >= 0).to(torch.bool)
+
+        def _check_new(do_skip, ref_post, ref_eids, owned_only):
+            ns, ne_, np_, nm_, _ = moe_lora_merged_align(
+                s["topk_ids"], s["tlm"], ne, shared_outer=False, max_loras=1,
+                block_size=blk, local_expert_offset=0, local_num_experts=lne,
+                do_skip=do_skip,
+            )
+            pp = int(np_.item())
+            nblk = pp // blk
+            eids_k = Counter(e for e in ne_[:nblk].tolist())
+            post_ok = pp == ref_post
+            eids_ok = eids_k == ref_eids
+            st_ = ns[:pp].tolist()
+            el_ = ne_[:nblk].tolist()
+            seen_, ok_ = [], True
+            for j in range(nblk):
+                eid = el_[j]
+                for slot in st_[j * blk : (j + 1) * blk]:
+                    if slot == numel:
+                        continue
+                    if not (0 <= slot < numel) or buckets[slot] != eid + 1:
+                        ok_ = False
+                        break
+                    seen_.append(slot)
+                if not ok_:
+                    break
+            if owned_only:
+                expected = sorted(i_ for i_ in range(numel) if buckets[i_] >= 1)
+            else:
+                expected = list(range(numel))
+            place_ok = ok_ and (sorted(seen_) == expected)
+            mask_ok = bool((nm_ == ref_mask).all().item())
+            return post_ok, eids_ok, place_ok, mask_ok, pp
+
+        a_post_ok, a_eids_ok, a_place_ok, a_mask_ok, a_pp = _check_new(
+            False, post_ref, eids_ref, owned_only=False
+        )
+        a_ok = a_post_ok and a_eids_ok and a_place_ok and a_mask_ok
+        print(
+            f"{'PASS' if a_ok else 'FAIL'} NEW(no-skip) vs ref: post_pad={a_pp} "
+            f"(ref {post_ref}) eids={a_eids_ok} placement={a_place_ok} mask={a_mask_ok}"
+        )
+
+        post_skip, eids_skip = ref_align_skip(vtopk, blk, vne)
+        b_post_ok, b_eids_ok, b_place_ok, b_mask_ok, b_pp = _check_new(
+            True, post_skip, eids_skip, owned_only=True
+        )
+        b_ok = b_post_ok and b_eids_ok and b_place_ok and b_mask_ok
+        print(
+            f"{'PASS' if b_ok else 'FAIL'} NEW(skip) vs ref_skip: post_pad={b_pp} "
+            f"(ref {post_skip}) eids={b_eids_ok} placement(owned-only)={b_place_ok} "
+            f"mask={b_mask_ok}"
+        )
+        new_ok = a_ok and b_ok
+
+        raise SystemExit(
+            0 if (verr == 0 and post_ok and eids_ok and all_once and new_ok) else 1
+        )
 
     per = set_bytes(mk())
     n_sets = pick_n_sets(per, args.budget_gb, args.n_sets)
     S = [mk() for _ in range(n_sets)]
     call = lambda i: prep_pipeline(S[i], ne, lne, blk)
     us = bench_kernel(call, n_sets) * 1000
+    call_new = lambda i: prep_pipeline_new(S[i], ne, lne, blk)
+    us_new = bench_kernel(call_new, n_sets) * 1000
     print(
         f"BENCH triton-gemm prep (COMBINED: virtual_topk_ids + moe_align + count_and_sort) "
         f"bs={args.bs} top_k={args.top_k} experts={ne} local_experts={lne} block={blk}"
     )
     print(f"  per_set={per/1e3:.1f}KB {report_sets(per, n_sets)}")
-    print(f"  combined prep pipeline        = {us:7.2f} us")
+    print(f"  OLD combined prep pipeline    = {us:7.2f} us")
+    print(f"  NEW fused (inline virtual)    = {us_new:7.2f} us   ({us/us_new:.2f}x)")
 
 
 if __name__ == "__main__":
