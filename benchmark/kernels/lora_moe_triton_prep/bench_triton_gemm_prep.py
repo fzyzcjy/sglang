@@ -58,6 +58,25 @@ def prep_pipeline(s, num_experts, local_num_experts, block_size):
     return moe_align_block_size(vtopk, block_size, vne)
 
 
+def prep_pipeline_new(s, num_experts, local_num_experts, block_size):
+    """Fused replacement: single LoRA-local kernel computes virtual id inline +
+    aligns (commit 1: inline virtual, no skip). Returns the same 3 outputs as
+    prep_pipeline (drops token_lora_mask + vne) for apples-to-apples."""
+    from sglang.jit_kernel.moe_lora_merged_align import moe_lora_merged_align
+
+    sorted_ids, expert_ids, post_pad, _mask, _vne = moe_lora_merged_align(
+        s["topk_ids"],
+        s["tlm"],
+        num_experts,
+        shared_outer=False,
+        max_loras=1,
+        block_size=block_size,
+        local_expert_offset=0,
+        local_num_experts=local_num_experts,
+    )
+    return sorted_ids, expert_ids, post_pad
+
+
 def ref_virtual_topk(topk_ids, tlm, num_experts, local_num_experts):
     bs, top_k = topk_ids.shape
     out = torch.empty_like(topk_ids)
@@ -163,19 +182,66 @@ def main():
             f"{'PASS' if all_once else 'FAIL'} count_and_sort placement: "
             f"every token in correct expert block + each of {numel} slots exactly once={all_once}"
         )
-        raise SystemExit(0 if (verr == 0 and post_ok and eids_ok and all_once) else 1)
+
+        # === NEW fused kernel vs OLD/ref (commit 1: inline virtual, no skip) ===
+        # Semantics are bucket-for-bucket identical to the old path, so the new
+        # kernel must match the same ref: post_pad exact, expert_ids multiset
+        # exact, placement valid, token_lora_mask exact.
+        from sglang.jit_kernel.moe_lora_merged_align import moe_lora_merged_align
+
+        n_sorted, n_expert, n_post, n_mask, n_vne = moe_lora_merged_align(
+            s["topk_ids"], s["tlm"], ne, shared_outer=False, max_loras=1,
+            block_size=blk, local_expert_offset=0, local_num_experts=lne,
+        )
+        n_pp = int(n_post.item())
+        n_nblk = n_pp // blk
+        n_eids = Counter(e for e in n_expert[:n_nblk].tolist())
+        n_post_ok = n_pp == post_ref
+        n_eids_ok = n_eids == eids_ref
+        # placement for new (buckets recomputed from ref_virtual_topk via vtopk)
+        n_st = n_sorted[:n_pp].tolist()
+        n_eids_list = n_expert[:n_nblk].tolist()
+        n_seen, n_place_ok = [], True
+        for j in range(n_nblk):
+            eid = n_eids_list[j]
+            for slot in n_st[j * blk : (j + 1) * blk]:
+                if slot == numel:
+                    continue
+                if not (0 <= slot < numel) or buckets[slot] != eid + 1:
+                    n_place_ok = False
+                    break
+                n_seen.append(slot)
+            if not n_place_ok:
+                break
+        n_all_once = n_place_ok and (sorted(n_seen) == list(range(numel)))
+        # token_lora_mask = (token_lora_mapping >= 0)
+        ref_mask = (s["tlm"] >= 0).to(torch.bool)
+        n_mask_ok = bool((n_mask == ref_mask).all().item())
+        new_ok = n_post_ok and n_eids_ok and n_all_once and n_mask_ok
+        print(
+            f"{'PASS' if new_ok else 'FAIL'} NEW-fused vs ref: post_pad={n_pp} "
+            f"(ref {post_ref}) eids_multiset={n_eids_ok} placement={n_all_once} "
+            f"mask={n_mask_ok}"
+        )
+
+        raise SystemExit(
+            0 if (verr == 0 and post_ok and eids_ok and all_once and new_ok) else 1
+        )
 
     per = set_bytes(mk())
     n_sets = pick_n_sets(per, args.budget_gb, args.n_sets)
     S = [mk() for _ in range(n_sets)]
     call = lambda i: prep_pipeline(S[i], ne, lne, blk)
     us = bench_kernel(call, n_sets) * 1000
+    call_new = lambda i: prep_pipeline_new(S[i], ne, lne, blk)
+    us_new = bench_kernel(call_new, n_sets) * 1000
     print(
         f"BENCH triton-gemm prep (COMBINED: virtual_topk_ids + moe_align + count_and_sort) "
         f"bs={args.bs} top_k={args.top_k} experts={ne} local_experts={lne} block={blk}"
     )
     print(f"  per_set={per/1e3:.1f}KB {report_sets(per, n_sets)}")
-    print(f"  combined prep pipeline        = {us:7.2f} us")
+    print(f"  OLD combined prep pipeline    = {us:7.2f} us")
+    print(f"  NEW fused (inline virtual)    = {us_new:7.2f} us   ({us/us_new:.2f}x)")
 
 
 if __name__ == "__main__":
