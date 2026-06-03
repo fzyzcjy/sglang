@@ -247,7 +247,10 @@ void invokeFusedPermuteNvfp4Quant(
     tensorrt_llm::QuantizationSFLayout sfLayout,
     bool dedup,
     cudaStream_t stream) {
-  constexpr uint32_t BLOCK_SIZE = 128;
+  // [opt] 7168/16 = 448 vecs/row; BLOCK_SIZE=128 -> each thread handles ~3.5 vecs and the grid
+  // underfills (ncu: 19.8% achieved occupancy, 0.21 waves/SM). 256 threads/row -> ~2x the threads,
+  // higher occupancy / better latency hiding for this occupancy-bound kernel.
+  constexpr uint32_t BLOCK_SIZE = 256;
   dim3 const block(BLOCK_SIZE);
 
   auto dispatch = [&](auto layoutTag) {
