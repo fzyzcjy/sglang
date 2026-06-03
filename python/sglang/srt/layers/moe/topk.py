@@ -1227,7 +1227,13 @@ def biased_grouped_topk_gpu(
                 if correction_bias is not None
                 else correction_bias
             )
-            _ret = kimi_k2_moe_fused_gate(
+            if envs.SGLANG_OPT_USE_JIT_KERNEL_KIMI_GATE.get():
+                from sglang.jit_kernel.kimi_k2_moe_fused_gate import (
+                    kimi_k2_moe_fused_gate as _kimi_k2_moe_fused_gate,
+                )
+            else:
+                _kimi_k2_moe_fused_gate = kimi_k2_moe_fused_gate
+            _ret = _kimi_k2_moe_fused_gate(
                 _gi,
                 _cb,
                 topk=topk,
