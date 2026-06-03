@@ -133,9 +133,11 @@ __global__ void fusedActivationQuantKernel(
       reinterpret_cast<uint32_t*>(&vec)[bank] = smem[(uint32_t)vecIdx * STRIDE + bank];
     }
     uint8_t fp8Scale;
-    auto fp4Vals = tk::cvt_warp_fp16_to_fp4<__nv_bfloat16, SF_VEC_SIZE, SF_VEC_SIZE, false,
-                                            DISABLE_FP4_FAST_MATH, std::false_type>(
+    // 5 template args on this flashinfer build: Type, SF_VEC_SIZE, CVT_ELTS_PER_THREAD,
+    // UE8M0_SF=false, TE_EXACT_NVFP4=false (the default nvfp4 quant path).
+    auto fp4Vals = tk::cvt_warp_fp16_to_fp4<__nv_bfloat16, SF_VEC_SIZE, SF_VEC_SIZE, false, false>(
         vec, globalEncodeScale, &fp8Scale);
+    (void)DISABLE_FP4_FAST_MATH;
     int64_t const vecOffset = (int64_t)permutedIdx * num_vecs_per_row + vecIdx;
     reinterpret_cast<PackedFp4Type*>(weightOutput)[vecOffset] = fp4Vals;
 
