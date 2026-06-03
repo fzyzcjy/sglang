@@ -156,6 +156,7 @@ def main():
                 gun,
                 nt,
                 tk,
+                0,  # grid_x_override=0 -> default grid.x = innerDim/128
             ),
             f"nvfp4 quant #2 (down, m={nt*tk})": lambda i: m.bench_nvfp4_quant(
                 S[i]["activated"],
@@ -206,6 +207,21 @@ def main():
             f"max_abs_err={aerr:.4e} rel={arel:.2e} (tol 2e-2, bf16)"
         )
 
+        # activation grid-invariance: a grid.x override must be bitwise-identical to the
+        # default grid (the kernel's hidden-dim grid-stride loop writes each output once,
+        # so output is independent of grid.x). This is the guard for the grid-tuning opt.
+        act_ref = s0["activated"].clone()
+        li_ref = s0["lora_input"].clone()
+        m.bench_activation(
+            s0["gate_up"], s0["lora_delta"], s0["idx_map"], s0["total_pad"],
+            s0["activated"], s0["lora_input"], gun, nt, tk, 2,  # grid_x_override=2
+        )
+        torch.cuda.synchronize()
+        gx_eq = bool(
+            torch.equal(s0["activated"], act_ref) and torch.equal(s0["lora_input"], li_ref)
+        )
+        print(f"{'PASS' if gx_eq else 'FAIL'} activation grid.x=2 bitwise == default grid.x")
+
         # quant: dequantize the kernel output and compare to the bf16 input (fp4 has no
         # bitwise ref; assert the round-trip error is within fp4 precision).
         r[1](0)
@@ -225,7 +241,7 @@ def main():
             f"{'PASS' if q_ok else 'FAIL'} nvfp4 quant#1 dequant vs input: "
             f"rel_err={qrel:.3e} (tol 0.20, e2m1 ~2^-1 mantissa)"
         )
-        raise SystemExit(0 if (perr == 0 and act_ok and q_ok) else 1)
+        raise SystemExit(0 if (perr == 0 and act_ok and q_ok and gx_eq) else 1)
 
     per = set_bytes(mk())
     n_sets = pick_n_sets(per, args.budget_gb, args.n_sets)
@@ -237,6 +253,29 @@ def main():
     for name, call in runners(S).items():
         us = bench_kernel(call, n_sets) * 1000
         print(f"  {name:30s} = {us:7.2f} us")
+
+    # activationKernel grid.x sweep (config-bound test): the hidden-dim grid-stride loop
+    # makes any grid.x bitwise-identical, so smaller grid.x removes empty blocks and gives
+    # each thread a longer strip (more in-flight loads). default grid.x = innerDim/128.
+    print("  -- activationKernel grid.x sweep (bitwise-identical to default) --")
+    default_gx = gun // 128
+    for gx in [default_gx, 16, 8, 4, 2, 1]:
+        call = lambda i, gx=gx: m.bench_activation(
+            S[i]["gate_up"],
+            S[i]["lora_delta"],
+            S[i]["idx_map"],
+            S[i]["total_pad"],
+            S[i]["activated"],
+            S[i]["lora_input"],
+            gun,
+            nt,
+            tk,
+            gx,
+        )
+        us = bench_kernel(call, n_sets) * 1000
+        strip = (gun // 2 + 256 * gx - 1) // (256 * gx)
+        tag = " (default)" if gx == default_gx else ""
+        print(f"    grid.x={gx:3d}  (~{strip} elt/thread) = {us:7.2f} us{tag}")
 
 
 if __name__ == "__main__":

@@ -187,6 +187,12 @@ struct Data {
   int32_t* expandedIdxToPermutedIdx;
 
   int32_t const* totalNumPaddedTokens;
+
+  // Bench/tuning knob: when > 0, overrides the activation launch grid.x (default
+  // innerDim/128). The kernel's grid-stride hidden-dim loop makes any grid.x
+  // produce bitwise-identical output, so a smaller grid.x removes empty blocks and
+  // gives each thread a longer strip (more in-flight loads) without changing math.
+  int32_t actGridXOverride = 0;
 };
 
 template <typename Type_, int32_t NumTokensPerCta_, bool UsePdl_>

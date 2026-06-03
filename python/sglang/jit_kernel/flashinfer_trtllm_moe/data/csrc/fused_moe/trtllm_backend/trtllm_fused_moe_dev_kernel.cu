@@ -421,7 +421,8 @@ void run(Data const& data, void* stream) {
                       DEEP_SEEK_ACTIVATION_NUM_THREADS_PER_CTA, 0, stream);
   } else {
     int const numThreads = 256;
-    const dim3 grid(data.innerDim / 128, data.topK, std::min(8192, data.numTokens));
+    int const gridX = data.actGridXOverride > 0 ? data.actGridXOverride : (data.innerDim / 128);
+    const dim3 grid(gridX, data.topK, std::min(8192, data.numTokens));
 
     LAUNCH_ACTIVATION(data, activationKernel, 1, grid, numThreads, 0, stream);
   }
