@@ -1231,6 +1231,7 @@ def biased_grouped_topk_gpu(
                 # The AOT kernel requires fp32 input and bias.
                 _kimi_k2_moe_fused_gate = kimi_k2_moe_fused_gate
                 use_bf16_input = False
+                assert not envs.SGLANG_OPT_KIMI_GATE_BF16_INPUT.get()
 
             if use_bf16_input:
                 # Pass gating_output and correction_bias through untouched, dropping the
