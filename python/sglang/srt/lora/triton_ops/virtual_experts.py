@@ -372,7 +372,6 @@ from sglang.srt.lora.trtllm_moe.specialized_expand import (  # noqa: E402,F401
 )
 
 
-
 def _align_block_size_jit(
     topk_ids: torch.Tensor,
     block_size: int,
