@@ -109,7 +109,8 @@ __global__ void count_and_sort_expert_tokens_kernel(
     int local_expert_offset,
     int local_num_experts,
     bool ep_local,
-    bool shared_outer) {
+    bool shared_outer,
+    bool do_skip) {
   const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
   const size_t stride = blockDim.x * gridDim.x;
 
@@ -117,6 +118,11 @@ __global__ void count_and_sort_expert_tokens_kernel(
     int vid = compute_virtual_id<scalar_t>(
         topk_ids, token_lora_mapping, i, top_k, num_experts_for_weight,
         local_expert_offset, local_num_experts, ep_local, shared_outer);
+    // EP skip: dropped/masked slots (vid < 0) produce no delta on this rank, so
+    // they never need a slot in sorted_token_ids -> skip the global atomicAdd
+    // (kills the sentinel-bucket-0 contention). When do_skip is off they fall
+    // into bucket 0 (old behavior, kept for the bitwise-equivalence guardrail).
+    if (do_skip && vid < 0) continue;
     int32_t expert_id = vid + 1;
     int32_t rank_post_pad = atomicAdd(&cumsum_buffer[expert_id], 1);
     sorted_token_ids[rank_post_pad] = i;
@@ -143,7 +149,8 @@ __global__ void moe_align_block_size_kernel(
     int local_expert_offset,
     int local_num_experts,
     bool ep_local,
-    bool shared_outer) {
+    bool shared_outer,
+    bool do_skip) {
   // Use a separate thread block to populate sorted_token_ids
   if (blockIdx.x == 1) {
     if (pad_sorted_token_ids) {
@@ -177,8 +184,11 @@ __global__ void moe_align_block_size_kernel(
     int vid = compute_virtual_id<scalar_t>(
         topk_ids, token_lora_mapping, i, top_k, num_experts_for_weight,
         local_expert_offset, local_num_experts, ep_local, shared_outer);
-    int expert_id = vid + 1;
-    atomicAdd(&shared_counts[expert_id], 1);
+    // EP skip: dropped/masked slots don't increment any bucket (sentinel bucket
+    // 0 stays empty), so they never get a block and never reach count_and_sort.
+    if (!do_skip || vid >= 0) {
+      atomicAdd(&shared_counts[vid + 1], 1);
+    }
     // token_lora_mask[m] = token_lora_mapping[m] >= 0, written once per row.
     if (static_cast<int>(i) % top_k == 0) {
       int m = static_cast<int>(i) / top_k;
@@ -285,7 +295,8 @@ struct MoeLoraMergedAlignKernel {
       int64_t local_expert_offset,
       int64_t local_num_experts,
       bool ep_local,
-      bool shared_outer) {
+      bool shared_outer,
+      bool do_skip) {
     using namespace host;
 
     auto device = topk_ids.device();
@@ -337,7 +348,8 @@ struct MoeLoraMergedAlignKernel {
         (int)local_expert_offset,
         (int)local_num_experts,
         ep_local,
-        shared_outer);
+        shared_outer,
+        do_skip);
 
     const int block_threads = std::min(256, threads);
     const int num_blocks = (numel + block_threads - 1) / block_threads;
@@ -357,7 +369,8 @@ struct MoeLoraMergedAlignKernel {
         (int)local_expert_offset,
         (int)local_num_experts,
         ep_local,
-        shared_outer);
+        shared_outer,
+        do_skip);
   }
 };
 

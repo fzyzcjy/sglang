@@ -41,6 +41,7 @@ def moe_lora_merged_align(
     block_size: int,
     local_expert_offset: int = 0,
     local_num_experts: Optional[int] = None,
+    do_skip: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, int]:
     """Fused replacement for (_fused_virtual_topk_ids + _align_block_size) on the
     merged-virtual-expert LoRA path.
@@ -104,6 +105,7 @@ def moe_lora_merged_align(
         local_num_experts if local_num_experts is not None else 0,
         ep_local,
         shared_outer,
+        do_skip,
     )
 
     return (

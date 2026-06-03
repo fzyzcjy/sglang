@@ -112,6 +112,25 @@ def ref_align(vtopk, block, vne):
     return post, eids
 
 
+def ref_align_skip(vtopk, block, vne):
+    """torch reference for the EP-skip variant: dropped/masked slots (vid < 0 ->
+    sentinel bucket 0) are NOT placed, so bucket 0 contributes no tokens/blocks
+    (post_pad shrinks, no -1 sentinel block)."""
+    from collections import Counter
+
+    buckets = (vtopk.reshape(-1) + 1).clamp(min=0)
+    counts = torch.bincount(buckets, minlength=vne + 1)
+    counts[0] = 0  # EP skip: sentinel bucket gets nothing
+    blocks = (counts + block - 1) // block
+    post = int((blocks * block).sum().item())
+    eids = Counter()
+    for b in range(vne + 1):
+        nb = int(blocks[b].item())
+        if nb:
+            eids[b - 1] += nb
+    return post, eids
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["bench", "correctness"], default="bench")
@@ -183,46 +202,69 @@ def main():
             f"every token in correct expert block + each of {numel} slots exactly once={all_once}"
         )
 
-        # === NEW fused kernel vs OLD/ref (commit 1: inline virtual, no skip) ===
-        # Semantics are bucket-for-bucket identical to the old path, so the new
-        # kernel must match the same ref: post_pad exact, expert_ids multiset
-        # exact, placement valid, token_lora_mask exact.
+        # === NEW fused kernel: two modes ===
+        # mode A (do_skip=False): bucket-for-bucket identical to the old path
+        #   -> validated against the same ref (bitwise-equivalence guardrail).
+        # mode B (do_skip=True): EP skip -> dropped/masked slots are not placed,
+        #   sentinel bucket emptied -> validated against ref_align_skip + the
+        #   placement set must equal exactly the OWNED slots.
         from sglang.jit_kernel.moe_lora_merged_align import moe_lora_merged_align
 
-        n_sorted, n_expert, n_post, n_mask, n_vne = moe_lora_merged_align(
-            s["topk_ids"], s["tlm"], ne, shared_outer=False, max_loras=1,
-            block_size=blk, local_expert_offset=0, local_num_experts=lne,
-        )
-        n_pp = int(n_post.item())
-        n_nblk = n_pp // blk
-        n_eids = Counter(e for e in n_expert[:n_nblk].tolist())
-        n_post_ok = n_pp == post_ref
-        n_eids_ok = n_eids == eids_ref
-        # placement for new (buckets recomputed from ref_virtual_topk via vtopk)
-        n_st = n_sorted[:n_pp].tolist()
-        n_eids_list = n_expert[:n_nblk].tolist()
-        n_seen, n_place_ok = [], True
-        for j in range(n_nblk):
-            eid = n_eids_list[j]
-            for slot in n_st[j * blk : (j + 1) * blk]:
-                if slot == numel:
-                    continue
-                if not (0 <= slot < numel) or buckets[slot] != eid + 1:
-                    n_place_ok = False
-                    break
-                n_seen.append(slot)
-            if not n_place_ok:
-                break
-        n_all_once = n_place_ok and (sorted(n_seen) == list(range(numel)))
-        # token_lora_mask = (token_lora_mapping >= 0)
         ref_mask = (s["tlm"] >= 0).to(torch.bool)
-        n_mask_ok = bool((n_mask == ref_mask).all().item())
-        new_ok = n_post_ok and n_eids_ok and n_all_once and n_mask_ok
-        print(
-            f"{'PASS' if new_ok else 'FAIL'} NEW-fused vs ref: post_pad={n_pp} "
-            f"(ref {post_ref}) eids_multiset={n_eids_ok} placement={n_all_once} "
-            f"mask={n_mask_ok}"
+
+        def _check_new(do_skip, ref_post, ref_eids, owned_only):
+            ns, ne_, np_, nm_, _ = moe_lora_merged_align(
+                s["topk_ids"], s["tlm"], ne, shared_outer=False, max_loras=1,
+                block_size=blk, local_expert_offset=0, local_num_experts=lne,
+                do_skip=do_skip,
+            )
+            pp = int(np_.item())
+            nblk = pp // blk
+            eids_k = Counter(e for e in ne_[:nblk].tolist())
+            post_ok = pp == ref_post
+            eids_ok = eids_k == ref_eids
+            st_ = ns[:pp].tolist()
+            el_ = ne_[:nblk].tolist()
+            seen_, ok_ = [], True
+            for j in range(nblk):
+                eid = el_[j]
+                for slot in st_[j * blk : (j + 1) * blk]:
+                    if slot == numel:
+                        continue
+                    if not (0 <= slot < numel) or buckets[slot] != eid + 1:
+                        ok_ = False
+                        break
+                    seen_.append(slot)
+                if not ok_:
+                    break
+            if owned_only:
+                expected = sorted(i_ for i_ in range(numel) if buckets[i_] >= 1)
+            else:
+                expected = list(range(numel))
+            place_ok = ok_ and (sorted(seen_) == expected)
+            mask_ok = bool((nm_ == ref_mask).all().item())
+            return post_ok, eids_ok, place_ok, mask_ok, pp
+
+        a_post_ok, a_eids_ok, a_place_ok, a_mask_ok, a_pp = _check_new(
+            False, post_ref, eids_ref, owned_only=False
         )
+        a_ok = a_post_ok and a_eids_ok and a_place_ok and a_mask_ok
+        print(
+            f"{'PASS' if a_ok else 'FAIL'} NEW(no-skip) vs ref: post_pad={a_pp} "
+            f"(ref {post_ref}) eids={a_eids_ok} placement={a_place_ok} mask={a_mask_ok}"
+        )
+
+        post_skip, eids_skip = ref_align_skip(vtopk, blk, vne)
+        b_post_ok, b_eids_ok, b_place_ok, b_mask_ok, b_pp = _check_new(
+            True, post_skip, eids_skip, owned_only=True
+        )
+        b_ok = b_post_ok and b_eids_ok and b_place_ok and b_mask_ok
+        print(
+            f"{'PASS' if b_ok else 'FAIL'} NEW(skip) vs ref_skip: post_pad={b_pp} "
+            f"(ref {post_skip}) eids={b_eids_ok} placement(owned-only)={b_place_ok} "
+            f"mask={b_mask_ok}"
+        )
+        new_ok = a_ok and b_ok
 
         raise SystemExit(
             0 if (verr == 0 and post_ok and eids_ok and all_once and new_ok) else 1
