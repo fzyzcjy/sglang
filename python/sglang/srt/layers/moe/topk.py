@@ -1256,9 +1256,7 @@ def biased_grouped_topk_gpu(
                     "[SHAPECAP kimi_k2_moe_fused_gate_py] "
                     f"IN input(gating_output.fp32)={_ti(_gi)} | "
                     f"IN bias(correction_bias.fp32)={_ti(_cb)} | "
-                    + "".join(
-                        f"OUT[{_k}]={_ti(_o)} | " for _k, _o in enumerate(_outs)
-                    )
+                    + "".join(f"OUT[{_k}]={_ti(_o)} | " for _k, _o in enumerate(_outs))
                     + f"scalars: num_experts={num_experts} topk={topk} "
                     f"num_expert_group={num_expert_group} renormalize={renormalize} "
                     f"routed_scaling_factor={routed_scaling_factor}",
