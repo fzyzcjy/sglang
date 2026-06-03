@@ -187,6 +187,7 @@ def main():
                 nt,
                 tk,
                 H,
+                mp,
                 args.tile,
                 0,  # dedup=0
             ),
@@ -199,6 +200,7 @@ def main():
                 nt,
                 tk,
                 H,
+                mp,
                 args.tile,
                 1,  # dedup=1
             ),
@@ -334,7 +336,7 @@ def main():
             f_sf = torch.empty_like(s0["q1_sf"])
             f_ptsf = torch.empty_like(s0["q1_ptsf"])
             m.bench_fused_permute_quant(
-                s0["hidden_in"], s0["idx_map"], f_fp4, f_sf, f_ptsf, nt, tk, H, args.tile, dedup
+                s0["hidden_in"], s0["idx_map"], f_fp4, f_sf, f_ptsf, nt, tk, H, mp, args.tile, dedup
             )
             torch.cuda.synchronize()
             fp4_eq = torch.equal(f_fp4[:e], s0["q1_fp4"][:e])

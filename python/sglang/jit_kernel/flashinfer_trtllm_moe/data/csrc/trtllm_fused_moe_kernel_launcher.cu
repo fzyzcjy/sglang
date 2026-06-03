@@ -3241,6 +3241,7 @@ int64_t bench_fused_permute_quant(
     int64_t num_tokens,
     int64_t top_k,
     int64_t hidden_size,
+    int64_t maxpad,
     int64_t tile,
     int64_t dedup) {
   cudaStream_t stream = get_stream(hidden_in.device());
@@ -3251,6 +3252,7 @@ int64_t bench_fused_permute_quant(
       static_cast<uint32_t>(num_tokens),
       static_cast<uint32_t>(top_k),
       static_cast<uint32_t>(hidden_size),
+      static_cast<int>(maxpad),
       reinterpret_cast<__nv_bfloat16 const*>(hidden_in.data_ptr()),
       gsi,
       static_cast<int32_t const*>(idx_map.data_ptr()),
