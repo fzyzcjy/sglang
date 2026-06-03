@@ -2900,9 +2900,9 @@ class FP4BlockScaleLoraLauncher {
     // [SHAPECAP] adhoc shape-capture instrumentation (committed for trace; reverted after the run).
     // _ti() prints shape/dtype/stride/device of a tensor; it is called on EVERY real input/output
     // tensor of the in-op permute / NvFP4-quant / activation kernels at each kernel's call site
-    // below. _shapecap caps the dump at the first 64 run() invocations to bound log size.
-    static int s_shapecap_count = 0;
-    bool const _shapecap = (s_shapecap_count++ < 64);
+    // No dedup, no cap: print EVERY call (prefill and decode). Log size is not a concern; a missing
+    // shape is. (_shapecap kept as an always-true flag so the per-kernel blocks below read uniformly.)
+    bool const _shapecap = true;
     auto _ti = [](const char* tag, auto const& t) {
       auto dt = t.dtype();
       auto dev = t.device();

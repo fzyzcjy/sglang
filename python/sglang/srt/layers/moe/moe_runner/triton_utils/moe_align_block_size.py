@@ -75,15 +75,7 @@ def moe_align_block_size(
     )
 
     # [SHAPECAP] adhoc shape-capture print (committed for trace; reverted after the run).
-    _seen = moe_align_block_size.__dict__.setdefault("_shapecap_seen", set())
-    _sig = (
-        tuple(topk_ids.shape),
-        str(topk_ids.dtype),
-        int(num_experts),
-        int(block_size),
-    )
-    if _sig not in _seen:
-        _seen.add(_sig)
+    if True:  # [SHAPECAP] no dedup -- print EVERY call (prefill and decode)
 
         def _ti(t):
             return (

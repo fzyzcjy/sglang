@@ -1236,10 +1236,7 @@ def biased_grouped_topk_gpu(
                 apply_routed_scaling_factor_on_output=apply_routed_scaling_factor_on_output,
             )
             # [SHAPECAP] adhoc shape-capture print (committed for trace; reverted after the run).
-            _seen = biased_grouped_topk_gpu.__dict__.setdefault("_shapecap_seen", set())
-            _sig = (tuple(_gi.shape), str(_gi.dtype), int(topk))
-            if _sig not in _seen:
-                _seen.add(_sig)
+            if True:  # [SHAPECAP] no dedup -- print EVERY call (prefill and decode)
 
                 def _ti(t):
                     return (
