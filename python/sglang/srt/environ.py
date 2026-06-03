@@ -478,6 +478,11 @@ class Envs:
     # engaged for the supported per-expert single-adapter EP path; other cases
     # fall back to the original path. Default off.
     SGLANG_OPT_LORA_FUSED_MERGED_ALIGN = EnvBool(False)
+    # Aggressive fusion: compute the SwiGLU+LoRA activation AND the down-GEMM NVFP4 per-token quant
+    # in a single kernel, so the bf16 activation is never materialized to HBM (eliminates its write
+    # + quant#2's two reads, ~1.5x over the separate pair on EP8 bs64 Kimi decode). Takes priority
+    # over _VEC. Read C++-side via getenv in FP4BlockScaleLoraLauncher::run. Default OFF (A/B bisect).
+    SGLANG_OPT_FUSED_MOE_ACTIVATION_QUANT_FUSE = EnvBool(False)
     # Skip-softmax threshold scale factor for TRT-LLM attention (prefill and decode separately).
     # None = standard attention. See https://arxiv.org/abs/2512.12087
     SGLANG_SKIP_SOFTMAX_PREFILL_THRESHOLD_SCALE_FACTOR = EnvFloat(None)
