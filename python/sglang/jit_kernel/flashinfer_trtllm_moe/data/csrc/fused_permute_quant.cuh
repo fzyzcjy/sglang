@@ -28,11 +28,18 @@
 //     to all of that token's (valid) permuted destinations. Fewer blocks, no redundant quant.
 #pragma once
 
-#include "nv_internal/tensorrt_llm/kernels/quantization.cuh"
+// Include the narrow utils header (cvt_warp_fp16_to_fp4 / get_sf_out_offset_* / PackedVec /
+// reciprocal_approximate_ftz) rather than quantization.cuh: the latter pulls in
+// nv_internal/.../common/cudaUtils.h, which ODR-conflicts with the flashinfer/trtllm/common
+// twin already included by trtllm_fused_moe_kernel_launcher.cu. quantization_utils.cuh only
+// needs cudaTypeUtils.cuh + quantization.h.
+#include "nv_internal/tensorrt_llm/kernels/quantization_utils.cuh"
 
+#include <cub/cub.cuh>
 #include <cstdint>
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
+#include <type_traits>
 
 namespace sgl_fused_permute_quant {
 
@@ -82,7 +89,7 @@ __device__ __forceinline__ void fused_quant_one_row(
   }
   __syncthreads();
   float const perTokenScale = sPerTokenScale;
-  float const globalEncodeScale = reciprocal_approximate_ftz(perTokenScale);
+  float const globalEncodeScale = tk::reciprocal_approximate_ftz(perTokenScale);
 
   // ---- pass 2: quantize + scatter-write to the permuted destination ----
   for (uint32_t vecIdx = threadIdx.x; vecIdx < num_vecs_per_row; vecIdx += BLOCK_SIZE) {
@@ -171,7 +178,7 @@ __global__ void fusedPermuteNvfp4QuantDedupKernel(
   }
   __syncthreads();
   float const perTokenScale = sPerTokenScale;
-  float const globalEncodeScale = reciprocal_approximate_ftz(perTokenScale);
+  float const globalEncodeScale = tk::reciprocal_approximate_ftz(perTokenScale);
 
   // Resolve this token's (valid) permuted destinations once (top_k of them).
   // top_k is small; thread 0 writes the per-token scale for each destination.
