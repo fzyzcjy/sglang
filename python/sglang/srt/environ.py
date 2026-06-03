@@ -470,6 +470,14 @@ class Envs:
     # getenv in trtllm_fused_moe_kernel_launcher.cu (FP4BlockScaleLoraLauncher::run), since the JIT
     # kernel has no Python->C++ config channel. Default OFF for A/B bisection; set =1 to enable.
     SGLANG_OPT_FUSED_MOE_ACTIVATION_VEC = EnvBool(False)
+    # Use the fused LoRA-local align kernel (moe_lora_merged_align) on the
+    # --lora-use-virtual-experts decode routing prep: one kernel computes the
+    # virtual expert id inline + EP-skips dropped slots + compacts to local
+    # experts + scatters in a single block, replacing the 3-kernel
+    # (_fused_virtual_topk_ids + moe_align + count_and_sort) pipeline. Only
+    # engaged for the supported per-expert single-adapter EP path; other cases
+    # fall back to the original path. Default off.
+    SGLANG_OPT_LORA_FUSED_MERGED_ALIGN = EnvBool(False)
     # Skip-softmax threshold scale factor for TRT-LLM attention (prefill and decode separately).
     # None = standard attention. See https://arxiv.org/abs/2512.12087
     SGLANG_SKIP_SOFTMAX_PREFILL_THRESHOLD_SCALE_FACTOR = EnvFloat(None)

@@ -58,10 +58,12 @@ def prep_pipeline(s, num_experts, local_num_experts, block_size):
     return moe_align_block_size(vtopk, block_size, vne)
 
 
-def prep_pipeline_new(s, num_experts, local_num_experts, block_size):
-    """Fused replacement: single LoRA-local kernel computes virtual id inline +
-    aligns (commit 1: inline virtual, no skip). Returns the same 3 outputs as
-    prep_pipeline (drops token_lora_mask + vne) for apples-to-apples."""
+def prep_pipeline_new(
+    s, num_experts, local_num_experts, block_size, compact=False, fuse_scatter=False
+):
+    """Fused replacement (inline virtual + EP skip; compact histograms over local
+    experts; fuse_scatter does the whole thing in one threadblock/launch).
+    Returns the same 3 outputs as prep_pipeline for apples-to-apples."""
     from sglang.jit_kernel.moe_lora_merged_align import moe_lora_merged_align
 
     sorted_ids, expert_ids, post_pad, _mask, _vne = moe_lora_merged_align(
@@ -73,11 +75,14 @@ def prep_pipeline_new(s, num_experts, local_num_experts, block_size):
         block_size=block_size,
         local_expert_offset=0,
         local_num_experts=local_num_experts,
+        do_skip=True,
+        compact=compact,
+        fuse_scatter=fuse_scatter,
     )
     return sorted_ids, expert_ids, post_pad
 
 
-def ref_virtual_topk(topk_ids, tlm, num_experts, local_num_experts):
+def ref_virtual_topk(topk_ids, tlm, num_experts, local_num_experts, local_offset=0):
     bs, top_k = topk_ids.shape
     out = torch.empty_like(topk_ids)
     for mrow in range(bs):
@@ -85,7 +90,7 @@ def ref_virtual_topk(topk_ids, tlm, num_experts, local_num_experts):
         safe = max(lora, 0)
         for k in range(top_k):
             base = int(topk_ids[mrow, k].item())
-            owned = 0 <= base < local_num_experts
+            owned = local_offset <= base < local_offset + local_num_experts
             base = base if owned else -1
             res = base if base < 0 else base + safe * num_experts
             out[mrow, k] = res if lora >= 0 else -1
@@ -138,12 +143,14 @@ def main():
     ap.add_argument("--top-k", type=int, default=8)
     ap.add_argument("--num-experts", type=int, default=384)
     ap.add_argument("--local-num-experts", type=int, default=48)
+    ap.add_argument("--local-expert-offset", type=int, default=0)
     ap.add_argument("--block-size", type=int, default=16)
     ap.add_argument("--budget-gb", type=float, default=16.0)
     ap.add_argument("--n-sets", type=int, default=0, help="0 = auto (fill --budget-gb)")
     args = ap.parse_args()
     dev = "cuda"
     ne, lne, blk = args.num_experts, args.local_num_experts, args.block_size
+    loff = args.local_expert_offset
     mk = lambda: make_input_set(args.bs, args.top_k, ne, dev)
 
     if args.mode == "correctness":
@@ -154,10 +161,10 @@ def main():
             ne,
             shared_outer=False,
             max_loras=1,
-            local_expert_offset=0,
+            local_expert_offset=loff,
             local_num_experts=lne,
         )
-        ref = ref_virtual_topk(s["topk_ids"], s["tlm"], ne, lne)
+        ref = ref_virtual_topk(s["topk_ids"], s["tlm"], ne, lne, loff)
         verr = int((vtopk != ref).sum().item())  # bitwise exact (integer ids)
         print(
             f"{'PASS' if verr == 0 else 'FAIL'} virtual_topk_ids bitwise mismatches={verr}"
@@ -212,11 +219,21 @@ def main():
 
         ref_mask = (s["tlm"] >= 0).to(torch.bool)
 
-        def _check_new(do_skip, ref_post, ref_eids, owned_only):
+        def _check_new(
+            do_skip, ref_post, ref_eids, owned_only, compact=False, fuse_scatter=False
+        ):
             ns, ne_, np_, nm_, _ = moe_lora_merged_align(
-                s["topk_ids"], s["tlm"], ne, shared_outer=False, max_loras=1,
-                block_size=blk, local_expert_offset=0, local_num_experts=lne,
+                s["topk_ids"],
+                s["tlm"],
+                ne,
+                shared_outer=False,
+                max_loras=1,
+                block_size=blk,
+                local_expert_offset=loff,
+                local_num_experts=lne,
                 do_skip=do_skip,
+                compact=compact,
+                fuse_scatter=fuse_scatter,
             )
             pp = int(np_.item())
             nblk = pp // blk
@@ -264,7 +281,33 @@ def main():
             f"(ref {post_skip}) eids={b_eids_ok} placement(owned-only)={b_place_ok} "
             f"mask={b_mask_ok}"
         )
-        new_ok = a_ok and b_ok
+
+        # mode C (do_skip=True, compact=True): histogram over LOCAL experts, but
+        # expert_ids are restored to GLOBAL -> same observable result as mode B
+        # (same ref_align_skip post_pad / expert-id multiset / owned placement).
+        c_post_ok, c_eids_ok, c_place_ok, c_mask_ok, c_pp = _check_new(
+            True, post_skip, eids_skip, owned_only=True, compact=True
+        )
+        c_ok = c_post_ok and c_eids_ok and c_place_ok and c_mask_ok
+        print(
+            f"{'PASS' if c_ok else 'FAIL'} NEW(skip+compact) vs ref_skip: post_pad={c_pp} "
+            f"(ref {post_skip}) eids={c_eids_ok} placement(owned-only)={c_place_ok} "
+            f"mask={c_mask_ok}"
+        )
+
+        # mode D (skip + compact + fuse_scatter): single-block fused kernel (fill +
+        # histogram + scan + expert_ids + scatter in one launch) -> same observable
+        # result as mode C.
+        d_post_ok, d_eids_ok, d_place_ok, d_mask_ok, d_pp = _check_new(
+            True, post_skip, eids_skip, owned_only=True, compact=True, fuse_scatter=True
+        )
+        d_ok = d_post_ok and d_eids_ok and d_place_ok and d_mask_ok
+        print(
+            f"{'PASS' if d_ok else 'FAIL'} NEW(skip+compact+FUSE 1-kernel) vs ref_skip: "
+            f"post_pad={d_pp} (ref {post_skip}) eids={d_eids_ok} "
+            f"placement(owned-only)={d_place_ok} mask={d_mask_ok}"
+        )
+        new_ok = a_ok and b_ok and c_ok and d_ok
 
         raise SystemExit(
             0 if (verr == 0 and post_ok and eids_ok and all_once and new_ok) else 1
@@ -275,15 +318,25 @@ def main():
     S = [mk() for _ in range(n_sets)]
     call = lambda i: prep_pipeline(S[i], ne, lne, blk)
     us = bench_kernel(call, n_sets) * 1000
-    call_new = lambda i: prep_pipeline_new(S[i], ne, lne, blk)
+    call_new = lambda i: prep_pipeline_new(S[i], ne, lne, blk, compact=False)
     us_new = bench_kernel(call_new, n_sets) * 1000
+    call_cmp = lambda i: prep_pipeline_new(S[i], ne, lne, blk, compact=True)
+    us_cmp = bench_kernel(call_cmp, n_sets) * 1000
+    call_fuse = lambda i: prep_pipeline_new(
+        S[i], ne, lne, blk, compact=True, fuse_scatter=True
+    )
+    us_fuse = bench_kernel(call_fuse, n_sets) * 1000
     print(
         f"BENCH triton-gemm prep (COMBINED: virtual_topk_ids + moe_align + count_and_sort) "
         f"bs={args.bs} top_k={args.top_k} experts={ne} local_experts={lne} block={blk}"
     )
     print(f"  per_set={per/1e3:.1f}KB {report_sets(per, n_sets)}")
-    print(f"  OLD combined prep pipeline    = {us:7.2f} us")
-    print(f"  NEW fused (inline virtual)    = {us_new:7.2f} us   ({us/us_new:.2f}x)")
+    print(f"  OLD combined prep pipeline       = {us:7.2f} us")
+    print(f"  NEW 2-kernel (skip)              = {us_new:7.2f} us   ({us/us_new:.2f}x)")
+    print(f"  NEW 2-kernel (skip + compact)    = {us_cmp:7.2f} us   ({us/us_cmp:.2f}x)")
+    print(
+        f"  NEW 1-kernel (skip+compact+FUSE) = {us_fuse:7.2f} us   ({us/us_fuse:.2f}x)"
+    )
 
 
 if __name__ == "__main__":
