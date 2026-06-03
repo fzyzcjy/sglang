@@ -2907,19 +2907,34 @@ class FP4BlockScaleLoraLauncher {
       auto dt = t.dtype();
       auto dev = t.device();
       printf("[SHAPECAP fp4_lora_cu]   %s: ndim=%d shape=[", tag, (int)t.ndim());
-      for (int _i = 0; _i < (int)t.ndim(); ++_i) printf("%s%ld", _i ? "," : "", (long)t.size(_i));
+      for (int _i = 0; _i < (int)t.ndim(); ++_i)
+        printf("%s%ld", _i ? "," : "", (long)t.size(_i));
       printf("] strides=[");
-      for (int _i = 0; _i < (int)t.ndim(); ++_i) printf("%s%ld", _i ? "," : "", (long)t.strides()[_i]);
-      printf("] dtype=(code=%d,bits=%d,lanes=%d) device=(type=%d,id=%d)\n", (int)dt.code, (int)dt.bits,
-             (int)dt.lanes, (int)dev.device_type, (int)dev.device_id);
+      for (int _i = 0; _i < (int)t.ndim(); ++_i)
+        printf("%s%ld", _i ? "," : "", (long)t.strides()[_i]);
+      printf(
+          "] dtype=(code=%d,bits=%d,lanes=%d) device=(type=%d,id=%d)\n",
+          (int)dt.code,
+          (int)dt.bits,
+          (int)dt.lanes,
+          (int)dev.device_type,
+          (int)dev.device_id);
     };
     if (_shapecap) {
       printf(
           "[SHAPECAP fp4_lora_cu] === scalars: num_tokens=%ld max_num_padded_tokens=%d hidden_size=%ld "
           "inter=%ld gate_up_n=%ld top_k=%ld num_experts=%ld local_num_experts=%ld tile=%ld | "
           "quant1.m=max_num_padded_tokens quant2.m=num_tokens*top_k=%ld activation.numTokens=num_tokens ===\n",
-          (long)num_tokens, max_num_padded_tokens, (long)hidden_size, (long)inter, (long)gate_up_n,
-          (long)top_k, (long)num_experts, (long)local_num_experts, (long)tile, (long)(num_tokens * top_k));
+          (long)num_tokens,
+          max_num_padded_tokens,
+          (long)hidden_size,
+          (long)inter,
+          (long)gate_up_n,
+          (long)top_k,
+          (long)num_experts,
+          (long)local_num_experts,
+          (long)tile,
+          (long)(num_tokens * top_k));
       fflush(stdout);
     }
     {
@@ -2948,8 +2963,11 @@ class FP4BlockScaleLoraLauncher {
       }
 
       if (_shapecap) {
-        printf("[SHAPECAP fp4_lora_cu] -- permuteKernel (numTokens=%ld topK=%ld hiddenDim=%ld) --\n",
-               (long)num_tokens, (long)top_k, (long)hidden_size);
+        printf(
+            "[SHAPECAP fp4_lora_cu] -- permuteKernel (numTokens=%ld topK=%ld hiddenDim=%ld) --\n",
+            (long)num_tokens,
+            (long)top_k,
+            (long)hidden_size);
         _ti("permute.IN  hidden_states", hidden_states_);
         _ti("permute.IN  expanded_idx_to_permuted_idx", expanded_idx_to_permuted_idx);
         _ti("permute.OUT permuted_hidden_bf16", permuted_hidden_bf16);
@@ -2972,8 +2990,10 @@ class FP4BlockScaleLoraLauncher {
           stream);
 
       if (_shapecap) {
-        printf("[SHAPECAP fp4_lora_cu] -- nvfp4QuantAndPerTokenScale #1 gate_up-input (m=%d hidden=%ld) --\n",
-               max_num_padded_tokens, (long)hidden_size);
+        printf(
+            "[SHAPECAP fp4_lora_cu] -- nvfp4QuantAndPerTokenScale #1 gate_up-input (m=%d hidden=%ld) --\n",
+            max_num_padded_tokens,
+            (long)hidden_size);
         _ti("quant1.IN  permuted_hidden_bf16", permuted_hidden_bf16);
         _ti("quant1.OUT hidden_fp4", hidden_fp4);
         _ti("quant1.OUT hidden_fp4_sf", hidden_fp4_sf);
@@ -3070,8 +3090,11 @@ class FP4BlockScaleLoraLauncher {
       moe::dev::activation::run(actData, stream);
 
       if (_shapecap) {
-        printf("[SHAPECAP fp4_lora_cu] -- activationKernel (innerDim=%ld topK=%ld numTokens=%ld) --\n",
-               (long)gate_up_n, (long)top_k, (long)num_tokens);
+        printf(
+            "[SHAPECAP fp4_lora_cu] -- activationKernel (innerDim=%ld topK=%ld numTokens=%ld) --\n",
+            (long)gate_up_n,
+            (long)top_k,
+            (long)num_tokens);
         _ti("activation.IN  gate_up_bf16", gate_up_bf16);
         _ti("activation.IN  gate_up_lora_delta", gate_up_lora_delta_);
         _ti("activation.OUT activated_bf16", activated_bf16);
@@ -3107,8 +3130,10 @@ class FP4BlockScaleLoraLauncher {
         stream);
 
     if (_shapecap) {
-      printf("[SHAPECAP fp4_lora_cu] -- nvfp4QuantAndPerTokenScale #2 down-input (m=num_tokens*top_k=%ld inter=%ld) --\n",
-             (long)(num_tokens * top_k), (long)inter);
+      printf(
+          "[SHAPECAP fp4_lora_cu] -- nvfp4QuantAndPerTokenScale #2 down-input (m=num_tokens*top_k=%ld inter=%ld) --\n",
+          (long)(num_tokens * top_k),
+          (long)inter);
       _ti("quant2.IN  activated_bf16", activated_bf16);
       _ti("quant2.OUT act_fp4", act_fp4);
       _ti("quant2.OUT act_fp4_sf", act_fp4_sf);
