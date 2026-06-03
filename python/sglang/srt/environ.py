@@ -464,6 +464,11 @@ class Envs:
     # getenv in trtllm_fused_moe_kernel_launcher.cu (FP4BlockScaleLoraLauncher::run), since the JIT
     # kernel has no Python->C++ config channel. Default OFF for A/B bisection; set =1 to enable.
     SGLANG_OPT_FUSED_MOE_ACTIVATION_VEC = EnvBool(False)
+    # Aggressive fusion: compute the SwiGLU+LoRA activation AND the down-GEMM NVFP4 per-token quant
+    # in a single kernel, so the bf16 activation is never materialized to HBM (eliminates its write
+    # + quant#2's two reads, ~1.5x over the separate pair on EP8 bs64 Kimi decode). Takes priority
+    # over _VEC. Read C++-side via getenv in FP4BlockScaleLoraLauncher::run. Default OFF (A/B bisect).
+    SGLANG_OPT_FUSED_MOE_ACTIVATION_QUANT_FUSE = EnvBool(False)
     # Skip-softmax threshold scale factor for TRT-LLM attention (prefill and decode separately).
     # None = standard attention. See https://arxiv.org/abs/2512.12087
     SGLANG_SKIP_SOFTMAX_PREFILL_THRESHOLD_SCALE_FACTOR = EnvFloat(None)

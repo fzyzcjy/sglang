@@ -2653,49 +2653,13 @@ class FP4BlockScaleLoraLauncher {
       cudaStreamWaitEvent(stream, reinterpret_cast<cudaEvent_t>(lora_ready_event_), 0);
     }
 
-    // ---- 6) activation (LoRA-aware): SwiGLU on raw gate_up + gate_up_lora_delta pre-act ----
-    Tensor activated_bf16 = alloc_tensor({max_num_padded_tokens, inter}, dl_bfloat16, device);
-    {
-      moe::dev::activation::Data actData;
-      actData.mDtypeElt = btg::Dtype::Bfloat16;
-      actData.mUsePdl = false;
-      actData.mUseDeepSeekFp8 = false;
-      actData.inPtr = gate_up_bf16.data_ptr();
-      actData.interleavedGateUpInput = true;
-      actData.outPtr = activated_bf16.data_ptr();
-      actData.inDqSfsPtr = nullptr;
-      actData.outDqSfsPtr = nullptr;
-      actData.gateUpLoraDeltaPtr =
-          static_cast<cutlass::bfloat16_t const*>(gate_up_lora_delta_.data_ptr());
-      actData.activationLoraInputOutPtr =
-          static_cast<cutlass::bfloat16_t*>(activation_lora_input_.data_ptr());
-      actData.innerDim = gate_up_n;
-      actData.numTokens = num_tokens;
-      actData.topK = top_k;
-      actData.expandedIdxToPermutedIdx =
-          static_cast<int*>(expanded_idx_to_permuted_idx.data_ptr());
-      actData.totalNumPaddedTokens = static_cast<int*>(total_num_padded_tokens.data_ptr());
-      // SGLANG_OPT_FUSED_MOE_ACTIVATION_VEC (registered in environ.py): select the vectorized
-      // activationKernelOpt over the scalar kernel. Read once per process via getenv (the JIT
-      // kernel has no Python->C++ config channel). Bitwise-identical output; ~3.25x faster.
-      static int const actOptMode = [] {
-        char const* e = std::getenv("SGLANG_OPT_FUSED_MOE_ACTIVATION_VEC");
-        return (e != nullptr && (e[0] == '1' || e[0] == 't' || e[0] == 'T' || e[0] == 'y' ||
-                                 e[0] == 'Y'))
-                   ? 1
-                   : 0;
-      }();
-      actData.actOptMode = actOptMode;
-      moe::dev::activation::run(actData, stream);
-    }
-
-    // ---- 7) NvFP4 quant of activated bf16 (already permuted) -> permuted fp4 + sf + per-token ----
-    // Mirrors the plain fp4 path's down-GEMM input quant EXACTLY (runner.cu invokeNvfp4QuantAnd
-    // PerTokenScale): the FC1 (post-SwiGLU) activation is bf16, quantized with the generic
-    // 1/448/6 global + a per-token scale, then the down GEMM applies output2_scales_scalar
-    // (g2_alphas). We pass m = num_tokens*top_k + the expanded->permuted map so only the valid
-    // (non-padding) permuted rows are quantized — the activation kernel leaves padding rows of
-    // `activated_bf16` uninitialized, and the quant kernel uses the remapped idx for read+write.
+    // ---- 6+7) activation (SwiGLU + LoRA) then NvFP4 per-token quant of the result ----
+    // Three modes, selected by env (read once per process; the JIT kernel has no Python->C++
+    // config channel). FUSE has priority over VEC:
+    //   SGLANG_OPT_FUSED_MOE_ACTIVATION_QUANT_FUSE=1 -> single fused kernel, activated_bf16 never
+    //                                                   materialized to HBM (~1.5x over the pair).
+    //   else SGLANG_OPT_FUSED_MOE_ACTIVATION_VEC=1   -> vectorized activationKernelOpt + quant#2.
+    //   else (default)                                -> scalar activationKernel + quant#2.
     auto sfLayout = tile >= 128 ? tensorrt_llm::QuantizationSFLayout::SWIZZLED_128x4
                                 : tensorrt_llm::QuantizationSFLayout::SWIZZLED_8x4;
     float const globalScaleInv = 1.f / 448.f / 6.f;
@@ -2704,13 +2668,63 @@ class FP4BlockScaleLoraLauncher {
     Tensor act_fp4 = alloc_tensor({max_num_padded_tokens, inter / 2}, dl_uint8, device);
     Tensor act_fp4_sf = alloc_tensor({act_sf_size}, dl_uint8, device);
     Tensor act_per_token_sf = alloc_tensor({max_num_padded_tokens}, dl_float32, device);
-    tensorrt_llm::kernels::invokeNvfp4QuantAndPerTokenScale<__nv_bfloat16>(
-        num_tokens * top_k, inter,
-        reinterpret_cast<__nv_bfloat16 const*>(activated_bf16.data_ptr()), globalScaleInv,
-        static_cast<int*>(expanded_idx_to_permuted_idx.data_ptr()),
-        reinterpret_cast<uint8_t*>(act_fp4.data_ptr()),
-        reinterpret_cast<uint8_t*>(act_fp4_sf.data_ptr()),
-        reinterpret_cast<float*>(act_per_token_sf.data_ptr()), sfLayout, stream);
+
+    auto envFlag = [](char const* name) {
+      char const* e = std::getenv(name);
+      return e != nullptr &&
+             (e[0] == '1' || e[0] == 't' || e[0] == 'T' || e[0] == 'y' || e[0] == 'Y');
+    };
+    static int const fuseActQuant = envFlag("SGLANG_OPT_FUSED_MOE_ACTIVATION_QUANT_FUSE") ? 1 : 0;
+    static int const actOptMode = envFlag("SGLANG_OPT_FUSED_MOE_ACTIVATION_VEC") ? 1 : 0;
+
+    if (fuseActQuant) {
+      // Fused: gate_up (interleaved) + lora_delta -> act_fp4/sf/per_token + activation_lora_input,
+      // without materializing activated_bf16. inter must be a multiple of 16 (always true here).
+      flashinfer::sgl_fused_act_quant::launchFusedActivationQuant(
+          num_tokens * top_k, inter, gate_up_n,
+          reinterpret_cast<__nv_bfloat16 const*>(gate_up_bf16.data_ptr()),
+          reinterpret_cast<__nv_bfloat16 const*>(gate_up_lora_delta_.data_ptr()),
+          reinterpret_cast<__nv_bfloat16*>(activation_lora_input_.data_ptr()),
+          static_cast<int*>(expanded_idx_to_permuted_idx.data_ptr()), globalScaleInv,
+          reinterpret_cast<uint8_t*>(act_fp4.data_ptr()),
+          reinterpret_cast<uint8_t*>(act_fp4_sf.data_ptr()),
+          reinterpret_cast<float*>(act_per_token_sf.data_ptr()), sfLayout,
+          /*disableFp4FastMath=*/false, stream);
+    } else {
+      Tensor activated_bf16 = alloc_tensor({max_num_padded_tokens, inter}, dl_bfloat16, device);
+      {
+        moe::dev::activation::Data actData;
+        actData.mDtypeElt = btg::Dtype::Bfloat16;
+        actData.mUsePdl = false;
+        actData.mUseDeepSeekFp8 = false;
+        actData.inPtr = gate_up_bf16.data_ptr();
+        actData.interleavedGateUpInput = true;
+        actData.outPtr = activated_bf16.data_ptr();
+        actData.inDqSfsPtr = nullptr;
+        actData.outDqSfsPtr = nullptr;
+        actData.gateUpLoraDeltaPtr =
+            static_cast<cutlass::bfloat16_t const*>(gate_up_lora_delta_.data_ptr());
+        actData.activationLoraInputOutPtr =
+            static_cast<cutlass::bfloat16_t*>(activation_lora_input_.data_ptr());
+        actData.innerDim = gate_up_n;
+        actData.numTokens = num_tokens;
+        actData.topK = top_k;
+        actData.expandedIdxToPermutedIdx =
+            static_cast<int*>(expanded_idx_to_permuted_idx.data_ptr());
+        actData.totalNumPaddedTokens = static_cast<int*>(total_num_padded_tokens.data_ptr());
+        actData.actOptMode = actOptMode;
+        moe::dev::activation::run(actData, stream);
+      }
+      // quant#2: m = num_tokens*top_k + the expanded->permuted map so only valid (non-padding)
+      // permuted rows are quantized (padding rows of activated_bf16 are left uninitialized).
+      tensorrt_llm::kernels::invokeNvfp4QuantAndPerTokenScale<__nv_bfloat16>(
+          num_tokens * top_k, inter,
+          reinterpret_cast<__nv_bfloat16 const*>(activated_bf16.data_ptr()), globalScaleInv,
+          static_cast<int*>(expanded_idx_to_permuted_idx.data_ptr()),
+          reinterpret_cast<uint8_t*>(act_fp4.data_ptr()),
+          reinterpret_cast<uint8_t*>(act_fp4_sf.data_ptr()),
+          reinterpret_cast<float*>(act_per_token_sf.data_ptr()), sfLayout, stream);
+    }
 
     // ---- 8) down GEMM: Gemm2::Runner(E2m1,E2m1,bf16, K=inter, N=hidden) ----
     // We run in per-token-activation mode (SGLANG_FLASHINFER_NVFP4_PER_TOKEN_ACTIVATION), where
