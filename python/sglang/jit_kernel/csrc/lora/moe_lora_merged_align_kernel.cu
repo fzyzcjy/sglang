@@ -322,7 +322,6 @@ __global__ void fused_align_scatter_kernel(
   const size_t stride = blockDim.x;
   const int warp_id = tid / WARP_SIZE;
   const int lane_id = tid & (WARP_SIZE - 1);
-  const int num_warps_for_scan = (scan_size + WARP_SIZE - 1) / WARP_SIZE;
 
   // Phase 1: fill sorted_token_ids with the `numel` padding sentinel.
   {
@@ -353,44 +352,38 @@ __global__ void fused_align_scatter_kernel(
   }
   __syncthreads();
 
-  // Phase 3: padded counts + two-level warp exclusive prefix sum (verbatim).
+  // Phase 3: padded counts + ONE two-level warp EXCLUSIVE prefix sum. A single
+  // exclusive scan yields both the per-bucket prefix offsets AND the grand total
+  // (prefix[num_experts]); no separate total pass. ~3 barriers vs the general
+  // kernel's ~7 (this kernel's buckets fit a few warps, so the wide scan_buf
+  // Blelloch path the general kernel needs is overkill).
   int32_t padded_count = 0;
   if (tid < num_experts) {
-    int32_t count = shared_counts[tid];
-    padded_count = (count + block_size - 1) / block_size * block_size;
-    scan_buf[tid] = padded_count;
+    padded_count = (shared_counts[tid] + block_size - 1) / block_size * block_size;
   }
-  const int warp_sum = warp_exclusive_scan(padded_count) + padded_count;
-  if (lane_id == WARP_SIZE - 1) warp_sums[warp_id] = warp_sum;
+  const int block_warps = (blockDim.x + WARP_SIZE - 1) / WARP_SIZE;
+  int warp_excl = warp_exclusive_scan(padded_count);
+  if (lane_id == WARP_SIZE - 1) warp_sums[warp_id] = warp_excl + padded_count;
   __syncthreads();
-  if (tid < WARP_SIZE) {
-    int val = (tid < num_warps_for_scan) ? warp_sums[tid] : 0;
-    int incl = warp_exclusive_scan(val) + val;
-    warp_sums[tid] = incl;
-  }
-  __syncthreads();
-  if (tid == 0) {
-    prefix[num_experts] = warp_sums[num_warps_for_scan - 1];
-    s_total_tokens_post_pad = prefix[num_experts];
-    *total_tokens_post_pad = s_total_tokens_post_pad;
-  }
-  __syncthreads();
-  if (tid >= num_experts && tid < scan_size) scan_buf[tid] = 0;
-  __syncthreads();
-  int v = (tid < scan_size) ? scan_buf[tid] : 0;
-  int pre = warp_exclusive_scan(v);
-  if (lane_id == WARP_SIZE - 1) warp_sums[warp_id] = pre + v;
-  __syncthreads();
+  // warp 0 exclusive-scans the per-warp totals into per-warp base offsets
   if (warp_id == 0) {
-    int val = (lane_id < num_warps_for_scan) ? warp_sums[lane_id] : 0;
-    warp_sums[lane_id] = warp_exclusive_scan(val);
+    int wt = (lane_id < block_warps) ? warp_sums[lane_id] : 0;
+    warp_sums[lane_id] = warp_exclusive_scan(wt);
   }
   __syncthreads();
-  int off = warp_sums[warp_id];
-  if (tid < scan_size) scan_buf[tid] = pre + off;
-  __syncthreads();
-  if (tid < num_experts) prefix[tid] = scan_buf[tid];
-  if (tid <= num_experts) cumsum[tid] = prefix[tid];
+  int my_prefix = warp_sums[warp_id] + warp_excl;
+  if (tid < num_experts) {
+    prefix[tid] = my_prefix;
+    cumsum[tid] = my_prefix;
+    cursor[tid] = my_prefix;  // scatter cursor inits to the bucket start offset
+  }
+  if (tid == num_experts - 1) {
+    int total = my_prefix + padded_count;
+    prefix[num_experts] = total;
+    cumsum[num_experts] = total;
+    s_total_tokens_post_pad = total;
+    *total_tokens_post_pad = total;
+  }
   __syncthreads();
 
   // Phase 4: expert_ids (binary search per block) + init the scatter cursor.
@@ -408,8 +401,9 @@ __global__ void fused_align_scatter_kernel(
     }
     expert_ids[i] = left - 2 + (compact ? local_expert_offset : 0);
   }
-  if (tid < num_experts) cursor[tid] = prefix[tid];
-  __syncthreads();
+  // No barrier: cursor was initialized in phase 3 (before its __syncthreads) and
+  // the expert_ids loop above touches neither cursor nor sorted_token_ids, so the
+  // scatter can proceed directly.
 
   // Phase 5: scatter owned tokens using the cached virtual ids + shared cursor.
   for (size_t i = tid; i < numel; i += stride) {
@@ -490,7 +484,13 @@ struct MoeLoraMergedAlignKernel {
           (num_experts + (num_experts + 1) + scan_size + WARP_SIZE + num_experts + numel) *
           sizeof(int32_t);
       auto fused = moe_lora_merged::fused_align_scatter_kernel<scalar_t>;
-      LaunchKernel(dim3(1), dim3(threads), stream, shmem)(
+      // Single block on one SM: 1024 threads is overkill for the small decode
+      // work (compact ~49 buckets, ~numel/EP owned tokens) and makes every
+      // __syncthreads wait on 32 warps. Use just enough to cover the scan width.
+      int fused_threads = std::max((int)scan_size, 256);
+      fused_threads = std::min(fused_threads, threads);
+      fused_threads = ((fused_threads + WARP_SIZE - 1) / WARP_SIZE) * WARP_SIZE;
+      LaunchKernel(dim3(1), dim3(fused_threads), stream, shmem)(
           fused,
           topk_ids_ptr,
           tlm_ptr,
