@@ -83,23 +83,29 @@ __device__ __forceinline__ void fused_quant_one_row(
   __shared__ typename BlockReduce::TempStorage tempStorage;
   float const globalAmax = BlockReduce(tempStorage).Reduce(localAmax, cuda::maximum<>{});
 
-  // ---- per-token scale (default !TE_EXACT branch of nvfp4QuantAndPerTokenScaleKernel) ----
-  __shared__ float sPerTokenScale;
+  // ---- per-token scale (TE_EXACT branch — production instantiates TE_EXACT_NVFP4=true for bf16,
+  //      quantization.cu:247): globalEncodeScale = globalScale/globalAmax (exact __fdiv_rn), stored
+  //      per-token scale = 1/globalEncodeScale. __shared__ scalar replaces the gmem round-trip
+  //      (bit-identical: an fp32 store->load doesn't change the value). ----
+  __shared__ float sEncodeScale;
   if (threadIdx.x == 0) {
-    sPerTokenScale = globalAmax * globalScaleInv;
-    perTokenScaleOutput[writeRow] = sPerTokenScale;
+    float const globalScale = __fdiv_rn(1.0f, globalScaleInv);
+    float const rowEncodeScale =
+        globalAmax != 0.0f ? fminf(__fdiv_rn(globalScale, globalAmax), FLT_MAX) : FLT_MAX;
+    sEncodeScale = rowEncodeScale != 0.0f ? rowEncodeScale : 1.0f;
   }
   __syncthreads();
-  float const perTokenScale = sPerTokenScale;
-  float const globalEncodeScale = tk::reciprocal_approximate_ftz(perTokenScale);
+  float const globalEncodeScale = sEncodeScale;
+  float const perTokenScale = __fdiv_rn(1.0f, globalEncodeScale);
+  if (threadIdx.x == 0) perTokenScaleOutput[writeRow] = perTokenScale;
 
   // ---- pass 2: quantize + scatter-write to the permuted destination ----
   for (uint32_t vecIdx = threadIdx.x; vecIdx < num_vecs_per_row; vecIdx += BLOCK_SIZE) {
     InType vec_in = inBase[static_cast<int64_t>(readRow) * num_vecs_per_row + vecIdx];
     uint8_t fp8Scale;
     auto fp4Vals = tk::cvt_warp_fp16_to_fp4<T, SF_VEC_SIZE, ELTS_PER_THREAD, /*UE8M0_SF=*/false,
-                                            /*TE_EXACT_NVFP4=*/false>(vec_in, globalEncodeScale,
-                                                                      &fp8Scale);
+                                            /*TE_EXACT_NVFP4=*/true>(vec_in, globalEncodeScale,
+                                                                     &fp8Scale);
     reinterpret_cast<PackedFp4Type*>(weightOutput)[static_cast<int64_t>(writeRow) * num_vecs_per_row + vecIdx] =
         fp4Vals;
 
@@ -178,11 +184,17 @@ __global__ void fusedPermuteNvfp4QuantDedupKernel(
   __shared__ typename BlockReduce::TempStorage tempStorage;
   float const globalAmax = BlockReduce(tempStorage).Reduce(localAmax, cuda::maximum<>{});
 
-  __shared__ float sPerTokenScale;
-  if (threadIdx.x == 0) sPerTokenScale = globalAmax * globalScaleInv;
+  // TE_EXACT per-token scale (matches production; see fused_quant_one_row).
+  __shared__ float sEncodeScale;
+  if (threadIdx.x == 0) {
+    float const globalScale = __fdiv_rn(1.0f, globalScaleInv);
+    float const rowEncodeScale =
+        globalAmax != 0.0f ? fminf(__fdiv_rn(globalScale, globalAmax), FLT_MAX) : FLT_MAX;
+    sEncodeScale = rowEncodeScale != 0.0f ? rowEncodeScale : 1.0f;
+  }
   __syncthreads();
-  float const perTokenScale = sPerTokenScale;
-  float const globalEncodeScale = tk::reciprocal_approximate_ftz(perTokenScale);
+  float const globalEncodeScale = sEncodeScale;
+  float const perTokenScale = __fdiv_rn(1.0f, globalEncodeScale);
 
   // per-token scale -> each (valid) destination (top_k small; first top_k threads write).
   if (threadIdx.x < topK) {
@@ -195,8 +207,8 @@ __global__ void fusedPermuteNvfp4QuantDedupKernel(
     InType vec_in = inBase[static_cast<int64_t>(token) * num_vecs_per_row + vecIdx];
     uint8_t fp8Scale;
     auto fp4Vals = tk::cvt_warp_fp16_to_fp4<T, SF_VEC_SIZE, ELTS_PER_THREAD, /*UE8M0_SF=*/false,
-                                            /*TE_EXACT_NVFP4=*/false>(vec_in, globalEncodeScale,
-                                                                      &fp8Scale);
+                                            /*TE_EXACT_NVFP4=*/true>(vec_in, globalEncodeScale,
+                                                                     &fp8Scale);
 #pragma unroll 1
     for (uint32_t k = 0; k < topK; ++k) {
       int const writeRow = expandedIdxToPermutedIdx[token * topK + k];
