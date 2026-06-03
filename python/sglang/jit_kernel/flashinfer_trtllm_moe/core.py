@@ -365,8 +365,17 @@ def trtllm_fp4_block_scale_routed_moe_lora(
         )
 
     # [SHAPECAP] adhoc shape-capture print (committed for trace; reverted after the run).
-    _seen = trtllm_fp4_block_scale_routed_moe_lora.__dict__.setdefault("_shapecap_seen", set())
-    _sig = (tuple(hidden_states.shape), str(hidden_states.dtype), int(num_experts), int(top_k), int(intermediate_size), int(local_num_experts))
+    _seen = trtllm_fp4_block_scale_routed_moe_lora.__dict__.setdefault(
+        "_shapecap_seen", set()
+    )
+    _sig = (
+        tuple(hidden_states.shape),
+        str(hidden_states.dtype),
+        int(num_experts),
+        int(top_k),
+        int(intermediate_size),
+        int(local_num_experts),
+    )
     if _sig not in _seen:
         _seen.add(_sig)
         print(

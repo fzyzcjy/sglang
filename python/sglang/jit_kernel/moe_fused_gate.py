@@ -68,7 +68,12 @@ def moe_fused_gate(
     module = _jit_moe_fused_gate_module()
     # [SHAPECAP] adhoc shape-capture print (committed for trace; reverted after the run).
     _seen = moe_fused_gate.__dict__.setdefault("_shapecap_seen", set())
-    _sig = (tuple(input.shape), str(input.dtype), int(topk), int(num_fused_shared_experts))
+    _sig = (
+        tuple(input.shape),
+        str(input.dtype),
+        int(topk),
+        int(num_fused_shared_experts),
+    )
     if _sig not in _seen:
         _seen.add(_sig)
         print(

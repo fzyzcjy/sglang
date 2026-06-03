@@ -36,7 +36,12 @@ def moe_align_block_size(
     module = _jit_moe_align_module(topk_ids.dtype)
     # [SHAPECAP] adhoc shape-capture print (committed for trace; reverted after the run).
     _seen = moe_align_block_size.__dict__.setdefault("_shapecap_seen", set())
-    _sig = (tuple(topk_ids.shape), str(topk_ids.dtype), int(num_experts), int(block_size))
+    _sig = (
+        tuple(topk_ids.shape),
+        str(topk_ids.dtype),
+        int(num_experts),
+        int(block_size),
+    )
     if _sig not in _seen:
         _seen.add(_sig)
         print(
