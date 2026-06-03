@@ -134,43 +134,45 @@ def test_jit_kimi_output_shapes_and_renorm():
     )
 
 
+_DTYPES = [torch.float32, torch.bfloat16, torch.float16]
+_DTYPE_IDS = ["fp32", "bf16", "fp16"]
+
+
 @pytest.mark.parametrize("seq_length", [1, 7, 64, 512, 513, 4096])
 @pytest.mark.parametrize("config", _CONFIGS, ids=["kimi384", "mimo256"])
-@pytest.mark.parametrize("low_dtype", [torch.bfloat16, torch.float16])
-@pytest.mark.parametrize("mixed_bias", [False, True], ids=["same_dtype", "fp32_bias"])
+@pytest.mark.parametrize("input_dtype", _DTYPES, ids=[f"in_{d}" for d in _DTYPE_IDS])
+@pytest.mark.parametrize("bias_dtype", _DTYPES, ids=[f"bias_{d}" for d in _DTYPE_IDS])
 def test_jit_kimi_low_precision_input_matches_fp32(
-    seq_length, config, low_dtype, mixed_bias
+    seq_length, config, input_dtype, bias_dtype
 ):
-    """bf16/fp16 input is widened exactly, so it matches the fp32-upcast path bitwise."""
+    """Any fp32/bf16/fp16 input+bias combo is widened exactly -> matches the fp32 path bitwise."""
     num_experts, topk, routed_scaling_factor = config
     renormalize = True
 
     torch.manual_seed(seq_length)
-    tensor_low = torch.rand(
+    tensor = torch.rand(
         (seq_length, num_experts), dtype=torch.float32, device="cuda"
-    ).to(low_dtype)
-    bias_low = torch.rand(num_experts, dtype=torch.float32, device="cuda").to(low_dtype)
-    # Mixed dtype: bf16/fp16 input with an fp32 correction bias (kernel allows it).
-    bias_in = bias_low.to(torch.float32) if mixed_bias else bias_low
+    ).to(input_dtype)
+    bias = torch.rand(num_experts, dtype=torch.float32, device="cuda").to(bias_dtype)
 
-    low_output, low_indices = jit_kimi_k2_moe_fused_gate(
-        tensor_low,
-        bias_in,
+    output, indices = jit_kimi_k2_moe_fused_gate(
+        tensor,
+        bias,
         topk=topk,
         renormalize=renormalize,
         routed_scaling_factor=routed_scaling_factor,
     )
     # Host-side upcast is the exact same widening the kernel does internally.
     ref_output, ref_indices = jit_kimi_k2_moe_fused_gate(
-        tensor_low.to(torch.float32),
-        bias_in.to(torch.float32),
+        tensor.to(torch.float32),
+        bias.to(torch.float32),
         topk=topk,
         renormalize=renormalize,
         routed_scaling_factor=routed_scaling_factor,
     )
 
-    torch.testing.assert_close(low_output, ref_output, rtol=0, atol=0)
-    torch.testing.assert_close(low_indices, ref_indices, rtol=0, atol=0)
+    torch.testing.assert_close(output, ref_output, rtol=0, atol=0)
+    torch.testing.assert_close(indices, ref_indices, rtol=0, atol=0)
 
 
 def test_jit_kimi_unsupported_num_experts():

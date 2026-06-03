@@ -740,6 +740,11 @@ class Envs:
     SGLANG_OPT_USE_JIT_KERNEL_FUSED_TOPK = EnvBool(True)
     SGLANG_OPT_USE_TOPK_V2 = EnvBool(True)
     SGLANG_OPT_USE_JIT_KERNEL_KIMI_GATE = EnvBool(False)
+    # When the JIT kimi gate is used, feed bf16/fp16 router logits / correction bias
+    # straight in (widened to fp32 in-register) instead of upcasting on the host,
+    # dropping two elementwise cast kernels. Toggle off to A/B bisect against the
+    # old host-upcast path; bitwise-identical, so on by default.
+    SGLANG_OPT_KIMI_GATE_BF16_INPUT = EnvBool(True)
     SGLANG_OPT_USE_JIT_KERNEL_MOE_ALIGN = EnvBool(False)
 
     # GEMM / kernel fusion
