@@ -196,9 +196,18 @@ def auto_num_groups(
     return n
 
 
-def bench_us_rotated(calls, rep_ms: int) -> float:
+def bench_us_rotated(calls, rep_ms: int, burn_in: int = 2) -> float:
     """Capture all rotated calls in ONE CUDA graph via do_bench_cudagraph; per-call us =
-    graph time / num_groups."""
+    graph time / num_groups.
+
+    burn_in discards the first ``burn_in`` do_bench_cudagraph measurements and keeps the
+    next. The FIRST do_bench_cudagraph in a process is systematically ~30% faster than
+    steady-state on GB200 (NOT a clock effect -- it persists with SM+mem clocks locked; it
+    is a per-process cudagraph warmup state). Without burn-in, the first config measured in
+    any single-process sweep looks artificially fast and the sweep picks a bogus optimum.
+    The burned-in steady-state value is order-independent, reproducible, and matches what
+    sustained e2e cuda-graph decode (continuous replay) actually sees. See
+    2026-06-04-triton-dobench-first-call-bias.md."""
 
     def fn():
         for call in calls:
@@ -206,6 +215,8 @@ def bench_us_rotated(calls, rep_ms: int) -> float:
 
     fn()  # eager warmup: triton JIT compile outside graph capture
     torch.cuda.synchronize()
+    for _ in range(burn_in):
+        triton.testing.do_bench_cudagraph(fn, rep=rep_ms)
     ms = triton.testing.do_bench_cudagraph(fn, rep=rep_ms)
     return float(ms) * 1e3 / len(calls)
 
