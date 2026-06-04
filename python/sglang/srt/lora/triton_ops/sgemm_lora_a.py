@@ -177,26 +177,13 @@ def sgemm_lora_a_fwd(
     K = weights.shape[-1]
     assert x.shape[-1] == K
 
-    # v2 split-K shrink wins on the large-K shrinks (K>=2048: in_proj/qkv/gate_up) where it
-    # beats both the old triton kernel and cuBLAS in steady state; on the smaller-K shrinks
-    # (o_proj K=1024, shared_down K=128) cuBLAS's skinny path is faster, so fall through to
-    # the cuBLAS/triton dispatch below for those.
-    if (
-        envs.SGLANG_OPT_LORA_DENSE_V2.get()
-        and weights.shape[0] == 1
-        and R <= 64
-        and K >= 2048
-    ):
-        from sglang.srt.lora.triton_ops.sgemm_lora_a_v2 import sgemm_lora_a_v2_fwd
-
-        return sgemm_lora_a_v2_fwd(
-            x,
-            weights,
-            batch_info,
-            stack_num=stack_num,
-            out_alloc_stream=out_alloc_stream,
-        )
-
+    # NOTE: sgemm_lora_a_v2 (single-adapter split-K shrink) is intentionally NOT wired in.
+    # In a fair same-process A/B on GB200 it loses to cuBLAS on every decode shrink (in_proj
+    # -9%, qkv -22%, gate_up -10%, o_proj/shared_down also slower): cuBLAS's skinny-GEMM path
+    # avoids the split-K fp32-zeros + atomic-add overhead. Since production runs the LoRA-A
+    # shrink through cuBLAS (SGLANG_OPT_LORA_CUBLAS=1), v2 would be a regression. The kernel +
+    # its bench sweep are kept as a documented negative result; only the LoRA-B expand v2
+    # kernels (sgemm_lora_b_v2 / gate_up_lora_b_v2) are wired under SGLANG_OPT_LORA_DENSE_V2.
     if envs.SGLANG_OPT_LORA_CUBLAS.get() or envs.SGLANG_OPT_LORA_CUBLAS_A.get():
         # Honor out_alloc_stream like the Triton path below: under SGLANG_OPT_LORA_OVERLAP_MAIN_ALLOC
         # the shrink output must be allocated on the MAIN (consumer) stream so the caching allocator
