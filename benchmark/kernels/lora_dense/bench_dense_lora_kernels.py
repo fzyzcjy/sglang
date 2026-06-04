@@ -277,10 +277,16 @@ def _old_then_v2(name, kernel, spec, x, weights, base, bi):
 
 
 def run_v2_vs_old_guardrail(args, shapes, dtype, device) -> None:
-    """new-vs-old guardrail: for every shape run the old kernel and the v2 kernel on
-    identical inputs and assert their outputs agree. Split-K (LoRA-A) changes the float
-    accumulation order so this is a tight numerical (not bitwise) check; the B kernels
-    keep the same math and should match within bf16. The old kernel is the reference."""
+    """new-vs-old guardrail. The old kernel is the reference.
+
+    The two LoRA-B expand kernels (sgemm_b, gate_up_b) keep the OLD kernel's exact
+    arithmetic, so they must be BITWISE IDENTICAL (max_abs_err == 0); a guardrail FAIL is
+    raised otherwise. The LoRA-A shrink (sgemm_a) uses split-K, which reorders the float
+    reduction, so it cannot be bitwise -- it is held to a tight numerical bound (the
+    split-K fp32 accumulation is actually more accurate than the old kernel, so the
+    difference is at the bf16-output quantization floor)."""
+    # sgemm_a: split-K reorders the sum -> tight numerical bound (bf16 output ULP).
+    A_ABS, A_REL = 2e-2, 5e-3
     failures = 0
     for shuffle in [False, True]:
         for name, kernel, spec in shapes:
@@ -293,10 +299,15 @@ def run_v2_vs_old_guardrail(args, shapes, dtype, device) -> None:
             old, new = _old_then_v2(name, kernel, spec, x, weights, base, bi)
             err = float((new - old).abs().max().item())
             rel = err / float(old.abs().max().item() + 1e-9)
-            ok = err <= args.tol or rel <= args.rtol
+            if kernel == "sgemm_a":
+                ok = err <= A_ABS or rel <= A_REL
+                mode = "close"
+            else:
+                ok = err == 0.0  # B kernels must be bitwise identical to old
+                mode = "BITWISE" if err == 0.0 else "DIFF"
             failures += int(not ok)
             print(
-                f"{'PASS' if ok else 'FAIL'} v2-vs-old {name:<22s} "
+                f"{'PASS' if ok else 'FAIL'} v2-vs-old {name:<22s} [{mode:<7s}] "
                 f"shuffled={int(shuffle)} max_abs_err={err:.4e} rel={rel:.2e}"
             )
     if failures:

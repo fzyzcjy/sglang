@@ -2,11 +2,13 @@
 
 Packs the gate and up expand into one launch (axis-1 selects the slice), like the original
 ``_gate_up_lora_b_kernel``, but specializes for the uniform single-adapter decode batch:
-drops the per-segment weight/rank/scaling indirection and raises occupancy with a finer
-output tile. The production shape is tiny (output_dim=128, R=16) so the original grid is
-only (8, 2, 1) = 16 CTAs; a smaller BLOCK_OUT lifts the CTA count toward the SM count.
+drops the per-segment weight/rank indirection and raises occupancy with a finer output
+tile. The production shape is tiny (output_dim=128, R=16) so the original grid is only
+(8, 2, 1) = 16 CTAs; a smaller BLOCK_OUT lifts the CTA count toward the SM count.
 
-Keeps load+add+store (the tile is exclusive within the launch) and the permutation gather.
+Keeps the exact arithmetic of the original (fp32 dot * scaling -> cast to bf16 -> add the
+bf16 base -> store), so the output is BITWISE IDENTICAL to the old kernel and the guardrail
+can assert bitwise equality. The permutation gather is kept for shuffled token order.
 """
 
 import torch
@@ -89,8 +91,11 @@ def _gate_up_lora_b_v2_kernel(
         + (s_physical[:, None] * output_stride_0 + n_offset[None, :] * output_stride_1)
     )
     output_mask = (s_offset[:, None] < seg_len) & n_mask
-    partial_sum += tl.load(output_ptr, mask=output_mask).to(tl.float32)
-    tl.store(output_ptr, partial_sum.to(output.dtype.element_ty), mask=output_mask)
+    # Exact same write as the old kernel: cast the scaled dot to bf16, add the bf16 base,
+    # store (load+add+store, tile exclusive). Bitwise identical to _gate_up_lora_b_kernel.
+    partial_sum = partial_sum.to(output.dtype.element_ty)
+    partial_sum += tl.load(output_ptr, mask=output_mask)
+    tl.store(output_ptr, partial_sum, mask=output_mask)
 
 
 def gate_up_lora_b_v2_fwd(

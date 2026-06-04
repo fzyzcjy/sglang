@@ -2,15 +2,16 @@
 
 The production decode shape is a skinny [S, R] x [R, N] expand with R=16 and N either
 2048 (o_proj / shared_down) or 62080 (lm_head), added into base_output. The original
-``_sgemm_lora_b_kernel`` uses BLOCK_N=256 -> grid (4, 8, 1) = 32 CTAs for N=2048, and
-writes via ``atomic_add`` even though, for the single merged decode segment, each
-(pid_s, pid_n) output tile is exclusive within the launch (no cross-program overlap), so
-a plain load+add+store is sufficient and avoids the bf16 read-modify-write atomic.
+``_sgemm_lora_b_kernel`` uses BLOCK_N=256 -> grid (4, 8, 1) = only 32 CTAs for N=2048,
+badly parallelism-starved on a 148-SM GB200.
 
-This v2 specializes for the single-adapter batch: it raises occupancy with a finer
-output tile (more N programs) and replaces the atomic with load+add+store. It keeps the
-permutation gather so a shuffled token order stays correct. The input x may be the fp32
-split-K LoRA-A accumulator; it is cast to the weight dtype on-load.
+This v2 specializes for the single-adapter batch and raises occupancy with a finer output
+tile (more N programs), dropping the per-segment weight/rank/seg indirection. It keeps the
+exact arithmetic of the original kernel -- same fp32 dot, same cast, same ``atomic_add``
+into base_output -- so its output is BITWISE IDENTICAL to the old kernel (the atomic adds
+are per-exclusive-tile, order-independent). That lets the guardrail assert bitwise
+equality. The permutation gather is kept so a shuffled token order stays correct; the
+input x may be the fp32 split-K LoRA-A accumulator, cast to the weight dtype on-load.
 """
 
 import torch
@@ -83,10 +84,14 @@ def _sgemm_lora_b_v2_kernel(
     if ENABLE_PDL:
         tl.extra.cuda.gdc_launch_dependents()
 
-    # Output tile (pid_s, pid_n) is exclusive within this single-segment launch, so a
-    # plain load+add+store replaces the atomic_add (no cross-program write overlap).
-    partial_sum += tl.load(output_ptr, mask=output_mask).to(tl.float32)
-    tl.store(output_ptr, partial_sum.to(output.dtype.element_ty), mask=output_mask)
+    # Exact same write as the old kernel (cast then atomic_add into base_output) so the
+    # output is bitwise identical; atomic per-exclusive-tile is order-independent here.
+    tl.atomic_add(
+        output_ptr,
+        partial_sum.to(output.dtype.element_ty),
+        mask=output_mask,
+        sem="relaxed",
+    )
 
 
 def _select_config_b(N: int) -> dict:
