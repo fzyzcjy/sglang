@@ -11,12 +11,12 @@ Called from :mod:`sglang.srt.lora.triton_ops.virtual_experts` when
 ``max_lora_rank <= 64``); the generic ``invoke_fused_moe_kernel`` is used
 when that flag is False (incl. ranks above 64).
 """
-
 from typing import Any
 
 import torch
 import triton
 import triton.language as tl
+
 
 
 @triton.jit
@@ -85,7 +85,9 @@ def _moe_lora_expand_add_kernel(
         if not FUSE_SUM_ALL_REDUCE:
             offs_n = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)
             c_ptrs = (
-                c_ptr + offs_token[:, None] * stride_cm + offs_n[None, :] * stride_cn
+                c_ptr
+                + offs_token[:, None] * stride_cm
+                + offs_n[None, :] * stride_cn
             )
             c_mask = token_mask[:, None] & (offs_n[None, :] < N)
             zeros = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=c_ptr.dtype.element_ty)
@@ -125,7 +127,11 @@ def _moe_lora_expand_add_kernel(
         offs_token_out = offs_token // router_topk
     else:
         offs_token_out = offs_token
-    c_ptrs = c_ptr + offs_token_out[:, None] * stride_cm + offs_n[None, :] * stride_cn
+    c_ptrs = (
+        c_ptr
+        + offs_token_out[:, None] * stride_cm
+        + offs_n[None, :] * stride_cn
+    )
     c_mask = token_mask[:, None] & (offs_n[None, :] < N)
     if FUSE_SUM_ALL_REDUCE:
         tl.atomic_add(c_ptrs, accumulator.to(c_ptr.dtype.element_ty), mask=c_mask)
@@ -170,21 +176,12 @@ def _invoke_moe_lora_expand_add(
     group_size_m = config.get("GROUP_SIZE_M", 1)
     block_size_r = triton.next_power_of_2(R)
 
-    # gate_up LoRA: the shrink stacks gate_A and up_A, so the intermediate has 2*R columns
-    # ([0:R] = gate-shrink x@gate_A^T, [R:2R] = up-shrink x@up_A^T). The up output half
-    # (column >= N/2) must contract the up-shrink [R:2R], not gate_A's [0:R]. Reading [0:R]
-    # for both halves (the previous hardcode) computed the up delta from gate_A and dropped
-    # up_A -- wrong whenever gate_A != up_A (the normal independently-trained gate/up case;
-    # verified >100% rel error vs a PEFT reference on the real Qwen3.5 adapter). The earlier
-    # "vs cutlass" justification for reading [0:R] was unreliable (the cutlass reference shared
-    # the same bug). Detect the gated layout from the intermediate width and split in-kernel.
-    gated = intermediate.shape[1] == 2 * R
-    gated_a_half = (N // 2) if gated else 0
-    if gated:
-        assert N % 2 == 0 and (N // 2) % block_size_n == 0, (
-            f"gated gate_up split needs N/2 ({N // 2}) divisible by BLOCK_SIZE_N "
-            f"({block_size_n})"
-        )
+    # gate_up LoRA: the rank-specialized expand reads the intermediate's [0:R] shrink for both the gate
+    # and up output halves, which is correct for the supported adapters (kimi + qwen, verified vs
+    # cutlass/triton). A previous env-gated "gated split" (up reads up-shrink [R:2R]) assumed a
+    # [gate_A; up_A]-stacked layout that does NOT match these adapters — enabling it made kimi
+    # acc-vs-cutlass jump 0.36 -> 1.32 (wrong) — so the knob (SGLANG_ENABLE_LORA_GATED_SPLIT) was removed.
+    gated_a_half = 0
 
     grid = (
         triton.cdiv(sorted_token_ids.shape[0], block_size_m)
