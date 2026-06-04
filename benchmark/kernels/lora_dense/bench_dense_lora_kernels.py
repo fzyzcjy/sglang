@@ -40,6 +40,7 @@ import triton.testing
 
 from sglang.srt.lora.triton_ops.gate_up_lora_b import gate_up_lora_b_fwd
 from sglang.srt.lora.triton_ops.sgemm_lora_a import sgemm_lora_a_fwd
+from sglang.srt.lora.triton_ops.sgemm_lora_a_v2 import sgemm_lora_a_v2_fwd
 from sglang.srt.lora.triton_ops.sgemm_lora_b import sgemm_lora_b_fwd
 from sglang.srt.lora.utils import LoRABatchInfo
 
@@ -235,6 +236,123 @@ class cublas_a_env:
         return False
 
 
+class dense_v2_env:
+    """Scoped SGLANG_OPT_LORA_DENSE_V2=1 (read live by envs.*.get()): selects the
+    single-adapter specialized split-K v2 dense LoRA kernels in the production fwds."""
+
+    def __init__(self, enabled: bool):
+        self.enabled = enabled
+
+    def __enter__(self):
+        if self.enabled:
+            os.environ["SGLANG_OPT_LORA_DENSE_V2"] = "1"
+
+    def __exit__(self, *exc):
+        if self.enabled:
+            os.environ.pop("SGLANG_OPT_LORA_DENSE_V2", None)
+        return False
+
+
+def run_v2_vs_old_guardrail(args, shapes, dtype, device) -> None:
+    """new-vs-old guardrail: for every sgemm_a shape run the old kernel and the v2 kernel
+    on identical inputs and assert their outputs agree. Split-K changes the float
+    accumulation order so this is a tight numerical (not bitwise) check; the old kernel is
+    the reference. Also re-checks both against the fp32 ref via run_correctness above."""
+    failures = 0
+    for shuffle in [False, True]:
+        for name, kernel, spec in shapes:
+            if kernel != "sgemm_a":
+                continue
+            bi = make_merged_decode_batch_info(
+                args.bs, args.rank, args.scaling, device, shuffle_permutation=shuffle
+            )
+            x, weights, _ = make_inputs(
+                name, kernel, spec, args.bs, args.rank, dtype, device
+            )
+            old = sgemm_lora_a_fwd(x, weights, bi, stack_num=spec["stack_num"]).float()
+            new = sgemm_lora_a_v2_fwd(
+                x, weights, bi, stack_num=spec["stack_num"]
+            ).float()
+            err = float((new - old).abs().max().item())
+            rel = err / float(old.abs().max().item() + 1e-9)
+            ok = err <= args.tol or rel <= args.rtol
+            failures += int(not ok)
+            print(
+                f"{'PASS' if ok else 'FAIL'} v2-vs-old {name:<22s} "
+                f"shuffled={int(shuffle)} max_abs_err={err:.4e} rel={rel:.2e}"
+            )
+    if failures:
+        raise SystemExit(1)
+
+
+def run_sweep_a_v2(args, shapes, dtype, device) -> None:
+    """Sweep (BLOCK_S, BLOCK_K, SPLIT_K, num_warps, num_stages) for sgemm_a v2 on each
+    sgemm_a shape; report the fastest config (PDL-rotated us)."""
+    num_sms = torch.cuda.get_device_properties(device).multi_processor_count
+    s = args.bs
+    for name, kernel, spec in shapes:
+        if kernel != "sgemm_a":
+            continue
+        K = spec["K"]
+        num_s_tiles = triton.cdiv(s, 16)
+        block_ks = [bk for bk in (32, 64, 128, 256) if bk <= max(K, 32)]
+        candidates = []
+        for block_k in block_ks:
+            num_k_tiles = triton.cdiv(K, block_k)
+            for split_k in sorted(
+                {
+                    1,
+                    min(num_k_tiles, 4),
+                    min(num_k_tiles, 8),
+                    min(num_k_tiles, 16),
+                    min(num_k_tiles, max(1, 2 * num_sms // num_s_tiles)),
+                    num_k_tiles,
+                }
+            ):
+                for num_warps in (2, 4, 8):
+                    for num_stages in (2, 3, 4):
+                        candidates.append(
+                            {
+                                "BLOCK_K": block_k,
+                                "SPLIT_K": split_k,
+                                "num_warps": num_warps,
+                                "num_stages": num_stages,
+                            }
+                        )
+        group_bytes = group_bytes_of(kernel, spec, s, args.rank)
+        num_groups = args.num_groups or auto_num_groups(
+            group_bytes, args.l2_mult, args.min_groups, args.max_groups
+        )
+        groups = [
+            make_inputs(name, kernel, spec, s, args.rank, dtype, device, seed=g)
+            for g in range(num_groups)
+        ]
+        bi = make_merged_decode_batch_info(s, args.rank, args.scaling, device)
+        best = None
+        for cfg in candidates:
+            calls = [
+                (
+                    lambda x=x, w=w: sgemm_lora_a_v2_fwd(
+                        x, w, bi, stack_num=spec["stack_num"], config=cfg
+                    )
+                )
+                for x, w, _ in groups
+            ]
+            try:
+                us = bench_us_rotated(calls, args.rep_ms)
+            except Exception as e:
+                continue
+            if best is None or us < best[0]:
+                best = (us, cfg)
+        us, cfg = best
+        print(
+            f"SWEEP-A-V2 {name:<22s} K={K} best={us:.2f} us  "
+            f"BLOCK_K={cfg['BLOCK_K']} SPLIT_K={cfg['SPLIT_K']} "
+            f"warps={cfg['num_warps']} stages={cfg['num_stages']}  "
+            f"(grid={num_s_tiles}x{cfg['SPLIT_K']}={num_s_tiles * cfg['SPLIT_K']} CTA)"
+        )
+
+
 def run_correctness(args, shapes, dtype, device) -> None:
     failures = 0
     for shuffle in [False, True]:
@@ -275,7 +393,14 @@ def run_correctness(args, shapes, dtype, device) -> None:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument(
-        "--mode", choices=["bench", "correctness", "profile"], default="bench"
+        "--mode",
+        choices=["bench", "correctness", "profile", "guardrail", "sweepa"],
+        default="bench",
+    )
+    ap.add_argument(
+        "--v2",
+        action="store_true",
+        help="enable SGLANG_OPT_LORA_DENSE_V2 (specialized split-K dense kernels)",
     )
     ap.add_argument("--only", default=None, help="run a single SHAPES entry by name")
     ap.add_argument("--bs", type=int, default=64, help="decode batch size (1 tok/req)")
@@ -313,10 +438,18 @@ def main():
     if args.mode == "correctness":
         run_correctness(args, shapes, dtype, device)
         return
+    if args.mode == "guardrail":
+        run_v2_vs_old_guardrail(args, shapes, dtype, device)
+        return
+    if args.mode == "sweepa":
+        run_sweep_a_v2(args, shapes, dtype, device)
+        return
 
     s = args.bs
     for name, kernel, spec in shapes:
         for variant, use_cublas_a in variants_for(name, kernel):
+            if args.v2 and variant != "triton":
+                continue  # v2 replaces the triton path; skip the F.linear variant
             bi = make_merged_decode_batch_info(s, args.rank, args.scaling, device)
             group_bytes = group_bytes_of(kernel, spec, s, args.rank)
             num_groups = args.num_groups or auto_num_groups(
@@ -328,8 +461,9 @@ def main():
             ]
             calls = [make_call(kernel, spec, x, w, base, bi) for x, w, base in groups]
 
+            label = "v2" if args.v2 else variant
             if args.mode == "profile":
-                with cublas_a_env(use_cublas_a):
+                with cublas_a_env(use_cublas_a), dense_v2_env(args.v2):
                     for _ in range(2):
                         calls[0]()
                     torch.cuda.synchronize()
@@ -337,14 +471,14 @@ def main():
                         for call in calls:
                             call()
                     torch.cuda.synchronize()
-                print(f"PROFILE {name} [{variant}]: {args.iters} x {num_groups} groups")
+                print(f"PROFILE {name} [{label}]: {args.iters} x {num_groups} groups")
                 continue
 
-            with cublas_a_env(use_cublas_a):
+            with cublas_a_env(use_cublas_a), dense_v2_env(args.v2):
                 us = bench_us_rotated(calls, args.rep_ms)
             dims = " ".join(f"{k}={v}" for k, v in spec.items())
             print(
-                f"BENCH {name:<22s} [{variant:<14s}] s={s} r={args.rank} {dims:<22s} "
+                f"BENCH {name:<22s} [{label:<14s}] s={s} r={args.rank} {dims:<22s} "
                 f"groups={num_groups} ({group_bytes * num_groups / 1e6:.0f} MB rotated): "
                 f"{us:.2f} us"
             )

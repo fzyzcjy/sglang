@@ -177,6 +177,17 @@ def sgemm_lora_a_fwd(
     K = weights.shape[-1]
     assert x.shape[-1] == K
 
+    if envs.SGLANG_OPT_LORA_DENSE_V2.get() and weights.shape[0] == 1 and R <= 64:
+        from sglang.srt.lora.triton_ops.sgemm_lora_a_v2 import sgemm_lora_a_v2_fwd
+
+        return sgemm_lora_a_v2_fwd(
+            x,
+            weights,
+            batch_info,
+            stack_num=stack_num,
+            out_alloc_stream=out_alloc_stream,
+        )
+
     if envs.SGLANG_OPT_LORA_CUBLAS.get() or envs.SGLANG_OPT_LORA_CUBLAS_A.get():
         # Honor out_alloc_stream like the Triton path below: under SGLANG_OPT_LORA_OVERLAP_MAIN_ALLOC
         # the shrink output must be allocated on the MAIN (consumer) stream so the caching allocator

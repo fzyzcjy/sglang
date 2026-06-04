@@ -504,6 +504,14 @@ class Envs:
     SGLANG_OPT_LORA_CUBLAS_GATE_UP = EnvBool(False)  # gate_up_lora_b
     SGLANG_OPT_LORA_CUBLAS_QKV = EnvBool(False)  # qkv_lora_b
     SGLANG_OPT_LORA_CUBLAS_KV_B = EnvBool(False)  # kv_b_lora_absorbed (MLA absorbed)
+    # Opt in to the single-adapter specialized v2 dense LoRA Triton kernels: the LoRA-A shrink
+    # (sgemm_lora_a) uses aggressive split-K to raise CTA count from ~4 to fill the SMs, and the
+    # LoRA-B expand kernels (sgemm_lora_b / gate_up_lora_b) raise occupancy via finer output tiles +
+    # drop the unnecessary atomic_add for the in-launch-exclusive single-segment decode case. These
+    # specialize for the uniform single-adapter batch (one merged segment, one weight slot); they keep
+    # the permutation gather so a shuffled token order is still correct. Default OFF (A/B bisect); the
+    # old kernels remain the correctness guardrail. Read live by envs.*.get() at each fwd call.
+    SGLANG_OPT_LORA_DENSE_V2 = EnvBool(False)
     # Fuse the FlashInfer routed-MoE topk pack ((id << 16) | bf16_bits(weight)) into the top-k
     # gating softmax via the JIT topk_softmax_pack kernel (a port of the AOT topkGatingSoftmax
     # fast path with a third output), removing the per-MoE-layer _pack_topk_kernel launch from
