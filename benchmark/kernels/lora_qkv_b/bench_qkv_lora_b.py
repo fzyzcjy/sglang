@@ -201,40 +201,84 @@ def bench_us_rotated(calls, rep_ms: int) -> float:
 
 
 def run_correctness(args, dtype, device) -> None:
-    cases = [
-        ("decode-merged(e2e)", "merged", 64, False),
-        ("decode-merged-shuffled", "merged", 64, True),
-        ("decode-merged bs128", "merged", 128, False),
-        ("multiseg [1,1,64,200]", "multiseg", [1, 1, 64, 200], False),
-        ("prefill s=256", "multiseg", [256], False),
-    ]
-    failures = 0
+    """Validate both writeback paths: the atomic_add baseline AND the
+    SGLANG_OPT_LORA_QKV_B_STORE load+add+store path. Each is checked against an
+    independent fp32 ref; the store path is additionally asserted bitwise-equal to the
+    atomic path (disjoint output tiles make both RMW orders produce identical bf16
+    results, so bitwise equality is the primary gate -- any tile overlap would diverge).
+
+    Beyond the two e2e presets this also exercises the risk axes a store path can break
+    on but the atomic baseline hides: ragged column tails (slice dims not a multiple of
+    BLOCK_OUT=64, forcing partial masked stores), rank!=16 / scaling!=2 (K and BLOCK_R
+    tail masks), and the seg_len==0 / rank==0 early-return branches.
+    """
+    from sglang.srt.environ import envs
+
+    # (name, slice_dims, batch_spec, rank, scaling)
+    # batch_spec: ("merged", s, shuffle) or ("multiseg", [seg_lens])
+    cases = []
     for preset, slice_dims in PRESETS.items():
+        for name, spec in [
+            ("decode-merged(e2e)", ("merged", 64, False)),
+            ("decode-merged-shuffled", ("merged", 64, True)),
+            ("decode-merged bs128", ("merged", 128, False)),
+            ("multiseg [1,1,64,200]", ("multiseg", [1, 1, 64, 200])),
+            ("prefill s=256", ("multiseg", [256])),
+        ]:
+            cases.append((f"{preset}/{name}", slice_dims, spec, 16, 2.0))
+        # rank / scaling variants (tile-overlap proof is rank-independent, but K and
+        # BLOCK_R=next_pow2(r) widen the tile). rank<16 is not a standalone shape here:
+        # tl.dot needs K>=16, so a rank-8 adapter runs with a width-16 padded buffer in
+        # production (BLOCK_R stays 16); we cover the wider rank=64 instead.
+        cases.append((f"{preset}/rank64", slice_dims, ("merged", 64, False), 64, 2.0))
+        cases.append((f"{preset}/scaling1", slice_dims, ("merged", 64, False), 16, 1.0))
+        # seg_len==0 / interspersed empty segments exercise the early-return branch.
+        cases.append(
+            (f"{preset}/seg0", slice_dims, ("multiseg", [0, 64, 0, 200]), 16, 2.0)
+        )
+    # Ragged column tail: slice dims NOT multiples of BLOCK_OUT=64, so the store path
+    # must do partial masked stores -- the most likely place store/atomic could diverge.
+    for tail_name, tail_dims in [
+        ("tailmask4", [100, 60, 28, 130]),
+        ("tailmask3", [300, 50, 50]),
+    ]:
+        cases.append((tail_name, tail_dims, ("merged", 64, False), 16, 2.0))
+
+    failures = 0
+    for name, slice_dims, spec, rank, scaling in cases:
         n_slices = len(slice_dims)
-        for name, kind, arg, shuffle in cases:
-            if kind == "merged":
-                s = arg
-                bi = make_merged_decode_batch_info(
-                    s, args.rank, args.scaling, device, shuffle_permutation=shuffle
-                )
-            else:
-                s = sum(arg)
-                bi = make_multiseg_batch_info(arg, args.rank, args.scaling, device)
-            x, w, output_offset, base = make_inputs(
-                s, slice_dims, args.rank, dtype, device
+        if spec[0] == "merged":
+            _, s, shuffle = spec
+            bi = make_merged_decode_batch_info(
+                s, rank, scaling, device, shuffle_permutation=shuffle
             )
-            ref = ref_qkv_b(x, w, output_offset, args.scaling, args.rank, base)
-            out = run_qkv_b(
+        else:
+            seg_lens = spec[1]
+            s = sum(seg_lens)
+            bi = make_multiseg_batch_info(seg_lens, rank, scaling, device)
+        x, w, output_offset, base = make_inputs(s, slice_dims, rank, dtype, device)
+        ref = ref_qkv_b(x, w, output_offset, scaling, rank, base)
+        with envs.SGLANG_OPT_LORA_QKV_B_STORE.override(False):
+            out_atomic = run_qkv_b(
                 x, w, bi, output_offset, max(slice_dims), base.clone(), n_slices
-            ).float()
-            err = float((out - ref).abs().max().item())
-            rel = err / float(ref.abs().max().item() + 1e-9)
-            ok = err <= args.tol
-            failures += int(not ok)
-            print(
-                f"{'PASS' if ok else 'FAIL'} {preset:<12s} {name:<24s} s={s:<4d} "
-                f"max_abs_err={err:.4e} rel={rel:.2e}"
             )
+        with envs.SGLANG_OPT_LORA_QKV_B_STORE.override(True):
+            out_store = run_qkv_b(
+                x, w, bi, output_offset, max(slice_dims), base.clone(), n_slices
+            )
+        ref_scale = float(ref.abs().max().item()) + 1e-9
+        rel_a = float((out_atomic.float() - ref).abs().max().item()) / ref_scale
+        rel_s = float((out_store.float() - ref).abs().max().item()) / ref_scale
+        bitwise = torch.equal(out_atomic, out_store)
+        # bitwise is the primary gate (atomic==store proves no tile overlap); the
+        # relative-error gate guards both paths against the fp32 ref. rtol=2e-2 is the
+        # bf16 round-off envelope for these K<=64 accumulations (observed ~3e-3).
+        ok = bitwise and rel_a <= args.rtol and rel_s <= args.rtol
+        failures += int(not ok)
+        print(
+            f"{'PASS' if ok else 'FAIL'} {name:<26s} s={s:<4d} r={rank:<2d} "
+            f"rel_atomic={rel_a:.2e} rel_store={rel_s:.2e} bitwise={bitwise}"
+        )
     if failures:
         raise SystemExit(1)
 
@@ -261,15 +305,29 @@ def main():
     ap.add_argument("--max-groups", type=int, default=1024)
     ap.add_argument("--rep-ms", type=int, default=100)
     ap.add_argument("--iters", type=int, default=4, help="profile-mode eager sweeps")
-    ap.add_argument("--tol", type=float, default=5e-2)
+    ap.add_argument("--rtol", type=float, default=2e-2)
     ap.add_argument(
         "--no-pdl", action="store_true", help="disable PDL (see disable_pdl docstring)"
+    )
+    ap.add_argument(
+        "--store",
+        action="store_true",
+        help="enable SGLANG_OPT_LORA_QKV_B_STORE (load+add+store writeback)",
+    )
+    ap.add_argument(
+        "--ab",
+        action="store_true",
+        help="bench mode: run production atomic AND store on the same groups, print speedup",
     )
     args = ap.parse_args()
     if args.no_pdl:
         import sglang.srt.lora.triton_ops.qkv_lora_b as _qkv
 
         disable_pdl([_qkv])
+    if args.store:
+        from sglang.srt.environ import envs
+
+        envs.SGLANG_OPT_LORA_QKV_B_STORE.set(True)
 
     device = "cuda"
     dtype = torch.bfloat16
@@ -326,13 +384,26 @@ def main():
             print(f"PROFILE {preset}: {args.iters} sweeps x {num_groups} groups done")
             continue
 
-        us = bench_us_rotated(calls, args.rep_ms)
-        print(
-            f"BENCH qkv_lora_b preset={preset} s={s} r={args.rank} n_slices={n_slices} "
+        common = (
+            f"qkv_lora_b preset={preset} s={s} r={args.rank} n_slices={n_slices} "
             f"total_out={total_out} max_out={max_out} grid={grid} "
-            f"groups={num_groups} ({group_bytes * num_groups / 1e6:.0f} MB rotated): "
-            f"{us:.2f} us"
+            f"groups={num_groups} ({group_bytes * num_groups / 1e6:.0f} MB rotated):"
         )
+        if args.ab:
+            # One-shot production atomic-vs-store A/B on the SAME input groups.
+            from sglang.srt.environ import envs
+
+            with envs.SGLANG_OPT_LORA_QKV_B_STORE.override(False):
+                us_atomic = bench_us_rotated(calls, args.rep_ms)
+            with envs.SGLANG_OPT_LORA_QKV_B_STORE.override(True):
+                us_store = bench_us_rotated(calls, args.rep_ms)
+            print(
+                f"BENCH-AB {common} atomic={us_atomic:.2f} store={us_store:.2f} us "
+                f"speedup={us_atomic / us_store:.2f}x"
+            )
+        else:
+            us = bench_us_rotated(calls, args.rep_ms)
+            print(f"BENCH {common} {us:.2f} us")
 
 
 if __name__ == "__main__":

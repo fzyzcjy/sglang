@@ -504,6 +504,16 @@ class Envs:
     SGLANG_OPT_LORA_CUBLAS_GATE_UP = EnvBool(False)  # gate_up_lora_b
     SGLANG_OPT_LORA_CUBLAS_QKV = EnvBool(False)  # qkv_lora_b
     SGLANG_OPT_LORA_CUBLAS_KV_B = EnvBool(False)  # kv_b_lora_absorbed (MLA absorbed)
+    # qkv_lora_b: replace the bf16 tl.atomic_add writeback with load+add+store (mirrors
+    # gate_up_lora_b). The expand-add output tiles are disjoint across all programs in a
+    # launch (distinct s-rows / n-cols / slice / segment), so each output element is
+    # read-modify-written by exactly one program; the atomic was only serializing that
+    # (now-unnecessary) intra-kernel RMW. base_output is a same-stream data dependency
+    # (base_layer.forward before apply_lora), not a concurrent cross-stream write, so the
+    # plain RMW is race-free. Measured ~4x faster on decode (bf16 narrow-tile atomic was
+    # ~70% of the kernel: it issues L2 atomic sectors at roofline-min DRAM traffic).
+    # Default OFF for A/B bisect.
+    SGLANG_OPT_LORA_QKV_B_STORE = EnvBool(False)
     # Fuse the FlashInfer routed-MoE topk pack ((id << 16) | bf16_bits(weight)) into the top-k
     # gating softmax via the JIT topk_softmax_pack kernel (a port of the AOT topkGatingSoftmax
     # fast path with a third output), removing the per-MoE-layer _pack_topk_kernel launch from
