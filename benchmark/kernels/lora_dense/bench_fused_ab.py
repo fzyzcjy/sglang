@@ -167,8 +167,17 @@ def main():
         groups = make_groups(S, K, N, R, ng, dev)
         # baseline: cuBLAS shrink (matmul) + Triton expand (atomic add into base)
         from sglang.srt.lora.triton_ops.sgemm_lora_b_v2 import sgemm_lora_b_v2_fwd
-        import benchmark.kernels.lora_dense.bench_dense_lora_kernels as BD
-        bi = BD.make_merged_decode_batch_info(S, R, 2.0, dev)
+        from sglang.srt.lora.utils import LoRABatchInfo
+        bi = LoRABatchInfo(
+            use_cuda_graph=True, bs=1, num_segments=1,
+            seg_indptr=torch.tensor([0, S], dtype=torch.int64, device=dev),
+            weight_indices=torch.zeros(1, dtype=torch.int32, device=dev),
+            lora_ranks=torch.tensor([R], dtype=torch.int64, device=dev),
+            scalings=torch.tensor([2.0], dtype=torch.float32, device=dev),
+            max_len=S, seg_lens=torch.tensor([S], dtype=torch.int64, device=dev),
+            permutation=torch.arange(S, dtype=torch.int32, device=dev),
+            single_adapter=(0, R),
+        )
         def base_call(x, A, B, base):
             tmp = torch.matmul(x, A.t())  # cuBLAS shrink -> [S,R]
             return sgemm_lora_b_v2_fwd(tmp, B.unsqueeze(0), bi, base_output=base)
