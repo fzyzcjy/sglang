@@ -165,7 +165,15 @@ def sgemm_lora_b_fwd(
     R = weights.shape[-1]
     assert x.shape[-1] == R
 
-    if envs.SGLANG_OPT_LORA_DENSE_V2.get() and weights.shape[0] == 1:
+    # v2 specializes for the single merged decode segment (seg_start=0, seg_len=max_len,
+    # weight slot 0). num_segments==1 holds only for the uniform single-adapter decode
+    # batch (compute_sgemm_routing sets num_segments=max_loras_per_batch); prefill/extend
+    # and multi-adapter batches have num_segments>1 and MUST fall through to the old kernel.
+    if (
+        envs.SGLANG_OPT_LORA_DENSE_V2.get()
+        and weights.shape[0] == 1
+        and batch_info.num_segments == 1
+    ):
         from sglang.srt.lora.triton_ops.sgemm_lora_b_v2 import sgemm_lora_b_v2_fwd
 
         return sgemm_lora_b_v2_fwd(x, weights, batch_info, base_output=base_output)

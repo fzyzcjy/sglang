@@ -38,6 +38,7 @@ def _gate_up_lora_b_v2_kernel(
     seg_len,
     sorted_token_ids,
     scalings,
+    lora_ranks,
     SORTED_BY_ADAPTER: tl.constexpr,
     BLOCK_S: tl.constexpr,
     BLOCK_N: tl.constexpr,
@@ -53,6 +54,12 @@ def _gate_up_lora_b_v2_kernel(
         return
 
     scaling = tl.load(scalings)
+    # Clamp to the adapter's actual rank like the old kernel (K = min(K, rank)); the x is
+    # rank-packed (gate at [0, rank), up at [rank, 2*rank)), so the up-slice offset and the
+    # k-mask must use the actual rank, not the (possibly larger) weight-buffer rank.
+    K = tl.minimum(K, tl.load(lora_ranks))
+    if K == 0:  # inactive adapter: no-op, matching the old kernel (avoids 0*NaN)
+        return
     n_start = gate_up_id * output_dim
 
     s_offset = tl.arange(0, BLOCK_S) + pid_s * BLOCK_S
@@ -142,6 +149,7 @@ def gate_up_lora_b_v2_fwd(
         int(batch_info.max_len),
         batch_info.permutation,
         batch_info.scalings,
+        batch_info.lora_ranks,
         sorted_by_adapter,
         BLOCK_S,
         BLOCK_OUT,

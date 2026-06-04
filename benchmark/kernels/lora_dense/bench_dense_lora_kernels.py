@@ -299,28 +299,33 @@ def run_v2_vs_old_guardrail(args, shapes, dtype, device) -> None:
     # sgemm_a: split-K reorders the sum -> tight numerical bound (bf16 output ULP).
     A_ABS, A_REL = 2e-2, 5e-3
     failures = 0
-    for shuffle in [False, True]:
-        for name, kernel, spec in shapes:
-            bi = make_merged_decode_batch_info(
-                args.bs, args.rank, args.scaling, device, shuffle_permutation=shuffle
-            )
-            x, weights, base = make_inputs(
-                name, kernel, spec, args.bs, args.rank, dtype, device
-            )
-            old, new = _old_then_v2(name, kernel, spec, x, weights, base, bi)
-            err = float((new - old).abs().max().item())
-            rel = err / float(old.abs().max().item() + 1e-9)
-            if kernel == "sgemm_a":
-                ok = err <= A_ABS or rel <= A_REL
-                mode = "close"
-            else:
-                ok = err == 0.0  # B kernels must be bitwise identical to old
-                mode = "BITWISE" if err == 0.0 else "DIFF"
-            failures += int(not ok)
-            print(
-                f"{'PASS' if ok else 'FAIL'} v2-vs-old {name:<22s} [{mode:<7s}] "
-                f"shuffled={int(shuffle)} max_abs_err={err:.4e} rel={rel:.2e}"
-            )
+    # Cover the partial-last-tile path too: bs not a multiple of BLOCK_S(=16), and bs=1.
+    # The v2 kernels substitute max_len for the per-segment seg_len and re-tile the output,
+    # so the s_offset<seg_len / n_offset<N masks are only exercised when bs % 16 != 0.
+    for bs in sorted({args.bs, 17, 1}):
+        for shuffle in [False, True]:
+            for name, kernel, spec in shapes:
+                bi = make_merged_decode_batch_info(
+                    bs, args.rank, args.scaling, device, shuffle_permutation=shuffle
+                )
+                x, weights, base = make_inputs(
+                    name, kernel, spec, bs, args.rank, dtype, device
+                )
+                old, new = _old_then_v2(name, kernel, spec, x, weights, base, bi)
+                err = float((new - old).abs().max().item())
+                rel = err / float(old.abs().max().item() + 1e-9)
+                finite = bool(torch.isfinite(new).all() and torch.isfinite(old).all())
+                if kernel == "sgemm_a":
+                    ok = finite and (err <= A_ABS or rel <= A_REL)
+                    mode = "close"
+                else:
+                    ok = finite and err == 0.0  # B kernels must be bitwise identical
+                    mode = "BITWISE" if err == 0.0 else "DIFF"
+                failures += int(not ok)
+                print(
+                    f"{'PASS' if ok else 'FAIL'} v2-vs-old {name:<22s} [{mode:<7s}] "
+                    f"bs={bs:<3d} shuffled={int(shuffle)} max_abs_err={err:.4e} rel={rel:.2e}"
+                )
     if failures:
         raise SystemExit(1)
 

@@ -207,7 +207,13 @@ def gate_up_lora_b_fwd(
     r = gate_up_lora_b.shape[-1]
     assert input_dim == 2 * r
 
-    if envs.SGLANG_OPT_LORA_DENSE_V2.get() and gate_up_lora_b.shape[0] == 1:
+    # v2 specializes for the single merged decode segment; num_segments>1 (prefill/extend or
+    # multi-adapter) MUST fall through to the old kernel (see sgemm_lora_b.py for the rationale).
+    if (
+        envs.SGLANG_OPT_LORA_DENSE_V2.get()
+        and gate_up_lora_b.shape[0] == 1
+        and batch_info.num_segments == 1
+    ):
         from sglang.srt.lora.triton_ops.gate_up_lora_b_v2 import gate_up_lora_b_v2_fwd
 
         return gate_up_lora_b_v2_fwd(
