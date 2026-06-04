@@ -144,6 +144,7 @@ def main():
     ap.add_argument("--mode", choices=["bench", "correctness"], default="bench")
     ap.add_argument("--block-n", type=int, default=0)
     ap.add_argument("--block-k", type=int, default=0)
+    ap.add_argument("--block-s", type=int, default=0)
     args = ap.parse_args()
     dev = "cuda"
     cfg = dict(CFG)
@@ -151,6 +152,8 @@ def main():
         cfg["BLOCK_N"] = args.block_n
     if args.block_k:
         cfg["BLOCK_K"] = args.block_k
+    if args.block_s:
+        cfg["BLOCK_S"] = args.block_s
 
     if args.mode == "correctness":
         for name, S, K, N, R in SHAPES:
