@@ -165,6 +165,11 @@ def sgemm_lora_b_fwd(
     R = weights.shape[-1]
     assert x.shape[-1] == R
 
+    if envs.SGLANG_OPT_LORA_DENSE_V2.get() and weights.shape[0] == 1:
+        from sglang.srt.lora.triton_ops.sgemm_lora_b_v2 import sgemm_lora_b_v2_fwd
+
+        return sgemm_lora_b_v2_fwd(x, weights, batch_info, base_output=base_output)
+
     if (
         envs.SGLANG_OPT_LORA_CUBLAS.get() or envs.SGLANG_OPT_LORA_CUBLAS_B.get()
     ) and S * R >= _CUBLAS_MIN_S_RANK:

@@ -207,6 +207,13 @@ def gate_up_lora_b_fwd(
     r = gate_up_lora_b.shape[-1]
     assert input_dim == 2 * r
 
+    if envs.SGLANG_OPT_LORA_DENSE_V2.get() and gate_up_lora_b.shape[0] == 1:
+        from sglang.srt.lora.triton_ops.gate_up_lora_b_v2 import gate_up_lora_b_v2_fwd
+
+        return gate_up_lora_b_v2_fwd(
+            x, gate_up_lora_b, batch_info, output_dim, base_output=base_output
+        )
+
     if (
         envs.SGLANG_OPT_LORA_CUBLAS.get() or envs.SGLANG_OPT_LORA_CUBLAS_GATE_UP.get()
     ) and s * r >= _CUBLAS_MIN_S_RANK:

@@ -253,26 +253,44 @@ class dense_v2_env:
         return False
 
 
+def _old_then_v2(name, kernel, spec, x, weights, base, bi):
+    """Returns (old_out, v2_out) as fp32 for one shape. Each expand kernel gets its own
+    base_output clone so the in-place += does not cross-contaminate."""
+    if kernel == "sgemm_a":
+        old = sgemm_lora_a_fwd(x, weights, bi, stack_num=spec["stack_num"])
+        new = sgemm_lora_a_v2_fwd(x, weights, bi, stack_num=spec["stack_num"])
+        return old.float(), new.float()
+    if kernel == "sgemm_b":
+        from sglang.srt.lora.triton_ops.sgemm_lora_b_v2 import sgemm_lora_b_v2_fwd
+
+        old = sgemm_lora_b_fwd(x, weights, bi, base_output=base.clone())
+        new = sgemm_lora_b_v2_fwd(x, weights, bi, base_output=base.clone())
+        return old.float(), new.float()
+    assert kernel == "gate_up_b"
+    from sglang.srt.lora.triton_ops.gate_up_lora_b_v2 import gate_up_lora_b_v2_fwd
+
+    old = gate_up_lora_b_fwd(x, weights, bi, spec["output_dim"], base_output=base.clone())
+    new = gate_up_lora_b_v2_fwd(
+        x, weights, bi, spec["output_dim"], base_output=base.clone()
+    )
+    return old.float(), new.float()
+
+
 def run_v2_vs_old_guardrail(args, shapes, dtype, device) -> None:
-    """new-vs-old guardrail: for every sgemm_a shape run the old kernel and the v2 kernel
-    on identical inputs and assert their outputs agree. Split-K changes the float
-    accumulation order so this is a tight numerical (not bitwise) check; the old kernel is
-    the reference. Also re-checks both against the fp32 ref via run_correctness above."""
+    """new-vs-old guardrail: for every shape run the old kernel and the v2 kernel on
+    identical inputs and assert their outputs agree. Split-K (LoRA-A) changes the float
+    accumulation order so this is a tight numerical (not bitwise) check; the B kernels
+    keep the same math and should match within bf16. The old kernel is the reference."""
     failures = 0
     for shuffle in [False, True]:
         for name, kernel, spec in shapes:
-            if kernel != "sgemm_a":
-                continue
             bi = make_merged_decode_batch_info(
                 args.bs, args.rank, args.scaling, device, shuffle_permutation=shuffle
             )
-            x, weights, _ = make_inputs(
+            x, weights, base = make_inputs(
                 name, kernel, spec, args.bs, args.rank, dtype, device
             )
-            old = sgemm_lora_a_fwd(x, weights, bi, stack_num=spec["stack_num"]).float()
-            new = sgemm_lora_a_v2_fwd(
-                x, weights, bi, stack_num=spec["stack_num"]
-            ).float()
+            old, new = _old_then_v2(name, kernel, spec, x, weights, base, bi)
             err = float((new - old).abs().max().item())
             rel = err / float(old.abs().max().item() + 1e-9)
             ok = err <= args.tol or rel <= args.rtol
