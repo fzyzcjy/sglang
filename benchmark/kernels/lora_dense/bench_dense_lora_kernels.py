@@ -349,7 +349,7 @@ def run_sweep_a_v2(args, shapes, dtype, device) -> None:
                     num_k_tiles,
                 }
             ):
-                for num_warps in (2, 4, 8):
+                for num_warps in (2, 4):
                     for num_stages in (2, 3, 4):
                         candidates.append(
                             {
