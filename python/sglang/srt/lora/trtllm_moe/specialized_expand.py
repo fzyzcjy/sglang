@@ -178,7 +178,12 @@ def _invoke_moe_lora_expand_add(
     # verified >100% rel error vs a PEFT reference on the real Qwen3.5 adapter). The earlier
     # "vs cutlass" justification for reading [0:R] was unreliable (the cutlass reference shared
     # the same bug). Detect the gated layout from the intermediate width and split in-kernel.
-    gated = intermediate.shape[1] == 2 * R
+    inter_width = intermediate.shape[1]
+    assert inter_width in (R, 2 * R), (
+        f"LoRA expand intermediate width must be R ({R}, non-gated) or 2*R "
+        f"({2 * R}, gated gate_up), got {inter_width}"
+    )
+    gated = inter_width == 2 * R
     gated_a_half = (N // 2) if gated else 0
     if gated:
         assert N % 2 == 0 and (N // 2) % block_size_n == 0, (
