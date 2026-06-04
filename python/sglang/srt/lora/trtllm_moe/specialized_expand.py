@@ -183,9 +183,13 @@ def _invoke_moe_lora_expand_add(
         f"LoRA expand intermediate width must be R ({R}, non-gated) or 2*R "
         f"({2 * R}, gated gate_up), got {inter_width}"
     )
+    # Lazy import to avoid the trtllm_moe <-> triton_ops package import cycle at load time.
+    from sglang.srt.environ import envs
+
     gated = inter_width == 2 * R
-    gated_a_half = (N // 2) if gated else 0
-    if gated:
+    use_gated_split = gated and envs.SGLANG_ENABLE_LORA_MOE_GATEUP_GATED_SPLIT.get()
+    gated_a_half = (N // 2) if use_gated_split else 0
+    if use_gated_split:
         assert N % 2 == 0 and (N // 2) % block_size_n == 0, (
             f"gated gate_up split needs N/2 ({N // 2}) divisible by BLOCK_SIZE_N "
             f"({block_size_n})"

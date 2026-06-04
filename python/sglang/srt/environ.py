@@ -402,6 +402,13 @@ class Envs:
     SGLANG_NPU_FORWARD_NATIVE_GEMMA_RMS_NORM = EnvBool(False)
     # Delay all-gather after qlora for better performance for Deepseek v3.2
     SGLANG_USE_AG_AFTER_QLORA = EnvBool(False)
+    # Fix: gated gate_up MoE-LoRA must contract the up-shrink columns [R:2R] for the up
+    # output half (gate_A's [0:R] for the gate half). The shrink stacks gate_A/up_A so the
+    # intermediate is 2*R wide; the rank-specialized direct expand previously hardcoded the
+    # split off and read [0:R] for BOTH halves, dropping up_A (wrong up-projection delta
+    # whenever gate_A != up_A; >100% rel error vs PEFT on the real Qwen3.5 adapter). Default
+    # True (correct). Set False to reproduce the pre-fix behavior for A/B bisection.
+    SGLANG_ENABLE_LORA_MOE_GATEUP_GATED_SPLIT = EnvBool(True)
     # Split-K for the dense LoRA-A (shrink) GEMM.
     SGLANG_ENABLE_LORA_SHRINK_SPLIT_K = EnvBool(False)
     # Quantize x to int8 in the dispatch operator
