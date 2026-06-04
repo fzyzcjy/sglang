@@ -113,17 +113,34 @@ def _num_sms(device_index: int) -> int:
     return torch.cuda.get_device_properties(device_index).multi_processor_count
 
 
-def _select_config(K: int, num_s_tiles: int, num_sms: int) -> dict:
-    """Pick (BLOCK_K, SPLIT_K, num_warps, num_stages) to roughly fill the SMs with
-    split-K programs. SPLIT_K is capped by the K-tile count so no program is empty."""
+# GB200 sweep-tuned configs keyed by (K, N) where N = stack_num * rank, for the qwen3.5
+# decode bs64 single-adapter shapes (see bench --mode sweepa). The split-K sweet spot is
+# ~64-128 CTAs; over-splitting raises atomic contention and regresses (e.g. K=2048 N=48 is
+# 3.5us at SPLIT_K=16 but ~4.5us at SPLIT_K=32). Unknown shapes fall back to the heuristic.
+_TUNED_CONFIGS = {
+    (2048, 64): {"BLOCK_K": 64, "SPLIT_K": 32, "num_warps": 4, "num_stages": 3},
+    (2048, 48): {"BLOCK_K": 64, "SPLIT_K": 16, "num_warps": 4, "num_stages": 3},
+    (2048, 32): {"BLOCK_K": 64, "SPLIT_K": 16, "num_warps": 4, "num_stages": 3},
+    (2048, 16): {"BLOCK_K": 64, "SPLIT_K": 32, "num_warps": 4, "num_stages": 4},
+    (1024, 16): {"BLOCK_K": 32, "SPLIT_K": 16, "num_warps": 4, "num_stages": 4},
+    (128, 16): {"BLOCK_K": 128, "SPLIT_K": 1, "num_warps": 2, "num_stages": 2},
+}
+
+
+def _select_config(K: int, N: int, num_s_tiles: int, num_sms: int) -> dict:
+    """Sweep-tuned config for the known decode shapes, else a heuristic targeting ~64 CTAs
+    of split-K work (the empirical sweet spot; more splits raise atomic contention)."""
+    tuned = _TUNED_CONFIGS.get((K, N))
+    if tuned is not None:
+        return tuned
     block_k = 64 if K >= 256 else triton.next_power_of_2(K)
     num_k_tiles = triton.cdiv(K, block_k)
-    target = max(1, 2 * num_sms // max(num_s_tiles, 1))
+    target = max(1, (num_sms // 2) // max(num_s_tiles, 1))
     split_k = max(1, min(target, num_k_tiles))
     return {
         "BLOCK_K": block_k,
         "SPLIT_K": split_k,
-        "num_warps": 2 if split_k <= 4 else 4,
+        "num_warps": 4,
         "num_stages": 3,
     }
 
@@ -151,7 +168,7 @@ def sgemm_lora_a_v2_fwd(
 
     BLOCK_S = 16
     num_s_tiles = triton.cdiv(batch_info.max_len, BLOCK_S)
-    cfg = config or _select_config(K, num_s_tiles, _num_sms(x.device.index))
+    cfg = config or _select_config(K, N, num_s_tiles, _num_sms(x.device.index))
     split_k = cfg["SPLIT_K"]
 
     if split_k > 1:
