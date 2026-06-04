@@ -177,7 +177,16 @@ def sgemm_lora_a_fwd(
     K = weights.shape[-1]
     assert x.shape[-1] == K
 
-    if envs.SGLANG_OPT_LORA_DENSE_V2.get() and weights.shape[0] == 1 and R <= 64:
+    # v2 split-K shrink wins on the large-K shrinks (K>=2048: in_proj/qkv/gate_up) where it
+    # beats both the old triton kernel and cuBLAS in steady state; on the smaller-K shrinks
+    # (o_proj K=1024, shared_down K=128) cuBLAS's skinny path is faster, so fall through to
+    # the cuBLAS/triton dispatch below for those.
+    if (
+        envs.SGLANG_OPT_LORA_DENSE_V2.get()
+        and weights.shape[0] == 1
+        and R <= 64
+        and K >= 2048
+    ):
         from sglang.srt.lora.triton_ops.sgemm_lora_a_v2 import sgemm_lora_a_v2_fwd
 
         return sgemm_lora_a_v2_fwd(
