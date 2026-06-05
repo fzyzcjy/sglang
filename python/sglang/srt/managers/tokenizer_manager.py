@@ -173,11 +173,7 @@ class TokenizerManager(TokenizerControlMixin):
         self.init_model_config()
 
         # Initialize tokenizer and multimodal processor
-        self.raw_tokenizer_wrapper = RawTokenizerWrapper()
-        self.raw_tokenizer_wrapper.init_tokenizer_and_processor(
-            server_args=self.server_args,
-            model_config=self.model_config,
-        )
+        self.init_raw_tokenizer_wrapper()
 
         # Init inter-process communication
         self.init_ipc_channels(port_args)
@@ -189,10 +185,7 @@ class TokenizerManager(TokenizerControlMixin):
         self.init_weight_update()
 
         # Init LoRA controller
-        self.lora_controller = LoraController(
-            server_args=self.server_args,
-            auto_create_handle_loop=self.auto_create_handle_loop,
-        )
+        self.init_lora_controller()
 
         # Init PD disaggregation and encoder disaggregation
         self.init_disaggregation()
@@ -201,13 +194,68 @@ class TokenizerManager(TokenizerControlMixin):
         self.init_metric_collector_watchdog()
 
         # Multimodal processor
+        self.init_multimodal_processor()
+
+        # Tokenized request builder
+        self.init_tokenized_request_builder()
+
+        # Request metrics recorder
+        self.init_request_metrics_recorder()
+
+        # Weight disk update controller
+        self.init_weight_disk_update_controller()
+
+        # Corpus controller
+        self.init_corpus_controller()
+
+        # Output processor
+        self.init_output_processor()
+
+        # Response emitter
+        self.init_response_emitter()
+
+        # Session controller
+        self.init_session_controller()
+
+        # Request log manager
+        self.init_request_log_manager()
+
+        # Request validator
+        self.init_request_validator()
+
+        # Request preparer
+        self.init_request_preparer()
+
+        # Score request handler
+        self.init_score_request_handler()
+
+        # Batch request dispatcher
+        self.init_batch_request_dispatcher()
+
+        # Init request dispatcher
+        self.init_request_dispatcher()
+
+    def init_raw_tokenizer_wrapper(self):
+        self.raw_tokenizer_wrapper = RawTokenizerWrapper()
+        self.raw_tokenizer_wrapper.init_tokenizer_and_processor(
+            server_args=self.server_args,
+            model_config=self.model_config,
+        )
+
+    def init_lora_controller(self):
+        self.lora_controller = LoraController(
+            server_args=self.server_args,
+            auto_create_handle_loop=self.auto_create_handle_loop,
+        )
+
+    def init_multimodal_processor(self):
         self.multimodal_processor = MultimodalProcessor.from_server_args(
             server_args=self.server_args,
             model_config=self.model_config,
             mm_processor=self.mm_processor,
         )
 
-        # Tokenized request builder
+    def init_tokenized_request_builder(self):
         self.tokenized_request_builder = TokenizedRequestBuilder(
             tokenizer=self.tokenizer,
             config=TokenizedRequestBuilderConfig(
@@ -218,7 +266,7 @@ class TokenizerManager(TokenizerControlMixin):
             ),
         )
 
-        # Request metrics recorder
+    def init_request_metrics_recorder(self):
         self.request_metrics_recorder = RequestMetricsRecorder(
             server_args=self.server_args,
             enable_metrics=self.enable_metrics,
@@ -226,7 +274,7 @@ class TokenizerManager(TokenizerControlMixin):
             disaggregation_mode=self.disaggregation_mode,
         )
 
-        # Weight disk update controller
+    def init_weight_disk_update_controller(self):
         self.weight_disk_update_controller = WeightDiskUpdateController(
             send_to_scheduler=self.send_to_scheduler,
             abort_request=self.abort_request,
@@ -237,7 +285,7 @@ class TokenizerManager(TokenizerControlMixin):
             auto_create_handle_loop=self.auto_create_handle_loop,
         )
 
-        # Corpus controller
+    def init_corpus_controller(self):
         self.corpus_controller = CorpusController(
             add_external_corpus_communicator=self.add_external_corpus_communicator,
             remove_external_corpus_communicator=self.remove_external_corpus_communicator,
@@ -250,7 +298,7 @@ class TokenizerManager(TokenizerControlMixin):
             auto_create_handle_loop=self.auto_create_handle_loop,
         )
 
-        # Output processor
+    def init_output_processor(self):
         self.output_processor = OutputProcessor(
             rid_to_state=self.rid_to_state,
             tokenizer=self.tokenizer,
@@ -272,7 +320,7 @@ class TokenizerManager(TokenizerControlMixin):
             ),
         )
 
-        # Response emitter
+    def init_response_emitter(self):
         self.response_emitter = ResponseEmitter(
             rid_to_state=self.rid_to_state,
             lora_controller=self.lora_controller,
@@ -281,19 +329,19 @@ class TokenizerManager(TokenizerControlMixin):
             server_args=self.server_args,
         )
 
-        # Session controller
+    def init_session_controller(self):
         self.session_controller = SessionController(
             send_to_scheduler=self.send_to_scheduler,
             auto_create_handle_loop=self.auto_create_handle_loop,
             server_args=self.server_args,
         )
 
-        # Request log manager
+    def init_request_log_manager(self):
         self.request_log_manager = RequestLogManager.from_server_args(
             server_args=self.server_args,
         )
 
-        # Request validator
+    def init_request_validator(self):
         self.request_validator = RequestValidator(
             config=RequestValidatorConfig(
                 context_len=self.context_len,
@@ -311,7 +359,7 @@ class TokenizerManager(TokenizerControlMixin):
             ),
         )
 
-        # Request preparer
+    def init_request_preparer(self):
         self.request_preparer = RequestPreparer(
             raw_tokenizer_wrapper=self.raw_tokenizer_wrapper,
             multimodal_processor=self.multimodal_processor,
@@ -332,7 +380,7 @@ class TokenizerManager(TokenizerControlMixin):
             ),
         )
 
-        # Score request handler
+    def init_score_request_handler(self):
         self.score_request_handler = ScoreRequestHandler(
             tokenizer=self.tokenizer,
             rid_to_state=self.rid_to_state,
@@ -344,7 +392,7 @@ class TokenizerManager(TokenizerControlMixin):
             ),
         )
 
-        # Batch request dispatcher
+    def init_batch_request_dispatcher(self):
         self.batch_request_dispatcher = BatchRequestDispatcher(
             request_preparer=self.request_preparer,
             response_emitter=self.response_emitter,
@@ -357,9 +405,6 @@ class TokenizerManager(TokenizerControlMixin):
                 disaggregation_mode=self.disaggregation_mode,
             ),
         )
-
-        # Init request dispatcher
-        self.init_request_dispatcher()
 
     def init_model_config(self):
         server_args = self.server_args
