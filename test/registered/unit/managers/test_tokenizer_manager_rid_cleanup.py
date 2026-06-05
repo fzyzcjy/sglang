@@ -24,6 +24,9 @@ maybe_stub_sgl_kernel()
 
 from sglang.srt.managers.io_struct import AbortReq, BatchStrOutput, GenerateReqInput
 from sglang.srt.managers.tokenizer_manager import ReqState, TokenizerManager
+from sglang.srt.managers.tokenizer_manager_components.request_state import (
+    init_req,
+)
 from sglang.srt.observability.req_time_stats import APIServerReqTimeStats
 
 register_cpu_ci(est_time=15, suite="base-a-test-cpu")
@@ -222,7 +225,12 @@ class TestRidToStateCleanupOnAbort(CustomTestCase):
         obj.received_time = 0.0
         obj.external_trace_header = None
         obj.bootstrap_room = None
-        tm._init_req_state(obj)
+        init_req(
+            tm.rid_to_state,
+            obj=obj,
+            enable_trace=tm.server_args.enable_trace,
+            disagg_mode=tm.disaggregation_mode,
+        )
 
         self.assertIn(rid, tm.rid_to_state)
 
@@ -276,7 +284,12 @@ class TestRidToStateCleanupOnBatchOutput(CustomTestCase):
         obj.received_time = 0.0
         obj.external_trace_header = None
         obj.bootstrap_room = None
-        tm._init_req_state(obj)
+        init_req(
+            tm.rid_to_state,
+            obj=obj,
+            enable_trace=tm.server_args.enable_trace,
+            disagg_mode=tm.disaggregation_mode,
+        )
 
         self.assertIn(rid, tm.rid_to_state)
 
@@ -312,7 +325,12 @@ class TestInitReqStateDuplicateDetection(CustomTestCase):
         obj.bootstrap_room = None
 
         with self.assertRaises(ValueError) as ctx:
-            tm._init_req_state(obj)
+            init_req(
+                tm.rid_to_state,
+                obj=obj,
+                enable_trace=tm.server_args.enable_trace,
+                disagg_mode=tm.disaggregation_mode,
+            )
         self.assertIn("Duplicate request ID", str(ctx.exception))
 
     def test_unique_rid_succeeds(self):
@@ -327,7 +345,12 @@ class TestInitReqStateDuplicateDetection(CustomTestCase):
         obj.external_trace_header = None
         obj.bootstrap_room = None
 
-        tm._init_req_state(obj)
+        init_req(
+            tm.rid_to_state,
+            obj=obj,
+            enable_trace=tm.server_args.enable_trace,
+            disagg_mode=tm.disaggregation_mode,
+        )
         self.assertIn(rid, tm.rid_to_state)
 
 
@@ -356,7 +379,12 @@ class TestResubmitAfterCompletion(CustomTestCase):
         obj.received_time = 0.0
         obj.external_trace_header = None
         obj.bootstrap_room = None
-        tm._init_req_state(obj)
+        init_req(
+            tm.rid_to_state,
+            obj=obj,
+            enable_trace=tm.server_args.enable_trace,
+            disagg_mode=tm.disaggregation_mode,
+        )
 
         self.assertIn(rid, tm.rid_to_state)
 
@@ -381,7 +409,12 @@ class TestResubmitAfterCompletion(CustomTestCase):
         obj.received_time = 0.0
         obj.external_trace_header = None
         obj.bootstrap_room = None
-        tm._init_req_state(obj)
+        init_req(
+            tm.rid_to_state,
+            obj=obj,
+            enable_trace=tm.server_args.enable_trace,
+            disagg_mode=tm.disaggregation_mode,
+        )
 
         self.assertIn(rid, tm.rid_to_state)
 
