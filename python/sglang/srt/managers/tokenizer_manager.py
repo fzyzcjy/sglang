@@ -69,6 +69,10 @@ from sglang.srt.managers.tokenizer_manager_components import (
     request_tracing,
     spec_decoding_meta,
 )
+from sglang.srt.managers.tokenizer_manager_components.corpus_controller import (
+    CorpusController,
+    CorpusControllerConfig,
+)
 from sglang.srt.managers.tokenizer_manager_components.lora_controller import (
     LoraController,
 )
@@ -200,6 +204,8 @@ class TokenizerManager(TokenizerControlMixin):
         self.init_request_metrics_recorder()
 
         self.init_weight_disk_update_controller()
+
+        self.init_corpus_controller()
 
         self.init_session_controller()
 
@@ -358,6 +364,19 @@ class TokenizerManager(TokenizerControlMixin):
             is_pause_cond=self.is_pause_cond,
             model_update_lock=self.model_update_lock,
             server_args=self.server_args,
+            auto_create_handle_loop=self.auto_create_handle_loop,
+        )
+
+    def init_corpus_controller(self):
+        self.corpus_controller = CorpusController(
+            add_external_corpus_communicator=self.add_external_corpus_communicator,
+            remove_external_corpus_communicator=self.remove_external_corpus_communicator,
+            list_external_corpora_communicator=self.list_external_corpora_communicator,
+            tokenizer=self.tokenizer,
+            config=CorpusControllerConfig(
+                speculative_algorithm=self.server_args.speculative_algorithm or "",
+                max_external_corpus_tokens=self.server_args.speculative_ngram_external_corpus_max_tokens,
+            ),
             auto_create_handle_loop=self.auto_create_handle_loop,
         )
 
