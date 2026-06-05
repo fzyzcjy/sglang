@@ -97,6 +97,9 @@ from sglang.srt.managers.tokenizer_manager_components.request_validator import (
     RequestValidator,
     RequestValidatorConfig,
 )
+from sglang.srt.managers.tokenizer_manager_components.response_emitter import (
+    ResponseEmitter,
+)
 from sglang.srt.managers.tokenizer_manager_components.score_request_handler import (
     ScoreRequestHandler,
     ScoreRequestHandlerConfig,
@@ -268,6 +271,15 @@ class TokenizerManager(TokenizerControlMixin):
                 enable_lora=self.server_args.enable_lora,
                 served_model_name=self.server_args.served_model_name,
             ),
+        )
+
+        # Response emitter
+        self.response_emitter = ResponseEmitter(
+            rid_to_state=self.rid_to_state,
+            lora_controller=self.lora_controller,
+            request_log_manager=self.request_log_manager,
+            abort_request=self.abort_request,
+            server_args=self.server_args,
         )
 
         # Session controller
@@ -508,7 +520,9 @@ class TokenizerManager(TokenizerControlMixin):
                 if obj.return_prompt_token_ids:
                     state.prompt_token_ids = list(tokenized_obj.input_ids)
                 self._send_one_request(tokenized_obj)
-                async for response in self._wait_one_response(obj, request):
+                async for response in TokenizerManager._wait_one_response(
+                    self.response_emitter, obj, request
+                ):
                     yield response
             else:
                 async for response in self._handle_batch_request(obj, request):
@@ -539,8 +553,9 @@ class TokenizerManager(TokenizerControlMixin):
         self.send_to_scheduler.send_pyobj(batch_req)
         set_time_batch(tokenized_objs, "set_api_server_dispatch_finish_time")
 
+    @staticmethod
     def _coalesce_streaming_chunks(
-        self,
+        self: "ResponseEmitter",
         out_list: list,
         rid: str,
     ) -> dict:
@@ -572,8 +587,9 @@ class TokenizerManager(TokenizerControlMixin):
             out["meta_info"] = meta_info
         return out
 
+    @staticmethod
     async def _handle_abort_finish_reason(
-        self,
+        self: "ResponseEmitter",
         out: dict,
         state: ReqState,
         is_stream: bool,
@@ -616,8 +632,9 @@ class TokenizerManager(TokenizerControlMixin):
 
         return None
 
+    @staticmethod
     async def _wait_one_response(
-        self,
+        self: "ResponseEmitter",
         obj: Union[GenerateReqInput, EmbeddingReqInput],
         request: Optional[fastapi.Request] = None,
     ):
@@ -656,7 +673,9 @@ class TokenizerManager(TokenizerControlMixin):
                 is_stream and self.server_args.incremental_streaming_output
             )
             if incremental_stream and len(out_list) > 1:
-                out = self._coalesce_streaming_chunks(out_list, obj.rid)
+                out = TokenizerManager._coalesce_streaming_chunks(
+                    self, out_list, obj.rid
+                )
             else:
                 out = out_list[-1]
 
@@ -695,8 +714,8 @@ class TokenizerManager(TokenizerControlMixin):
 
                 # Check if this was an abort/error created by scheduler
                 if isinstance(out["meta_info"].get("finish_reason"), dict):
-                    abort_out = await self._handle_abort_finish_reason(
-                        out, state, is_stream
+                    abort_out = await TokenizerManager._handle_abort_finish_reason(
+                        self, out, state, is_stream
                     )
                     if abort_out is not None:
                         yield abort_out
@@ -750,7 +769,11 @@ class TokenizerManager(TokenizerControlMixin):
                     state = self.rid_to_state[tmp_obj.rid]
                     if tmp_obj.return_prompt_token_ids:
                         state.prompt_token_ids = list(tokenized_objs[i].input_ids)
-                    generators.append(self._wait_one_response(tmp_obj, request))
+                    generators.append(
+                        TokenizerManager._wait_one_response(
+                            self.response_emitter, tmp_obj, request
+                        )
+                    )
                     rids.append(tmp_obj.rid)
             else:
                 # Sequential tokenization and processing
@@ -768,7 +791,11 @@ class TokenizerManager(TokenizerControlMixin):
                         if tmp_obj.return_prompt_token_ids:
                             state.prompt_token_ids = list(tokenized_obj.input_ids)
                         self._send_one_request(tokenized_obj)
-                        generators.append(self._wait_one_response(tmp_obj, request))
+                        generators.append(
+                            TokenizerManager._wait_one_response(
+                                self.response_emitter, tmp_obj, request
+                            )
+                        )
                         rids.append(tmp_obj.rid)
         else:
             # FIXME: When using batch and parallel_sample_num together, the perf is not optimal.
@@ -806,7 +833,9 @@ class TokenizerManager(TokenizerControlMixin):
                     disagg_mode=self.disaggregation_mode,
                 )
                 self._send_one_request(tokenized_obj)
-                await self._wait_one_response(tmp_obj, request).__anext__()
+                await TokenizerManager._wait_one_response(
+                    self.response_emitter, tmp_obj, request
+                ).__anext__()
 
             # Expand requests, assign new rids for them, and send them
             for i in range(batch_size):
@@ -831,7 +860,11 @@ class TokenizerManager(TokenizerControlMixin):
                     if tmp_obj.return_prompt_token_ids:
                         state.prompt_token_ids = list(tokenized_objs[i].input_ids)
                     self._send_one_request(tokenized_obj)
-                    generators.append(self._wait_one_response(tmp_obj, request))
+                    generators.append(
+                        TokenizerManager._wait_one_response(
+                            self.response_emitter, tmp_obj, request
+                        )
+                    )
                     rids.append(tmp_obj.rid)
 
                 self.rid_to_state[objs[i].rid].time_stats.set_finished_time()
@@ -933,8 +966,8 @@ class TokenizerManager(TokenizerControlMixin):
         freeze_gc("Tokenizer Manager")
         return None
 
-    def create_abort_task(self, obj: GenerateReqInput):
-        # Abort the request if the client is disconnected.
+    @staticmethod
+    def create_abort_task(self: "ResponseEmitter", obj: GenerateReqInput):
         async def abort_request():
             await asyncio.sleep(2)
             if obj.is_single:
