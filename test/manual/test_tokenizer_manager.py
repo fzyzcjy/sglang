@@ -18,10 +18,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 from sglang.srt.managers.io_struct import GenerateReqInput
-from sglang.srt.managers.tokenizer_manager import (
+from sglang.srt.managers.tokenizer_manager import ReqState, TokenizerManager
+from sglang.srt.managers.tokenizer_manager_components.raw_tokenizer_wrapper import (
     InputFormat,
-    ReqState,
-    TokenizerManager,
 )
 from sglang.srt.observability.req_time_stats import APIServerReqTimeStats
 from sglang.srt.server_args import PortArgs, ServerArgs
@@ -50,7 +49,7 @@ class TestInputFormatDetection(unittest.TestCase):
     def test_detect_single_string(self):
         """Test detection of single string input."""
         text = "Hello world"
-        result = self.tokenizer_manager._detect_input_format(
+        result = self.tokenizer_manager.raw_tokenizer_wrapper._detect_input_format(
             text, is_cross_encoder=False
         )
         self.assertEqual(result, InputFormat.SINGLE_STRING)
@@ -58,7 +57,7 @@ class TestInputFormatDetection(unittest.TestCase):
     def test_detect_single_string_cross_encoder_disabled(self):
         """Test single string with cross_encoder disabled still returns single_string."""
         text = "Hello world"
-        result = self.tokenizer_manager._detect_input_format(
+        result = self.tokenizer_manager.raw_tokenizer_wrapper._detect_input_format(
             text, is_cross_encoder=True
         )
         self.assertEqual(result, InputFormat.SINGLE_STRING)
@@ -66,7 +65,7 @@ class TestInputFormatDetection(unittest.TestCase):
     def test_detect_batch_strings(self):
         """Test detection of batch string inputs."""
         texts = ["Hello", "World", "How are you?"]
-        result = self.tokenizer_manager._detect_input_format(
+        result = self.tokenizer_manager.raw_tokenizer_wrapper._detect_input_format(
             texts, is_cross_encoder=False
         )
         self.assertEqual(result, InputFormat.BATCH_STRINGS)
@@ -74,7 +73,7 @@ class TestInputFormatDetection(unittest.TestCase):
     def test_detect_batch_strings_cross_encoder_disabled(self):
         """Test batch strings with cross_encoder disabled."""
         texts = ["Hello", "World"]
-        result = self.tokenizer_manager._detect_input_format(
+        result = self.tokenizer_manager.raw_tokenizer_wrapper._detect_input_format(
             texts, is_cross_encoder=True
         )
         self.assertEqual(result, InputFormat.BATCH_STRINGS)
@@ -82,7 +81,7 @@ class TestInputFormatDetection(unittest.TestCase):
     def test_detect_cross_encoder_single_pair(self):
         """Test detection of cross-encoder single pair."""
         texts = [["query text", "document text"]]
-        result = self.tokenizer_manager._detect_input_format(
+        result = self.tokenizer_manager.raw_tokenizer_wrapper._detect_input_format(
             texts, is_cross_encoder=True
         )
         self.assertEqual(result, InputFormat.CROSS_ENCODER_PAIRS)
@@ -90,7 +89,7 @@ class TestInputFormatDetection(unittest.TestCase):
     def test_detect_cross_encoder_multiple_pairs(self):
         """Test detection of cross-encoder multiple pairs."""
         texts = [["q1", "d1"], ["q2", "d2"], ["q3", "d3"]]
-        result = self.tokenizer_manager._detect_input_format(
+        result = self.tokenizer_manager.raw_tokenizer_wrapper._detect_input_format(
             texts, is_cross_encoder=True
         )
         self.assertEqual(result, InputFormat.CROSS_ENCODER_PAIRS)
@@ -98,7 +97,7 @@ class TestInputFormatDetection(unittest.TestCase):
     def test_detect_cross_encoder_disabled_with_pairs(self):
         """Test pairs with cross_encoder disabled should return batch_strings."""
         texts = [["query", "document"]]
-        result = self.tokenizer_manager._detect_input_format(
+        result = self.tokenizer_manager.raw_tokenizer_wrapper._detect_input_format(
             texts, is_cross_encoder=False
         )
         self.assertEqual(result, InputFormat.BATCH_STRINGS)
@@ -106,7 +105,7 @@ class TestInputFormatDetection(unittest.TestCase):
     def test_detect_empty_list(self):
         """Test detection with empty list."""
         texts = []
-        result = self.tokenizer_manager._detect_input_format(
+        result = self.tokenizer_manager.raw_tokenizer_wrapper._detect_input_format(
             texts, is_cross_encoder=True
         )
         self.assertEqual(result, InputFormat.BATCH_STRINGS)
@@ -114,13 +113,13 @@ class TestInputFormatDetection(unittest.TestCase):
     def test_detect_malformed_cross_encoder_pairs(self):
         """Test malformed cross-encoder pairs (not length 2)."""
         texts = [["query only"]]  # Single element, not a pair
-        result = self.tokenizer_manager._detect_input_format(
+        result = self.tokenizer_manager.raw_tokenizer_wrapper._detect_input_format(
             texts, is_cross_encoder=True
         )
         self.assertEqual(result, InputFormat.BATCH_STRINGS)
 
         texts = [["query", "doc", "extra"]]  # Three elements, not a pair
-        result = self.tokenizer_manager._detect_input_format(
+        result = self.tokenizer_manager.raw_tokenizer_wrapper._detect_input_format(
             texts, is_cross_encoder=True
         )
         self.assertEqual(result, InputFormat.BATCH_STRINGS)
@@ -148,7 +147,7 @@ class TestTokenizerInputPreparation(unittest.TestCase):
     def test_prepare_single_string_input(self):
         """Test preparation of single string input."""
         text = "Hello world"
-        result = self.tokenizer_manager._prepare_tokenizer_input(
+        result = self.tokenizer_manager.raw_tokenizer_wrapper._prepare_tokenizer_input(
             text, InputFormat.SINGLE_STRING
         )
         self.assertEqual(result, ["Hello world"])
@@ -156,7 +155,7 @@ class TestTokenizerInputPreparation(unittest.TestCase):
     def test_prepare_batch_strings_input(self):
         """Test preparation of batch strings input."""
         texts = ["Hello", "World", "Test"]
-        result = self.tokenizer_manager._prepare_tokenizer_input(
+        result = self.tokenizer_manager.raw_tokenizer_wrapper._prepare_tokenizer_input(
             texts, InputFormat.BATCH_STRINGS
         )
         self.assertEqual(result, ["Hello", "World", "Test"])
@@ -164,7 +163,7 @@ class TestTokenizerInputPreparation(unittest.TestCase):
     def test_prepare_cross_encoder_pairs_input(self):
         """Test preparation of cross-encoder pairs input."""
         texts = [["query1", "doc1"], ["query2", "doc2"]]
-        result = self.tokenizer_manager._prepare_tokenizer_input(
+        result = self.tokenizer_manager.raw_tokenizer_wrapper._prepare_tokenizer_input(
             texts, InputFormat.CROSS_ENCODER_PAIRS
         )
         self.assertEqual(result, [["query1", "doc1"], ["query2", "doc2"]])
@@ -172,7 +171,7 @@ class TestTokenizerInputPreparation(unittest.TestCase):
     def test_prepare_cross_encoder_single_pair_input(self):
         """Test preparation of single cross-encoder pair."""
         texts = [["query text", "document text"]]
-        result = self.tokenizer_manager._prepare_tokenizer_input(
+        result = self.tokenizer_manager.raw_tokenizer_wrapper._prepare_tokenizer_input(
             texts, InputFormat.CROSS_ENCODER_PAIRS
         )
         self.assertEqual(result, [["query text", "document text"]])
@@ -180,7 +179,7 @@ class TestTokenizerInputPreparation(unittest.TestCase):
     def test_prepare_batch_strings_input_format_passthrough(self):
         """Batch strings should pass through unchanged."""
         texts = ["test"]
-        result = self.tokenizer_manager._prepare_tokenizer_input(
+        result = self.tokenizer_manager.raw_tokenizer_wrapper._prepare_tokenizer_input(
             texts, InputFormat.BATCH_STRINGS
         )
         self.assertEqual(result, ["test"])
@@ -211,7 +210,7 @@ class TestTokenizerResultExtraction(unittest.TestCase):
         token_type_ids = [[0, 0, 0]]
 
         result_input_ids, result_token_type_ids = (
-            self.tokenizer_manager._extract_tokenizer_results(
+            self.tokenizer_manager.raw_tokenizer_wrapper._extract_tokenizer_results(
                 input_ids,
                 token_type_ids,
                 InputFormat.SINGLE_STRING,
@@ -228,7 +227,7 @@ class TestTokenizerResultExtraction(unittest.TestCase):
         token_type_ids = [[0, 0, 0, 1, 1]]
 
         result_input_ids, result_token_type_ids = (
-            self.tokenizer_manager._extract_tokenizer_results(
+            self.tokenizer_manager.raw_tokenizer_wrapper._extract_tokenizer_results(
                 input_ids,
                 token_type_ids,
                 InputFormat.CROSS_ENCODER_PAIRS,
@@ -245,7 +244,7 @@ class TestTokenizerResultExtraction(unittest.TestCase):
         token_type_ids = [[0, 0, 0], [0, 0, 0]]
 
         result_input_ids, result_token_type_ids = (
-            self.tokenizer_manager._extract_tokenizer_results(
+            self.tokenizer_manager.raw_tokenizer_wrapper._extract_tokenizer_results(
                 input_ids,
                 token_type_ids,
                 InputFormat.BATCH_STRINGS,
@@ -262,7 +261,7 @@ class TestTokenizerResultExtraction(unittest.TestCase):
         token_type_ids = [[0, 0, 0, 1, 1], [0, 0, 0, 1, 1]]
 
         result_input_ids, result_token_type_ids = (
-            self.tokenizer_manager._extract_tokenizer_results(
+            self.tokenizer_manager.raw_tokenizer_wrapper._extract_tokenizer_results(
                 input_ids,
                 token_type_ids,
                 InputFormat.CROSS_ENCODER_PAIRS,
@@ -281,7 +280,7 @@ class TestTokenizerResultExtraction(unittest.TestCase):
         token_type_ids = None
 
         result_input_ids, result_token_type_ids = (
-            self.tokenizer_manager._extract_tokenizer_results(
+            self.tokenizer_manager.raw_tokenizer_wrapper._extract_tokenizer_results(
                 input_ids,
                 token_type_ids,
                 InputFormat.SINGLE_STRING,
@@ -298,7 +297,7 @@ class TestTokenizerResultExtraction(unittest.TestCase):
         token_type_ids = None
 
         result_input_ids, result_token_type_ids = (
-            self.tokenizer_manager._extract_tokenizer_results(
+            self.tokenizer_manager.raw_tokenizer_wrapper._extract_tokenizer_results(
                 input_ids,
                 token_type_ids,
                 InputFormat.SINGLE_STRING,
@@ -334,14 +333,18 @@ class TestTokenizerManagerIntegration(unittest.TestCase):
         text = "Hello world"
 
         # Step 1: Detect format
-        input_format = self.tokenizer_manager._detect_input_format(
-            text, is_cross_encoder=False
+        input_format = (
+            self.tokenizer_manager.raw_tokenizer_wrapper._detect_input_format(
+                text, is_cross_encoder=False
+            )
         )
         self.assertEqual(input_format, InputFormat.SINGLE_STRING)
 
         # Step 2: Prepare input
-        tokenizer_input = self.tokenizer_manager._prepare_tokenizer_input(
-            text, input_format
+        tokenizer_input = (
+            self.tokenizer_manager.raw_tokenizer_wrapper._prepare_tokenizer_input(
+                text, input_format
+            )
         )
         self.assertEqual(tokenizer_input, ["Hello world"])
 
@@ -350,7 +353,7 @@ class TestTokenizerManagerIntegration(unittest.TestCase):
         mock_token_type_ids = None
 
         result_input_ids, result_token_type_ids = (
-            self.tokenizer_manager._extract_tokenizer_results(
+            self.tokenizer_manager.raw_tokenizer_wrapper._extract_tokenizer_results(
                 mock_input_ids, mock_token_type_ids, input_format, original_batch_size=1
             )
         )
@@ -365,14 +368,18 @@ class TestTokenizerManagerIntegration(unittest.TestCase):
         ]
 
         # Step 1: Detect format
-        input_format = self.tokenizer_manager._detect_input_format(
-            texts, is_cross_encoder=True
+        input_format = (
+            self.tokenizer_manager.raw_tokenizer_wrapper._detect_input_format(
+                texts, is_cross_encoder=True
+            )
         )
         self.assertEqual(input_format, InputFormat.CROSS_ENCODER_PAIRS)
 
         # Step 2: Prepare input
-        tokenizer_input = self.tokenizer_manager._prepare_tokenizer_input(
-            texts, input_format
+        tokenizer_input = (
+            self.tokenizer_manager.raw_tokenizer_wrapper._prepare_tokenizer_input(
+                texts, input_format
+            )
         )
         self.assertEqual(tokenizer_input, texts)
 
@@ -381,7 +388,7 @@ class TestTokenizerManagerIntegration(unittest.TestCase):
         mock_token_type_ids = [[0, 0, 0, 0, 1, 1, 1]]
 
         result_input_ids, result_token_type_ids = (
-            self.tokenizer_manager._extract_tokenizer_results(
+            self.tokenizer_manager.raw_tokenizer_wrapper._extract_tokenizer_results(
                 mock_input_ids, mock_token_type_ids, input_format, original_batch_size=1
             )
         )
@@ -394,14 +401,18 @@ class TestTokenizerManagerIntegration(unittest.TestCase):
         texts = ["Hello", "World", "Test"]
 
         # Step 1: Detect format
-        input_format = self.tokenizer_manager._detect_input_format(
-            texts, is_cross_encoder=False
+        input_format = (
+            self.tokenizer_manager.raw_tokenizer_wrapper._detect_input_format(
+                texts, is_cross_encoder=False
+            )
         )
         self.assertEqual(input_format, InputFormat.BATCH_STRINGS)
 
         # Step 2: Prepare input
-        tokenizer_input = self.tokenizer_manager._prepare_tokenizer_input(
-            texts, input_format
+        tokenizer_input = (
+            self.tokenizer_manager.raw_tokenizer_wrapper._prepare_tokenizer_input(
+                texts, input_format
+            )
         )
         self.assertEqual(tokenizer_input, ["Hello", "World", "Test"])
 
@@ -410,7 +421,7 @@ class TestTokenizerManagerIntegration(unittest.TestCase):
         mock_token_type_ids = None
 
         result_input_ids, result_token_type_ids = (
-            self.tokenizer_manager._extract_tokenizer_results(
+            self.tokenizer_manager.raw_tokenizer_wrapper._extract_tokenizer_results(
                 mock_input_ids, mock_token_type_ids, input_format, original_batch_size=3
             )
         )
