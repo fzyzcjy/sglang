@@ -527,8 +527,9 @@ class TokenizerControlMixin:
 
         return success, message
 
+    @staticmethod
     async def _unload_lora_adapter_locked(
-        self: TokenizerManager,
+        self: "LoraController",
         obj: UnloadLoRAAdapterReqInput,
     ) -> UnloadLoRAAdapterReqOutput:
         assert (
@@ -547,8 +548,9 @@ class TokenizerControlMixin:
 
         return result
 
+    @staticmethod
     async def load_lora_adapter(
-        self: TokenizerManager,
+        self: "LoraController",
         obj: LoadLoRAAdapterReqInput,
         _: Optional[fastapi.Request] = None,
     ) -> LoadLoRAAdapterReqOutput:
@@ -608,8 +610,10 @@ class TokenizerControlMixin:
                             f"max allowed: {self.server_args.max_loaded_loras})"
                         )
 
-                        unload_result = await self._unload_lora_adapter_locked(
-                            UnloadLoRAAdapterReqInput(lora_name=lru_lora_name)
+                        unload_result = (
+                            await TokenizerManager._unload_lora_adapter_locked(
+                                self, UnloadLoRAAdapterReqInput(lora_name=lru_lora_name)
+                            )
                         )
                         if not unload_result.success:
                             raise ValueError(
@@ -625,8 +629,9 @@ class TokenizerControlMixin:
                 error_message=str(e),
             )
 
+    @staticmethod
     async def load_lora_adapter_from_tensors(
-        self: TokenizerManager,
+        self: "LoraController",
         obj: LoadLoRAAdapterFromTensorsReqInput,
         _: Optional[fastapi.Request] = None,
     ) -> LoadLoRAAdapterFromTensorsReqOutput:
@@ -678,8 +683,10 @@ class TokenizerControlMixin:
                             f"max allowed: {self.server_args.max_loaded_loras})"
                         )
 
-                        unload_result = await self._unload_lora_adapter_locked(
-                            UnloadLoRAAdapterReqInput(lora_name=lru_lora_name)
+                        unload_result = (
+                            await TokenizerManager._unload_lora_adapter_locked(
+                                self, UnloadLoRAAdapterReqInput(lora_name=lru_lora_name)
+                            )
                         )
                         if not unload_result.success:
                             raise ValueError(
@@ -695,8 +702,9 @@ class TokenizerControlMixin:
                 error_message=str(e),
             )
 
+    @staticmethod
     async def unload_lora_adapter(
-        self: TokenizerManager,
+        self: "LoraController",
         obj: UnloadLoRAAdapterReqInput,
         _: Optional[fastapi.Request] = None,
     ) -> UnloadLoRAAdapterReqOutput:
@@ -723,7 +731,7 @@ class TokenizerControlMixin:
             )
 
             async with self.lora_update_lock:
-                return await self._unload_lora_adapter_locked(obj)
+                return await TokenizerManager._unload_lora_adapter_locked(self, obj)
         except ValueError as e:
             return UnloadLoRAAdapterReqOutput(success=False, error_message=str(e))
 
