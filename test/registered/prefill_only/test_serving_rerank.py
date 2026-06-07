@@ -152,6 +152,7 @@ class TestOpenAIServingRerankUnit(unittest.TestCase):
                 self.model_config = Mock()
                 self.model_config.is_generation = True
                 self.model_config.model_path = "qwen/qwen3"
+                self.score_request_handler = self
                 self.tokenizer = Mock()
                 self.tokenizer.chat_template = (
                     'Note that the answer can only be "yes" or "no". '
