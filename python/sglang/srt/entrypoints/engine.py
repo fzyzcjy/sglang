@@ -1141,8 +1141,8 @@ class Engine(EngineScoreMixin, EngineBase):
             load_format=load_format,
         )
         return self.loop.run_until_complete(
-            TokenizerManager.load_lora_adapter_from_tensors(
-                self.tokenizer_manager.lora_controller, lora_req, None
+            self.tokenizer_manager.lora_controller.load_lora_adapter_from_tensors(
+                lora_req, None
             )
         )
 
@@ -1156,9 +1156,7 @@ class Engine(EngineScoreMixin, EngineBase):
         )
 
         return self.loop.run_until_complete(
-            TokenizerManager.load_lora_adapter(
-                self.tokenizer_manager.lora_controller, obj, None
-            )
+            self.tokenizer_manager.lora_controller.load_lora_adapter(obj, None)
         )
 
     def unload_lora_adapter(self, lora_name: str):
@@ -1167,9 +1165,7 @@ class Engine(EngineScoreMixin, EngineBase):
         obj = UnloadLoRAAdapterReqInput(lora_name=lora_name)
 
         return self.loop.run_until_complete(
-            TokenizerManager.unload_lora_adapter(
-                self.tokenizer_manager.lora_controller, obj, None
-            )
+            self.tokenizer_manager.lora_controller.unload_lora_adapter(obj, None)
         )
 
     async def async_load_lora_adapter(
@@ -1187,9 +1183,7 @@ class Engine(EngineScoreMixin, EngineBase):
             pinned=pinned,
         )
 
-        return await TokenizerManager.load_lora_adapter(
-            self.tokenizer_manager.lora_controller, obj, None
-        )
+        return await self.tokenizer_manager.lora_controller.load_lora_adapter(obj, None)
 
     async def async_unload_lora_adapter(self, lora_name: str):
         """
@@ -1200,8 +1194,8 @@ class Engine(EngineScoreMixin, EngineBase):
 
         obj = UnloadLoRAAdapterReqInput(lora_name=lora_name)
 
-        return await TokenizerManager.unload_lora_adapter(
-            self.tokenizer_manager.lora_controller, obj, None
+        return await self.tokenizer_manager.lora_controller.unload_lora_adapter(
+            obj, None
         )
 
     def release_memory_occupation(self, tags: Optional[List[str]] = None):
