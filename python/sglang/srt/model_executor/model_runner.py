@@ -130,6 +130,7 @@ from sglang.srt.model_executor.model_runner_components.layer_setup import (
     resolve_layer_indices,
 )
 from sglang.srt.model_executor.model_runner_components.load_model_utils import (
+    load_kv_cache_scales,
     maybe_downgrade_dtype_for_legacy_gpu,
     maybe_trigger_remote_instance_nccl_send_group,
 )
@@ -1006,7 +1007,7 @@ class ModelRunner:
             pyt_hooks = PytHooks()
             pyt_hooks.register_hooks(self.model, module_prefix="model")
 
-        self._load_kv_cache_scales()
+        load_kv_cache_scales(model=self.model, server_args=self.server_args)
 
         self._resolve_sliding_window_size()
 
@@ -1117,30 +1118,6 @@ class ModelRunner:
         if _is_npu:
             torch.npu.empty_cache()
         monkey_patch_vllm_parallel_state(reverse=True)
-
-    def _load_kv_cache_scales(self) -> None:
-        if self.server_args.kv_cache_dtype == "fp8_e4m3":
-            if self.server_args.quantization_param_path is not None:
-                if callable(getattr(self.model, "load_kv_cache_scales", None)):
-                    self.model.load_kv_cache_scales(
-                        self.server_args.quantization_param_path
-                    )
-                    logger.info(
-                        "Loaded KV cache scaling factors from %s",
-                        self.server_args.quantization_param_path,
-                    )
-                else:
-                    raise RuntimeError(
-                        "Using FP8 KV cache and scaling factors provided but "
-                        "model %s does not support loading scaling factors.",
-                        self.model.__class__,
-                    )
-            else:
-                logger.warning(
-                    "Using FP8 KV cache but no scaling factors "
-                    "provided. Defaulting to scaling factors of 1.0. "
-                    "This may lead to less accurate results!"
-                )
 
     def _resolve_sliding_window_size(self) -> None:
         # Parse other args
