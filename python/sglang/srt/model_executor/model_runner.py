@@ -141,6 +141,9 @@ from sglang.srt.model_executor.model_runner_components.layer_setup import (
     adjust_hybrid_swa_layer_ids,
     resolve_layer_indices,
 )
+from sglang.srt.model_executor.model_runner_components.msprobe import (
+    create_msprobe_debugger,
+)
 from sglang.srt.model_executor.model_runner_components.pool_configurator import (
     MemoryPoolConfig,
 )
@@ -373,9 +376,7 @@ class ModelRunner:
 
         self.init_remote_instance_weight_transport()
 
-        self.msprobe_debugger = None
-        if server_args.msprobe_dump_config is not None:
-            self.init_msprobe()
+        self.msprobe_debugger = create_msprobe_debugger(server_args)
 
         # auxiliary hidden capture mode. TODO: expose this to server args?
         self.init_spec_aux_hidden_state()
@@ -568,21 +569,6 @@ class ModelRunner:
             req_to_token_pool=self.req_to_token_pool,
             token_to_kv_pool_allocator=self.token_to_kv_pool_allocator,
             memory_pool_config=self.memory_pool_config,
-        )
-
-    def init_msprobe(self):
-        # Init the msprobe
-        try:
-            from msprobe.pytorch import PrecisionDebugger, seed_all
-        except ImportError:
-            logger.warning(
-                "Please install msprobe for tensor data dump: pip install mindstudio-probe --pre, "
-                "see https://gitcode.com/Ascend/msprobe for details."
-            )
-            return
-        seed_all(mode=True)
-        self.msprobe_debugger = PrecisionDebugger(
-            config_path=self.server_args.msprobe_dump_config
         )
 
     def init_mindspore_runner(self):
