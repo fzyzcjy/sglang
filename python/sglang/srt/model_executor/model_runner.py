@@ -19,7 +19,6 @@ import contextlib
 import datetime
 import inspect
 import logging
-import os
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -43,9 +42,6 @@ from sglang.srt.configs.model_config import (
 from sglang.srt.configs.update_config import adjust_config_with_unaligned_cpu_tp
 from sglang.srt.constants import GPU_MEMORY_TYPE_WEIGHTS
 from sglang.srt.debug_utils.dumper import dumper
-from sglang.srt.debug_utils.tensor_dump_forward_hook import (
-    register_forward_hook_for_model,
-)
 from sglang.srt.distributed import (
     get_tp_group,
     get_world_group,
@@ -132,6 +128,7 @@ from sglang.srt.model_executor.model_runner_components.layer_setup import (
 from sglang.srt.model_executor.model_runner_components.load_model_utils import (
     load_kv_cache_scales,
     maybe_downgrade_dtype_for_legacy_gpu,
+    maybe_register_debug_tensor_dump_hook,
     maybe_trigger_remote_instance_nccl_send_group,
     resolve_sliding_window_size,
 )
@@ -1046,7 +1043,15 @@ class ModelRunner:
                 f"Online {self.server_args.quantization} quantization: quantized {quantized_layers_count} layers of types: {layer_types}"
             )
 
-        self._maybe_register_debug_tensor_dump_hook()
+        maybe_register_debug_tensor_dump_hook(
+            model=self.model,
+            server_args=self.server_args,
+            spec_algorithm=self.spec_algorithm,
+            is_draft_worker=self.is_draft_worker,
+            tp_size=self.tp_size,
+            tp_rank=self.tp_rank,
+            pp_rank=self.pp_rank,
+        )
 
         if dumper.may_enable:
             dumper.apply_source_patches()
@@ -1121,21 +1126,6 @@ class ModelRunner:
         if _is_npu:
             torch.npu.empty_cache()
         monkey_patch_vllm_parallel_state(reverse=True)
-
-    def _maybe_register_debug_tensor_dump_hook(self) -> None:
-        if self.server_args.debug_tensor_dump_output_folder is not None:
-            dump_folder = self.server_args.debug_tensor_dump_output_folder
-            if self.spec_algorithm.is_eagle():
-                role = "draft" if self.is_draft_worker else "target"
-                dump_folder = os.path.join(dump_folder, role)
-            register_forward_hook_for_model(
-                self.model,
-                dump_folder,
-                self.server_args.debug_tensor_dump_layers,
-                self.tp_size,
-                self.tp_rank,
-                self.pp_rank,
-            )
 
     def _dist_barrier_after_load(self) -> None:
         if self.server_args.elastic_ep_backend == "mooncake":
