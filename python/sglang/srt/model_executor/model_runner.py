@@ -131,6 +131,9 @@ from sglang.srt.model_executor.model_runner_components.layer_setup import (
     adjust_hybrid_swa_layer_ids,
     resolve_layer_indices,
 )
+from sglang.srt.model_executor.model_runner_components.load_model_utils import (
+    maybe_downgrade_dtype_for_legacy_gpu,
+)
 from sglang.srt.model_executor.model_runner_components.moe_ep_setup import (
     init_lplb_solvers,
     prepare_moe_topk,
@@ -979,7 +982,9 @@ class ModelRunner:
         if self.device != "cpu":
             torch.set_num_threads(1)
         if self.device == "cuda":
-            self._maybe_downgrade_dtype_for_legacy_gpu()
+            maybe_downgrade_dtype_for_legacy_gpu(
+                server_args=self.server_args, model_config=self.model_config
+            )
 
         set_cuda_arch()
 
@@ -1052,16 +1057,6 @@ class ModelRunner:
         )
 
         self._dist_barrier_after_load()
-
-    def _maybe_downgrade_dtype_for_legacy_gpu(self) -> None:
-        if torch.cuda.get_device_capability()[0] < 8:
-            logger.info(
-                "Compute capability below sm80. Use float16 due to lack of bfloat16 support."
-            )
-            self.server_args.dtype = "float16"
-            self.model_config.dtype = torch.float16
-            if torch.cuda.get_device_capability()[1] < 5:
-                raise RuntimeError("SGLang only supports sm75 and above.")
 
     def _build_load_config(self) -> LoadConfig:
         # Prepare the model config
