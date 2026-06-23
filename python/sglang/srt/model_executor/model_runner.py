@@ -40,9 +40,7 @@ from sglang.srt.configs.model_config import (
     AttentionArch,
     ModelConfig,
     ModelImpl,
-    dsa_layer_skips_topk,
     get_num_indexer_layers,
-    is_deepseek_dsa,
 )
 from sglang.srt.configs.update_config import adjust_config_with_unaligned_cpu_tp
 from sglang.srt.constants import GPU_MEMORY_TYPE_WEIGHTS
@@ -146,6 +144,9 @@ from sglang.srt.model_executor.model_runner_components.msprobe import (
 )
 from sglang.srt.model_executor.model_runner_components.pool_configurator import (
     MemoryPoolConfig,
+)
+from sglang.srt.model_executor.model_runner_components.pp_proxy import (
+    resolve_pp_proxy_topk_size,
 )
 from sglang.srt.model_executor.model_runner_components.quantization_checks import (
     check_quantized_moe_compatibility,
@@ -706,15 +707,12 @@ class ModelRunner:
         )
 
     def get_pp_proxy_topk_size(self) -> Optional[int]:
-        hf_config = self.model_config.hf_text_config
-        if (
-            self.pp_size <= 1
-            or self.pp_rank == 0
-            or not is_deepseek_dsa(hf_config)
-            or not dsa_layer_skips_topk(hf_config, self.start_layer)
-        ):
-            return None
-        return getattr(hf_config, "index_topk", None)
+        return resolve_pp_proxy_topk_size(
+            model_config=self.model_config,
+            pp_size=self.pp_size,
+            pp_rank=self.pp_rank,
+            start_layer=self.start_layer,
+        )
 
     def alloc_memory_pool(self, memory_pool_config: Optional[MemoryPoolConfig] = None):
         """Allocate KV cache memory pools only (no backends or cuda graphs)."""
