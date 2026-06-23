@@ -144,6 +144,9 @@ from sglang.srt.model_executor.model_runner_components.layer_setup import (
 from sglang.srt.model_executor.model_runner_components.pool_configurator import (
     MemoryPoolConfig,
 )
+from sglang.srt.model_executor.model_runner_components.quantization_checks import (
+    check_quantized_moe_compatibility,
+)
 from sglang.srt.model_executor.model_runner_components.remote_instance_weight_transport import (
     RemoteInstanceWeightTransport,
 )
@@ -189,7 +192,6 @@ from sglang.srt.utils import (
     cpu_has_amx_support,
     enable_show_time_cost,
     get_available_gpu_memory,
-    get_bool_env_var,
     init_cublas,
     is_hip,
     is_host_cpu_arm64,
@@ -217,7 +219,6 @@ _is_hip = is_hip()
 _is_npu = is_npu()
 _is_cpu_amx_available = cpu_has_amx_support()
 _is_cpu_arm64 = is_host_cpu_arm64()
-_use_aiter = get_bool_env_var("SGLANG_USE_AITER") and _is_hip
 
 if _is_npu:
     from sglang.srt.hardware_backend.npu.utils import init_npu_backend
@@ -534,7 +535,12 @@ class ModelRunner:
 
         # Load model weights and configure
         self.initialize()
-        self.check_quantized_moe_compatibility()
+        check_quantized_moe_compatibility(
+            model_config=self.model_config,
+            tp_size=self.tp_size,
+            moe_ep_size=self.moe_ep_size,
+            moe_dp_size=self.moe_dp_size,
+        )
 
         if (
             self.server_args.elastic_ep_backend is not None
@@ -1021,44 +1027,6 @@ class ModelRunner:
 
         if not server_args.disable_chunked_prefix_cache:
             log_info_on_rank0(logger, "Chunked prefix cache is turned on.")
-
-    def check_quantized_moe_compatibility(self):
-        if (
-            quantization_config := getattr(
-                self.model_config.hf_config, "quantization_config", None
-            )
-        ) is not None and (
-            weight_block_size := quantization_config.get("weight_block_size", None)
-        ) is not None:
-            weight_block_size_n = weight_block_size[0]
-
-            if self.tp_size % self.moe_ep_size != 0:
-                raise ValueError(
-                    f"tp_size {self.tp_size} must be divisible by ep_size {self.moe_ep_size}"
-                )
-            moe_tp_size = self.tp_size // self.moe_ep_size // self.moe_dp_size
-
-            moe_intermediate_size = getattr(
-                self.model_config.hf_text_config, "moe_intermediate_size", None
-            )
-            if moe_intermediate_size is None:
-                return
-
-            if moe_intermediate_size % moe_tp_size != 0:
-                raise ValueError(
-                    f"moe_intermediate_size {moe_intermediate_size} must be divisible by moe_tp_size ({moe_tp_size}) which is tp_size ({self.tp_size}) divided by moe_ep_size ({self.moe_ep_size})."
-                )
-
-            if (
-                not envs.SGLANG_SHARED_EXPERT_TP1.get()
-                and (moe_intermediate_size // moe_tp_size) % weight_block_size_n != 0
-                and not _use_aiter
-            ):
-                raise ValueError(
-                    f"For quantized MoE models, please make sure ({moe_intermediate_size=} / {moe_tp_size=}) % {weight_block_size_n=} == 0 "
-                    f"where moe_tp_size is equal to tp_size ({self.tp_size}) divided by ep_size ({self.moe_ep_size}). "
-                    f"You can fix this by setting arguments `--tp` and `--ep` correctly."
-                )
 
     def init_shared_mooncake_transfer_engine(self):
         """
