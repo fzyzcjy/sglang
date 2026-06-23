@@ -159,9 +159,6 @@ from sglang.srt.model_executor.model_runner_components.quantization_checks impor
 from sglang.srt.model_executor.model_runner_components.remote_instance_weight_transport import (
     RemoteInstanceWeightTransport,
 )
-from sglang.srt.model_executor.model_runner_components.server_args_adjustment import (
-    model_specific_adjustment,
-)
 from sglang.srt.model_executor.model_runner_components.spec_aux_hidden_state import (
     resolve_spec_aux_hidden_state_config,
 )
@@ -185,6 +182,7 @@ from sglang.srt.model_loader.utils import resolve_language_model
 from sglang.srt.platforms import current_platform
 from sglang.srt.sampling.sampling_batch_info import SamplingBatchInfo
 from sglang.srt.server_args import (
+    CHUNKED_PREFIX_CACHE_SUPPORTED_ATTENTION_BACKENDS,
     ServerArgs,
     get_global_server_args,
     set_global_server_args_for_scheduler,
@@ -252,17 +250,6 @@ MLA_ATTENTION_BACKENDS = [
     "dsa",
     "nsa",  # Deprecated alias for "dsa"
     "intel_xpu",
-]
-
-CHUNKED_PREFIX_CACHE_SUPPORTED_ATTENTION_BACKENDS = [
-    "flashinfer",
-    "fa3",
-    "fa4",
-    "flashmla",
-    "cutedsl_mla",
-    "cutlass_mla",
-    "trtllm_mla",
-    "tokenspeed_mla",
 ]
 
 
@@ -407,11 +394,6 @@ class ModelRunner:
         # Apply the rank zero filter to logger
         if server_args.show_time_cost:
             enable_show_time_cost()
-
-        # Model-specific adjustment
-        model_specific_adjustment(
-            server_args=self.server_args, model_config=self.model_config
-        )
 
         # Set the global server_args in the scheduler process
         set_global_server_args_for_scheduler(server_args)
