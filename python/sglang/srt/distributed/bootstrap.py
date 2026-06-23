@@ -18,6 +18,7 @@ from sglang.srt.distributed import (
     set_mscclpp_all_reduce,
     set_torch_symm_mem_all_reduce,
 )
+from sglang.srt.distributed.parallel_state_wrapper import ParallelState
 from sglang.srt.environ import envs
 from sglang.srt.layers.dp_attention import (
     get_attention_tp_group,
@@ -57,19 +58,21 @@ def init_torch_distributed(
     server_args: ServerArgs,
     model_config: ModelConfig,
     device: str,
-    gpu_id: int,
-    tp_rank: int,
-    tp_size: int,
-    pp_rank: int,
-    pp_size: int,
-    dp_size: int,
-    attn_cp_size: int,
-    moe_ep_size: int,
-    moe_dp_size: int,
+    ps: ParallelState,
     dist_port: int,
     is_draft_worker: bool,
     local_omp_cpuid: Optional[List[int]],
 ):
+    gpu_id = ps.gpu_id
+    tp_rank = ps.tp_rank
+    tp_size = ps.tp_size
+    pp_rank = ps.pp_rank
+    pp_size = ps.pp_size
+    dp_size = ps.dp_size
+    attn_cp_size = ps.attn_cp_size
+    moe_ep_size = ps.moe_ep_size
+    moe_dp_size = ps.moe_dp_size
+
     tic = time.perf_counter()
     logger.info("Init torch distributed begin.")
 
@@ -81,9 +84,7 @@ def init_torch_distributed(
         )
         raise
 
-    backend = _resolve_backend(
-        device=device, server_args=server_args, gpu_id=gpu_id
-    )
+    backend = _resolve_backend(device=device, server_args=server_args, gpu_id=gpu_id)
 
     before_avail_memory = get_available_gpu_memory(device, gpu_id)
     if not server_args.enable_p2p_check:
