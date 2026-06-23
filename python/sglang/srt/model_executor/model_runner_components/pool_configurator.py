@@ -375,7 +375,7 @@ class SWAChunkCapPoolConfigurator(HybridSWAPoolConfigurator):
             decode_alloc = 2 * get_alloc_len_per_decode(sa)
         per_request = trailing_tokens + decode_alloc
 
-        num_reqs = sa.max_running_requests // model_runner.dp_size
+        num_reqs = sa.max_running_requests // model_runner.ps.dp_size
         if sa.disaggregation_mode == "decode":
             self._swa_cap = (
                 per_request * num_reqs
@@ -467,7 +467,7 @@ class DSV4PoolConfigurator(MemoryPoolConfigurator):
         self.compression_ratios = cfg.compress_ratios[
             model_runner.start_layer : model_runner.end_layer
         ]
-        if model_runner.pp_size > 1:
+        if model_runner.ps.pp_size > 1:
             logger.info(
                 f"DSV4 pool PP slice: rank={model_runner.pp_group.rank_in_group} "
                 f"layers=[{model_runner.start_layer},{model_runner.end_layer}) "
