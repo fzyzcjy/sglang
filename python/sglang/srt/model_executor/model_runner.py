@@ -541,12 +541,6 @@ class ModelRunner:
             max_running_requests=self.max_running_requests,
             device=self.device,
         )
-        # Legacy double-track fields kept for now; Scheduler / CudaGraphRunner
-        # still read them. PRs 2 and 3 of this chain migrate those callers
-        # to ``self.ngram_embedding_manager`` and then drop the fields below.
-        self.use_ngram_embedding = self.ngram_embedding_manager.enabled
-        if self.ngram_embedding_manager.enabled:
-            self.token_table = self.ngram_embedding_manager.table
 
     def init_kv_cache_configurator(self):
         self.kv_cache_configurator = KVCacheConfigurator(
