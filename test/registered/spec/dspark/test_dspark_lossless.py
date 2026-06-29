@@ -253,7 +253,7 @@ class _DSparkLosslessBase(CustomTestCase, GSM8KMixin):
             )
 
     def test_gsm8k(self):
-        """Default-path GSM8K accuracy and accept length clear the lossless floor."""
+        """DSpark GSM8K accuracy and accept length clear the lossless floor."""
         self._maybe_skip()
         super().test_gsm8k()
 
