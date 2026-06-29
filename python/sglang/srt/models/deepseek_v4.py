@@ -195,6 +195,34 @@ def _fused_rmsnorm_fp8_quant(hidden_states, weight, eps):
     return x_quant, x_bf16
 
 
+def make_hc_mixing_params(
+    hc_mult: int, hidden_size: int
+) -> Tuple[
+    nn.Parameter, nn.Parameter, nn.Parameter, nn.Parameter, nn.Parameter, nn.Parameter
+]:
+    mix_hc = (2 + hc_mult) * hc_mult
+    hc_dim = hc_mult * hidden_size
+    return (
+        nn.Parameter(torch.empty(mix_hc, hc_dim, dtype=torch.float32)),
+        nn.Parameter(torch.empty(mix_hc, hc_dim, dtype=torch.float32)),
+        nn.Parameter(torch.empty(mix_hc, dtype=torch.float32)),
+        nn.Parameter(torch.empty(mix_hc, dtype=torch.float32)),
+        nn.Parameter(torch.empty(3, dtype=torch.float32)),
+        nn.Parameter(torch.empty(3, dtype=torch.float32)),
+    )
+
+
+def make_hc_head_params(
+    hc_mult: int, hidden_size: int
+) -> Tuple[nn.Parameter, nn.Parameter, nn.Parameter]:
+    hc_dim = hc_mult * hidden_size
+    return (
+        nn.Parameter(torch.empty(hc_mult, hc_dim, dtype=torch.float32)),
+        nn.Parameter(torch.empty(hc_mult, dtype=torch.float32)),
+        nn.Parameter(torch.empty(1, dtype=torch.float32)),
+    )
+
+
 _FREQS_CIS_TO_COS_SIN: dict[
     Tuple[int, torch.dtype, torch.device], Tuple[torch.Tensor, torch.Tensor]
 ] = {}
@@ -1159,14 +1187,14 @@ class DeepseekV4DecoderLayer(nn.Module):
         self.hc_mult = hc_mult = config.hc_mult
         self.hc_sinkhorn_iters = config.hc_sinkhorn_iters
         self.hc_eps = config.hc_eps
-        mix_hc = (2 + hc_mult) * hc_mult
-        hc_dim = hc_mult * config.hidden_size
-        self.hc_attn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim, dtype=torch.float32))
-        self.hc_ffn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim, dtype=torch.float32))
-        self.hc_attn_base = nn.Parameter(torch.empty(mix_hc, dtype=torch.float32))
-        self.hc_ffn_base = nn.Parameter(torch.empty(mix_hc, dtype=torch.float32))
-        self.hc_attn_scale = nn.Parameter(torch.empty(3, dtype=torch.float32))
-        self.hc_ffn_scale = nn.Parameter(torch.empty(3, dtype=torch.float32))
+        (
+            self.hc_attn_fn,
+            self.hc_ffn_fn,
+            self.hc_attn_base,
+            self.hc_ffn_base,
+            self.hc_attn_scale,
+            self.hc_ffn_scale,
+        ) = make_hc_mixing_params(hc_mult, config.hidden_size)
         self.rms_norm_eps = config.rms_norm_eps
         self.dsa_enable_prefill_cp = is_dsa_enable_prefill_cp()
         self.use_fused_mhc_post_pre = _is_fused_mhc_post_pre_enabled()
@@ -1772,12 +1800,11 @@ class DeepseekV4Model(nn.Module):
         self.hc_mult = hc_mult = config.hc_mult
         self.norm_eps = config.rms_norm_eps
         if self.pp_group.is_last_rank:
-            hc_dim = hc_mult * config.hidden_size
-            self.hc_head_fn = nn.Parameter(
-                torch.empty(hc_mult, hc_dim, dtype=torch.float32)
-            )
-            self.hc_head_base = nn.Parameter(torch.empty(hc_mult, dtype=torch.float32))
-            self.hc_head_scale = nn.Parameter(torch.empty(1, dtype=torch.float32))
+            (
+                self.hc_head_fn,
+                self.hc_head_base,
+                self.hc_head_scale,
+            ) = make_hc_head_params(hc_mult, config.hidden_size)
 
         self.dsa_enable_prefill_cp = is_dsa_enable_prefill_cp()
         self.use_fused_mhc_post_pre = _is_fused_mhc_post_pre_enabled()

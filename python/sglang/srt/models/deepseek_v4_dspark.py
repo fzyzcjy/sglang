@@ -22,6 +22,7 @@ from sglang.srt.layers.vocab_parallel_embedding import VocabParallelEmbedding
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models import deepseek_v2
 from sglang.srt.models.dbrx import ReplicatedLinear
+from sglang.srt.models.deepseek_v4 import make_hc_head_params, make_hc_mixing_params
 from sglang.srt.speculative.dspark_utils import parse_dspark_draft_config
 from sglang.srt.utils import add_prefix
 
@@ -416,14 +417,14 @@ class DSparkV4Stage(nn.Module):
         self.attn_norm = RMSNorm(config.hidden_size, eps=self.norm_eps)
         self.ffn_norm = RMSNorm(config.hidden_size, eps=self.norm_eps)
 
-        mix_hc = (2 + hc_mult) * hc_mult
-        hc_dim = hc_mult * config.hidden_size
-        self.hc_attn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim, dtype=torch.float32))
-        self.hc_ffn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim, dtype=torch.float32))
-        self.hc_attn_base = nn.Parameter(torch.empty(mix_hc, dtype=torch.float32))
-        self.hc_ffn_base = nn.Parameter(torch.empty(mix_hc, dtype=torch.float32))
-        self.hc_attn_scale = nn.Parameter(torch.empty(3, dtype=torch.float32))
-        self.hc_ffn_scale = nn.Parameter(torch.empty(3, dtype=torch.float32))
+        (
+            self.hc_attn_fn,
+            self.hc_ffn_fn,
+            self.hc_attn_base,
+            self.hc_ffn_base,
+            self.hc_attn_scale,
+            self.hc_ffn_scale,
+        ) = make_hc_mixing_params(hc_mult, config.hidden_size)
 
         if stage_id == 0:
             if num_target_layers <= 0:
@@ -441,11 +442,11 @@ class DSparkV4Stage(nn.Module):
 
         if stage_id == num_stages - 1:
             self.norm = RMSNorm(config.hidden_size, eps=self.norm_eps)
-            self.hc_head_fn = nn.Parameter(
-                torch.empty(hc_mult, hc_dim, dtype=torch.float32)
-            )
-            self.hc_head_base = nn.Parameter(torch.empty(hc_mult, dtype=torch.float32))
-            self.hc_head_scale = nn.Parameter(torch.empty(1, dtype=torch.float32))
+            (
+                self.hc_head_fn,
+                self.hc_head_base,
+                self.hc_head_scale,
+            ) = make_hc_head_params(hc_mult, config.hidden_size)
 
     def hc_pre(
         self,
