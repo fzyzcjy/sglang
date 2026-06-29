@@ -1,6 +1,5 @@
 import functools
 import unittest
-from typing import Optional
 
 import torch
 
@@ -192,11 +191,12 @@ class TestQwen3DSparkModelParity(CustomTestCase):
         if not _CUDA_AVAILABLE:
             return
         try:
-            from sglang.srt.models.dspark import Qwen3DSparkModel as SglQwen3DSparkModel
-            from sglang.srt.runtime_context import get_parallel
             from test.srt.speculative._dspark_reference.qwen3.modeling import (
                 Qwen3DSparkModel as RefQwen3DSparkModel,
             )
+
+            from sglang.srt.models.dspark import Qwen3DSparkModel as SglQwen3DSparkModel
+            from sglang.srt.runtime_context import get_parallel
         except ImportError as exc:
             cls._import_error = str(exc)
             return
@@ -298,9 +298,7 @@ class TestQwen3DSparkModelParity(CustomTestCase):
         torch.testing.assert_close(
             sgl_logits, ref_logits, atol=_ATOL_LOGITS, rtol=_RTOL_LOGITS
         )
-        torch.testing.assert_close(
-            sgl_logits.argmax(dim=-1), ref_logits.argmax(dim=-1)
-        )
+        torch.testing.assert_close(sgl_logits.argmax(dim=-1), ref_logits.argmax(dim=-1))
 
     @_requires_cuda
     def test_markov_head_parity_vanilla(self):
@@ -308,10 +306,11 @@ class TestQwen3DSparkModelParity(CustomTestCase):
         if getattr(self, "_import_error", None):
             self.skipTest(f"Import error: {self._import_error}")
 
-        from sglang.srt.models.dspark import build_markov_head
         from test.srt.speculative._dspark_reference.markov_head import (
             VanillaMarkov as RefVanillaMarkov,
         )
+
+        from sglang.srt.models.dspark import build_markov_head
 
         cfg = self.cfg
         torch.manual_seed(20)
@@ -334,7 +333,9 @@ class TestQwen3DSparkModelParity(CustomTestCase):
             ref_out = ref_head.apply_block_logits(
                 base_logits, token_ids=token_ids, hidden_states=None
             )
-        torch.testing.assert_close(sgl_out, ref_out, atol=_ATOL_LOGITS, rtol=_RTOL_LOGITS)
+        torch.testing.assert_close(
+            sgl_out, ref_out, atol=_ATOL_LOGITS, rtol=_RTOL_LOGITS
+        )
 
     @_requires_cuda
     def test_draft_probs_row_order_no_anchor_row(self):
@@ -397,11 +398,12 @@ class TestGemma4DSparkModelParity(CustomTestCase):
         if not _CUDA_AVAILABLE:
             return
         try:
-            from sglang.srt.models.dspark_gemma import Gemma4DSparkModel as SglGemma4
-            from sglang.srt.runtime_context import get_parallel
             from test.srt.speculative._dspark_reference.gemma4.modeling import (
                 Gemma4DSparkModel as RefGemma4,
             )
+
+            from sglang.srt.models.dspark_gemma import Gemma4DSparkModel as SglGemma4
+            from sglang.srt.runtime_context import get_parallel
         except ImportError as exc:
             cls._import_error = str(exc)
             return
@@ -502,10 +504,11 @@ class TestGemma4DSparkModelParity(CustomTestCase):
         if getattr(self, "_import_error", None):
             self.skipTest(f"Import error: {self._import_error}")
 
-        from sglang.srt.models.dspark import build_markov_head
         from test.srt.speculative._dspark_reference.markov_head import (
             VanillaMarkov as RefVanillaMarkov,
         )
+
+        from sglang.srt.models.dspark import build_markov_head
 
         cfg = self.cfg
         torch.manual_seed(50)
@@ -528,7 +531,9 @@ class TestGemma4DSparkModelParity(CustomTestCase):
             ref_out = ref_head.apply_block_logits(
                 base_logits, token_ids=token_ids, hidden_states=None
             )
-        torch.testing.assert_close(sgl_out, ref_out, atol=_ATOL_LOGITS, rtol=_RTOL_LOGITS)
+        torch.testing.assert_close(
+            sgl_out, ref_out, atol=_ATOL_LOGITS, rtol=_RTOL_LOGITS
+        )
 
     @_requires_cuda
     def test_draft_probs_row_order_no_anchor_row(self):
