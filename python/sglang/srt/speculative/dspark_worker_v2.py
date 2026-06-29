@@ -1,9 +1,12 @@
 import logging
+import os
 from typing import Optional
 
 import msgspec
 import torch
+import torch.distributed as dist
 
+from sglang.srt.distributed import get_tp_group
 from sglang.srt.distributed.communication_op import tensor_model_parallel_all_gather
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.managers.scheduler import GenerationBatchResult
@@ -30,9 +33,22 @@ from sglang.srt.speculative.draft_worker_common import (
     make_draft_block_spec_info,
     make_draft_input_v2,
 )
+from sglang.srt.speculative.dspark_scheduler import (
+    ConfidencePrefixScheduler,
+    DSparkScheduleConfig,
+)
+from sglang.srt.speculative.dspark_sps_table import (
+    SpsCostTable,
+    load_sps_table_from_path,
+)
 from sglang.srt.speculative.dspark_utils import (
     dspark_gamma_from_num_draft_tokens,
     parse_dspark_draft_config,
+)
+from sglang.srt.speculative.ragged_verify import (
+    RaggedVerifyLayout,
+    RaggedVerifyMode,
+    read_ragged_verify_mode,
 )
 from sglang.srt.speculative.reject_sampling import chain_speculative_sampling_triton
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
@@ -189,6 +205,46 @@ class DSparkWorkerV2(BaseSpecWorker):
                 "relayed on an independent stream/event and is advisory only.",
                 getattr(self._confidence_head, "with_markov", True),
             )
+
+        # Ragged-verify mode and the confidence prefix scheduler. The scheduler is
+        # inert (None) unless the mode is cutoff-only/full AND a confidence head is
+        # present, so the off-mode / no-head path is byte-identical to the static
+        # uniform-gamma worker. cutoff-only runs the full bs*(gamma+1) window and
+        # only caps accept at per-request ell_r; full (real-N) is not wired here.
+        self._ragged_verify_mode = read_ragged_verify_mode()
+        self._verify_scheduler: Optional[ConfidencePrefixScheduler] = None
+        if (
+            self._ragged_verify_mode is not RaggedVerifyMode.OFF
+            and self._confidence_head is not None
+        ):
+            self._verify_scheduler = ConfidencePrefixScheduler(
+                sps_table=self._build_sps_cost_table(),
+                cfg=DSparkScheduleConfig(gamma=self.gamma),
+            )
+            if self.tp_rank == 0:
+                logger.info(
+                    "DSpark ragged-verify scheduler enabled (mode=%s).",
+                    self._ragged_verify_mode.value,
+                )
+
+    def _build_sps_cost_table(self) -> SpsCostTable:
+        # Load a pre-profiled table when a path is given, else a flat constant-SPS
+        # table (budget = verify-all-up-to-max). Flat is the inert default for
+        # cutoff-only, which has zero throughput gain; the GPU profiler hook lands
+        # with the full real-N path.
+        sps_table_path = os.environ.get("SGLANG_DSPARK_SPS_TABLE_PATH")
+        if sps_table_path:
+            return load_sps_table_from_path(sps_table_path)
+        max_batch_tokens = max(
+            1,
+            int(self.server_args.max_running_requests or 1)
+            * self.verify_num_draft_tokens,
+        )
+        return SpsCostTable(
+            sample_batch_tokens=[1],
+            sample_steps_per_sec=[1.0],
+            max_batch_tokens=max_batch_tokens,
+        )
 
     @property
     def carries_confidence(self) -> bool:
@@ -447,11 +503,93 @@ class DSparkWorkerV2(BaseSpecWorker):
                 )
         return self._confidence_cpu_pinned
 
+    def _maybe_schedule_cutoff_layout(
+        self,
+        *,
+        req_pool_indices: torch.Tensor,
+        device: torch.device,
+    ) -> Optional[RaggedVerifyLayout]:
+        # Single gate for the ragged-verify path. OFF -> None (the static
+        # uniform-gamma path is byte-identical). FULL (real-N: token-keyed graph +
+        # ragged attention metadata + compact->strided scatter) is owned by the
+        # next worker pass and is not wired here yet. CUTOFF_ONLY runs the full
+        # window and only caps accept per request.
+        if self._ragged_verify_mode is RaggedVerifyMode.OFF:
+            return None
+        if self._ragged_verify_mode is RaggedVerifyMode.FULL:
+            raise NotImplementedError(
+                "SGLANG_RAGGED_VERIFY=full (real-N ragged verify) is not wired into "
+                "DSparkWorkerV2 yet; the token-keyed graph + ragged attention "
+                "metadata land in a later worker pass. Use 'cutoff-only' for now."
+            )
+        return self._schedule_cutoff_layout(
+            req_pool_indices=req_pool_indices, device=device
+        )
+
+    def _schedule_cutoff_layout(
+        self,
+        *,
+        req_pool_indices: torch.Tensor,
+        device: torch.device,
+    ) -> Optional[RaggedVerifyLayout]:
+        # Cutoff-only schedule: derive per-request verify_lens (= 1 + ell_r) from
+        # the n-2-frozen confidence history, broadcast from rank 0 across the TP
+        # group for cross-rank shape consistency, then wrap them in a cutoff
+        # RaggedVerifyLayout. Returns None (-> uniform full block) whenever the
+        # confidence history is not yet available.
+        if self._verify_scheduler is None:
+            return None
+        confidence_history = self.pull_confidence_history()
+        if confidence_history is None:
+            return None
+
+        req_pool_indices_cpu = req_pool_indices.to("cpu", dtype=torch.int64)
+        confidence = confidence_history[req_pool_indices_cpu].to(self.device)
+        survival_probs = torch.cumprod(confidence.to(torch.float32), dim=1)
+
+        self._verify_scheduler.update_budget_from_history(
+            history_survival_probs=survival_probs
+        )
+        verify_lens = self._verify_scheduler.compute_verify_lens(
+            survival_probs=survival_probs
+        ).to(device=device, dtype=torch.int32)
+
+        if self.server_args.tp_size > 1:
+            # Broadcast rank-0 geometry so every rank derives an identical layout
+            # (distributed-compat doc: rank-0 broadcast eliminates the divergence
+            # source without a host sync). DP-attention follow-up must switch the
+            # sync group to get_attention_tp_group().device_group (mirror
+            # sampler.py); c-v1 is TP-only.
+            dist.broadcast(verify_lens, src=0, group=get_tp_group().device_group)
+
+        verify_lens_cpu = verify_lens.to("cpu").tolist()
+        return RaggedVerifyLayout.from_verify_lens(
+            verify_lens_cpu=verify_lens_cpu,
+            device=device,
+            grid=[sum(verify_lens_cpu)],
+        )
+
+    def _cap_correct_len(
+        self,
+        *,
+        correct_len: torch.Tensor,
+        layout: RaggedVerifyLayout,
+    ) -> torch.Tensor:
+        # Cutoff-only cap: commit at most ell_r = verify_len - 1 correct drafts per
+        # request. Capping accept is lossless -- fewer correctly-verified drafts are
+        # committed and the bonus (recomputed by callers at the capped index) is
+        # still the target's true next token at the cap.
+        ell_r = (layout.verify_lens.to(device=correct_len.device) - 1).to(
+            correct_len.dtype
+        )
+        return torch.minimum(correct_len, ell_r)
+
     def _accept_greedy(
         self,
         *,
         candidates: torch.Tensor,
         target_logits: torch.Tensor,
+        cutoff_layout: Optional[RaggedVerifyLayout] = None,
     ):
         bs = candidates.shape[0]
         target_predict = torch.argmax(target_logits, dim=-1).view(
@@ -461,6 +599,12 @@ class DSparkWorkerV2(BaseSpecWorker):
             candidates=candidates,
             target_predict=target_predict,
         )
+        if cutoff_layout is not None:
+            correct_len = self._cap_correct_len(
+                correct_len=correct_len, layout=cutoff_layout
+            )
+            row_ids = torch.arange(bs, device=target_predict.device)
+            bonus = target_predict[row_ids, correct_len.to(torch.long)].to(torch.int64)
         return correct_len, bonus
 
     def _accept_sampling(
@@ -471,6 +615,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         draft_probs: torch.Tensor,
         sampling_info,
         draft_input: DFlashDraftInputV2,
+        cutoff_layout: Optional[RaggedVerifyLayout] = None,
     ):
         bs = candidates.shape[0]
         device = candidates.device
@@ -515,6 +660,10 @@ class DSparkWorkerV2(BaseSpecWorker):
             deterministic=True,
         )
         correct_len = accept_token_num
+        if cutoff_layout is not None:
+            correct_len = self._cap_correct_len(
+                correct_len=correct_len, layout=cutoff_layout
+            )
         row_ids = torch.arange(bs, dtype=torch.long, device=device)
         accept_pos = accept_index[row_ids, correct_len.to(torch.long)].to(torch.long)
         bonus = predicts[accept_pos].to(torch.int64)
@@ -825,6 +974,10 @@ class DSparkWorkerV2(BaseSpecWorker):
                 confidence=confidence,
             )
 
+        cutoff_layout = self._maybe_schedule_cutoff_layout(
+            req_pool_indices=batch.req_pool_indices, device=device
+        )
+
         verify_ids_2d = torch.cat(
             [draft_block_ids[:, :1], draft_tokens], dim=1
         ).contiguous()
@@ -843,6 +996,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             correct_len, bonus = self._accept_greedy(
                 candidates=verify_ids_2d,
                 target_logits=logits_output.next_token_logits,
+                cutoff_layout=cutoff_layout,
             )
         else:
             draft_probs = torch.softmax(
@@ -854,6 +1008,7 @@ class DSparkWorkerV2(BaseSpecWorker):
                 draft_probs=draft_probs,
                 sampling_info=sampling_info,
                 draft_input=draft_input,
+                cutoff_layout=cutoff_layout,
             )
 
         commit_lens = correct_len.to(torch.int32) + 1
