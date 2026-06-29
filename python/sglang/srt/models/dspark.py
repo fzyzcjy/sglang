@@ -287,13 +287,13 @@ _DSPARK_SKIPPED_WEIGHT_PREFIXES = (
 )
 
 
-class DSparkDraftModel(DFlashDraftModel):
-    """DSpark dense draft model: DFlash KV-injection backbone + serial Markov head.
+class DSparkDraftMixin:
+    """Mixin that attaches a Markov head and DSpark-aware load_weights to any
+    KV-injection draft backbone.
 
-    Generic over the draft backbone style; concrete per-arch subclasses
-    (``Qwen3DSparkModel`` / ``Gemma4DSparkModel``) provide the ``EntryClass`` name
-    the model registry matches against. Inherits the backbone forward, fc/
-    hidden_norm projection and KV-injection helpers from ``DFlashDraftModel``.
+    MRO must place this mixin before the backbone base class so cooperative
+    super().__init__ reaches the backbone (which sets self.block_size) first;
+    the mixin then builds the Markov head on top.
     """
 
     def __init__(self, config, quant_config=None, prefix: str = "") -> None:
@@ -330,6 +330,12 @@ class DSparkDraftModel(DFlashDraftModel):
             param = params_dict[name]
             weight_loader = getattr(param, "weight_loader", default_weight_loader)
             weight_loader(param, loaded_weight)
+
+
+class DSparkDraftModel(DSparkDraftMixin, DFlashDraftModel):
+    """DSpark dense draft model: DFlash KV-injection backbone + serial Markov head."""
+
+    pass
 
 
 class Qwen3DSparkModel(DSparkDraftModel):
