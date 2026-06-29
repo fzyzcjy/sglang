@@ -268,6 +268,26 @@ class FlashAttentionBackend(AttentionBackend):
         self.speculative_num_draft_tokens = (
             model_runner.server_args.speculative_num_draft_tokens
         )
+        if (
+            self.speculative_num_draft_tokens is not None
+            and model_runner.is_draft_worker
+        ):
+            # The draft runner's TARGET_VERIFY metadata (q stride, cache_seqlens,
+            # page_table width) is sized by speculative_num_draft_tokens. For DSpark
+            # the draft block is gamma tokens while speculative_num_draft_tokens
+            # (gamma + 1) is the target verify window only, so the draft forward
+            # feeds gamma query tokens; using gamma + 1 here would over-read the q
+            # buffer / req_to_token in the FlashAttention forward. Resolve the draft
+            # block token count the same way the decode cuda graph runner does so the
+            # two stay consistent (a no-op for DFlash, whose draft block already
+            # equals speculative_num_draft_tokens).
+            self.speculative_num_draft_tokens = (
+                SpeculativeAlgorithm.from_string(
+                    model_runner.server_args.speculative_algorithm
+                ).get_num_tokens_per_bs_for_target_verify(
+                    int(self.speculative_num_draft_tokens), is_draft_worker=True
+                )
+            )
         self.speculative_step_id = speculative_step_id
 
         # Local attention settings
