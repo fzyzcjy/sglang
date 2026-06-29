@@ -207,6 +207,11 @@ class SpeculativeAlgorithm(Enum):
         # graph support. We can use it for target verify, or we can use it for
         # other cases which is not target verify but fixed length prefill.
         # Here, we expose this interface to allow the other use cases.
+        if self.is_dspark() and is_draft_worker:
+            # DSpark draft block is gamma slots; the gamma+1 window (=
+            # num_draft_tokens) is the target verify geometry only. The draft
+            # runner's decode cuda graph must capture the gamma-slot draft forward.
+            return num_draft_tokens - 1
         return num_draft_tokens
 
     def create_worker(
