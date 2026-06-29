@@ -597,9 +597,13 @@ class DSparkWorkerV2(BaseSpecWorker):
         # is mapped to (0, 1) by sigmoid. Losslessness does not depend on the
         # calibration quality, only on the scheduler being non-anticipating.
         confidence = torch.sigmoid(confidence_raw.float())
+        # sigmoid is mathematically in (0, 1) but saturates to exactly 0.0 / 1.0 at
+        # fp32 precision for large-magnitude logits, so the sanity check uses the
+        # closed interval (matching the V4 draft). The value is advisory only;
+        # losslessness does not depend on it.
         assert bool(
-            ((confidence > 0) & (confidence < 1)).all()
-        ), "DSpark confidence must lie in the open interval (0, 1)."
+            ((confidence >= 0) & (confidence <= 1)).all()
+        ), "DSpark confidence must lie in [0, 1]."
         return confidence
 
     def _ensure_confidence_relay_buffers(self, *, confidence: torch.Tensor) -> None:
