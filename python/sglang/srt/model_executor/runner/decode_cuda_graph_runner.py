@@ -114,7 +114,7 @@ if TYPE_CHECKING:
     from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 
 
-def ragged_verify_full_mode_enabled(spec_algorithm: "SpeculativeAlgorithm") -> bool:
+def ragged_verify_full_mode_enabled(spec_algorithm: SpeculativeAlgorithm) -> bool:
     """Whether DSpark real-N ragged verify (SGLANG_RAGGED_VERIFY=full) is on.
 
     Gated on the spec algorithm advertising ragged-verify support. The env read

@@ -103,7 +103,9 @@ class TestDFlashRaggedVerifyMetadata(CustomTestCase):
             0, (bs + 1) * draft_token_num, step=draft_token_num, dtype=torch.int32
         )
         self.assertTrue(torch.equal(qo_indptr, expected_qo))
-        self.assertEqual(kv_indices.numel(), paged_kernel_lens_sum + draft_token_num * bs)
+        self.assertEqual(
+            kv_indices.numel(), paged_kernel_lens_sum + draft_token_num * bs
+        )
         expected_cum = torch.zeros((bs + 1,), dtype=torch.int32)
         expected_cum[1:] = torch.cumsum(paged_kernel_lens + draft_token_num, dim=0)
         self.assertTrue(torch.equal(cum_kv_seq_len, expected_cum))
