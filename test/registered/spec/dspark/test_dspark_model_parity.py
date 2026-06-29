@@ -4,6 +4,8 @@ import sys
 import unittest
 
 import torch
+from transformers.models.gemma4.configuration_gemma4 import Gemma4TextConfig
+from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 
 from sglang.test.ci.ci_register import register_cuda_ci
 from sglang.test.test_utils import CustomTestCase
@@ -49,25 +51,87 @@ def _requires_cuda(test_method):
     return wrapper
 
 
-class _TinyQwen3Config:
-    """Minimal Qwen3-like config for DSpark model parity tests."""
+def _setup_sglang_runtime() -> None:
+    """Set global server args and a single-rank model-parallel group.
+
+    The SGLang DSpark backbone reads get_global_server_args() (RotaryEmbedding)
+    and builds VocabParallelEmbedding / TP-sharded projections that require the
+    model-parallel group; both must exist before the SGLang model is constructed.
+    """
+    from sglang.srt.distributed.parallel_state import (
+        init_distributed_environment,
+        initialize_model_parallel,
+        model_parallel_is_initialized,
+    )
+    from sglang.srt.server_args import ServerArgs, set_global_server_args_for_scheduler
+
+    set_global_server_args_for_scheduler(ServerArgs(model_path="dummy"))
+
+    os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+    os.environ.setdefault("MASTER_PORT", "29651")
+    os.environ.setdefault("RANK", "0")
+    os.environ.setdefault("WORLD_SIZE", "1")
+    os.environ.setdefault("LOCAL_RANK", "0")
+
+    if not torch.distributed.is_initialized():
+        init_distributed_environment(
+            world_size=1,
+            rank=0,
+            local_rank=0,
+            backend="nccl",
+        )
+
+    if not model_parallel_is_initialized():
+        initialize_model_parallel(
+            tensor_model_parallel_size=1,
+            expert_model_parallel_size=1,
+            pipeline_model_parallel_size=1,
+            backend="nccl",
+        )
+
+
+def _force_native_ops(model: torch.nn.Module) -> None:
+    """Route every MultiPlatformOp to its native forward.
+
+    The SGLang norm/activation CUDA kernels do not dispatch float32, and this
+    fp32 parity oracle keeps both backbones in float32 to match the HF reference
+    exactly; the native path is platform-agnostic float32.
+    """
+    from sglang.srt.layers.utils.multi_platform import MultiPlatformOp
+
+    for module in model.modules():
+        if isinstance(module, MultiPlatformOp):
+            module._forward_method = module.forward_native
+
+
+class _TinyQwen3Config(Qwen3Config):
+    """Minimal Qwen3-like config for DSpark model parity tests.
+
+    Subclasses the real HF config so the DeepSpec reference backbone (an HF
+    PreTrainedModel) accepts it, while overriding the dims to tiny values and
+    attaching the DSpark-specific draft fields.
+    """
+
+    model_type = "qwen3"
 
     def __init__(self, markov_head_type: str = "vanilla", markov_rank: int = 8) -> None:
-        self.hidden_size = 64
-        self.num_hidden_layers = 2
-        self.num_attention_heads = 4
-        self.num_key_value_heads = 2
-        self.head_dim = self.hidden_size // self.num_attention_heads
-        self.intermediate_size = 128
-        self.vocab_size = 256
-        self.rms_norm_eps = 1e-6
-        self.attention_bias = False
-        self.attention_dropout = 0.0
-        self.max_position_embeddings = 512
-        self.rope_theta = 10000.0
+        super().__init__(
+            hidden_size=64,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            head_dim=64 // 4,
+            intermediate_size=128,
+            vocab_size=256,
+            rms_norm_eps=1e-6,
+            attention_bias=False,
+            attention_dropout=0.0,
+            max_position_embeddings=512,
+            rope_theta=10000.0,
+            sliding_window=None,
+            hidden_act="silu",
+        )
         self.layer_types = ["full_attention"] * self.num_hidden_layers
-        self.sliding_window = None
-        self.hidden_act = "silu"
 
         self.markov_rank = markov_rank
         self.markov_head_type = markov_head_type
@@ -79,11 +143,17 @@ class _TinyQwen3Config:
         self.enable_confidence_head = False
 
         self._attn_implementation = "eager"
-        self.model_type = "qwen3"
 
 
-class _TinyGemma4Config:
-    """Minimal Gemma4-like config for DSpark model parity tests."""
+class _TinyGemma4Config(Gemma4TextConfig):
+    """Minimal Gemma4-like config for DSpark model parity tests.
+
+    Subclasses the real HF config so the DeepSpec reference backbone (an HF
+    PreTrainedModel) accepts it, while overriding the dims to tiny values and
+    attaching the DSpark-specific draft fields.
+    """
+
+    model_type = "gemma4"
 
     def __init__(
         self,
@@ -91,25 +161,27 @@ class _TinyGemma4Config:
         markov_rank: int = 8,
         attention_k_eq_v: bool = False,
     ) -> None:
-        self.hidden_size = 64
-        self.num_hidden_layers = 2
-        self.num_attention_heads = 4
-        self.num_key_value_heads = 4
-        self.global_head_dim = 16
-        self.num_global_key_value_heads = 4
-        self.intermediate_size = 128
-        self.vocab_size = 256
-        self.rms_norm_eps = 1e-6
-        self.attention_bias = False
-        self.attention_dropout = 0.0
-        self.max_position_embeddings = 512
-        self.rope_theta = 10000.0
-        self.attention_k_eq_v = attention_k_eq_v
-        self.final_logit_softcapping = None
-        self.enable_moe_block = False
-        self.hidden_size_per_layer_input = 0
-        self.head_dim = self.global_head_dim
-        self.hidden_act = "gelu"
+        super().__init__(
+            hidden_size=64,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            global_head_dim=16,
+            num_global_key_value_heads=4,
+            intermediate_size=128,
+            vocab_size=256,
+            rms_norm_eps=1e-6,
+            attention_bias=False,
+            attention_dropout=0.0,
+            max_position_embeddings=512,
+            rope_theta=10000.0,
+            attention_k_eq_v=attention_k_eq_v,
+            final_logit_softcapping=None,
+            enable_moe_block=False,
+            hidden_size_per_layer_input=0,
+            head_dim=16,
+            hidden_activation="gelu_pytorch_tanh",
+        )
         self.query_pre_attn_scalar = 1.0
 
         self.markov_rank = markov_rank
@@ -122,7 +194,6 @@ class _TinyGemma4Config:
         self.enable_confidence_head = False
 
         self._attn_implementation = "eager"
-        self.model_type = "gemma4"
 
 
 def _sync_weights_by_name(src: torch.nn.Module, dst: torch.nn.Module) -> None:
@@ -143,7 +214,6 @@ def _sync_ref_to_sgl_kv_projections(
     num_attention_heads: int,
     num_key_value_heads: int,
     has_v_proj: bool,
-    norm_scale_shift: float,
 ) -> None:
     """Copy reference per-layer attention weights into the SGLang fused qkv_proj.
 
@@ -153,10 +223,9 @@ def _sync_ref_to_sgl_kv_projections(
     ``v_proj``; the SGLang fused weight still carries a v block, so we mirror the
     reference K weight into it to keep ``kv_proj_only`` consistent.
 
-    ``norm_scale_shift`` reproduces the gemma RMSNorm convention gap: the HF
-    reference computes ``norm(x) * (1 + w)`` while the SGLang gemma norm uses
-    ``scale_shift=0`` (``norm(x) * w``), so a real checkpoint export pre-shifts
-    the stored weight by 1; we mirror that here (it is 0 for Qwen3).
+    Both backbones apply RMSNorm as ``norm(x) * w``: the HF gemma4 norm in this
+    transformers version drops the legacy ``(1 + w)`` convention and the SGLang
+    gemma norm uses ``scale_shift=0``, so the norm weights copy across directly.
     """
     ref_attn = ref_layer.self_attn
     q_size = num_attention_heads * head_dim
@@ -167,8 +236,8 @@ def _sync_ref_to_sgl_kv_projections(
         fused[q_size : q_size + kv_size].copy_(ref_attn.k_proj.weight)
         v_weight = ref_attn.v_proj.weight if has_v_proj else ref_attn.k_proj.weight
         fused[q_size + kv_size : q_size + 2 * kv_size].copy_(v_weight)
-        sgl_attn.q_norm.weight.copy_(ref_attn.q_norm.weight + norm_scale_shift)
-        sgl_attn.k_norm.weight.copy_(ref_attn.k_norm.weight + norm_scale_shift)
+        sgl_attn.q_norm.weight.copy_(ref_attn.q_norm.weight)
+        sgl_attn.k_norm.weight.copy_(ref_attn.k_norm.weight)
 
 
 def _reference_ctx_kv(
@@ -225,6 +294,7 @@ class TestQwen3DSparkModelParity(CustomTestCase):
             return
         cls._import_error = None
 
+        _setup_sglang_runtime()
         cfg = _TinyQwen3Config(markov_head_type="vanilla", markov_rank=8)
         device = torch.device("cuda")
         cls.device = device
@@ -234,6 +304,7 @@ class TestQwen3DSparkModelParity(CustomTestCase):
         ref_model = RefQwen3DSparkModel(cfg).to(device).eval()
         with get_parallel().override(tp_size=1, tp_rank=0):
             sgl_model = SglQwen3DSparkModel(config=cfg).to(device).eval()
+        _force_native_ops(sgl_model)
 
         for layer_id, sgl_layer in enumerate(sgl_model.layers):
             _sync_ref_to_sgl_kv_projections(
@@ -243,7 +314,6 @@ class TestQwen3DSparkModelParity(CustomTestCase):
                 num_attention_heads=cfg.num_attention_heads,
                 num_key_value_heads=cfg.num_key_value_heads,
                 has_v_proj=True,
-                norm_scale_shift=0.0,
             )
         with torch.no_grad():
             sgl_model.fc.weight.copy_(ref_model.fc.weight)
@@ -434,6 +504,7 @@ class TestGemma4DSparkModelParity(CustomTestCase):
             return
         cls._import_error = None
 
+        _setup_sglang_runtime()
         cfg = _TinyGemma4Config(
             markov_head_type="vanilla",
             markov_rank=8,
@@ -447,6 +518,7 @@ class TestGemma4DSparkModelParity(CustomTestCase):
         ref_model = RefGemma4(cfg).to(device).eval()
         with get_parallel().override(tp_size=1, tp_rank=0):
             sgl_model = SglGemma4(config=cfg).to(device).eval()
+        _force_native_ops(sgl_model)
 
         head_dim = cfg.global_head_dim
         num_kv_heads = (
@@ -462,11 +534,10 @@ class TestGemma4DSparkModelParity(CustomTestCase):
                 num_attention_heads=cfg.num_attention_heads,
                 num_key_value_heads=num_kv_heads,
                 has_v_proj=not cls.attention_k_eq_v,
-                norm_scale_shift=1.0,
             )
         with torch.no_grad():
             sgl_model.fc.weight.copy_(ref_model.fc.weight)
-            sgl_model.hidden_norm.weight.copy_(ref_model.hidden_norm.weight + 1.0)
+            sgl_model.hidden_norm.weight.copy_(ref_model.hidden_norm.weight)
 
         cls.ref_model = ref_model
         cls.sgl_model = sgl_model
