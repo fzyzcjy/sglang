@@ -483,9 +483,9 @@ class DSparkV4Stage(DeepseekV4DecoderLayer):
             hc_base,
         )
         return (
-            y.view(bsz, block_size, self.dim),
-            post.view(bsz, block_size, self.hc_mult),
-            comb.view(bsz, block_size, self.hc_mult, self.hc_mult),
+            y.reshape(bsz, block_size, self.dim),
+            post.reshape(bsz, block_size, self.hc_mult),
+            comb.reshape(bsz, block_size, self.hc_mult, self.hc_mult),
         )
 
     def _hc_post_block(
@@ -503,7 +503,7 @@ class DSparkV4Stage(DeepseekV4DecoderLayer):
             post.reshape(bsz * block_size, self.hc_mult),
             comb.reshape(bsz * block_size, self.hc_mult, self.hc_mult),
         )
-        return y.view(bsz, block_size, self.hc_mult, self.dim)
+        return y.reshape(bsz, block_size, self.hc_mult, self.dim)
 
     def forward(
         self,
