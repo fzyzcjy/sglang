@@ -4,7 +4,6 @@ from typing import Optional
 
 import msgspec
 import torch
-import torch.distributed as dist
 
 from sglang.srt.distributed import get_tp_group
 from sglang.srt.distributed.communication_op import tensor_model_parallel_all_gather
@@ -63,9 +62,23 @@ class _VerifyWindow(msgspec.Struct, frozen=True):
     verify_cache_loc_2d: torch.Tensor
 
 
+class _RaggedVerifyWindow(msgspec.Struct, frozen=True):
+    positions: torch.Tensor
+    verify_cache_loc: torch.Tensor
+    verify_ids: torch.Tensor
+    seq_lens_cpu: torch.Tensor
+
+
 class _TargetVerifyResult(msgspec.Struct, frozen=True):
     logits_output: object
     can_run_cuda_graph: bool
+
+
+class _DraftBlockResult(msgspec.Struct, frozen=True):
+    draft_tokens: torch.Tensor
+    corrected_logits: torch.Tensor
+    greedy_mask: torch.Tensor
+    temperatures: torch.Tensor
 
 
 class DSparkWorkerV2(BaseSpecWorker):
@@ -375,6 +388,16 @@ class DSparkWorkerV2(BaseSpecWorker):
         org_vocab_size = int(lm_head.org_vocab_size)
         return full_logits[..., :org_vocab_size]
 
+    def _resolve_greedy_mask(self, *, bs: int, sampling_info) -> torch.Tensor:
+        # Per-request greedy mask (review M4). A row is greedy iff top_k <= 1,
+        # which mirrors SamplingBatchInfo.is_all_greedy (= all rows greedy). In a
+        # mixed batch the previous batch-level branch forced greedy rows onto the
+        # rejection-sampling accept path; the per-row mask lets greedy rows use
+        # argmax-match accept and sampling rows use the chain kernel.
+        if sampling_info is None:
+            return torch.ones(bs, dtype=torch.bool, device=self.device)
+        return (sampling_info.top_ks <= 1).view(-1)
+
     def _sample_draft_block(
         self,
         *,
@@ -382,26 +405,41 @@ class DSparkWorkerV2(BaseSpecWorker):
         anchor_tokens: torch.Tensor,
         draft_hidden: torch.Tensor,
         sampling_info,
-    ):
+    ) -> _DraftBlockResult:
         markov_head = self.draft_model.markov_head
-        is_greedy = sampling_info is None or sampling_info.is_all_greedy
+        bs = base_logits.shape[0]
+        greedy_mask = self._resolve_greedy_mask(bs=bs, sampling_info=sampling_info)
+        any_sampling = bool((~greedy_mask).any())
 
-        if is_greedy:
-
-            def sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:
-                return torch.argmax(step_logits, dim=-1)
-
-            temperatures = None
+        if sampling_info is None:
+            temperatures = torch.ones(bs, dtype=torch.float32, device=self.device)
         else:
             temperatures = (
                 sampling_info.temperatures.view(-1).to(torch.float32).clamp_min(1e-5)
             )
 
+        if not any_sampling:
+            # All-greedy batch: argmax only. Crucially this must NOT draw random
+            # numbers (no torch.multinomial), otherwise the RNG stream diverges
+            # from the off/cutoff/a+b path and breaks byte-identical losslessness.
             def sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:
+                return torch.argmax(step_logits, dim=-1)
+
+        else:
+
+            def sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:
+                # Per-row mixed sampling: greedy rows take argmax, sampling rows
+                # draw from the temperature-scaled softmax. torch.where selects per
+                # row so a mixed batch keeps each request's own draft distribution.
+                # With at least one sampling row this matches the all-sampling RNG
+                # draw count (one multinomial per step), so the all-sampling path
+                # stays byte-identical.
+                argmax_tokens = torch.argmax(step_logits, dim=-1)
                 probs = torch.softmax(
                     step_logits.float() / temperatures[:, None], dim=-1
                 )
-                return torch.multinomial(probs, num_samples=1).squeeze(-1)
+                sampled_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)
+                return torch.where(greedy_mask, argmax_tokens, sampled_tokens)
 
         draft_tokens, corrected_logits = markov_head.sample_block(
             base_logits,
@@ -409,7 +447,12 @@ class DSparkWorkerV2(BaseSpecWorker):
             hidden_states=draft_hidden,
             sampler=sampler,
         )
-        return draft_tokens, corrected_logits, is_greedy, temperatures
+        return _DraftBlockResult(
+            draft_tokens=draft_tokens,
+            corrected_logits=corrected_logits,
+            greedy_mask=greedy_mask,
+            temperatures=temperatures,
+        )
 
     def _build_markov_embed_stack(
         self,
@@ -503,40 +546,43 @@ class DSparkWorkerV2(BaseSpecWorker):
                 )
         return self._confidence_cpu_pinned
 
-    def _maybe_schedule_cutoff_layout(
+    def _maybe_schedule_ragged_layout(
         self,
         *,
         req_pool_indices: torch.Tensor,
         device: torch.device,
     ) -> Optional[RaggedVerifyLayout]:
         # Single gate for the ragged-verify path. OFF -> None (the static
-        # uniform-gamma path is byte-identical). FULL (real-N: token-keyed graph +
-        # ragged attention metadata + compact->strided scatter) is owned by the
-        # next worker pass and is not wired here yet. CUTOFF_ONLY runs the full
-        # window and only caps accept per request.
+        # uniform-gamma path is byte-identical). CUTOFF_ONLY runs the full
+        # bs*(gamma+1) window and only caps accept per request. FULL builds the
+        # real-N ragged layout (token-keyed graph + per-request compact verify +
+        # compact->strided scatter). Both schedules share the n-2-frozen
+        # verify_lens; only the grid (and downstream execution) differ.
         if self._ragged_verify_mode is RaggedVerifyMode.OFF:
             return None
-        if self._ragged_verify_mode is RaggedVerifyMode.FULL:
-            raise NotImplementedError(
-                "SGLANG_RAGGED_VERIFY=full (real-N ragged verify) is not wired into "
-                "DSparkWorkerV2 yet; the token-keyed graph + ragged attention "
-                "metadata land in a later worker pass. Use 'cutoff-only' for now."
-            )
-        return self._schedule_cutoff_layout(
+        verify_lens = self._schedule_verify_lens(
             req_pool_indices=req_pool_indices, device=device
         )
+        if verify_lens is None:
+            return None
+        verify_lens_cpu = verify_lens.to("cpu").tolist()
+        grid = self._verify_layout_grid(verify_lens_cpu=verify_lens_cpu)
+        return RaggedVerifyLayout.from_verify_lens(
+            verify_lens_cpu=verify_lens_cpu,
+            device=device,
+            grid=grid,
+        )
 
-    def _schedule_cutoff_layout(
+    def _schedule_verify_lens(
         self,
         *,
         req_pool_indices: torch.Tensor,
         device: torch.device,
-    ) -> Optional[RaggedVerifyLayout]:
-        # Cutoff-only schedule: derive per-request verify_lens (= 1 + ell_r) from
-        # the n-2-frozen confidence history, broadcast from rank 0 across the TP
-        # group for cross-rank shape consistency, then wrap them in a cutoff
-        # RaggedVerifyLayout. Returns None (-> uniform full block) whenever the
-        # confidence history is not yet available.
+    ) -> Optional[torch.Tensor]:
+        # Shared cutoff/full schedule: derive per-request verify_lens (= 1 + ell_r)
+        # from the n-2-frozen confidence history, broadcast from rank 0 across the
+        # TP group for cross-rank shape consistency. Returns None (-> uniform full
+        # block) whenever the confidence history is not yet available.
         if self._verify_scheduler is None:
             return None
         confidence_history = self.pull_confidence_history()
@@ -555,19 +601,42 @@ class DSparkWorkerV2(BaseSpecWorker):
         ).to(device=device, dtype=torch.int32)
 
         if self.server_args.tp_size > 1:
-            # Broadcast rank-0 geometry so every rank derives an identical layout
-            # (distributed-compat doc: rank-0 broadcast eliminates the divergence
-            # source without a host sync). DP-attention follow-up must switch the
-            # sync group to get_attention_tp_group().device_group (mirror
-            # sampler.py); c-v1 is TP-only.
-            dist.broadcast(verify_lens, src=0, group=get_tp_group().device_group)
+            # GroupCoordinator.broadcast maps the local src rank to a global rank
+            # via self.ranks[src]; passing src=0 to dist.broadcast directly would
+            # use a GLOBAL rank and broadcast from the wrong source when the TP
+            # group's ranks[0] != 0 (review A6). Use the group wrapper so rank 0 is
+            # the TP-local source. DP-attention follow-up must switch to
+            # get_attention_tp_group().broadcast (mirror sampler.py); c-v1 is
+            # TP-only.
+            get_tp_group().broadcast(verify_lens, src=0)
 
-        verify_lens_cpu = verify_lens.to("cpu").tolist()
-        return RaggedVerifyLayout.from_verify_lens(
-            verify_lens_cpu=verify_lens_cpu,
-            device=device,
-            grid=[sum(verify_lens_cpu)],
-        )
+        return verify_lens
+
+    def _verify_layout_grid(self, *, verify_lens_cpu: list[int]) -> list[int]:
+        # cutoff-only runs the full bs*(gamma+1) block and never selects a
+        # token-keyed graph, so its grid only needs to contain the total. full
+        # selects a token-keyed decode graph: align the layout grid with the
+        # decode runner's capture token buckets so graph_num_tokens lands on a
+        # captured tier.
+        total = sum(verify_lens_cpu)
+        if self._ragged_verify_mode is not RaggedVerifyMode.FULL:
+            return [total]
+        capture_num_tokens = self._ragged_capture_num_tokens()
+        if capture_num_tokens is None:
+            return [total]
+        return capture_num_tokens
+
+    def _ragged_capture_num_tokens(self) -> Optional[list[int]]:
+        # The decode runner owns the token-keyed capture grid (Plan B). Read it so
+        # graph_num_tokens = round_up_grid(total, capture_num_tokens) selects a
+        # captured graph. Returns None when no token-keyed graph exists (e.g.
+        # cuda-graph disabled or an eager runner without ragged capture), in which
+        # case full runs eager on exactly `total`. The runner type is polymorphic
+        # (graph runner vs eager runner), so ragged_verify_mode may be absent.
+        runner = self.model_runner.decode_cuda_graph_runner
+        if runner is None or not getattr(runner, "ragged_verify_mode", False):
+            return None
+        return runner.capture_num_tokens
 
     def _cap_correct_len(
         self,
@@ -667,6 +736,64 @@ class DSparkWorkerV2(BaseSpecWorker):
         row_ids = torch.arange(bs, dtype=torch.long, device=device)
         accept_pos = accept_index[row_ids, correct_len.to(torch.long)].to(torch.long)
         bonus = predicts[accept_pos].to(torch.int64)
+        return correct_len, bonus
+
+    def _accept_block(
+        self,
+        *,
+        candidates: torch.Tensor,
+        target_logits: torch.Tensor,
+        draft_block: _DraftBlockResult,
+        sampling_info,
+        draft_input: DFlashDraftInputV2,
+        cutoff_layout: Optional[RaggedVerifyLayout] = None,
+    ):
+        # Per-request accept (review M4). Greedy rows (top_k <= 1) use the DFlash
+        # argmax-match rule; sampling rows use the rejection-sampling chain kernel.
+        # When the batch is uniform we take the single matching branch directly so
+        # the all-greedy / all-sampling paths stay byte-identical to before. A
+        # mixed batch runs both and selects per row by the greedy mask -- still
+        # lossless (each row gets its own correct rule) and now without forcing
+        # greedy rows onto the chain kernel.
+        greedy_mask = draft_block.greedy_mask
+        if bool(greedy_mask.all()):
+            return self._accept_greedy(
+                candidates=candidates,
+                target_logits=target_logits,
+                cutoff_layout=cutoff_layout,
+            )
+        draft_probs = torch.softmax(
+            draft_block.corrected_logits.float()
+            / draft_block.temperatures[:, None, None],
+            dim=-1,
+        )
+        if not bool(greedy_mask.any()):
+            return self._accept_sampling(
+                candidates=candidates,
+                target_logits=target_logits,
+                draft_probs=draft_probs,
+                sampling_info=sampling_info,
+                draft_input=draft_input,
+                cutoff_layout=cutoff_layout,
+            )
+
+        greedy_len, greedy_bonus = self._accept_greedy(
+            candidates=candidates,
+            target_logits=target_logits,
+            cutoff_layout=cutoff_layout,
+        )
+        sampling_len, sampling_bonus = self._accept_sampling(
+            candidates=candidates,
+            target_logits=target_logits,
+            draft_probs=draft_probs,
+            sampling_info=sampling_info,
+            draft_input=draft_input,
+            cutoff_layout=cutoff_layout,
+        )
+        correct_len = torch.where(
+            greedy_mask, greedy_len.to(sampling_len.dtype), sampling_len
+        )
+        bonus = torch.where(greedy_mask, greedy_bonus, sampling_bonus)
         return correct_len, bonus
 
     def _build_out_tokens(
@@ -910,6 +1037,264 @@ class DSparkWorkerV2(BaseSpecWorker):
             can_run_cuda_graph=can_run_cuda_graph,
         )
 
+    def _build_ragged_verify_window(
+        self,
+        *,
+        batch: ScheduleBatch,
+        layout: RaggedVerifyLayout,
+        draft_block_ids: torch.Tensor,
+        draft_tokens: torch.Tensor,
+        bs: int,
+        device: str,
+    ) -> _RaggedVerifyWindow:
+        # Compact (real-N) verify window. Request r contributes only its scheduled
+        # prefix [anchor, s_0..s_{ell_r-1}] = verify_len_r tokens, packed back to
+        # back into a `total`-token compact layout keyed by layout.extend_start_loc.
+        # Cache slots are over-allocated to the full gamma+1 block (plan section 6);
+        # the compact window writes only the first verify_len_r reserved slots.
+        prefix_lens = batch.seq_lens
+        verify_lens = layout.verify_lens.to(device=device, dtype=torch.int32)
+        verify_lens_cpu = layout.verify_lens_cpu
+
+        positions, _ = compute_position(
+            self.model_runner.server_args.attention_backend,
+            prefix_lens.to(torch.int32),
+            verify_lens,
+            layout.total_verify_tokens,
+        )
+        verify_cache_loc = assign_extend_cache_locs_func(
+            req_pool_indices=batch.req_pool_indices,
+            req_to_token=self.model_runner.req_to_token_pool.req_to_token,
+            start_offset=prefix_lens,
+            end_offset=prefix_lens + verify_lens.to(prefix_lens.dtype),
+            batch_size=bs,
+            draft_token_num=self.verify_num_draft_tokens,
+            device=device,
+        )[: layout.total_verify_tokens]
+
+        verify_ids = self._compact_verify_ids(
+            draft_block_ids=draft_block_ids,
+            draft_tokens=draft_tokens,
+            verify_lens_cpu=verify_lens_cpu,
+            total=layout.total_verify_tokens,
+            device=device,
+        )
+
+        if batch.seq_lens_cpu is not None:
+            seq_lens_cpu = batch.seq_lens_cpu + torch.tensor(
+                verify_lens_cpu, dtype=batch.seq_lens_cpu.dtype
+            )
+        else:
+            seq_lens_cpu = (prefix_lens.to("cpu", dtype=torch.int32)) + torch.tensor(
+                verify_lens_cpu, dtype=torch.int32
+            )
+
+        return _RaggedVerifyWindow(
+            positions=positions,
+            verify_cache_loc=verify_cache_loc,
+            verify_ids=verify_ids,
+            seq_lens_cpu=seq_lens_cpu,
+        )
+
+    def _compact_verify_ids(
+        self,
+        *,
+        draft_block_ids: torch.Tensor,
+        draft_tokens: torch.Tensor,
+        verify_lens_cpu: list[int],
+        total: int,
+        device: str,
+    ) -> torch.Tensor:
+        # Pack [anchor, s_0..s_{ell_r-1}] per request into a compact total-token
+        # 1d tensor. anchor = draft_block_ids[:, 0]; s_k = draft_tokens[:, k].
+        verify_ids = torch.empty((total,), dtype=torch.int64, device=device)
+        offset = 0
+        anchors = draft_block_ids[:, 0]
+        for r, verify_len in enumerate(verify_lens_cpu):
+            verify_ids[offset] = anchors[r]
+            ell_r = verify_len - 1
+            if ell_r > 0:
+                verify_ids[offset + 1 : offset + verify_len] = draft_tokens[r, :ell_r]
+            offset += verify_len
+        return verify_ids
+
+    def _run_ragged_target_verify(
+        self,
+        *,
+        batch: ScheduleBatch,
+        layout: RaggedVerifyLayout,
+        ragged_window: _RaggedVerifyWindow,
+        sampling_info,
+    ) -> _TargetVerifyResult:
+        # Compact verify forward. The merged decode runner reads
+        # spec_info.ragged_verify_layout to select the token-keyed graph and the
+        # merged attention backend builds ragged metadata from it
+        # (generate_attn_arg_prefill's ragged branch). seq_lens stays at the
+        # prefix; the backend adds layout.verify_lens itself.
+        verify_input = DFlashVerifyInput(
+            draft_token=ragged_window.verify_ids,
+            positions=ragged_window.positions,
+            draft_token_num=self.verify_num_draft_tokens,
+            custom_mask=None,
+            capture_hidden_mode=CaptureHiddenMode.FULL,
+            ragged_verify_layout=layout,
+        )
+        batch.out_cache_loc = ragged_window.verify_cache_loc
+        seq_lens_cpu_backup = batch.seq_lens_cpu
+        seq_lens_sum_backup = batch.seq_lens_sum
+        batch.seq_lens_cpu = ragged_window.seq_lens_cpu
+        batch.seq_lens_sum = int(ragged_window.seq_lens_cpu.sum())
+
+        verify_forward_batch, can_run_cuda_graph = verify_input.prepare_for_verify(
+            batch, self.target_worker
+        )
+        batch.seq_lens_cpu = seq_lens_cpu_backup
+        batch.seq_lens_sum = seq_lens_sum_backup
+
+        target_out = self.target_worker.forward_batch_generation(
+            batch=None,
+            forward_batch=verify_forward_batch,
+            is_verify=True,
+            skip_attn_backend_init=True,
+        )
+        logits_output = target_out.logits_output
+        can_run_cuda_graph = target_out.can_run_cuda_graph
+
+        return _TargetVerifyResult(
+            logits_output=logits_output,
+            can_run_cuda_graph=can_run_cuda_graph,
+        )
+
+    def _scatter_compact_to_strided(
+        self,
+        *,
+        compact: torch.Tensor,
+        layout: RaggedVerifyLayout,
+        bs: int,
+        fill_value: float,
+    ) -> torch.Tensor:
+        # compact->strided scatter (infra section 12.E). compact is [total, dim]
+        # (one row per verified token, packed by layout.extend_start_loc). The
+        # accept path + result processor expect a [bs*(gamma+1), dim] strided
+        # tensor where request i owns rows [i*(gamma+1), i*(gamma+1)+verify_len_i).
+        # Padded strided rows are filled with `fill_value`; the accept cap to ell_r
+        # keeps them out of the commit decision (lossless).
+        stride = self.verify_num_draft_tokens
+        dim = compact.shape[1]
+        strided = torch.full(
+            (bs * stride, dim),
+            fill_value,
+            dtype=compact.dtype,
+            device=compact.device,
+        )
+        offset = 0
+        for r, verify_len in enumerate(layout.verify_lens_cpu):
+            dst = r * stride
+            strided[dst : dst + verify_len] = compact[offset : offset + verify_len]
+            offset += verify_len
+        return strided
+
+    def _apply_logits_adjustments_strided(
+        self,
+        *,
+        next_token_logits: torch.Tensor,
+        sampling_info,
+    ) -> None:
+        if sampling_info is None:
+            return
+        apply_dflash_verify_logits_adjustments(
+            next_token_logits=next_token_logits,
+            sampling_info=sampling_info,
+            draft_token_num=self.verify_num_draft_tokens,
+        )
+
+    def _verify_full(
+        self,
+        *,
+        batch: ScheduleBatch,
+        layout: RaggedVerifyLayout,
+        draft_block_ids: torch.Tensor,
+        draft_tokens: torch.Tensor,
+        bs: int,
+        device: str,
+        sampling_info,
+    ) -> tuple[_TargetVerifyResult, torch.Tensor]:
+        # Real-N (full) verify: run the compact total-token forward, then scatter
+        # the compact logits and hidden_states back to the bs*(gamma+1) strided
+        # layout the accept path + result processor expect. Padded strided rows
+        # are filled with 0 and never enter the commit decision (accept is capped
+        # to ell_r). Returns the result with strided logits/hidden in place, plus
+        # the strided hidden for the ragged KV injection.
+        ragged_window = self._build_ragged_verify_window(
+            batch=batch,
+            layout=layout,
+            draft_block_ids=draft_block_ids,
+            draft_tokens=draft_tokens,
+            bs=bs,
+            device=device,
+        )
+        target_verify = self._run_ragged_target_verify(
+            batch=batch,
+            layout=layout,
+            ragged_window=ragged_window,
+            sampling_info=sampling_info,
+        )
+        logits_output = target_verify.logits_output
+
+        compact_logits = logits_output.next_token_logits
+        strided_logits = self._scatter_compact_to_strided(
+            compact=compact_logits, layout=layout, bs=bs, fill_value=0.0
+        )
+        self._apply_logits_adjustments_strided(
+            next_token_logits=strided_logits, sampling_info=sampling_info
+        )
+        logits_output.next_token_logits = strided_logits
+
+        compact_hidden = logits_output.hidden_states
+        if compact_hidden is None:
+            raise RuntimeError("DSpark verify requires target hidden states, got None.")
+        hidden_strided = self._scatter_compact_to_strided(
+            compact=compact_hidden, layout=layout, bs=bs, fill_value=0.0
+        )
+        logits_output.hidden_states = hidden_strided
+        return target_verify, hidden_strided
+
+    def _inject_ragged_hidden_to_draft_kv(
+        self,
+        *,
+        batch: ScheduleBatch,
+        layout: RaggedVerifyLayout,
+        hidden_strided: torch.Tensor,
+        commit_lens: torch.Tensor,
+        bs: int,
+    ) -> None:
+        # Inject the committed tokens' target hidden into the draft KV using the
+        # strided layout. The full gamma+1 cache slots are over-allocated per
+        # request (plan section 6); the 2d prefix-valid write commits exactly
+        # commit_lens_r slots (= 1 + correct_len_r <= verify_len_r), so the ragged
+        # commit lengths are honoured.
+        stride = self.verify_num_draft_tokens
+        prefix_lens = batch.seq_lens
+        positions_2d = prefix_lens.unsqueeze(1) + self._block_pos_offsets
+        verify_cache_loc = assign_extend_cache_locs_func(
+            req_pool_indices=batch.req_pool_indices,
+            req_to_token=self.model_runner.req_to_token_pool.req_to_token,
+            start_offset=prefix_lens,
+            end_offset=prefix_lens + stride,
+            batch_size=bs,
+            draft_token_num=stride,
+            device=self.device,
+        )
+        verify_cache_loc_2d = verify_cache_loc.view(bs, stride)
+        hidden = hidden_strided.view(bs, stride, -1)
+        self._inject_target_hidden_to_draft_kv(
+            target_hidden=hidden.reshape(-1, hidden.shape[-1]),
+            cache_loc=verify_cache_loc,
+            cache_loc_2d=verify_cache_loc_2d,
+            positions=positions_2d.reshape(-1),
+            commit_lens=commit_lens,
+        )
+
     def _forward_decode(
         self, batch: ScheduleBatch, on_publish
     ) -> GenerationBatchResult:
@@ -954,14 +1339,13 @@ class DSparkWorkerV2(BaseSpecWorker):
             draft_hidden=draft_hidden, lm_head=lm_head
         )
         sampling_info = batch.sampling_info
-        draft_tokens, corrected_logits, is_greedy, temperatures = (
-            self._sample_draft_block(
-                base_logits=base_logits,
-                anchor_tokens=draft_block_ids[:, 0],
-                draft_hidden=draft_hidden,
-                sampling_info=sampling_info,
-            )
+        draft_block = self._sample_draft_block(
+            base_logits=base_logits,
+            anchor_tokens=draft_block_ids[:, 0],
+            draft_hidden=draft_hidden,
+            sampling_info=sampling_info,
         )
+        draft_tokens = draft_block.draft_tokens
 
         if self._confidence_head is not None:
             confidence = self._compute_confidence(
@@ -974,42 +1358,47 @@ class DSparkWorkerV2(BaseSpecWorker):
                 confidence=confidence,
             )
 
-        cutoff_layout = self._maybe_schedule_cutoff_layout(
+        layout = self._maybe_schedule_ragged_layout(
             req_pool_indices=batch.req_pool_indices, device=device
+        )
+        run_full = (
+            self._ragged_verify_mode is RaggedVerifyMode.FULL and layout is not None
         )
 
         verify_ids_2d = torch.cat(
             [draft_block_ids[:, :1], draft_tokens], dim=1
         ).contiguous()
 
-        target_verify = self._run_target_verify(
-            batch=batch,
-            draft_input=draft_input,
-            verify_ids_2d=verify_ids_2d,
-            verify_window=verify_window,
-            sampling_info=sampling_info,
-        )
+        if run_full:
+            target_verify, hidden_strided = self._verify_full(
+                batch=batch,
+                layout=layout,
+                draft_block_ids=draft_block_ids,
+                draft_tokens=draft_tokens,
+                bs=bs,
+                device=device,
+                sampling_info=sampling_info,
+            )
+        else:
+            target_verify = self._run_target_verify(
+                batch=batch,
+                draft_input=draft_input,
+                verify_ids_2d=verify_ids_2d,
+                verify_window=verify_window,
+                sampling_info=sampling_info,
+            )
+            hidden_strided = None
         logits_output = target_verify.logits_output
         can_run_cuda_graph = target_verify.can_run_cuda_graph
 
-        if is_greedy:
-            correct_len, bonus = self._accept_greedy(
-                candidates=verify_ids_2d,
-                target_logits=logits_output.next_token_logits,
-                cutoff_layout=cutoff_layout,
-            )
-        else:
-            draft_probs = torch.softmax(
-                corrected_logits.float() / temperatures[:, None, None], dim=-1
-            )
-            correct_len, bonus = self._accept_sampling(
-                candidates=verify_ids_2d,
-                target_logits=logits_output.next_token_logits,
-                draft_probs=draft_probs,
-                sampling_info=sampling_info,
-                draft_input=draft_input,
-                cutoff_layout=cutoff_layout,
-            )
+        correct_len, bonus = self._accept_block(
+            candidates=verify_ids_2d,
+            target_logits=logits_output.next_token_logits,
+            draft_block=draft_block,
+            sampling_info=sampling_info,
+            draft_input=draft_input,
+            cutoff_layout=layout,
+        )
 
         commit_lens = correct_len.to(torch.int32) + 1
         out_tokens = self._build_out_tokens(
@@ -1019,17 +1408,28 @@ class DSparkWorkerV2(BaseSpecWorker):
         if on_publish is not None:
             on_publish(new_seq_lens)
 
-        hidden = logits_output.hidden_states
-        if hidden is None:
-            raise RuntimeError("DSpark verify requires target hidden states, got None.")
-        hidden = hidden.view(bs, self.verify_num_draft_tokens, -1)
-        self._inject_target_hidden_to_draft_kv(
-            target_hidden=hidden.reshape(-1, hidden.shape[-1]),
-            cache_loc=verify_window.verify_cache_loc,
-            cache_loc_2d=verify_window.verify_cache_loc_2d,
-            positions=verify_window.positions_2d.reshape(-1),
-            commit_lens=commit_lens,
-        )
+        if run_full:
+            self._inject_ragged_hidden_to_draft_kv(
+                batch=batch,
+                layout=layout,
+                hidden_strided=hidden_strided,
+                commit_lens=commit_lens,
+                bs=bs,
+            )
+        else:
+            hidden = logits_output.hidden_states
+            if hidden is None:
+                raise RuntimeError(
+                    "DSpark verify requires target hidden states, got None."
+                )
+            hidden = hidden.view(bs, self.verify_num_draft_tokens, -1)
+            self._inject_target_hidden_to_draft_kv(
+                target_hidden=hidden.reshape(-1, hidden.shape[-1]),
+                cache_loc=verify_window.verify_cache_loc,
+                cache_loc_2d=verify_window.verify_cache_loc_2d,
+                positions=verify_window.positions_2d.reshape(-1),
+                commit_lens=commit_lens,
+            )
         logits_output.hidden_states = None
 
         next_draft_input = self._make_next_draft_input(
