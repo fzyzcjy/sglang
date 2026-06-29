@@ -1,8 +1,9 @@
 # Adapted from the DeepSpec DSpark reference (deepspec/modeling/dspark) but
 # implemented with SGLang primitives. The DSpark dense draft reuses the DFlash
 # KV-injection backbone (DFlashDraftModel) and adds a serial Markov head; it
-# carries no token embedding / lm_head (the target model's are used) and no
-# confidence head (confidence is out of scope for the static-verify MVP).
+# carries no token embedding / lm_head (the target model's are used) but does
+# add an optional confidence head (DSparkConfidenceHead) that scores per-draft
+# accept probability for the confidence-aware scheduler.
 
 from __future__ import annotations
 
@@ -276,13 +277,81 @@ def build_markov_head(config) -> Optional[nn.Module]:
     raise ValueError(f"Unsupported DSpark markov_head_type={markov_head_type!r}.")
 
 
+class DSparkConfidenceHead(nn.Module):
+    """Per-draft confidence head: RAW accept-rate logit (no sigmoid).
+
+    Mirrors DeepSpec ``common.AcceptRatePredictor`` (a single ``proj`` Linear
+    whose forward is ``proj(features).squeeze(-1)``). When ``with_markov`` the
+    input is ``cat([hidden, markov_embed], -1)`` with feature dim
+    ``hidden_size + markov_rank``; otherwise just ``hidden`` (dim ``hidden_size``).
+    The head emits a raw logit; sigmoid / STS calibration is applied by the
+    worker before the value is relayed to the scheduler.
+    """
+
+    def __init__(
+        self,
+        *,
+        hidden_size: int,
+        markov_rank: int,
+        with_markov: bool = True,
+        dtype: torch.dtype = torch.float32,
+    ) -> None:
+        super().__init__()
+        self.with_markov = bool(with_markov)
+        input_dim = int(hidden_size) + (int(markov_rank) if self.with_markov else 0)
+        self.proj = nn.Linear(input_dim, 1, dtype=dtype)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        markov_embed_stack: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        if self.with_markov:
+            if markov_embed_stack is None:
+                raise ValueError(
+                    "DSparkConfidenceHead(with_markov=True) requires markov_embed_stack."
+                )
+            features = torch.cat(
+                [hidden_states, markov_embed_stack.to(dtype=hidden_states.dtype)],
+                dim=-1,
+            )
+        else:
+            features = hidden_states
+        features = features.to(dtype=self.proj.weight.dtype)
+        return self.proj(features).squeeze(-1)
+
+
+def build_confidence_head(config) -> Optional[nn.Module]:
+    """Build the DSpark confidence head when the draft config enables it.
+
+    Returns ``None`` when no confidence head is configured (the a+b static-verify
+    checkpoints), keeping the head and its relay strictly opt-in.
+    """
+    enable = bool(getattr(config, "enable_confidence_head", False))
+    if not enable:
+        return None
+    hidden_size = int(config.hidden_size)
+    markov_rank = int(getattr(config, "markov_rank", 0))
+    with_markov = bool(getattr(config, "confidence_head_with_markov", markov_rank > 0))
+    if with_markov and markov_rank <= 0:
+        raise ValueError(
+            "DSpark confidence_head_with_markov requires markov_rank > 0, "
+            f"got markov_rank={markov_rank}."
+        )
+    return DSparkConfidenceHead(
+        hidden_size=hidden_size,
+        markov_rank=markov_rank,
+        with_markov=with_markov,
+    )
+
+
 # Weight-name prefixes that exist in the DSpark checkpoint but are intentionally
 # not materialized for the static-verify MVP draft: the target model supplies the
-# embedding/lm_head, and confidence is out of scope (plan §0).
+# embedding/lm_head. ``confidence_head.`` is loaded when the draft config enables
+# the head; see DSparkDraftMixin.load_weights.
 _DSPARK_SKIPPED_WEIGHT_PREFIXES = (
     "embed_tokens.",
     "lm_head.",
-    "confidence_head.",
     "rotary_emb.",
 )
 
@@ -306,15 +375,21 @@ class DSparkDraftMixin:
             )
         self.gamma = int(dspark_config.resolve_gamma(default=self.block_size))
         self.markov_head = build_markov_head(config)
+        self.confidence_head = build_confidence_head(config)
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         markov_weights = []
+        confidence_weights = []
         backbone_weights = []
         params_dict = dict(self.named_parameters())
         for name, loaded_weight in weights:
             if any(name.startswith(p) for p in _DSPARK_SKIPPED_WEIGHT_PREFIXES):
                 continue
-            if name.startswith("markov_head."):
+            if name.startswith("confidence_head."):
+                if self.confidence_head is None:
+                    continue
+                confidence_weights.append((name, loaded_weight))
+            elif name.startswith("markov_head."):
                 markov_weights.append((name, loaded_weight))
             else:
                 backbone_weights.append((name, loaded_weight))
@@ -330,6 +405,48 @@ class DSparkDraftMixin:
             param = params_dict[name]
             weight_loader = getattr(param, "weight_loader", default_weight_loader)
             weight_loader(param, loaded_weight)
+
+        self._load_confidence_weights(
+            confidence_weights=confidence_weights, params_dict=params_dict
+        )
+
+    def _load_confidence_weights(
+        self,
+        *,
+        confidence_weights: list,
+        params_dict: dict,
+    ) -> None:
+        if self.confidence_head is None:
+            return
+        loaded_names = set()
+        for name, loaded_weight in confidence_weights:
+            if name not in params_dict:
+                raise ValueError(
+                    f"DSpark unexpected confidence weight {name!r} not found in "
+                    "model parameters."
+                )
+            param = params_dict[name]
+            weight_loader = getattr(param, "weight_loader", default_weight_loader)
+            weight_loader(param, loaded_weight)
+            loaded_names.add(name)
+
+        confidence_param_names = {
+            name
+            for name in params_dict
+            if name.startswith("confidence_head.")
+        }
+        missing = confidence_param_names - loaded_names
+        if missing:
+            logger.warning(
+                "DSpark confidence head present but checkpoint is missing %s; "
+                "identity-initializing to a constant accept probability of 0.5 "
+                "(advisory-only; does not affect losslessness).",
+                sorted(missing),
+            )
+            with torch.no_grad():
+                self.confidence_head.proj.weight.zero_()
+                if self.confidence_head.proj.bias is not None:
+                    self.confidence_head.proj.bias.zero_()
 
 
 class DSparkDraftModel(DSparkDraftMixin, DFlashDraftModel):
