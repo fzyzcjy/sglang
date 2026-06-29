@@ -68,7 +68,7 @@ def schedule_verify_lens_topk(
     cfg: DSparkScheduleConfig,
 ) -> torch.Tensor:
     cfg.validate()
-    num_requests, gamma = survival_probs.shape
+    num_requests, _gamma = survival_probs.shape
     max_len = cfg.resolved_max_verify_len()
     device = survival_probs.device
 
@@ -133,9 +133,7 @@ def _value_independent_descending_order(
         for i in range(num_candidates)
     ]
     keys.sort()
-    return torch.tensor(
-        [k[3] for k in keys], dtype=torch.int64, device=probs.device
-    )
+    return torch.tensor([k[3] for k in keys], dtype=torch.int64, device=probs.device)
 
 
 def schedule_verify_lens_greedy(
@@ -145,7 +143,7 @@ def schedule_verify_lens_greedy(
     cfg: DSparkScheduleConfig,
 ) -> torch.Tensor:
     cfg.validate()
-    num_requests, gamma = survival_probs.shape
+    num_requests, _gamma = survival_probs.shape
     max_len = cfg.resolved_max_verify_len()
 
     candidate_window = survival_probs[:, cfg.min_verify_len : max_len].to(torch.float64)
@@ -212,9 +210,9 @@ class ConfidencePrefixScheduler:
         )
         verify_lens_64 = verify_lens.to(torch.int64)
         total_extra = int((verify_lens_64 - self.cfg.min_verify_len).sum().item())
-        assert total_extra <= budget, (
-            f"DSpark verify-len budget violated: extra={total_extra} > budget={budget}"
-        )
+        assert (
+            total_extra <= budget
+        ), f"DSpark verify-len budget violated: extra={total_extra} > budget={budget}"
         return verify_lens
 
 

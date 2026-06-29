@@ -11,7 +11,7 @@ import msgspec
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from sglang.srt.speculative.base_spec_worker import BaseDraftWorker
+    from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
 
 
 class SpsCostTable(msgspec.Struct, frozen=True):
@@ -47,17 +47,17 @@ class SpsCostTable(msgspec.Struct, frozen=True):
         return msgspec.json.encode(self).decode("utf-8")
 
     @classmethod
-    def from_json(cls, data: str) -> "SpsCostTable":
+    def from_json(cls, data: str) -> SpsCostTable:
         return msgspec.json.decode(data.encode("utf-8"), type=cls)
 
 
 def profile_sps_table(
     *,
-    target_worker: "BaseDraftWorker",
+    target_worker: BaseSpecWorker,
     probe_request_counts: list[int],
     gamma: int,
     iters: int,
-    time_uniform_verify_step: Callable[["BaseDraftWorker", int, int], float],
+    time_uniform_verify_step: Callable[[BaseSpecWorker, int, int], float],
     max_batch_tokens: Optional[int] = None,
 ) -> SpsCostTable:
     if gamma < 1:

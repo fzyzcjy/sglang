@@ -17,7 +17,9 @@ from sglang.test.test_utils import CustomTestCase
 register_cpu_ci(est_time=20, suite="base-a-test-cpu")
 
 
-def _flat_table(steps_per_sec: float = 1.0, max_batch_tokens: int = 4096) -> SpsCostTable:
+def _flat_table(
+    steps_per_sec: float = 1.0, max_batch_tokens: int = 4096
+) -> SpsCostTable:
     return SpsCostTable(
         sample_batch_tokens=[1],
         sample_steps_per_sec=[steps_per_sec],
@@ -158,9 +160,7 @@ class TestScheduleVerifyLensTopk(CustomTestCase):
 
     def test_min_and_max_enter_the_budget(self):
         """min_verify_len floors and max_verify_len caps every per-request length."""
-        survival = torch.tensor(
-            [[0.99, 0.99, 0.99, 0.99, 0.99]], dtype=torch.float32
-        )
+        survival = torch.tensor([[0.99, 0.99, 0.99, 0.99, 0.99]], dtype=torch.float32)
         cfg = DSparkScheduleConfig(gamma=5, min_verify_len=1, max_verify_len=3)
         verify_lens = schedule_verify_lens_topk(
             survival_probs=survival, budget=100, cfg=cfg
@@ -175,7 +175,9 @@ class TestScheduleVerifyLensTopk(CustomTestCase):
         verify_lens = schedule_verify_lens_topk(
             survival_probs=survival, budget=0, cfg=cfg
         )
-        self.assertTrue(torch.equal(verify_lens, torch.tensor([1, 1], dtype=torch.int32)))
+        self.assertTrue(
+            torch.equal(verify_lens, torch.tensor([1, 1], dtype=torch.int32))
+        )
 
     def test_large_budget_selects_all_candidates(self):
         """A budget >= candidate count selects clamp(gamma, min, max) per request."""
@@ -196,9 +198,7 @@ class TestScheduleVerifyLensTopk(CustomTestCase):
 
     def test_tie_break_is_value_independent(self):
         """Tie-break depends only on (a, position, request), not on token values."""
-        survival = torch.tensor(
-            [[0.8, 0.8, 0.8], [0.8, 0.8, 0.8]], dtype=torch.float32
-        )
+        survival = torch.tensor([[0.8, 0.8, 0.8], [0.8, 0.8, 0.8]], dtype=torch.float32)
         cfg = DSparkScheduleConfig(gamma=3)
         verify_lens = schedule_verify_lens_topk(
             survival_probs=survival, budget=3, cfg=cfg
@@ -234,9 +234,9 @@ class TestNonAnticipating(CustomTestCase):
             verify_lens = schedule_verify_lens_topk(
                 survival_probs=perturbed, budget=budget, cfg=cfg
             )
-            admitted_prefix_unchanged = min(
-                int(baseline[request].item()), cut
-            ) == min(int(verify_lens[request].item()), cut)
+            admitted_prefix_unchanged = min(int(baseline[request].item()), cut) == min(
+                int(verify_lens[request].item()), cut
+            )
             self.assertTrue(
                 admitted_prefix_unchanged,
                 msg=f"prefix admission changed under future perturbation delta={delta}",
@@ -263,7 +263,9 @@ class TestNonAnticipating(CustomTestCase):
 class TestScheduleVerifyLensGreedy(CustomTestCase):
     def test_greedy_appendix_a_early_stops_at_theta_drop(self):
         """Appendix A: a_1=0.8, SPS=(1.0,0.5,0.45) -> Theta drops at first extra so l_r=0."""
-        survival = torch.tensor([[0.8, 0.8 * 0.8, 0.8 * 0.8 * 0.8]], dtype=torch.float32)
+        survival = torch.tensor(
+            [[0.8, 0.8 * 0.8, 0.8 * 0.8 * 0.8]], dtype=torch.float32
+        )
         table = SpsCostTable(
             sample_batch_tokens=[1, 2, 3],
             sample_steps_per_sec=[1.0, 0.5, 0.45],
@@ -344,9 +346,7 @@ class TestScheduleVerifyLensHook(CustomTestCase):
     def test_hook_returns_none_without_scheduler(self):
         """schedule_verify_lens returns None (uniform fallback) when scheduler is None."""
         survival = torch.tensor([[0.9, 0.8]], dtype=torch.float32)
-        self.assertIsNone(
-            schedule_verify_lens(scheduler=None, survival_probs=survival)
-        )
+        self.assertIsNone(schedule_verify_lens(scheduler=None, survival_probs=survival))
 
     def test_hook_returns_none_without_survival_probs(self):
         """schedule_verify_lens returns None when survival_probs is None."""
@@ -361,9 +361,7 @@ class TestScheduleVerifyLensHook(CustomTestCase):
         survival = torch.tensor([[0.9, 0.8, 0.7]], dtype=torch.float32)
         cfg = DSparkScheduleConfig(gamma=3)
         scheduler = ConfidencePrefixScheduler(sps_table=_flat_table(), cfg=cfg)
-        verify_lens = schedule_verify_lens(
-            scheduler=scheduler, survival_probs=survival
-        )
+        verify_lens = schedule_verify_lens(scheduler=scheduler, survival_probs=survival)
         self.assertIsNotNone(verify_lens)
         self.assertEqual(tuple(verify_lens.shape), (1,))
 
