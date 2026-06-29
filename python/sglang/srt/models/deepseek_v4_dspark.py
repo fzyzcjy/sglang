@@ -447,20 +447,6 @@ class DSparkV4Stage(nn.Module):
             self.hc_head_base = nn.Parameter(torch.empty(hc_mult, dtype=torch.float32))
             self.hc_head_scale = nn.Parameter(torch.empty(1, dtype=torch.float32))
 
-    def _hc_split_sinkhorn(
-        self, mixes: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        from sglang.srt.layers.mhc import hc_split_sinkhorn
-
-        return hc_split_sinkhorn(
-            mixes,
-            self.hc_attn_scale,
-            self.hc_attn_base,
-            self.hc_mult,
-            self.hc_sinkhorn_iters,
-            self.hc_eps,
-        )
-
     def hc_pre(
         self,
         x: torch.Tensor,
