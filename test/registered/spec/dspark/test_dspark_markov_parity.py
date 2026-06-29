@@ -125,13 +125,16 @@ class TestVanillaMarkovParity(CustomTestCase):
 
     def test_apply_block_logits_exact_match(self):
         """VanillaMarkov.apply_block_logits must match reference exactly."""
-        token_ids, base_logits, _ = self._make_inputs()
+        _, base_logits, _ = self._make_inputs()
+        token_ids_block = torch.randint(
+            0, self.vocab_size, (self.batch_size, self.proposal_len)
+        )
         with torch.no_grad():
             sgl_out = self.sgl_head.apply_block_logits(
-                base_logits, token_ids=token_ids, hidden_states=None
+                base_logits, token_ids=token_ids_block, hidden_states=None
             )
             ref_out = self.ref_head.apply_block_logits(
-                base_logits, token_ids=token_ids, hidden_states=None
+                base_logits, token_ids=token_ids_block, hidden_states=None
             )
         torch.testing.assert_close(sgl_out, ref_out, atol=_ATOL, rtol=_RTOL)
 
@@ -236,7 +239,11 @@ class TestGatedMarkovParity(CustomTestCase):
 
     def test_apply_block_logits_exact_match(self):
         """GatedMarkovHead.apply_block_logits must match reference exactly."""
-        token_ids, hidden, base_logits, _ = self._make_inputs()
+        _, _, base_logits, _ = self._make_inputs()
+        token_ids = torch.randint(
+            0, self.vocab_size, (self.batch_size, self.proposal_len)
+        )
+        hidden = torch.randn(self.batch_size, self.proposal_len, self.hidden_size)
         with torch.no_grad():
             sgl_out = self.sgl_head.apply_block_logits(
                 base_logits, token_ids=token_ids, hidden_states=hidden
