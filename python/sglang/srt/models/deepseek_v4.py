@@ -1784,6 +1784,8 @@ class DeepseekV4Model(nn.Module):
         if self.dsa_enable_prefill_cp:
             self.cp_size = get_parallel().attn_cp_size
 
+        self.dspark_layers_to_capture: Optional[List[int]] = None
+
     def hc_head(
         self,
         x: torch.Tensor,
@@ -1856,6 +1858,8 @@ class DeepseekV4Model(nn.Module):
                 delattr(forward_batch, _attr)
 
         use_fused = self.use_fused_mhc_post_pre
+        capture_dspark = self.dspark_layers_to_capture is not None
+        dspark_aux_hidden_states: List[torch.Tensor] = []
         prev_residual, prev_post, prev_comb = None, None, None
         last_layer = None
         for i in range(self.start_layer, self.end_layer):
@@ -1877,6 +1881,18 @@ class DeepseekV4Model(nn.Module):
                     prev_post=prev_post,
                     prev_comb=prev_comb,
                 )
+            if capture_dspark and i in self.dspark_layers_to_capture:
+                # Materialize the completed post-layer mHC tensor [*, hc, d]. Under
+                # fused-MHC the layer returns the deferred FFN hc_post state, so apply
+                # hc_post to finish it (same as the last-layer completion below); under
+                # the non-fused path the returned tensor is already finalized.
+                if use_fused:
+                    completed = layer.hc_post(
+                        hidden_states, prev_residual, prev_post, prev_comb
+                    )
+                else:
+                    completed = hidden_states
+                dspark_aux_hidden_states.append(completed.mean(dim=1))
         if use_fused and last_layer is not None:
             hidden_states = last_layer.hc_post(
                 hidden_states, prev_residual, prev_post, prev_comb
@@ -1901,6 +1917,10 @@ class DeepseekV4Model(nn.Module):
             hidden_states, self.hc_head_fn, self.hc_head_scale, self.hc_head_base
         )
         hidden_states = self.norm(hidden_states)
+
+        if capture_dspark:
+            aux_hidden = torch.cat(dspark_aux_hidden_states, dim=-1)
+            return (hidden_states, pre_hc_head), aux_hidden
 
         return hidden_states, pre_hc_head
 
@@ -1969,6 +1989,19 @@ class DeepseekV4ForCausalLM(nn.Module):
     @property
     def routed_experts_weights_of_layer(self):
         return self._routed_experts_weights_of_layer.value
+
+    def set_dspark_layers_to_capture(self, layer_ids: List[int]) -> None:
+        if not self.pp_group.is_last_rank:
+            return
+        if layer_ids is None:
+            raise ValueError(
+                "DSPARK requires explicit layer_ids for aux hidden capture."
+            )
+        # DSpark captures the hc-mean of each target layer's completed post-layer mHC
+        # tensor (SoT model.py:920). Unlike DFLASH there is no +1 layer-id offset: the
+        # ids index directly into self.layers, matching the SoT target_layer_ids.
+        self.capture_aux_hidden_states = True
+        self.model.dspark_layers_to_capture = list(layer_ids)
 
     def determine_num_fused_shared_experts(self):
         self.num_fused_shared_experts = 0
