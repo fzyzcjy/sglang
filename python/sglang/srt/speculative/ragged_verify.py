@@ -14,30 +14,45 @@ logger = logging.getLogger(__name__)
 
 
 class RaggedVerifyMode(str, Enum):
-    OFF = "off"
-    CUTOFF_ONLY = "cutoff-only"
-    FULL = "full"
+    # Named by what the verify forward actually computes:
+    #   STATIC     — uniform gamma+1 block per request (default).
+    #   CAP_ACCEPT — full block, but caps accept at per-request ell_r (lossless
+    #                harness, no throughput gain).
+    #   COMPACT    — only total = sum(1+ell_r) tokens (real-N, throughput gain).
+    STATIC = "static"
+    CAP_ACCEPT = "cap-accept"
+    COMPACT = "compact"
 
 
-_RAGGED_VERIFY_OFF_ALIASES = frozenset({"", "off"})
+# Legacy spellings (pre-rename) accepted as aliases.
+_LEGACY_MODE_ALIASES: dict[str, RaggedVerifyMode] = {
+    "": RaggedVerifyMode.STATIC,
+    "off": RaggedVerifyMode.STATIC,
+    "cutoff-only": RaggedVerifyMode.CAP_ACCEPT,
+    "full": RaggedVerifyMode.COMPACT,
+}
 
 
 def read_ragged_verify_mode() -> RaggedVerifyMode:
     value = envs.SGLANG_RAGGED_VERIFY.get()
-    if value in _RAGGED_VERIFY_OFF_ALIASES:
-        return RaggedVerifyMode.OFF
-    if value == RaggedVerifyMode.CUTOFF_ONLY.value:
-        return RaggedVerifyMode.CUTOFF_ONLY
-    if value == RaggedVerifyMode.FULL.value:
-        return RaggedVerifyMode.FULL
+    if value in _LEGACY_MODE_ALIASES:
+        return _LEGACY_MODE_ALIASES[value]
+    for mode in RaggedVerifyMode:
+        if value == mode.value:
+            return mode
     raise ValueError(
-        "invalid SGLANG_RAGGED_VERIFY="
-        f"{value!r}; expected one of 'off', 'cutoff-only', 'full'"
+        f"invalid SGLANG_RAGGED_VERIFY={value!r}; expected one of "
+        f"{', '.join(repr(m.value) for m in RaggedVerifyMode)} "
+        "(legacy off/cutoff-only/full accepted)"
     )
 
 
-def ragged_verify_full_enabled() -> bool:
-    return read_ragged_verify_mode() == RaggedVerifyMode.FULL
+def ragged_verify_compact_enabled() -> bool:
+    return read_ragged_verify_mode() == RaggedVerifyMode.COMPACT
+
+
+# Backwards-compatible alias for callers written before the rename.
+ragged_verify_full_enabled = ragged_verify_compact_enabled
 
 
 def round_up_grid(total: int, grid: Sequence[int]) -> int:

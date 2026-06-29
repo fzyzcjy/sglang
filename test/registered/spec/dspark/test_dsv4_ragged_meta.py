@@ -72,18 +72,18 @@ class _patched_cp_size:
 
 
 class TestRaggedVerifyMode(CustomTestCase):
-    def test_unset_mode_returns_off(self):
-        """Unset SGLANG_RAGGED_VERIFY resolves to the off sentinel."""
+    def test_unset_mode_returns_static(self):
+        """Unset SGLANG_RAGGED_VERIFY resolves to the static sentinel."""
         with envs.SGLANG_RAGGED_VERIFY.override(""):
             self.assertEqual(_ragged_verify_mode(), RAGGED_VERIFY_OFF)
 
-    def test_cutoff_only_mode_parsed(self):
-        """cutoff-only is an accepted mode value."""
+    def test_cap_accept_mode_parsed(self):
+        """cap-accept is an accepted mode value."""
         with envs.SGLANG_RAGGED_VERIFY.override(RAGGED_VERIFY_CUTOFF_ONLY):
             self.assertEqual(_ragged_verify_mode(), RAGGED_VERIFY_CUTOFF_ONLY)
 
-    def test_full_mode_parsed(self):
-        """full is an accepted mode value."""
+    def test_compact_mode_parsed(self):
+        """compact is an accepted mode value."""
         with envs.SGLANG_RAGGED_VERIFY.override(RAGGED_VERIFY_FULL):
             self.assertEqual(_ragged_verify_mode(), RAGGED_VERIFY_FULL)
 
@@ -93,8 +93,8 @@ class TestRaggedVerifyMode(CustomTestCase):
             with self.assertRaises(AssertionError):
                 _ragged_verify_mode()
 
-    def test_choices_are_off_cutoff_full(self):
-        """The accepted mode set is exactly off / cutoff-only / full."""
+    def test_choices_are_static_cap_accept_compact(self):
+        """The accepted mode set is exactly static / cap-accept / compact."""
         self.assertEqual(
             set(RAGGED_VERIFY_CHOICES),
             {RAGGED_VERIFY_OFF, RAGGED_VERIFY_CUTOFF_ONLY, RAGGED_VERIFY_FULL},
@@ -130,7 +130,7 @@ class TestTargetVerifyGraphKey(CustomTestCase):
         self.assertEqual(num_tokens, 18)
 
     def test_token_keyed_when_full_layout(self):
-        """A full ragged layout keys the graph by graph_num_tokens."""
+        """A compact ragged layout keys the graph by graph_num_tokens."""
         backend = _stub_backend(num_draft_tokens=6)
         layout = _make_layout([6, 3, 1])
         key, num_tokens = DeepseekV4AttnBackend._target_verify_graph_key(
@@ -190,7 +190,7 @@ class TestResolveVerifyLayoutGating(CustomTestCase):
             )
 
     def test_none_when_mode_not_full(self):
-        """cutoff-only keeps the bs-keyed full-block graph (layout ignored here)."""
+        """cap-accept keeps the bs-keyed full-block graph (layout ignored here)."""
         backend = _stub_backend()
         layout = _make_layout([6, 3, 1])
         fb = _make_forward_batch(layout)
@@ -200,7 +200,7 @@ class TestResolveVerifyLayoutGating(CustomTestCase):
             )
 
     def test_returns_layout_when_full(self):
-        """full mode plus an attached layout resolves to the ragged layout."""
+        """compact mode plus an attached layout resolves to the ragged layout."""
         backend = _stub_backend()
         layout = _make_layout([6, 3, 1])
         fb = _make_forward_batch(layout)

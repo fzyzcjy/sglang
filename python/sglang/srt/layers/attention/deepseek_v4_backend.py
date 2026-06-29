@@ -59,6 +59,7 @@ from sglang.srt.layers.attention.dsv4.sparse_prefill_utils import (
 from sglang.srt.mem_cache.deepseek_v4_memory_pool import DeepSeekV4TokenToKVPool
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
 from sglang.srt.speculative.eagle_utils import per_step_draft_out_cache_loc
+from sglang.srt.speculative.ragged_verify import RaggedVerifyMode
 from sglang.srt.utils import ceil_align
 from sglang.srt.utils.common import is_sm120_supported
 
@@ -109,22 +110,28 @@ def _get_target_verify_bs(forward_batch: ForwardBatch) -> int:
     return draft_count // draft_token_num
 
 
-RAGGED_VERIFY_OFF = ""
-RAGGED_VERIFY_CUTOFF_ONLY = "cutoff-only"
-RAGGED_VERIFY_FULL = "full"
-RAGGED_VERIFY_CHOICES = (
-    RAGGED_VERIFY_OFF,
-    RAGGED_VERIFY_CUTOFF_ONLY,
-    RAGGED_VERIFY_FULL,
-)
+# Verify-schedule mode string constants, mirroring RaggedVerifyMode so this
+# backend compares against the canonical values without importing the enum (it
+# is read before the speculative module is guaranteed importable here).
+RAGGED_VERIFY_OFF = RaggedVerifyMode.STATIC.value
+RAGGED_VERIFY_CUTOFF_ONLY = RaggedVerifyMode.CAP_ACCEPT.value
+RAGGED_VERIFY_FULL = RaggedVerifyMode.COMPACT.value
+RAGGED_VERIFY_CHOICES = tuple(m.value for m in RaggedVerifyMode)
 
 
 def _ragged_verify_mode() -> str:
-    mode = envs.SGLANG_RAGGED_VERIFY.get() or RAGGED_VERIFY_OFF
+    # Read the raw env value and resolve it through the alias map so legacy
+    # spellings (off / cutoff-only / full) are accepted identically to the new
+    # canonical values (static / cap-accept / compact).
+    from sglang.srt.speculative.ragged_verify import _LEGACY_MODE_ALIASES
+
+    raw = envs.SGLANG_RAGGED_VERIFY.get()
+    if raw in _LEGACY_MODE_ALIASES:
+        return _LEGACY_MODE_ALIASES[raw].value
     assert (
-        mode in RAGGED_VERIFY_CHOICES
-    ), f"invalid SGLANG_RAGGED_VERIFY={mode!r}, expected one of {RAGGED_VERIFY_CHOICES}"
-    return mode
+        raw in RAGGED_VERIFY_CHOICES
+    ), f"invalid SGLANG_RAGGED_VERIFY={raw!r}, expected one of {RAGGED_VERIFY_CHOICES}"
+    return raw
 
 
 def _resolve_ragged_verify_layout(

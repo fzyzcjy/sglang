@@ -251,14 +251,14 @@ class DSparkWorkerV2(BaseSpecWorker):
             )
 
         # Ragged-verify mode and the confidence prefix scheduler. The scheduler is
-        # inert (None) unless the mode is cutoff-only/full AND a confidence head is
-        # present, so the off-mode / no-head path is byte-identical to the static
-        # uniform-gamma worker. cutoff-only runs the full bs*(gamma+1) window and
-        # only caps accept at per-request ell_r; full (real-N) is not wired here.
+        # inert (None) unless the mode is cap-accept/compact AND a confidence head is
+        # present, so the static-mode / no-head path is byte-identical to the static
+        # uniform-gamma worker. cap-accept runs the full bs*(gamma+1) window and
+        # only caps accept at per-request ell_r; compact (real-N) is not wired here.
         self._ragged_verify_mode = read_ragged_verify_mode()
         self._verify_scheduler: Optional[ConfidencePrefixScheduler] = None
         if (
-            self._ragged_verify_mode is not RaggedVerifyMode.OFF
+            self._ragged_verify_mode is not RaggedVerifyMode.STATIC
             and self._confidence_head is not None
         ):
             self._verify_scheduler = ConfidencePrefixScheduler(
@@ -274,8 +274,8 @@ class DSparkWorkerV2(BaseSpecWorker):
     def _build_sps_cost_table(self) -> SpsCostTable:
         # Load a pre-profiled table when a path is given, else a flat constant-SPS
         # table (budget = verify-all-up-to-max). Flat is the inert default for
-        # cutoff-only, which has zero throughput gain; the GPU profiler hook lands
-        # with the full real-N path.
+        # cap-accept, which has zero throughput gain; the GPU profiler hook lands
+        # with the compact real-N path.
         sps_table_path = os.environ.get("SGLANG_DSPARK_SPS_TABLE_PATH")
         if sps_table_path:
             return load_sps_table_from_path(sps_table_path)
@@ -659,13 +659,13 @@ class DSparkWorkerV2(BaseSpecWorker):
         req_pool_indices: torch.Tensor,
         device: torch.device,
     ) -> Optional[RaggedVerifyLayout]:
-        # Single gate for the ragged-verify path. OFF -> None (the static
-        # uniform-gamma path is byte-identical). CUTOFF_ONLY runs the full
-        # bs*(gamma+1) window and only caps accept per request. FULL builds the
+        # Single gate for the ragged-verify path. STATIC -> None (the static
+        # uniform-gamma path is byte-identical). CAP_ACCEPT runs the full
+        # bs*(gamma+1) window and only caps accept per request. COMPACT builds the
         # real-N ragged layout (token-keyed graph + per-request compact verify +
         # compact->strided scatter). Both schedules share the n-2-frozen
         # verify_lens; only the grid (and downstream execution) differ.
-        if self._ragged_verify_mode is RaggedVerifyMode.OFF:
+        if self._ragged_verify_mode is RaggedVerifyMode.STATIC:
             return None
         verify_lens = self._schedule_verify_lens(
             req_pool_indices=req_pool_indices, device=device
@@ -720,13 +720,13 @@ class DSparkWorkerV2(BaseSpecWorker):
         return verify_lens
 
     def _verify_layout_grid(self, *, verify_lens_cpu: list[int]) -> list[int]:
-        # cutoff-only runs the full bs*(gamma+1) block and never selects a
-        # token-keyed graph, so its grid only needs to contain the total. full
+        # cap-accept runs the full bs*(gamma+1) block and never selects a
+        # token-keyed graph, so its grid only needs to contain the total. compact
         # selects a token-keyed decode graph: align the layout grid with the
         # decode runner's capture token buckets so graph_num_tokens lands on a
         # captured tier.
         total = sum(verify_lens_cpu)
-        if self._ragged_verify_mode is not RaggedVerifyMode.FULL:
+        if self._ragged_verify_mode is not RaggedVerifyMode.COMPACT:
             return [total]
         capture_num_tokens = self._ragged_capture_num_tokens()
         if capture_num_tokens is None:
@@ -1357,7 +1357,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         correct_len: torch.Tensor,
         commit_lens: torch.Tensor,
         bs: int,
-        run_full: bool,
+        run_compact: bool,
         new_seq_lens: torch.Tensor,
     ) -> Optional[torch.Tensor]:
         # Commit the accepted tokens' target hidden into the draft KV. A draft model
@@ -1384,7 +1384,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             )
             return committed_hidden
 
-        if run_full:
+        if run_compact:
             self._inject_ragged_hidden_to_draft_kv(
                 batch=batch,
                 layout=layout,
@@ -1743,15 +1743,15 @@ class DSparkWorkerV2(BaseSpecWorker):
         layout = self._maybe_schedule_ragged_layout(
             req_pool_indices=batch.req_pool_indices, device=device
         )
-        run_full = (
-            self._ragged_verify_mode is RaggedVerifyMode.FULL and layout is not None
+        run_compact = (
+            self._ragged_verify_mode is RaggedVerifyMode.COMPACT and layout is not None
         )
 
         verify_ids_2d = torch.cat(
             [draft_block_ids[:, :1], draft_tokens], dim=1
         ).contiguous()
 
-        if run_full:
+        if run_compact:
             target_verify, hidden_strided = self._verify_full(
                 batch=batch,
                 layout=layout,
@@ -1799,7 +1799,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             correct_len=correct_len,
             commit_lens=commit_lens,
             bs=bs,
-            run_full=run_full,
+            run_compact=run_compact,
             new_seq_lens=new_seq_lens,
         )
         logits_output.hidden_states = None
