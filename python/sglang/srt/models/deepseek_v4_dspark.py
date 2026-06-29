@@ -61,7 +61,9 @@ def build_dspark_topk_idxs(
     self-contained reference attention path.
     """
     if start_pos <= 0:
-        raise ValueError(f"DSpark draft attention requires start_pos > 0, got {start_pos}.")
+        raise ValueError(
+            f"DSpark draft attention requires start_pos > 0, got {start_pos}."
+        )
     window = torch.arange(min(window_size, start_pos + 1))
     block = window_size + torch.arange(block_size)
     matrix = torch.cat([window, block])
@@ -106,9 +108,13 @@ class DSparkAttention(nn.Module):
         self.softmax_scale = self.head_dim**-0.5
 
         self.compress_ratio = 0
-        assert self.compress_ratio == 0, "DSpark draft attention requires compress_ratio == 0."
+        assert (
+            self.compress_ratio == 0
+        ), "DSpark draft attention requires compress_ratio == 0."
 
-        self.attn_sink = nn.Parameter(torch.empty(self.n_local_heads, dtype=torch.float32))
+        self.attn_sink = nn.Parameter(
+            torch.empty(self.n_local_heads, dtype=torch.float32)
+        )
         self.wq_a = ReplicatedLinear(
             self.dim,
             self.q_lora_rank,
@@ -248,15 +254,15 @@ class DSparkAttention(nn.Module):
             return x
 
         bsz, block_size, _ = x.shape
-        freqs_cis = self.freqs_cis[
-            start_pos + seqlen : start_pos + seqlen + block_size
-        ]
+        freqs_cis = self.freqs_cis[start_pos + seqlen : start_pos + seqlen + block_size]
 
         q, _ = self.wq_a(x)
         q = self.q_norm(q)
         q, _ = self.wq_b(q)
         q = q.view(bsz, block_size, self.n_local_heads, self.head_dim)
-        q = q * torch.rsqrt(q.float().square().mean(-1, keepdim=True) + self.eps).to(q.dtype)
+        q = q * torch.rsqrt(q.float().square().mean(-1, keepdim=True) + self.eps).to(
+            q.dtype
+        )
         apply_rotary_emb(q[..., -rd:], freqs_cis)
 
         kv = self.apply_kv_norm_rope(self.kv_proj_only(x), freqs_cis)
@@ -326,9 +332,7 @@ class DSparkV4MarkovHead(nn.Module):
     ) -> torch.Tensor:
         return logits + self.compute_step_bias(token_ids, hidden_states)
 
-    def forward(
-        self, token_ids: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, token_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         embed = self.get_prev_embeddings(token_ids)
         logits = self.project_bias(embed)
         return logits, embed
@@ -423,7 +427,9 @@ class DSparkV4Stage(nn.Module):
 
         if stage_id == 0:
             if num_target_layers <= 0:
-                raise ValueError("DSpark needs target layers for the target-hidden projection.")
+                raise ValueError(
+                    "DSpark needs target layers for the target-hidden projection."
+                )
             self.main_proj = ReplicatedLinear(
                 config.hidden_size * num_target_layers,
                 config.hidden_size,
@@ -561,7 +567,9 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
                 "DSpark V4 draft requires markov_rank > 0, "
                 f"got markov_rank={dspark_config.markov_rank}."
             )
-        self.gamma = int(dspark_config.resolve_gamma(default=int(config.num_hidden_layers)))
+        self.gamma = int(
+            dspark_config.resolve_gamma(default=int(config.num_hidden_layers))
+        )
         self.block_size = self.gamma
         self.num_stages = int(getattr(config, "num_nextn_predict_layers", 1) or 1)
 
@@ -757,7 +765,12 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
                 loaded_params.add(candidate)
                 break
             else:
-                for param_name, weight_name, expert_id, shard_id in expert_params_mapping:
+                for (
+                    param_name,
+                    weight_name,
+                    expert_id,
+                    shard_id,
+                ) in expert_params_mapping:
                     if weight_name not in mapped:
                         continue
                     candidate = mapped.replace(weight_name, param_name)
@@ -776,10 +789,14 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
                     break
                 else:
                     if mapped not in params_dict:
-                        logger.warning("DSpark V4 draft: unexpected weight %r -> %r", name, mapped)
+                        logger.warning(
+                            "DSpark V4 draft: unexpected weight %r -> %r", name, mapped
+                        )
                         continue
                     param = params_dict[mapped]
-                    weight_loader = getattr(param, "weight_loader", default_weight_loader)
+                    weight_loader = getattr(
+                        param, "weight_loader", default_weight_loader
+                    )
                     weight_loader(param, loaded_weight)
                     loaded_params.add(mapped)
 
