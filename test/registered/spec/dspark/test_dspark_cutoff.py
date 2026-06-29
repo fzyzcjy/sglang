@@ -23,6 +23,8 @@ def _make_worker(
     worker.verify_num_draft_tokens = gamma + 1
     worker._ragged_verify_mode = mode
     worker._verify_scheduler = scheduler
+    worker._confidence_ready = None
+    worker._confidence_cpu_pinned = None
     return worker
 
 
@@ -117,29 +119,29 @@ class TestCutoffGreedyAccept(CustomTestCase):
         self.assertEqual(cut_bonus.tolist(), [int(target_predict[0, 0])])
 
 
-class TestCutoffGating(CustomTestCase):
+class TestRaggedGating(CustomTestCase):
     def test_off_mode_returns_none(self):
-        """OFF mode never schedules a cutoff layout (uniform path stays byte-identical)."""
+        """OFF mode never schedules a ragged layout (uniform path stays byte-identical)."""
         worker = _make_worker(gamma=4, mode=RaggedVerifyMode.OFF, scheduler=object())
-        layout = worker._maybe_schedule_cutoff_layout(
+        layout = worker._maybe_schedule_ragged_layout(
             req_pool_indices=torch.tensor([0, 1]), device=_DEVICE
         )
         self.assertIsNone(layout)
 
-    def test_full_mode_raises_not_implemented(self):
-        """FULL (real-N) mode is not wired into the worker yet and must fail loudly."""
+    def test_full_mode_without_confidence_returns_none(self):
+        """FULL with no confidence history yet falls back to the uniform block (lossless)."""
         worker = _make_worker(gamma=4, mode=RaggedVerifyMode.FULL, scheduler=object())
-        with self.assertRaises(NotImplementedError):
-            worker._maybe_schedule_cutoff_layout(
-                req_pool_indices=torch.tensor([0, 1]), device=_DEVICE
-            )
+        layout = worker._maybe_schedule_ragged_layout(
+            req_pool_indices=torch.tensor([0, 1]), device=_DEVICE
+        )
+        self.assertIsNone(layout)
 
     def test_cutoff_mode_without_scheduler_returns_none(self):
         """cutoff-only with no scheduler (no confidence head) falls back to uniform."""
         worker = _make_worker(
             gamma=4, mode=RaggedVerifyMode.CUTOFF_ONLY, scheduler=None
         )
-        layout = worker._maybe_schedule_cutoff_layout(
+        layout = worker._maybe_schedule_ragged_layout(
             req_pool_indices=torch.tensor([0, 1]), device=_DEVICE
         )
         self.assertIsNone(layout)
