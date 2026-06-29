@@ -1,4 +1,6 @@
 import functools
+import os
+import sys
 import unittest
 
 import torch
@@ -13,6 +15,26 @@ _ATOL_HIDDEN = 1e-4
 _RTOL_HIDDEN = 1e-4
 _ATOL_LOGITS = 1e-4
 _RTOL_LOGITS = 1e-4
+
+_REPO_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
+)
+
+
+def _ensure_repo_test_package() -> None:
+    """Put repo root on sys.path and evict the stdlib ``test`` package.
+
+    CI runs each file as ``python3 <path>`` (repo root absent from sys.path) and
+    Python ships a stdlib ``test`` package that shadows the repo's ``test``
+    namespace; both must be corrected before importing the vendored reference.
+    """
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
+    for name in [m for m in list(sys.modules) if m == "test" or m.startswith("test.")]:
+        module = sys.modules.get(name)
+        file = getattr(module, "__file__", "") or ""
+        if not file.startswith(_REPO_ROOT + os.sep):
+            del sys.modules[name]
 
 
 def _requires_cuda(test_method):
@@ -191,6 +213,7 @@ class TestQwen3DSparkModelParity(CustomTestCase):
         if not _CUDA_AVAILABLE:
             return
         try:
+            _ensure_repo_test_package()
             from test.srt.speculative._dspark_reference.qwen3.modeling import (
                 Qwen3DSparkModel as RefQwen3DSparkModel,
             )
@@ -306,6 +329,7 @@ class TestQwen3DSparkModelParity(CustomTestCase):
         if getattr(self, "_import_error", None):
             self.skipTest(f"Import error: {self._import_error}")
 
+        _ensure_repo_test_package()
         from test.srt.speculative._dspark_reference.markov_head import (
             VanillaMarkov as RefVanillaMarkov,
         )
@@ -398,6 +422,7 @@ class TestGemma4DSparkModelParity(CustomTestCase):
         if not _CUDA_AVAILABLE:
             return
         try:
+            _ensure_repo_test_package()
             from test.srt.speculative._dspark_reference.gemma4.modeling import (
                 Gemma4DSparkModel as RefGemma4,
             )
@@ -504,6 +529,7 @@ class TestGemma4DSparkModelParity(CustomTestCase):
         if getattr(self, "_import_error", None):
             self.skipTest(f"Import error: {self._import_error}")
 
+        _ensure_repo_test_package()
         from test.srt.speculative._dspark_reference.markov_head import (
             VanillaMarkov as RefVanillaMarkov,
         )

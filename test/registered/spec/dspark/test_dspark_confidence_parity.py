@@ -1,4 +1,6 @@
 import importlib
+import os
+import sys
 import unittest
 
 import torch
@@ -16,15 +18,36 @@ _ATOL = 1e-5
 _RTOL = 1e-5
 
 _REF_PKG = "test.srt.speculative._dspark_reference"
+_REPO_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
+)
+
+
+def _ensure_repo_test_package() -> None:
+    """Put repo root on sys.path and evict the stdlib ``test`` package.
+
+    CI runs each file as ``python3 <path>`` (repo root absent from sys.path) and
+    Python ships a stdlib ``test`` package that shadows the repo's ``test``
+    namespace; both must be corrected before importing the vendored reference.
+    """
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
+    for name in [m for m in list(sys.modules) if m == "test" or m.startswith("test.")]:
+        module = sys.modules.get(name)
+        file = getattr(module, "__file__", "") or ""
+        if not file.startswith(_REPO_ROOT + os.sep):
+            del sys.modules[name]
 
 
 def _load_ref_accept_rate_predictor():
     """Import the DeepSpec reference AcceptRatePredictor without the deepspec package."""
+    _ensure_repo_test_package()
     return importlib.import_module(f"{_REF_PKG}.common").AcceptRatePredictor
 
 
 def _load_ref_markov_head():
     """Import the DeepSpec reference markov_head without the deepspec package."""
+    _ensure_repo_test_package()
     return importlib.import_module(f"{_REF_PKG}.markov_head")
 
 
