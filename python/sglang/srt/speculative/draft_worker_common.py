@@ -1,0 +1,149 @@
+from __future__ import annotations
+
+import logging
+from copy import deepcopy
+from typing import Any, Optional
+
+import msgspec
+import torch
+
+from sglang.srt.managers.tp_worker import TpModelWorker
+from sglang.srt.model_executor.forward_batch_info import CaptureHiddenMode
+from sglang.srt.server_args import (
+    ServerArgs,
+    get_global_server_args,
+    set_global_server_args_for_scheduler,
+)
+from sglang.srt.speculative.dflash_info import DFlashVerifyInput
+from sglang.srt.speculative.dflash_info_v2 import DFlashDraftInputV2
+
+logger = logging.getLogger(__name__)
+
+_SUPPORTED_DRAFT_BACKENDS = ("flashinfer", "fa3", "fa4", "triton", "ascend")
+
+
+class DraftWorkerBundle(msgspec.Struct, frozen=True):
+    draft_worker: TpModelWorker
+    draft_model_runner: Any
+    draft_model: Any
+    resolved_attention_backend: str
+
+
+def _resolve_draft_attention_backend(
+    *, draft_server_args: ServerArgs, algo_label: str
+) -> str:
+    draft_backend = draft_server_args.speculative_draft_attention_backend
+    if draft_backend is None:
+        draft_backend, _ = draft_server_args.get_attention_backends()
+    if draft_backend is None:
+        return "triton" if torch.version.hip else "flashinfer"
+    if draft_backend not in _SUPPORTED_DRAFT_BACKENDS:
+        fallback = "triton" if torch.version.hip else "flashinfer"
+        logger.warning(
+            "%s draft worker only supports attention_backend in %s for now, "
+            "but got %r. Falling back to '%s'.",
+            algo_label,
+            _SUPPORTED_DRAFT_BACKENDS,
+            draft_backend,
+            fallback,
+        )
+        return fallback
+    return draft_backend
+
+
+def build_draft_tp_worker(
+    *,
+    server_args: ServerArgs,
+    gpu_id: int,
+    tp_rank: int,
+    dp_rank: Optional[int],
+    moe_ep_rank: int,
+    attn_cp_rank: int,
+    moe_dp_rank: int,
+    nccl_port: int,
+    target_model_config: Any,
+    algo_label: str,
+) -> DraftWorkerBundle:
+    """Build the separate draft ``TpModelWorker`` shared by DFlash and DSpark.
+
+    Encapsulates the draft server-args deepcopy, attention-backend resolution +
+    fallback, the global-server-args save/restore around construction, and the
+    ``draft_runner`` alias. Returns the constructed worker, its model runner, the
+    draft model, and the resolved attention backend.
+    """
+    draft_server_args = deepcopy(server_args)
+    draft_server_args.skip_tokenizer_init = True
+    draft_backend = _resolve_draft_attention_backend(
+        draft_server_args=draft_server_args, algo_label=algo_label
+    )
+    draft_server_args.speculative_draft_attention_backend = None
+    draft_server_args.prefill_attention_backend = None
+    draft_server_args.decode_attention_backend = None
+    draft_server_args.attention_backend = draft_backend
+    draft_server_args.context_length = target_model_config.context_len
+
+    saved_server_args = get_global_server_args()
+    draft_worker = TpModelWorker(
+        server_args=draft_server_args,
+        gpu_id=gpu_id,
+        tp_rank=tp_rank,
+        moe_ep_rank=moe_ep_rank,
+        pp_rank=0,
+        attn_cp_rank=attn_cp_rank,
+        moe_dp_rank=moe_dp_rank,
+        dp_rank=dp_rank,
+        nccl_port=nccl_port,
+        is_draft_worker=True,
+    )
+    set_global_server_args_for_scheduler(saved_server_args)
+
+    draft_model_runner = draft_worker.model_runner
+    draft_worker.draft_runner = draft_model_runner
+    return DraftWorkerBundle(
+        draft_worker=draft_worker,
+        draft_model_runner=draft_model_runner,
+        draft_model=draft_model_runner.model,
+        resolved_attention_backend=draft_backend,
+    )
+
+
+def make_draft_input_v2(
+    *,
+    bonus_tokens: torch.Tensor,
+    new_seq_lens: torch.Tensor,
+) -> DFlashDraftInputV2:
+    """Build the cross-iteration draft relay state shared by DFlash and DSpark.
+
+    The legacy Eagle-shaped ``topk_p``/``topk_index``/``hidden_states`` fields are
+    unused (the relay carries only ``bonus_tokens`` + ``new_seq_lens``).
+    """
+    bs = int(new_seq_lens.numel())
+    device = bonus_tokens.device
+    return DFlashDraftInputV2(
+        topk_p=torch.empty((bs, 0), device=device, dtype=torch.float32),
+        topk_index=torch.empty((bs, 0), device=device, dtype=torch.int64),
+        bonus_tokens=bonus_tokens.to(dtype=torch.int64),
+        new_seq_lens=new_seq_lens.to(dtype=torch.int64),
+        hidden_states=torch.empty((bs, 0), device=device, dtype=torch.float16),
+    )
+
+
+def make_draft_block_spec_info(
+    *,
+    draft_token_num: int,
+    device: torch.device,
+) -> DFlashVerifyInput:
+    """Build the sentinel draft-block ``DFlashVerifyInput`` carried into the draft
+    forward (only ``draft_token_num`` + capture mode matter; tensors come from the
+    ForwardBatch)."""
+    return DFlashVerifyInput(
+        draft_token=torch.empty((0,), dtype=torch.long, device=device),
+        positions=torch.empty((0,), dtype=torch.int64, device=device),
+        draft_token_num=int(draft_token_num),
+        custom_mask=None,
+        capture_hidden_mode=CaptureHiddenMode.NULL,
+    )
+
+
+def build_block_pos_offsets(*, length: int, device: torch.device) -> torch.Tensor:
+    return torch.arange(int(length), device=device, dtype=torch.int64)

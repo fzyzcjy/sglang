@@ -1,6 +1,5 @@
 import logging
-from copy import deepcopy
-from typing import List, Optional
+from typing import Optional
 
 import torch
 
@@ -14,11 +13,7 @@ from sglang.srt.model_executor.forward_batch_info import (
     ForwardMode,
     compute_position,
 )
-from sglang.srt.server_args import (
-    ServerArgs,
-    get_global_server_args,
-    set_global_server_args_for_scheduler,
-)
+from sglang.srt.server_args import ServerArgs
 from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
 from sglang.srt.speculative.dflash_info import DFlashVerifyInput
 from sglang.srt.speculative.dflash_info_v2 import DFlashDraftInputV2
@@ -27,6 +22,12 @@ from sglang.srt.speculative.dflash_utils import (
     build_dflash_verify_target_probs,
     compute_dflash_correct_drafts_and_bonus,
     _get_or_create_chain_verify_buffers,
+)
+from sglang.srt.speculative.draft_worker_common import (
+    build_block_pos_offsets,
+    build_draft_tp_worker,
+    make_draft_block_spec_info,
+    make_draft_input_v2,
 )
 from sglang.srt.speculative.dspark_utils import (
     dspark_gamma_from_num_draft_tokens,
@@ -83,49 +84,22 @@ class DSparkWorkerV2(BaseSpecWorker):
                 "draft requires a full-vocab logits/sampler that is not yet TP-sharded."
             )
 
-        # Draft runner (separate KV cache + attention backend), mirroring DFlash.
-        draft_server_args = deepcopy(server_args)
-        draft_server_args.skip_tokenizer_init = True
-        draft_backend = draft_server_args.speculative_draft_attention_backend
-        supported_draft_backends = ("flashinfer", "fa3", "fa4", "triton", "ascend")
-        if draft_backend is None:
-            draft_backend, _ = draft_server_args.get_attention_backends()
-        if draft_backend is None:
-            draft_backend = "triton" if torch.version.hip else "flashinfer"
-        elif draft_backend not in supported_draft_backends:
-            fallback = "triton" if torch.version.hip else "flashinfer"
-            logger.warning(
-                "DSpark draft worker only supports attention_backend in %s for now, "
-                "but got %r. Falling back to '%s'.",
-                supported_draft_backends,
-                draft_backend,
-                fallback,
-            )
-            draft_backend = fallback
-        draft_server_args.speculative_draft_attention_backend = None
-        draft_server_args.prefill_attention_backend = None
-        draft_server_args.decode_attention_backend = None
-        draft_server_args.attention_backend = draft_backend
-        draft_server_args.context_length = (
-            target_worker.model_runner.model_config.context_len
-        )
-        saved_server_args = get_global_server_args()
-        self._draft_worker = TpModelWorker(
-            server_args=draft_server_args,
+        # Draft runner (separate KV cache + attention backend), shared with DFlash.
+        bundle = build_draft_tp_worker(
+            server_args=server_args,
             gpu_id=gpu_id,
             tp_rank=tp_rank,
+            dp_rank=dp_rank,
             moe_ep_rank=moe_ep_rank,
-            pp_rank=0,
             attn_cp_rank=attn_cp_rank,
             moe_dp_rank=moe_dp_rank,
-            dp_rank=dp_rank,
             nccl_port=nccl_port,
-            is_draft_worker=True,
+            target_model_config=target_worker.model_runner.model_config,
+            algo_label="DSPARK",
         )
-        set_global_server_args_for_scheduler(saved_server_args)
-        self.draft_model_runner = self._draft_worker.model_runner
-        self._draft_worker.draft_runner = self.draft_model_runner
-        self.draft_model = self.draft_model_runner.model
+        self._draft_worker = bundle.draft_worker
+        self.draft_model_runner = bundle.draft_model_runner
+        self.draft_model = bundle.draft_model
 
         dspark_config = parse_dspark_draft_config(
             draft_hf_config=self.draft_model_runner.model_config.hf_config
@@ -186,15 +160,11 @@ class DSparkWorkerV2(BaseSpecWorker):
                 type(self.draft_model.markov_head).__name__,
             )
 
-        self._block_pos_offsets = torch.arange(
-            self.verify_num_draft_tokens, device=self.device, dtype=torch.int64
+        self._block_pos_offsets = build_block_pos_offsets(
+            length=self.verify_num_draft_tokens, device=self.device
         )
-        self._draft_block_spec_info = DFlashVerifyInput(
-            draft_token=torch.empty((0,), dtype=torch.long, device=self.device),
-            positions=torch.empty((0,), dtype=torch.int64, device=self.device),
-            draft_token_num=int(self.gamma),
-            custom_mask=None,
-            capture_hidden_mode=CaptureHiddenMode.NULL,
+        self._draft_block_spec_info = make_draft_block_spec_info(
+            draft_token_num=int(self.gamma), device=self.device
         )
 
     @property
@@ -304,14 +274,8 @@ class DSparkWorkerV2(BaseSpecWorker):
         bonus_tokens: torch.Tensor,
         new_seq_lens: torch.Tensor,
     ) -> DFlashDraftInputV2:
-        bs = int(new_seq_lens.numel())
-        device = bonus_tokens.device
-        return DFlashDraftInputV2(
-            topk_p=torch.empty((bs, 0), device=device, dtype=torch.float32),
-            topk_index=torch.empty((bs, 0), device=device, dtype=torch.int64),
-            bonus_tokens=bonus_tokens.to(dtype=torch.int64),
-            new_seq_lens=new_seq_lens.to(dtype=torch.int64),
-            hidden_states=torch.empty((bs, 0), device=device, dtype=torch.float16),
+        return make_draft_input_v2(
+            bonus_tokens=bonus_tokens, new_seq_lens=new_seq_lens
         )
 
     def _sample_draft_block(
