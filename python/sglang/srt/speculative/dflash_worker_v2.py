@@ -181,7 +181,7 @@ class DFlashWorkerV2(BaseSpecWorker):
         if self.tp_rank == 0:
             logger.info(
                 "Initialized DFLASH draft runner. attention_backend=%s, model=%s, block_size=%s, draft_window_size=%s, compact_cache=%s",
-                getattr(draft_server_args, "attention_backend", None),
+                bundle.resolved_attention_backend,
                 self.draft_model.__class__.__name__,
                 self.block_size,
                 self.draft_window_size,

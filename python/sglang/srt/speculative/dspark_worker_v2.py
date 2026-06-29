@@ -164,7 +164,7 @@ class DSparkWorkerV2(BaseSpecWorker):
                 "Initialized DSpark draft runner. attention_backend=%s, model=%s, "
                 "gamma=%s, verify_num_draft_tokens=%s, mask_token_id=%s, "
                 "markov_head=%s",
-                getattr(draft_server_args, "attention_backend", None),
+                bundle.resolved_attention_backend,
                 self.draft_model.__class__.__name__,
                 self.gamma,
                 self.verify_num_draft_tokens,
