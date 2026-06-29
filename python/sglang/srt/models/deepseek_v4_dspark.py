@@ -688,20 +688,17 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         """
         if sampler is None:
             sampler = _greedy_step_sampler
-        logits = self._base_logits(x)
-        bsz = input_ids.size(0)
-        output_ids = input_ids.new_empty(bsz, self.block_size + 1)
-        output_ids[:, 0] = input_ids
-        corrected_logits: List[torch.Tensor] = []
-        for i in range(self.block_size):
-            step_logits = self.markov_head.apply_step_logits(
-                logits[:, i, :],
-                token_ids=output_ids[:, i],
-                hidden_states=None,
-            )
-            output_ids[:, i + 1] = sampler(step_logits, i)
-            corrected_logits.append(step_logits.unsqueeze(1))
-        return output_ids, torch.cat(corrected_logits, dim=1)
+        base_logits = self._base_logits(x)
+        sampled_tokens, corrected_logits = self.markov_head.sample_block(
+            base_logits,
+            first_prev_tokens=input_ids,
+            hidden_states=None,
+            sampler=sampler,
+        )
+        output_ids = torch.cat(
+            [input_ids.unsqueeze(1), sampled_tokens.to(input_ids.dtype)], dim=1
+        )
+        return output_ids, corrected_logits
 
     @torch.no_grad()
     def forward_spec(
