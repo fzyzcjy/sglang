@@ -288,6 +288,7 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             if self.ragged_verify_mode
             else None
         )
+        self._ragged_graph_size = 0
 
         # If returning hidden states is enabled, set initial capture hidden mode to full to avoid double-capture on startup
         if model_runner.server_args.enable_return_hidden_states:
@@ -1139,7 +1140,7 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             variant_label = self._resolve_lora_variant(forward_batch)
             stream_idx = get_current_stream_idx() if self.enable_pdmux else None
             self._replay_graph_key = self._make_graph_key(
-                self.bs, stream_idx, variant_label
+                self._ragged_graph_size, stream_idx, variant_label
             )
             return
 
@@ -1148,11 +1149,17 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
 
         raw_bs = forward_batch.batch_size
         graph_num_tokens = self._ragged_graph_num_tokens(raw_num_token)
+        # The dense-operator graph is selected by token total, but the attention
+        # metadata wrappers stay bs-keyed (flashinfer prefill_cuda_graph_metadata
+        # is created per capture_bs). Pad bs to a captured bucket so the wrapper
+        # lookup at init_forward_metadata_out_graph resolves; padded rows
+        # reference reserved req-pool slot 0 and their output is discarded.
+        bs = self._pad_to_bucket(raw_bs, self.capture_bs)
 
         self.buffer_registry.fill_from(
             forward_batch,
             raw_bs=raw_bs,
-            padded_bs=raw_bs,
+            padded_bs=bs,
             raw_num_tokens=raw_num_token,
             padded_num_tokens=graph_num_tokens,
             pp_proxy_tensors=pp_proxy_tensors,
@@ -1161,7 +1168,7 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         if self.enable_two_batch_overlap:
             self.tbo_plugin.replay_prepare(
                 forward_mode=self.capture_forward_mode,
-                bs=raw_bs,
+                bs=bs,
                 num_token_non_padded=len(forward_batch.input_ids),
                 spec_info=forward_batch.spec_info,
             )
@@ -1173,7 +1180,7 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         fb_view = build_replay_fb_view(
             forward_batch=forward_batch,
             buffers=buffers,
-            bs=raw_bs,
+            bs=bs,
             raw_bs=raw_bs,
             num_tokens=graph_num_tokens,
             seq_len_fill_value=self.seq_len_fill_value,
@@ -1182,11 +1189,13 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         )
         attn_backend.init_forward_metadata_out_graph(fb_view)
 
-        # Store fields. graph_num_tokens identifies the captured graph; the
-        # token-keyed ShapeKey replaces the bs-keyed one.
+        # Store fields. graph_num_tokens identifies the captured graph (the
+        # token-keyed ShapeKey replaces the bs-keyed one); bs is the padded
+        # attention-wrapper key.
         self.raw_bs = raw_bs
         self.raw_num_token = raw_num_token
-        self.bs = graph_num_tokens
+        self.bs = bs
+        self._ragged_graph_size = graph_num_tokens
 
         if self.model_runner.hisparse_coordinator is not None:
             self.model_runner.hisparse_coordinator.num_real_reqs.fill_(raw_bs)
