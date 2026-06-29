@@ -148,6 +148,47 @@ class TestAcceptBlockPerRequest(CustomTestCase):
         self.assertEqual(correct_len.tolist(), [3])
         self.assertEqual(bonus.tolist(), [41])
 
+    def test_all_sampling_uses_only_chain_kernel_path(self):
+        """An all-sampling mask routes _accept_block to _accept_sampling exactly once (no greedy call)."""
+        gamma = 4
+        worker = _make_worker(gamma=gamma)
+        bs = 2
+        candidates = torch.tensor([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]])
+        target_logits = torch.zeros((bs * (gamma + 1), 8))
+        draft_block = _DraftBlockResult(
+            draft_tokens=candidates[:, 1:],
+            corrected_logits=torch.zeros((bs, gamma, 8)),
+            greedy_mask=torch.tensor([False, False]),
+            temperatures=torch.ones(bs),
+        )
+        calls = {"greedy": 0, "sampling": 0}
+
+        def fake_greedy(**kwargs):
+            calls["greedy"] += 1
+            return torch.zeros(bs, dtype=torch.int32), torch.zeros(
+                bs, dtype=torch.int64
+            )
+
+        def fake_sampling(**kwargs):
+            calls["sampling"] += 1
+            return (
+                torch.tensor([1, 2], dtype=torch.int32),
+                torch.tensor([3, 4], dtype=torch.int64),
+            )
+
+        worker._accept_greedy = fake_greedy
+        worker._accept_sampling = fake_sampling
+        correct_len, bonus = worker._accept_block(
+            candidates=candidates,
+            target_logits=target_logits,
+            draft_block=draft_block,
+            sampling_info=object(),
+            draft_input=object(),
+        )
+        self.assertEqual(calls, {"greedy": 0, "sampling": 1})
+        self.assertEqual(correct_len.tolist(), [1, 2])
+        self.assertEqual(bonus.tolist(), [3, 4])
+
     def test_mixed_batch_selects_per_row_results(self):
         """A mixed batch selects greedy rows from argmax-match and sampling rows from the chain kernel."""
         gamma = 4
