@@ -1314,7 +1314,14 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             spec_info = DFlashVerifyInput(
                 draft_token=None,
                 positions=None,
-                draft_token_num=self.model_runner.server_args.speculative_num_draft_tokens,
+                # num_tokens_per_bs is the per-request token count this runner
+                # actually captures: speculative_num_draft_tokens (= verify window)
+                # for the target, but the gamma-token draft block for the DSpark
+                # draft worker. The attention backend sizes its qo_indptr / page
+                # table from this draft_token_num, so using the raw verify-window
+                # value here would mismatch the gamma-token draft q during draft
+                # verify graph capture. Matches DFlash, where the two are equal.
+                draft_token_num=self.num_tokens_per_bs,
                 custom_mask=(
                     None
                     if (self.model_runner.is_draft_worker or not build_custom_mask)
