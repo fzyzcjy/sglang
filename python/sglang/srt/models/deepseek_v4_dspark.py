@@ -215,6 +215,24 @@ class DSparkAttention(nn.Module):
         self._ensure_ring(bsz, main_kv_step.device, main_kv_step.dtype)
         self._kv_ring[:bsz, start_pos % self.window_size] = main_kv_step
 
+    def project_and_store_main_kv(
+        self, main_x: torch.Tensor, start_pos: int, is_prefill: bool
+    ) -> torch.Tensor:
+        """Project the target hidden into draft KV and write it into the ring.
+
+        Shared by ``forward`` and the model-level ``inject_target_hidden`` (plan §2.g):
+        ``wkv`` proj -> ``kv_norm`` + rope -> sliding-window ring store (full window on
+        prefill, single accepted slot on decode). Returns the projected ``main_kv``.
+        """
+        seqlen = main_x.shape[1]
+        freqs_cis = self.freqs_cis[start_pos : start_pos + seqlen]
+        main_kv = self.apply_kv_norm_rope(self.kv_proj_only(main_x), freqs_cis)
+        if is_prefill:
+            self.write_window_kv(main_kv, start_pos)
+        else:
+            self.write_step_kv(main_kv.squeeze(1), start_pos)
+        return main_kv
+
     def _sparse_attn(
         self,
         q: torch.Tensor,
@@ -246,13 +264,13 @@ class DSparkAttention(nn.Module):
         self, x: torch.Tensor, start_pos: int, main_x: torch.Tensor
     ) -> torch.Tensor:
         rd = self.rope_head_dim
-        bsz, seqlen, _ = main_x.shape
-        main_freqs_cis = self.freqs_cis[start_pos : start_pos + seqlen]
-        main_kv = self.apply_kv_norm_rope(self.kv_proj_only(main_x), main_freqs_cis)
+        seqlen = main_x.shape[1]
 
         if start_pos == 0:
-            self.write_window_kv(main_kv, start_pos)
+            self.project_and_store_main_kv(main_x, start_pos, is_prefill=True)
             return x
+
+        self.project_and_store_main_kv(main_x, start_pos, is_prefill=False)
 
         bsz, block_size, _ = x.shape
         freqs_cis = self.freqs_cis[start_pos + seqlen : start_pos + seqlen + block_size]
@@ -274,7 +292,6 @@ class DSparkAttention(nn.Module):
             block_size=block_size,
             start_pos=start_pos,
         ).to(x.device)
-        self.write_step_kv(main_kv.squeeze(1), start_pos)
         kv = torch.cat([self._kv_ring[:bsz], kv], dim=1)
         o = self._sparse_attn(q, kv, topk_idxs)
         apply_rotary_emb(o[..., -rd:], freqs_cis, True)
@@ -624,15 +641,10 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         the pool API. Returns the projected ``main_x`` for reuse in the draft forward.
         """
         main_x = self.project_target_hidden(main_hidden)
-        bsz, seqlen, _ = main_x.shape
         for stage in self.stages:
-            attn = stage.attn
-            freqs_cis = attn.freqs_cis[start_pos : start_pos + seqlen]
-            main_kv = attn.apply_kv_norm_rope(attn.kv_proj_only(main_x), freqs_cis)
-            if is_prefill:
-                attn.write_window_kv(main_kv, start_pos)
-            else:
-                attn.write_step_kv(main_kv.squeeze(1), start_pos)
+            stage.attn.project_and_store_main_kv(
+                main_x, start_pos, is_prefill=is_prefill
+            )
         return main_x
 
     def forward_embed(
