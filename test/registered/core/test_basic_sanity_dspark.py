@@ -1,12 +1,6 @@
 """Basic sanity with DSPARK spec decoding on Qwen3-14B. Mirrors
 test_basic_sanity_dflash.py with the DSPARK path active (overlap scheduling on by
-default). The sanity surface (API contract, decode correctness, scheduler stress,
-forward occupancy, GSM8K floor) comes entirely from the shared mixins.
-
-Checkpoints are not part of the default CI cache (unlike the DFLASH defaults), so
-setUpClass skips the whole class cleanly when the target/draft snapshots are not
-available locally instead of erroring on server launch.
-"""
+default)."""
 
 import os
 import unittest
@@ -62,9 +56,6 @@ class TestBasicSanityDSpark(
     # above EAGLE3's; keep a safe lower bound here.
     fwd_occupancy_acc_length_threshold: float = 2.0
 
-    # Lossless greedy keeps spec accuracy at the target model's own level; 0.80 is
-    # a comfortable floor below Qwen3-14B's own GSM8K that still catches a broken
-    # accept path.
     gsm8k_num_questions = 200
     gsm8k_accuracy_thres = 0.80
     gsm8k_accept_length_thres = 2.0
