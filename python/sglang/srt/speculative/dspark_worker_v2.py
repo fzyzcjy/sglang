@@ -1131,6 +1131,13 @@ class DSparkWorkerV2(BaseSpecWorker):
         # merged attention backend builds ragged metadata from it
         # (generate_attn_arg_prefill's ragged branch). seq_lens stays at the
         # prefix; the backend adds layout.verify_lens itself.
+        #
+        # WAR/RAW (invariant 3): the layout's device buffers are built on the
+        # forward stream before this prepare_for_verify, so the runner snapshots
+        # them inside load_batch ahead of read_done.record(); the generic overlap
+        # barrier (supports_overalloc_war_verify(), already DSPARK-gated) then
+        # serializes the next schedule-stream write against this read. No new
+        # event is introduced.
         verify_input = DFlashVerifyInput(
             draft_token=ragged_window.verify_ids,
             positions=ragged_window.positions,
