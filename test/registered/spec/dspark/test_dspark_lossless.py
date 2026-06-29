@@ -55,7 +55,7 @@ def _temperature_request(
     seed: int,
     max_new_tokens: int = 48,
 ) -> str:
-    """Send a temperature-sampled generation request and return output text."""
+    """Send a seeded temperature-sampled generation request, return output text."""
     resp = requests.post(
         url + "/generate",
         json={
@@ -65,11 +65,28 @@ def _temperature_request(
                 "top_k": top_k,
                 "top_p": top_p,
                 "max_new_tokens": max_new_tokens,
+                "sampling_seed": seed,
             },
         },
     )
     resp.raise_for_status()
     return resp.json()["text"]
+
+
+def _checkpoints_available(*model_paths: str) -> bool:
+    """Probe whether every HF repo path resolves (False if gated/missing/offline)."""
+    try:
+        from huggingface_hub import HfApi
+    except ImportError:
+        return True
+
+    api = HfApi()
+    for path in model_paths:
+        try:
+            api.model_info(path)
+        except Exception:
+            return False
+    return True
 
 
 class _DSparkLosslessBase(CustomTestCase):
@@ -114,7 +131,11 @@ class _DSparkLosslessBase(CustomTestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
+        cls.checkpoints_available = True
         if not cls.target_model or not cls.draft_model:
+            return
+        if not _checkpoints_available(cls.target_model, cls.draft_model):
+            cls.checkpoints_available = False
             return
         base_url = DEFAULT_URL_FOR_TEST
 
@@ -148,6 +169,11 @@ class _DSparkLosslessBase(CustomTestCase):
         if not self.target_model or not self.draft_model:
             self.skipTest(
                 "Model paths not configured. Set target_model and draft_model."
+            )
+        if not getattr(self, "checkpoints_available", True):
+            self.skipTest(
+                f"Checkpoint(s) unavailable (gated/missing/offline): "
+                f"{self.target_model}, {self.draft_model}."
             )
         if not hasattr(self, "process"):
             self.skipTest("Server not launched (setUpClass failed or skipped).")
@@ -188,26 +214,25 @@ class _DSparkLosslessBase(CustomTestCase):
         self.assertEqual(out1, out2, "DSpark greedy output is not deterministic.")
         self.assertIsNone(self.process.poll())
 
-    def test_temperature_sampling_lossless_with_top_k_top_p(self):
-        """DSpark temperature sampling with target top-k/top-p must be lossless.
+    def test_temperature_sampling_seed_is_deterministic(self):
+        """DSpark seeded temperature sampling repeats identically for one seed.
 
-        Losslessness for temperature sampling holds because the chain rejection
-        kernel operates on any valid draft distribution q (plan §3 [P0-B]).
-        We verify by re-running the same prompt twice and confirming the server
-        does not crash. Exact distribution equivalence is verified by the
-        statistical test below.
+        This is a determinism smoke test, not a distribution-equivalence proof:
+        with a fixed sampling_seed the target sampler is deterministic, so the
+        spec server must emit the same tokens for two identical seeded requests
+        and stay alive. (Distribution equivalence against a non-spec baseline is
+        not asserted here -- spec and non-spec do not share an RNG call sequence,
+        so seeded outputs are not expected to be bit-identical across the two.)
         """
         self._maybe_skip()
         prompt = _TEMPERATURE_PROMPTS[0]
-        out1 = _temperature_request(
-            self.base_url,
-            prompt,
-            temperature=0.8,
-            top_k=50,
-            top_p=0.95,
-            seed=42,
-        )
+        kwargs = dict(temperature=0.8, top_k=50, top_p=0.95, seed=42)
+        out1 = _temperature_request(self.base_url, prompt, **kwargs)
+        out2 = _temperature_request(self.base_url, prompt, **kwargs)
         self.assertIsInstance(out1, str)
+        self.assertEqual(
+            out1, out2, "Seeded DSpark temperature sampling is not deterministic."
+        )
         self.assertIsNone(self.process.poll())
 
     def test_server_stays_alive_after_batch(self):
