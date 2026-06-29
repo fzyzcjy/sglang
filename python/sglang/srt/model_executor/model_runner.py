@@ -1065,12 +1065,16 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 )
             self.model.set_dflash_layers_to_capture(self.dflash_target_layer_ids)
         if self.dspark_use_aux_hidden_state:
-            if not hasattr(self.model, "set_dspark_layers_to_capture"):
+            if hasattr(self.model, "set_dspark_layers_to_capture"):
+                self.model.set_dspark_layers_to_capture(self.dspark_target_layer_ids)
+            elif hasattr(self.model, "set_dflash_layers_to_capture"):
+                self.model.set_dflash_layers_to_capture(self.dspark_target_layer_ids)
+            else:
                 raise ValueError(
-                    f"Model {self.model.__class__.__name__} does not implement "
-                    "set_dspark_layers_to_capture, which is required for DSPARK."
+                    f"Model {self.model.__class__.__name__} implements neither "
+                    "set_dspark_layers_to_capture nor set_dflash_layers_to_capture, "
+                    "one of which is required for DSPARK."
                 )
-            self.model.set_dspark_layers_to_capture(self.dspark_target_layer_ids)
 
     def remote_instance_init_transfer_engine(self):
         try:
