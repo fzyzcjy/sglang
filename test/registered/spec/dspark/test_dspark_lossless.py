@@ -12,7 +12,7 @@ from sglang.test.test_utils import (
     popen_launch_server,
 )
 
-register_cuda_ci(est_time=600, suite="base-b-test-1-gpu-large")
+register_cuda_ci(est_time=600, stage="base-b", runner_config="1-gpu-large")
 
 DEFAULT_TARGET_MODEL_DSPARK_QWEN3 = "Qwen/Qwen3-8B"
 DEFAULT_DRAFT_MODEL_DSPARK_QWEN3 = "z-lab/Qwen3-8B-DSpark"
