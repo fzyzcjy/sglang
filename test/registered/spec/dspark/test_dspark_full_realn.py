@@ -128,7 +128,7 @@ class TestAcceptBlockPerRequest(CustomTestCase):
         """An all-greedy mask routes _accept_block to the argmax-match (DFlash) rule."""
         gamma = 4
         worker = _make_worker(gamma=gamma)
-        vocab = 32
+        vocab = 64
         candidates = torch.tensor([[1, 2, 3, 4, 5]])
         target_predict = torch.tensor([[2, 3, 4, 41, 42]])
         logits = self._greedy_logits(target_predict, vocab)

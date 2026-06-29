@@ -66,7 +66,7 @@ class TestCutoffGreedyAccept(CustomTestCase):
         """A cutoff layout with verify_len == gamma+1 is byte-identical to no cutoff."""
         gamma = 4
         worker = _make_worker(gamma=gamma)
-        vocab = 32
+        vocab = 128
         candidates = torch.tensor([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]])
         target_predict = torch.tensor([[2, 3, 99, 50, 60], [7, 8, 9, 10, 11]])
         logits = self._greedy_logits(target_predict, vocab)
