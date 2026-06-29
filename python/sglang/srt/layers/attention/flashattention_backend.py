@@ -281,12 +281,10 @@ class FlashAttentionBackend(AttentionBackend):
             # block token count the same way the decode cuda graph runner does so the
             # two stay consistent (a no-op for DFlash, whose draft block already
             # equals speculative_num_draft_tokens).
-            self.speculative_num_draft_tokens = (
-                SpeculativeAlgorithm.from_string(
-                    model_runner.server_args.speculative_algorithm
-                ).get_num_tokens_per_bs_for_target_verify(
-                    int(self.speculative_num_draft_tokens), is_draft_worker=True
-                )
+            self.speculative_num_draft_tokens = SpeculativeAlgorithm.from_string(
+                model_runner.server_args.speculative_algorithm
+            ).get_num_tokens_per_bs_for_target_verify(
+                int(self.speculative_num_draft_tokens), is_draft_worker=True
             )
         self.speculative_step_id = speculative_step_id
 
