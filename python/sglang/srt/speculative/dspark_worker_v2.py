@@ -278,6 +278,22 @@ class DSparkWorkerV2(BaseSpecWorker):
             bonus_tokens=bonus_tokens, new_seq_lens=new_seq_lens
         )
 
+    def _compute_base_logits(
+        self, *, draft_hidden: torch.Tensor, lm_head
+    ) -> torch.Tensor:
+        # ParallelLMHead.forward is intentionally disabled; compute full-vocab base
+        # logits directly from the head weight. MVP is tp_size == 1, where the full
+        # (real) vocab lives on this rank at org_vocab_start == 0.
+        weight = lm_head.weight
+        if hasattr(lm_head, "shard_indices"):
+            num_org = int(lm_head.shard_indices.num_org_elements)
+        else:
+            num_org = int(weight.shape[0])
+        hidden = draft_hidden
+        if hidden.dtype != weight.dtype:
+            hidden = hidden.to(weight.dtype)
+        return torch.matmul(hidden, weight[:num_org].T)
+
     def _sample_draft_block(
         self,
         *,
@@ -564,7 +580,9 @@ class DSparkWorkerV2(BaseSpecWorker):
         draft_hidden = draft_hidden.view(bs, gamma, -1)
 
         # --- 2) Serial Markov draft sampling (eager) over all gamma positions.
-        base_logits = lm_head(draft_hidden).view(bs, gamma, -1)
+        base_logits = self._compute_base_logits(
+            draft_hidden=draft_hidden, lm_head=lm_head
+        )
         sampling_info = batch.sampling_info
         draft_tokens, corrected_logits, is_greedy, temperatures = (
             self._sample_draft_block(
