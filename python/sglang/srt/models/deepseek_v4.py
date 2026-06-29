@@ -1933,6 +1933,17 @@ class DeepseekV4Model(nn.Module):
 
         use_fused = self.use_fused_mhc_post_pre
         capture_dspark = self.dspark_layers_to_capture is not None
+        if capture_dspark and dsa_use_prefill_cp(forward_batch):
+            # The captured DSpark aux hidden states are CP-local and in CP-split token
+            # order; unlike the final hidden_states they are not CP all-gathered/reranged
+            # below, so they would misalign with the full-sequence draft input. DSpark
+            # static-verify is CP-off for v1 (c-plan decision 4); fail fast rather than
+            # relay misaligned aux hidden states.
+            raise NotImplementedError(
+                "DSpark aux hidden-state capture is not supported together with "
+                "DeepSeek-V4 prefill context parallelism (attn_cp_size > 1). Disable one "
+                "of them: DSpark static-verify is CP-off for v1."
+            )
         dspark_aux_hidden_states: List[torch.Tensor] = []
         prev_residual, prev_post, prev_comb = None, None, None
         last_layer = None
