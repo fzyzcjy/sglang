@@ -1,8 +1,6 @@
 import os
 import sys
-import types
 import unittest
-from typing import Optional
 
 import torch
 
@@ -229,12 +227,8 @@ class TestGatedMarkovParity(CustomTestCase):
         """GatedMarkovHead.compute_step_bias must match reference exactly."""
         token_ids, hidden, _, _ = self._make_inputs()
         with torch.no_grad():
-            sgl_bias = self.sgl_head.compute_step_bias(
-                token_ids, hidden_states=hidden
-            )
-            ref_bias = self.ref_head.compute_step_bias(
-                token_ids, hidden_states=hidden
-            )
+            sgl_bias = self.sgl_head.compute_step_bias(token_ids, hidden_states=hidden)
+            ref_bias = self.ref_head.compute_step_bias(token_ids, hidden_states=hidden)
         torch.testing.assert_close(sgl_bias, ref_bias, atol=_ATOL, rtol=_RTOL)
 
     def test_apply_block_logits_exact_match(self):
@@ -327,12 +321,8 @@ class TestRNNHeadParity(CustomTestCase):
         """RNNHead.compute_step_bias (zero state) must match reference exactly."""
         token_ids, hidden, _, _, _, _ = self._make_inputs()
         with torch.no_grad():
-            sgl_bias = self.sgl_head.compute_step_bias(
-                token_ids, hidden_states=hidden
-            )
-            ref_bias = self.ref_head.compute_step_bias(
-                token_ids, hidden_states=hidden
-            )
+            sgl_bias = self.sgl_head.compute_step_bias(token_ids, hidden_states=hidden)
+            ref_bias = self.ref_head.compute_step_bias(token_ids, hidden_states=hidden)
         torch.testing.assert_close(sgl_bias, ref_bias, atol=_ATOL, rtol=_RTOL)
 
     def test_apply_block_logits_exact_match(self):
@@ -378,7 +368,9 @@ class TestRNNHeadParity(CustomTestCase):
         """apply_block_logits with 2 different token sequences must differ (state dependency)."""
         _, _, base_logits, _, block_hidden, _ = self._make_inputs()
         token_ids_a = torch.zeros(self.batch_size, self.proposal_len, dtype=torch.long)
-        token_ids_b = torch.ones(self.batch_size, self.proposal_len, dtype=torch.long) * 10
+        token_ids_b = (
+            torch.ones(self.batch_size, self.proposal_len, dtype=torch.long) * 10
+        )
         with torch.no_grad():
             out_a = self.sgl_head.apply_block_logits(
                 base_logits, token_ids=token_ids_a, hidden_states=block_hidden

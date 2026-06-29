@@ -119,7 +119,9 @@ def parse_dspark_draft_config(*, draft_hf_config: Any) -> DSparkDraftConfig:
 
     raw_markov_rank = dspark_cfg.get(
         "markov_rank",
-        _cfg_get(text_config, "markov_rank", _cfg_get(draft_hf_config, "markov_rank", 0)),
+        _cfg_get(
+            text_config, "markov_rank", _cfg_get(draft_hf_config, "markov_rank", 0)
+        ),
     )
     markov_rank = int(raw_markov_rank) if raw_markov_rank is not None else 0
     if markov_rank < 0:
