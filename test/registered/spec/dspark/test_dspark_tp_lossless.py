@@ -21,11 +21,12 @@ The sound invariants here, mirroring EAGLE/DFlash:
     speculation is actually accepting drafts.
 """
 
+import os
 import unittest
 
 import requests
 
-from sglang.srt.utils import kill_process_tree
+from sglang.srt.utils import find_local_repo_dir, kill_process_tree
 from sglang.test.ci.ci_register import register_cuda_ci
 from sglang.test.kits.eval_accuracy_kit import GSM8KMixin
 from sglang.test.test_utils import (
@@ -55,17 +56,21 @@ def _greedy_request(url: str, prompt: str, max_new_tokens: int = 32) -> str:
 
 
 def _checkpoints_available(*model_paths: str) -> bool:
-    """Probe whether every HF repo path resolves (False if gated/missing/offline)."""
-    try:
-        from huggingface_hub import HfApi
-    except ImportError:
-        return True
+    """True only if every model has a local HF snapshot (cached and launchable).
 
-    api = HfApi()
+    A repo existing on the Hub is not enough -- a gated or simply un-cached model
+    cannot be launched on the CI runner, which would surface as a setUpClass
+    server-launch ERROR rather than a clean skip. Requiring a local snapshot
+    skips such models cleanly.
+    """
     for path in model_paths:
+        if os.path.isdir(path):
+            continue
         try:
-            api.model_info(path)
+            snapshot_dir = find_local_repo_dir(path, revision=None)
         except Exception:
+            return False
+        if not snapshot_dir or not os.path.isdir(snapshot_dir):
             return False
     return True
 
