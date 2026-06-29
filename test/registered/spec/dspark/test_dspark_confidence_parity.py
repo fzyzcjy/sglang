@@ -121,10 +121,11 @@ class TestConfidenceHeadParity(CustomTestCase):
     def test_raw_logit_is_not_sigmoid(self):
         """The head emits a RAW logit (range unbounded), not a (0,1) probability."""
         hidden, markov_embed = self._make_inputs()
+        original_bias = self.sgl_head.proj.bias.detach().clone()
         with torch.no_grad():
             self.sgl_head.proj.bias.fill_(50.0)
             out = self.sgl_head(hidden, markov_embed)
-            self.sgl_head.proj.bias.zero_()
+            self.sgl_head.proj.bias.copy_(original_bias)
         self.assertGreater(float(out.max()), 1.0)
 
 
