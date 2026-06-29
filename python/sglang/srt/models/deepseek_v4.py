@@ -223,6 +223,28 @@ def make_hc_head_params(
     )
 
 
+def hc_head_torch(
+    x: torch.Tensor,
+    hc_fn: torch.Tensor,
+    hc_scale: torch.Tensor,
+    hc_base: torch.Tensor,
+    *,
+    norm_eps: float,
+    hc_eps: float,
+) -> torch.Tensor:
+    """Pure-torch mHC head collapse over the last two dims ``[..., hc, d] -> [..., d]``.
+
+    Shape-generic in the leading dims so both the 2D production fallback
+    (``[N, hc, d]``) and the 4D draft reference (``[b, s, hc, d]``) share one impl."""
+    shape, dtype = x.size(), x.dtype
+    x = x.flatten(-2).float()
+    rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + norm_eps)
+    mixes = F.linear(x, hc_fn) * rsqrt
+    pre = torch.sigmoid(mixes * hc_scale + hc_base) + hc_eps
+    y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=-2)
+    return y.to(dtype)
+
+
 _FREQS_CIS_TO_COS_SIN: dict[
     Tuple[int, torch.dtype, torch.device], Tuple[torch.Tensor, torch.Tensor]
 ] = {}
@@ -1153,7 +1175,7 @@ class DeepseekV4DecoderLayer(nn.Module):
         self.config = config
         self.hidden_size = config.hidden_size
         self.layer_id = layer_id
-        self.self_attn = MQALayer(
+        self.self_attn = self._build_self_attn(
             config=config,
             layer_id=layer_id,
             quant_config=quant_config,
@@ -1200,6 +1222,25 @@ class DeepseekV4DecoderLayer(nn.Module):
         self.use_fused_mhc_post_pre = _is_fused_mhc_post_pre_enabled()
         self._input_layernorm_weight_bf16 = None
         self._post_attention_layernorm_weight_bf16 = None
+
+    def _build_self_attn(
+        self,
+        *,
+        config: DeepSeekV4Config,
+        layer_id: int,
+        quant_config: Optional[QuantizationConfig],
+        prefix: str,
+        alt_streams: Optional[List[torch.cuda.Stream]],
+        compress_ratio_override: Optional[int],
+    ) -> nn.Module:
+        return MQALayer(
+            config=config,
+            layer_id=layer_id,
+            quant_config=quant_config,
+            prefix=prefix,
+            alt_streams=alt_streams,
+            compress_ratio_override=compress_ratio_override,
+        )
 
     def refresh_mhc_norm_weight_cache(self):
         # Cache bf16 norm weights so the fused path does not allocate/cast per forward.
@@ -1831,13 +1872,14 @@ class DeepseekV4Model(nn.Module):
                 norm_eps=self.norm_eps,
                 hc_eps=self.hc_eps,
             )
-        shape, dtype = x.size(), x.dtype
-        x = x.flatten(1).float()
-        rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
-        mixes = F.linear(x, hc_fn) * rsqrt
-        pre = torch.sigmoid(mixes * hc_scale + hc_base) + self.hc_eps
-        y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=1)
-        return y.to(dtype)
+        return hc_head_torch(
+            x,
+            hc_fn,
+            hc_scale,
+            hc_base,
+            norm_eps=self.norm_eps,
+            hc_eps=self.hc_eps,
+        )
 
     def forward(
         self,
