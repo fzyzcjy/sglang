@@ -143,6 +143,9 @@ class _DSparkLosslessBase(CustomTestCase, GSM8KMixin):
     spec server's accuracy is then floored via ``GSM8KMixin``.
     """
 
+    # Abstract base: not collected as a test on its own (subclasses set models).
+    __test__ = False
+
     target_model: str = ""
     draft_model: str = ""
     other_launch_args: list = []
@@ -325,6 +328,7 @@ class TestDSparkLosslessQwen3(
 ):
     """DSpark lossless parity for Qwen3 target + Qwen3-DSpark draft (no overlap)."""
 
+    __test__ = True
     target_model = DEFAULT_TARGET_MODEL_DSPARK_QWEN3
     draft_model = DEFAULT_DRAFT_MODEL_DSPARK_QWEN3
     disable_overlap = True
@@ -335,6 +339,7 @@ class TestDSparkLosslessQwen3Overlap(
 ):
     """DSpark lossless parity for Qwen3 target + draft with overlap scheduling."""
 
+    __test__ = True
     target_model = DEFAULT_TARGET_MODEL_DSPARK_QWEN3
     draft_model = DEFAULT_DRAFT_MODEL_DSPARK_QWEN3
     disable_overlap = False
@@ -345,6 +350,7 @@ class TestDSparkLosslessGemma4(
 ):
     """DSpark lossless parity for Gemma4 target + Gemma4-DSpark draft."""
 
+    __test__ = True
     target_model = DEFAULT_TARGET_MODEL_DSPARK_GEMMA4
     draft_model = DEFAULT_DRAFT_MODEL_DSPARK_GEMMA4
     disable_overlap = True
