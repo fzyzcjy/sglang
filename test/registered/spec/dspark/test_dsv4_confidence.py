@@ -1,3 +1,4 @@
+import os
 import types
 import unittest
 
@@ -40,9 +41,48 @@ class _DsparkConfig:
         self.confidence_head_with_markov = confidence_head_with_markov
 
 
+def _ensure_dist_initialized() -> None:
+    """Set up a single-rank gloo distributed environment plus TP/PP/EP groups.
+
+    DSparkV4MarkovHead.markov_w1 is a VocabParallelEmbedding whose forward calls
+    get_tp_group(); even at tp=1 that asserts the model-parallel group exists, so
+    the CPU stub must initialize it before any markov-head forward runs.
+    """
+    os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+    os.environ.setdefault("MASTER_PORT", "29641")
+    os.environ.setdefault("RANK", "0")
+    os.environ.setdefault("WORLD_SIZE", "1")
+    os.environ.setdefault("LOCAL_RANK", "0")
+
+    from sglang.srt.distributed.parallel_state import (
+        init_distributed_environment,
+        initialize_model_parallel,
+        model_parallel_is_initialized,
+    )
+
+    if not torch.distributed.is_initialized():
+        init_distributed_environment(
+            world_size=1,
+            rank=0,
+            local_rank=0,
+            backend="gloo",
+        )
+
+    if not model_parallel_is_initialized():
+        initialize_model_parallel(
+            tensor_model_parallel_size=1,
+            expert_model_parallel_size=1,
+            pipeline_model_parallel_size=1,
+            backend="gloo",
+        )
+
+
 def _make_last_stage() -> types.SimpleNamespace:
     """A stand-in for stages[-1]: real norm + real hc_head params (initialized)."""
     norm = RMSNorm(_HIDDEN, eps=_NORM_EPS)
+    # CPU test runs on a CUDA box, where RMSNorm dispatches to the CUDA-only
+    # sgl_kernel; force the platform-agnostic native path so it runs on CPU.
+    norm._forward_method = norm.forward_native
     hc_head_fn, hc_head_base, hc_head_scale = make_hc_head_params(_HC_MULT, _HIDDEN)
     with torch.no_grad():
         hc_head_fn.normal_()
@@ -69,6 +109,7 @@ def _make_model_stub(
     Attaches only the fields the tap-point / base-logits / confidence methods touch so
     the real (unbound) methods run on CPU.
     """
+    _ensure_dist_initialized()
     model = DeepseekV4ForCausalLMDSpark.__new__(DeepseekV4ForCausalLMDSpark)
     torch.nn.Module.__init__(model)
     model.gamma = _GAMMA
