@@ -3,7 +3,6 @@ from __future__ import annotations
 import bisect
 import logging
 import statistics
-import time
 from typing import TYPE_CHECKING, Callable, Optional
 
 import msgspec
@@ -80,9 +79,9 @@ def profile_sps_table(
         batch_tokens = num_requests * verify_window
         durations: list[float] = []
         for _ in range(iters):
-            start = time.perf_counter()
-            time_uniform_verify_step(target_worker, num_requests, gamma)
-            durations.append(time.perf_counter() - start)
+            durations.append(
+                time_uniform_verify_step(target_worker, num_requests, gamma)
+            )
         median_duration = statistics.median(durations)
         steps_per_sec = (1.0 / median_duration) if median_duration > 0 else float("inf")
 
