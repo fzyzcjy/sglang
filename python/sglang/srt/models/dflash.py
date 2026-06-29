@@ -225,6 +225,11 @@ class DFlashAttention(nn.Module):
         _, k = self.rotary_emb(positions, dummy_q, k)
         return k
 
+    def apply_v_norm(self, v: torch.Tensor) -> torch.Tensor:
+        # Qwen3-style draft attention has no V normalization; the DSpark worker
+        # calls this uniformly across draft backbones (Gemma applies a real norm).
+        return v
+
 
 class DFlashMLP(nn.Module):
     def __init__(self, config, quant_config=None, prefix: str = "") -> None:
