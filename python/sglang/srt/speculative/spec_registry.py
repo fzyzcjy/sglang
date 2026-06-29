@@ -76,6 +76,15 @@ class CustomSpecAlgo:
     def is_dflash(self) -> bool:
         return False
 
+    def is_dspark(self) -> bool:
+        return False
+
+    def is_block_draft_with_target_kv(self) -> bool:
+        return False
+
+    def supports_overalloc_war_verify(self) -> bool:
+        return False
+
     def is_standalone(self) -> bool:
         return False
 

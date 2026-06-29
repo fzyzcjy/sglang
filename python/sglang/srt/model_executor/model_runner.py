@@ -474,7 +474,10 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                     # if there is no aux layer, set to None
                     self.eagle_aux_hidden_state_layer_ids = None
 
-        if self.spec_algorithm.is_dflash() and not self.is_draft_worker:
+        if (
+            self.spec_algorithm.is_block_draft_with_target_kv()
+            and not self.is_draft_worker
+        ):
             from sglang.srt.speculative.dflash_utils import parse_dflash_draft_config
 
             # Select target layers to capture for building DFlash context features.
