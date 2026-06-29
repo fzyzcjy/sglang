@@ -1,4 +1,4 @@
-import types
+import functools
 import unittest
 from typing import Optional
 
@@ -18,7 +18,6 @@ _RTOL_LOGITS = 1e-4
 
 def _requires_cuda(test_method):
     """Decorator: skip test if CUDA is not available."""
-    import functools
 
     @functools.wraps(test_method)
     def wrapper(self, *args, **kwargs):
@@ -65,7 +64,12 @@ class _TinyQwen3Config:
 class _TinyGemma4Config:
     """Minimal Gemma4-like config for DSpark model parity tests."""
 
-    def __init__(self, markov_head_type: str = "vanilla", markov_rank: int = 8) -> None:
+    def __init__(
+        self,
+        markov_head_type: str = "vanilla",
+        markov_rank: int = 8,
+        attention_k_eq_v: bool = False,
+    ) -> None:
         self.hidden_size = 64
         self.num_hidden_layers = 2
         self.num_attention_heads = 4
@@ -79,7 +83,7 @@ class _TinyGemma4Config:
         self.attention_dropout = 0.0
         self.max_position_embeddings = 512
         self.rope_theta = 10000.0
-        self.attention_k_eq_v = False
+        self.attention_k_eq_v = attention_k_eq_v
         self.final_logit_softcapping = None
         self.enable_moe_block = False
         self.hidden_size_per_layer_input = 0
@@ -110,12 +114,77 @@ def _sync_weights_by_name(src: torch.nn.Module, dst: torch.nn.Module) -> None:
                 dst_params[name].copy_(param)
 
 
+def _sync_ref_to_sgl_kv_projections(
+    *,
+    ref_layer: torch.nn.Module,
+    sgl_attn: torch.nn.Module,
+    head_dim: int,
+    num_attention_heads: int,
+    num_key_value_heads: int,
+    has_v_proj: bool,
+    norm_scale_shift: float,
+) -> None:
+    """Copy reference per-layer attention weights into the SGLang fused qkv_proj.
+
+    The reference uses separate ``q_proj``/``k_proj``/``v_proj`` while the SGLang
+    draft attention fuses them into a single ``qkv_proj`` (q rows, then k, then
+    v). When the reference shares K and V (``attention_k_eq_v``) it has no
+    ``v_proj``; the SGLang fused weight still carries a v block, so we mirror the
+    reference K weight into it to keep ``kv_proj_only`` consistent.
+
+    ``norm_scale_shift`` reproduces the gemma RMSNorm convention gap: the HF
+    reference computes ``norm(x) * (1 + w)`` while the SGLang gemma norm uses
+    ``scale_shift=0`` (``norm(x) * w``), so a real checkpoint export pre-shifts
+    the stored weight by 1; we mirror that here (it is 0 for Qwen3).
+    """
+    ref_attn = ref_layer.self_attn
+    q_size = num_attention_heads * head_dim
+    kv_size = num_key_value_heads * head_dim
+    with torch.no_grad():
+        fused = sgl_attn.qkv_proj.weight
+        fused[:q_size].copy_(ref_attn.q_proj.weight)
+        fused[q_size : q_size + kv_size].copy_(ref_attn.k_proj.weight)
+        v_weight = ref_attn.v_proj.weight if has_v_proj else ref_attn.k_proj.weight
+        fused[q_size + kv_size : q_size + 2 * kv_size].copy_(v_weight)
+        sgl_attn.q_norm.weight.copy_(ref_attn.q_norm.weight + norm_scale_shift)
+        sgl_attn.k_norm.weight.copy_(ref_attn.k_norm.weight + norm_scale_shift)
+
+
+def _reference_ctx_kv(
+    *,
+    ref_attn: torch.nn.Module,
+    ctx_hidden: torch.Tensor,
+    num_key_value_heads: int,
+    head_dim: int,
+    has_v_proj: bool,
+    apply_v_norm: bool,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Reference ctx K/V (projection + per-head K/V norm, no rope).
+
+    Mirrors the worker injection path (``kv_proj_only`` -> ``apply_k_norm`` ->
+    ``apply_v_norm``) on the independent reference modules so the two can be
+    compared head-for-head.
+    """
+    ctx_len = ctx_hidden.shape[0]
+    k = ref_attn.k_proj(ctx_hidden).view(ctx_len, num_key_value_heads, head_dim)
+    if has_v_proj:
+        v = ref_attn.v_proj(ctx_hidden).view(ctx_len, num_key_value_heads, head_dim)
+    else:
+        v = k.clone()
+    k = ref_attn.k_norm(k)
+    if apply_v_norm:
+        v = ref_attn.v_norm(v)
+    return k, v
+
+
 class TestQwen3DSparkModelParity(CustomTestCase):
     """Worker-faithful parity: SGLang Qwen3DSparkModel vs DeepSpec reference.
 
-    Compares fc/hidden_norm projection, markov head bias, draft logits, and
-    greedy tokens for identical random weights.  GPU-only (requires CUDA to run
-    the Qwen3 rotary embedding and attention).
+    Builds both the SGLang DSpark draft backbone and the independent reference
+    backbone with identical random weights, then verifies the KV-injection
+    equivalence (the #1 risk per plan §8/§11): per-layer ctx K/V projections,
+    the fc/hidden_norm context projection, and draft logits/greedy tokens.
+    GPU-only (the SGLang draft attention needs CUDA for rotary embedding).
     """
 
     @classmethod
@@ -124,6 +193,7 @@ class TestQwen3DSparkModelParity(CustomTestCase):
             return
         try:
             from sglang.srt.models.dspark import Qwen3DSparkModel as SglQwen3DSparkModel
+            from sglang.srt.runtime_context import get_parallel
             from test.srt.speculative._dspark_reference.qwen3.modeling import (
                 Qwen3DSparkModel as RefQwen3DSparkModel,
             )
@@ -133,37 +203,129 @@ class TestQwen3DSparkModelParity(CustomTestCase):
         cls._import_error = None
 
         cfg = _TinyQwen3Config(markov_head_type="vanilla", markov_rank=8)
-        torch.manual_seed(10)
-
         device = torch.device("cuda")
         cls.device = device
         cls.cfg = cfg
 
-        cls.sgl_model = SglQwen3DSparkModel.__new__(SglQwen3DSparkModel)
-        cls.ref_model = None
+        torch.manual_seed(10)
+        ref_model = RefQwen3DSparkModel(cfg).to(device).eval()
+        with get_parallel().override(tp_size=1, tp_rank=0):
+            sgl_model = SglQwen3DSparkModel(config=cfg).to(device).eval()
+
+        for layer_id, sgl_layer in enumerate(sgl_model.layers):
+            _sync_ref_to_sgl_kv_projections(
+                ref_layer=ref_model.layers[layer_id],
+                sgl_attn=sgl_layer.self_attn,
+                head_dim=cfg.head_dim,
+                num_attention_heads=cfg.num_attention_heads,
+                num_key_value_heads=cfg.num_key_value_heads,
+                has_v_proj=True,
+                norm_scale_shift=0.0,
+            )
+        with torch.no_grad():
+            sgl_model.fc.weight.copy_(ref_model.fc.weight)
+            sgl_model.hidden_norm.weight.copy_(ref_model.hidden_norm.weight)
+
+        cls.ref_model = ref_model
+        cls.sgl_model = sgl_model
+        cls.lm_head_weight = ref_model.lm_head.weight.detach().clone()
 
     @_requires_cuda
-    def test_markov_head_parity_vanilla(self):
-        """SGLang markov head weights match reference for Qwen3 vanilla config."""
+    def test_ctx_kv_injection_parity(self):
+        """SGLang ctx K/V (kv_proj_only+norms) matches the reference projections."""
         if getattr(self, "_import_error", None):
             self.skipTest(f"Import error: {self._import_error}")
 
-        from sglang.srt.models.dspark import build_markov_head, VanillaMarkov
+        cfg = self.cfg
+        ctx_len = 5
+        torch.manual_seed(21)
+        ctx_hidden = torch.randn(ctx_len, cfg.hidden_size, device=self.device)
+
+        for layer_id, sgl_layer in enumerate(self.sgl_model.layers):
+            attn = sgl_layer.self_attn
+            with torch.no_grad():
+                k, v = attn.kv_proj_only(ctx_hidden)
+                k = attn.apply_k_norm(k).view(ctx_len, attn.num_kv_heads, attn.head_dim)
+                v = attn.apply_v_norm(v).view(ctx_len, attn.num_kv_heads, attn.head_dim)
+                ref_k, ref_v = _reference_ctx_kv(
+                    ref_attn=self.ref_model.layers[layer_id].self_attn,
+                    ctx_hidden=ctx_hidden,
+                    num_key_value_heads=cfg.num_key_value_heads,
+                    head_dim=cfg.head_dim,
+                    has_v_proj=True,
+                    apply_v_norm=False,
+                )
+            torch.testing.assert_close(k, ref_k, atol=_ATOL_HIDDEN, rtol=_RTOL_HIDDEN)
+            torch.testing.assert_close(v, ref_v, atol=_ATOL_HIDDEN, rtol=_RTOL_HIDDEN)
+
+    @_requires_cuda
+    def test_fc_hidden_norm_projection_parity(self):
+        """SGLang project_target_hidden matches reference hidden_norm(fc(.))."""
+        if getattr(self, "_import_error", None):
+            self.skipTest(f"Import error: {self._import_error}")
+
+        cfg = self.cfg
+        ctx_len = 5
+        n_features = len(cfg.target_layer_ids)
+        torch.manual_seed(22)
+        target_hidden = torch.randn(
+            ctx_len, n_features * cfg.hidden_size, device=self.device
+        )
+
+        with torch.no_grad():
+            sgl_ctx = self.sgl_model.project_target_hidden(target_hidden)
+            ref_ctx = self.ref_model.hidden_norm(self.ref_model.fc(target_hidden))
+        self.assertEqual(sgl_ctx.shape, (ctx_len, cfg.hidden_size))
+        torch.testing.assert_close(
+            sgl_ctx, ref_ctx, atol=_ATOL_HIDDEN, rtol=_RTOL_HIDDEN
+        )
+
+    @_requires_cuda
+    def test_draft_logits_greedy_token_parity(self):
+        """Draft logits (lm_head matmul) and greedy tokens match the reference."""
+        if getattr(self, "_import_error", None):
+            self.skipTest(f"Import error: {self._import_error}")
+
+        cfg = self.cfg
+        bs = 4
+        torch.manual_seed(23)
+        draft_hidden = torch.randn(bs, cfg.hidden_size, device=self.device)
+        weight = self.lm_head_weight.to(self.device)
+
+        with torch.no_grad():
+            sgl_logits = torch.matmul(draft_hidden.to(weight.dtype), weight.T)
+            ref_logits = self.ref_model.compute_logits(draft_hidden)
+        torch.testing.assert_close(
+            sgl_logits, ref_logits, atol=_ATOL_LOGITS, rtol=_RTOL_LOGITS
+        )
+        torch.testing.assert_close(
+            sgl_logits.argmax(dim=-1), ref_logits.argmax(dim=-1)
+        )
+
+    @_requires_cuda
+    def test_markov_head_parity_vanilla(self):
+        """SGLang markov head bias matches reference for Qwen3 vanilla config."""
+        if getattr(self, "_import_error", None):
+            self.skipTest(f"Import error: {self._import_error}")
+
+        from sglang.srt.models.dspark import build_markov_head
         from test.srt.speculative._dspark_reference.markov_head import (
             VanillaMarkov as RefVanillaMarkov,
         )
 
         cfg = self.cfg
         torch.manual_seed(20)
-        sgl_head = build_markov_head(cfg)
-        ref_head = RefVanillaMarkov(vocab_size=cfg.vocab_size, markov_rank=cfg.markov_rank)
+        sgl_head = build_markov_head(cfg).to(self.device)
+        ref_head = RefVanillaMarkov(
+            vocab_size=cfg.vocab_size, markov_rank=cfg.markov_rank
+        ).to(self.device)
         sgl_head.eval()
         ref_head.eval()
         _sync_weights_by_name(sgl_head, ref_head)
 
         bs, gamma = 1, cfg.block_size
-        base_logits = torch.randn(bs, gamma, cfg.vocab_size)
-        token_ids = torch.randint(0, cfg.vocab_size, (bs,))
+        base_logits = torch.randn(bs, gamma, cfg.vocab_size, device=self.device)
+        token_ids = torch.randint(0, cfg.vocab_size, (bs,), device=self.device)
 
         with torch.no_grad():
             sgl_out = sgl_head.apply_block_logits(
@@ -188,11 +350,11 @@ class TestQwen3DSparkModelParity(CustomTestCase):
         vocab = cfg.vocab_size
         torch.manual_seed(30)
 
-        head = build_markov_head(cfg)
+        head = build_markov_head(cfg).to(self.device)
         head.eval()
 
-        base_logits = torch.randn(bs, gamma, vocab)
-        first_prev = torch.randint(0, vocab, (bs,))
+        base_logits = torch.randn(bs, gamma, vocab, device=self.device)
+        first_prev = torch.randint(0, vocab, (bs,), device=self.device)
 
         def greedy_sampler(logits, step_idx):
             return torch.argmax(logits, dim=-1)
@@ -222,19 +384,117 @@ class TestQwen3DSparkModelParity(CustomTestCase):
 class TestGemma4DSparkModelParity(CustomTestCase):
     """Worker-faithful parity for Gemma4DSparkModel vs DeepSpec reference.
 
-    Checks markov head + fc/hidden_norm projection output using identical
-    random weights. GPU-only.
+    Like the Qwen3 case, builds both backbones with identical random weights and
+    checks the ctx K/V injection projections, fc/hidden_norm projection, and
+    draft logits. Runs once with the standard K/V path and once with
+    ``attention_k_eq_v`` so the shared-K/V load branch is covered. GPU-only.
     """
+
+    attention_k_eq_v: bool = False
 
     @classmethod
     def setUpClass(cls) -> None:
         if not _CUDA_AVAILABLE:
             return
-        cls._import_error = None
         try:
             from sglang.srt.models.dspark_gemma import Gemma4DSparkModel as SglGemma4
+            from sglang.srt.runtime_context import get_parallel
+            from test.srt.speculative._dspark_reference.gemma4.modeling import (
+                Gemma4DSparkModel as RefGemma4,
+            )
         except ImportError as exc:
             cls._import_error = str(exc)
+            return
+        cls._import_error = None
+
+        cfg = _TinyGemma4Config(
+            markov_head_type="vanilla",
+            markov_rank=8,
+            attention_k_eq_v=cls.attention_k_eq_v,
+        )
+        device = torch.device("cuda")
+        cls.device = device
+        cls.cfg = cfg
+
+        torch.manual_seed(40)
+        ref_model = RefGemma4(cfg).to(device).eval()
+        with get_parallel().override(tp_size=1, tp_rank=0):
+            sgl_model = SglGemma4(config=cfg).to(device).eval()
+
+        head_dim = cfg.global_head_dim
+        num_kv_heads = (
+            cfg.num_global_key_value_heads
+            if cls.attention_k_eq_v
+            else cfg.num_key_value_heads
+        )
+        for layer_id, sgl_layer in enumerate(sgl_model.layers):
+            _sync_ref_to_sgl_kv_projections(
+                ref_layer=ref_model.layers[layer_id],
+                sgl_attn=sgl_layer.self_attn,
+                head_dim=head_dim,
+                num_attention_heads=cfg.num_attention_heads,
+                num_key_value_heads=num_kv_heads,
+                has_v_proj=not cls.attention_k_eq_v,
+                norm_scale_shift=1.0,
+            )
+        with torch.no_grad():
+            sgl_model.fc.weight.copy_(ref_model.fc.weight)
+            sgl_model.hidden_norm.weight.copy_(ref_model.hidden_norm.weight + 1.0)
+
+        cls.ref_model = ref_model
+        cls.sgl_model = sgl_model
+        cls.num_kv_heads = num_kv_heads
+        cls.head_dim = head_dim
+
+    @_requires_cuda
+    def test_ctx_kv_injection_parity(self):
+        """SGLang ctx K/V (kv_proj_only+norms) matches the reference projections."""
+        if getattr(self, "_import_error", None):
+            self.skipTest(f"Import error: {self._import_error}")
+
+        cfg = self.cfg
+        ctx_len = 5
+        torch.manual_seed(41)
+        ctx_hidden = torch.randn(ctx_len, cfg.hidden_size, device=self.device)
+
+        for layer_id, sgl_layer in enumerate(self.sgl_model.layers):
+            attn = sgl_layer.self_attn
+            with torch.no_grad():
+                k, v = attn.kv_proj_only(ctx_hidden)
+                k = attn.apply_k_norm(k).view(ctx_len, attn.num_kv_heads, attn.head_dim)
+                v = attn.apply_v_norm(v).view(ctx_len, attn.num_kv_heads, attn.head_dim)
+                ref_k, ref_v = _reference_ctx_kv(
+                    ref_attn=self.ref_model.layers[layer_id].self_attn,
+                    ctx_hidden=ctx_hidden,
+                    num_key_value_heads=self.num_kv_heads,
+                    head_dim=self.head_dim,
+                    has_v_proj=not self.attention_k_eq_v,
+                    apply_v_norm=True,
+                )
+            torch.testing.assert_close(k, ref_k, atol=_ATOL_HIDDEN, rtol=_RTOL_HIDDEN)
+            torch.testing.assert_close(v, ref_v, atol=_ATOL_HIDDEN, rtol=_RTOL_HIDDEN)
+
+    @_requires_cuda
+    def test_fc_hidden_norm_projection_parity(self):
+        """SGLang project_target_hidden matches reference hidden_norm(fc(.))."""
+        if getattr(self, "_import_error", None):
+            self.skipTest(f"Import error: {self._import_error}")
+
+        cfg = self.cfg
+        ctx_len = 5
+        n_features = len(cfg.target_layer_ids)
+        torch.manual_seed(42)
+        target_hidden = torch.randn(
+            ctx_len, n_features * cfg.hidden_size, device=self.device
+        )
+
+        with torch.no_grad():
+            sgl_ctx = self.sgl_model.project_target_hidden(target_hidden)
+            ref_ctx = self.ref_model.hidden_norm(self.ref_model.fc(target_hidden))
+        self.assertEqual(sgl_ctx.shape, (ctx_len, cfg.hidden_size))
+        torch.testing.assert_close(
+            sgl_ctx, ref_ctx, atol=_ATOL_HIDDEN, rtol=_RTOL_HIDDEN
+        )
 
     @_requires_cuda
     def test_markov_head_parity_vanilla(self):
@@ -242,22 +502,24 @@ class TestGemma4DSparkModelParity(CustomTestCase):
         if getattr(self, "_import_error", None):
             self.skipTest(f"Import error: {self._import_error}")
 
-        from sglang.srt.models.dspark import build_markov_head, VanillaMarkov
+        from sglang.srt.models.dspark import build_markov_head
         from test.srt.speculative._dspark_reference.markov_head import (
             VanillaMarkov as RefVanillaMarkov,
         )
 
-        cfg = _TinyGemma4Config(markov_head_type="vanilla", markov_rank=8)
+        cfg = self.cfg
         torch.manual_seed(50)
-        sgl_head = build_markov_head(cfg)
-        ref_head = RefVanillaMarkov(vocab_size=cfg.vocab_size, markov_rank=cfg.markov_rank)
+        sgl_head = build_markov_head(cfg).to(self.device)
+        ref_head = RefVanillaMarkov(
+            vocab_size=cfg.vocab_size, markov_rank=cfg.markov_rank
+        ).to(self.device)
         sgl_head.eval()
         ref_head.eval()
         _sync_weights_by_name(sgl_head, ref_head)
 
         bs, gamma = 1, cfg.block_size
-        base_logits = torch.randn(bs, gamma, cfg.vocab_size)
-        token_ids = torch.randint(0, cfg.vocab_size, (bs,))
+        base_logits = torch.randn(bs, gamma, cfg.vocab_size, device=self.device)
+        token_ids = torch.randint(0, cfg.vocab_size, (bs,), device=self.device)
 
         with torch.no_grad():
             sgl_out = sgl_head.apply_block_logits(
@@ -269,26 +531,8 @@ class TestGemma4DSparkModelParity(CustomTestCase):
         torch.testing.assert_close(sgl_out, ref_out, atol=_ATOL_LOGITS, rtol=_RTOL_LOGITS)
 
     @_requires_cuda
-    def test_fc_hidden_norm_projection_shape(self):
-        """fc+hidden_norm projection output has shape [bs, hidden_size]."""
-        if getattr(self, "_import_error", None):
-            self.skipTest(f"Import error: {self._import_error}")
-
-        import torch.nn as nn
-
-        cfg = _TinyGemma4Config()
-        torch.manual_seed(60)
-        n_target_layers = len(cfg.target_layer_ids)
-        fc = nn.Linear(n_target_layers * cfg.hidden_size, cfg.hidden_size, bias=False)
-
-        bs, seq = 1, 4
-        target_h = torch.randn(bs, seq, n_target_layers * cfg.hidden_size)
-        out = fc(target_h)
-        self.assertEqual(out.shape, (bs, seq, cfg.hidden_size))
-
-    @_requires_cuda
     def test_draft_probs_row_order_no_anchor_row(self):
-        """draft_probs has gamma rows (no anchor row) for Gemma4 config."""
+        """draft_probs has gamma rows (no anchor row) for Gemma4 gated config."""
         if getattr(self, "_import_error", None):
             self.skipTest(f"Import error: {self._import_error}")
 
@@ -300,12 +544,12 @@ class TestGemma4DSparkModelParity(CustomTestCase):
         vocab = cfg.vocab_size
         torch.manual_seed(70)
 
-        head = build_markov_head(cfg)
+        head = build_markov_head(cfg).to(self.device)
         head.eval()
 
-        base_logits = torch.randn(bs, gamma, vocab)
-        first_prev = torch.randint(0, vocab, (bs,))
-        block_hidden = torch.randn(bs, gamma, cfg.hidden_size)
+        base_logits = torch.randn(bs, gamma, vocab, device=self.device)
+        first_prev = torch.randint(0, vocab, (bs,), device=self.device)
+        block_hidden = torch.randn(bs, gamma, cfg.hidden_size, device=self.device)
 
         def greedy_sampler(logits, step_idx):
             return torch.argmax(logits, dim=-1)
@@ -320,6 +564,12 @@ class TestGemma4DSparkModelParity(CustomTestCase):
 
         self.assertEqual(sampled.shape, (bs, gamma))
         self.assertEqual(corrected_logits.shape, (bs, gamma, vocab))
+
+
+class TestGemma4DSparkModelParityKEqV(TestGemma4DSparkModelParity):
+    """Gemma4 DSpark parity with attention_k_eq_v=True (shared-K/V load branch)."""
+
+    attention_k_eq_v = True
 
 
 if __name__ == "__main__":
