@@ -693,6 +693,12 @@ class Envs:
 
     # Spec Config
     SGLANG_SPEC_ENABLE_STRICT_FILTER_CHECK = EnvBool(True)
+    # Ragged target-verify mode (per-request verify_len instead of a uniform
+    # gamma+1 block). Tri-state, validated at the read site (EnvStr does not
+    # check choices): "off" (unset; static full block), "cutoff-only" (full
+    # block, accept capped per request; lossless harness, no throughput gain),
+    # "full" (real-N ragged, num-tokens-keyed cuda graph). See read_ragged_verify_mode.
+    SGLANG_RAGGED_VERIFY = EnvStr("off")
     # Skip draft_extend while adaptive spec is at steps=0 (drafting disabled).
     # Saves the per-step draft forward, but the draft KV goes stale: an upshift
     # back to steps>0 starts from a cold draft state (low accept until it recovers).
