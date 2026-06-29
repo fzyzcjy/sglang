@@ -36,6 +36,10 @@ def read_ragged_verify_mode() -> RaggedVerifyMode:
     )
 
 
+def ragged_verify_full_enabled() -> bool:
+    return read_ragged_verify_mode() == RaggedVerifyMode.FULL
+
+
 def round_up_grid(total: int, grid: Sequence[int]) -> int:
     if not grid:
         raise ValueError("round_up_grid requires a non-empty grid")
