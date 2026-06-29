@@ -810,8 +810,8 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         confidence_raw = confidence_head(x_post_hc, markov_embed_stack)
         confidence = torch.sigmoid(confidence_raw.float())
         assert bool(
-            ((confidence > 0) & (confidence < 1)).all()
-        ), "DSpark confidence must lie in the open interval (0, 1)."
+            ((confidence >= 0) & (confidence <= 1)).all()
+        ), "DSpark confidence must lie in [0, 1]."
         return confidence
 
     @torch.no_grad()

@@ -219,7 +219,7 @@ class TestDsv4ConfidenceTapPoint(CustomTestCase):
         self.assertIsNone(model.last_confidence())
 
     def test_confidence_shape_and_range_when_enabled(self) -> None:
-        """Enabled confidence head stashes [bs, gamma] values in (0, 1)."""
+        """Enabled confidence head stashes [bs, gamma] sigmoid values in [0, 1]."""
         model = _make_model_stub(with_confidence=True)
         bsz = 2
         x = torch.randn(bsz, _GAMMA, _HC_MULT, _HIDDEN)
@@ -228,7 +228,7 @@ class TestDsv4ConfidenceTapPoint(CustomTestCase):
         confidence = model.last_confidence()
         self.assertIsNotNone(confidence)
         self.assertEqual(confidence.shape, (bsz, _GAMMA))
-        self.assertTrue(bool(((confidence > 0) & (confidence < 1)).all()))
+        self.assertTrue(bool(((confidence >= 0) & (confidence <= 1)).all()))
 
     def test_markov_embed_stack_off_by_one(self) -> None:
         """markov_embed prev seq is [anchor, s_0, ..., s_{gamma-2}] (off-by-one)."""
