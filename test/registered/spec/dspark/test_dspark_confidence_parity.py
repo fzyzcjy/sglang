@@ -157,9 +157,7 @@ class TestMarkovEmbedOffByOne(CustomTestCase):
         )
         head.eval()
         anchor = torch.randint(0, self.vocab_size, (self.batch_size,))
-        draft_tokens = torch.randint(
-            0, self.vocab_size, (self.batch_size, self.gamma)
-        )
+        draft_tokens = torch.randint(0, self.vocab_size, (self.batch_size, self.gamma))
 
         prev_seq = torch.cat(
             [anchor.view(-1, 1), draft_tokens[:, : self.gamma - 1]], dim=1
@@ -171,9 +169,7 @@ class TestMarkovEmbedOffByOne(CustomTestCase):
         with torch.no_grad():
             expected_step0 = head.get_prev_embeddings(anchor)
             expected_step1 = head.get_prev_embeddings(draft_tokens[:, 0])
-            expected_last = head.get_prev_embeddings(
-                draft_tokens[:, self.gamma - 2]
-            )
+            expected_last = head.get_prev_embeddings(draft_tokens[:, self.gamma - 2])
         torch.testing.assert_close(stack[:, 0], expected_step0, atol=_ATOL, rtol=_RTOL)
         torch.testing.assert_close(stack[:, 1], expected_step1, atol=_ATOL, rtol=_RTOL)
         torch.testing.assert_close(
@@ -184,9 +180,7 @@ class TestMarkovEmbedOffByOne(CustomTestCase):
 class TestBuildConfidenceHead(CustomTestCase):
     def test_disabled_returns_none(self):
         """build_confidence_head returns None when enable_confidence_head is False."""
-        cfg = _HeadConfig(
-            hidden_size=64, markov_rank=16, enable_confidence_head=False
-        )
+        cfg = _HeadConfig(hidden_size=64, markov_rank=16, enable_confidence_head=False)
         self.assertIsNone(build_confidence_head(cfg))
 
     def test_enabled_with_markov_input_dim(self):

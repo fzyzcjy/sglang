@@ -404,9 +404,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         if self._confidence_buf is not None:
             return
         device_module = torch.get_device_module(self.device)
-        req_pool_size = int(
-            self.model_runner.req_to_token_pool.req_to_token.shape[0]
-        )
+        req_pool_size = int(self.model_runner.req_to_token_pool.req_to_token.shape[0])
         self._confidence_buf = torch.empty(
             (req_pool_size, self.gamma),
             dtype=confidence.dtype,

@@ -142,7 +142,9 @@ class GatedMarkovHead(VanillaMarkov):
         hidden_states: Optional[torch.Tensor],
     ) -> torch.Tensor:
         prev_embeddings = self.get_prev_embeddings(token_ids)
-        gate = self.compute_gate(token_ids, hidden_states).to(dtype=prev_embeddings.dtype)
+        gate = self.compute_gate(token_ids, hidden_states).to(
+            dtype=prev_embeddings.dtype
+        )
         return self.project_bias(gate * prev_embeddings)
 
 
@@ -240,9 +242,7 @@ class RNNHead(VanillaMarkov):
         prev_tokens = first_prev_tokens.long()
         for step_idx in range(proposal_len):
             prev_emb = self.get_prev_embeddings(prev_tokens)
-            state, bias = self._rnn_step(
-                state, prev_emb, hidden_states[:, step_idx, :]
-            )
+            state, bias = self._rnn_step(state, prev_emb, hidden_states[:, step_idx, :])
             step_logits = base_logits[:, step_idx, :] + bias
             next_tokens = sampler(step_logits, step_idx)
             sampled_tokens.append(next_tokens)
@@ -431,9 +431,7 @@ class DSparkDraftMixin:
             loaded_names.add(name)
 
         confidence_param_names = {
-            name
-            for name in params_dict
-            if name.startswith("confidence_head.")
+            name for name in params_dict if name.startswith("confidence_head.")
         }
         missing = confidence_param_names - loaded_names
         if missing:
