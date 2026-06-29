@@ -81,6 +81,12 @@ class _DraftBlockResult(msgspec.Struct, frozen=True):
     temperatures: torch.Tensor
 
 
+class _DraftProposal(msgspec.Struct, frozen=True):
+    draft_block_ids: torch.Tensor
+    draft_block: _DraftBlockResult
+    draft_hidden: Optional[torch.Tensor]
+
+
 class DSparkWorkerV2(BaseSpecWorker):
     """DSpark dense speculative decoding worker (spec-v2, static verify).
 
@@ -204,6 +210,31 @@ class DSparkWorkerV2(BaseSpecWorker):
             draft_token_num=int(self.gamma), device=self.device
         )
 
+        # Capability-driven draft polymorphism (no model-identity branches). A
+        # draft model that exposes ``forward_spec`` owns its whole draft block
+        # (embed -> stages -> Markov head finish) and its own KV ring, so the
+        # worker delegates the draft forward, the target-hidden injection, and the
+        # confidence to the model instead of orchestrating them per-layer. Dense
+        # backbones (qwen3 / gemma4) expose none of these, so all flags are False
+        # and every dense path below is byte-identical.
+        self._draft_owns_block_forward = hasattr(self.draft_model, "forward_spec")
+        self._draft_owns_kv_injection = hasattr(
+            self.draft_model, "inject_target_hidden"
+        )
+        self._draft_owns_confidence = hasattr(self.draft_model, "last_confidence")
+        # The target attn backend is constructed after the worker (the scheduler runs
+        # init_attention_backends later), so the verify-prep self-add capability is
+        # resolved lazily on first verify and cached.
+        self._verify_backend_self_adds_seq_lens_cache: Optional[bool] = None
+        if self._draft_owns_block_forward and hasattr(
+            self.draft_model, "attach_shared_modules"
+        ):
+            target_model = self.target_worker.model_runner.model
+            self.draft_model.attach_shared_modules(
+                embed_tokens=self._resolve_target_embed_tokens(target_model),
+                lm_head=target_model.lm_head,
+            )
+
         # Optional confidence relay. The head and its relay are inert (no
         # buffers, no events, no compute) when the draft model lacks a
         # confidence head, so the a+b lossless decode path is unchanged.
@@ -258,6 +289,34 @@ class DSparkWorkerV2(BaseSpecWorker):
             sample_steps_per_sec=[1.0],
             max_batch_tokens=max_batch_tokens,
         )
+
+    def _verify_backend_self_adds_seq_lens(self) -> bool:
+        # Backend-driven (not model-identity) predicate for the verify-prep host
+        # seq-len pre-add. The dense FlashInfer / Triton verify backends add the
+        # verify window once on the GPU `seq_lens` path, so the worker must pre-add
+        # the window to the host `seq_lens_cpu`. The V4-family verify backend builds
+        # its own target-verify metadata that self-adds `speculative_num_draft_tokens`
+        # to both `seq_lens` and `seq_lens_cpu`, so pre-adding on the host would
+        # double-add. The V4-family backend is the one that owns a raw target-verify
+        # metadata builder; dense backends do not expose it, so this returns False
+        # for them and the dense pre-add stays byte-identical. Cached because the
+        # resolved target attn backend does not change after init.
+        if self._verify_backend_self_adds_seq_lens_cache is None:
+            backend = self.target_worker.model_runner.attn_backend
+            self._verify_backend_self_adds_seq_lens_cache = hasattr(
+                backend, "make_forward_metadata_from_raw_verify"
+            )
+        return self._verify_backend_self_adds_seq_lens_cache
+
+    def _resolve_target_embed_tokens(self, target_model):
+        # The V4 draft forward reuses the target's input embedding module. Some
+        # target models expose it via ``get_input_embeddings`` on the outer module;
+        # others (DeepSeek-V4) expose it on the inner ``model`` submodule. Resolve
+        # whichever the target provides so the attach works without a model-identity
+        # branch.
+        if hasattr(target_model, "get_input_embeddings"):
+            return target_model.get_input_embeddings()
+        return target_model.model.get_input_embeddings()
 
     @property
     def carries_confidence(self) -> bool:
@@ -317,7 +376,22 @@ class DSparkWorkerV2(BaseSpecWorker):
         positions: torch.Tensor,
         cache_loc_2d: Optional[torch.Tensor] = None,
         commit_lens: Optional[torch.Tensor] = None,
+        start_pos: int = 0,
+        is_prefill: bool = False,
     ) -> None:
+        # Capability dispatch (B4): a draft model that owns its KV ring takes the
+        # whole injection (project -> per-stage proj -> norm -> rope -> ring store)
+        # via ``inject_target_hidden``; the worker only hands it the captured target
+        # hidden plus the sliding-window position / commit signal. Dense backbones
+        # lack ``inject_target_hidden`` so they fall through to the per-layer pool
+        # loop below, which is byte-identical to before.
+        if self._draft_owns_kv_injection:
+            self._inject_target_hidden_via_model(
+                target_hidden=target_hidden,
+                start_pos=start_pos,
+                is_prefill=is_prefill,
+            )
+            return
         if target_hidden is None or target_hidden.numel() == 0:
             return
         device = self.model_runner.device
@@ -364,13 +438,42 @@ class DSparkWorkerV2(BaseSpecWorker):
                         attn.attn.v_scale,
                     )
 
+    def _inject_target_hidden_via_model(
+        self,
+        *,
+        target_hidden: torch.Tensor,
+        start_pos: int,
+        is_prefill: bool,
+    ) -> None:
+        if target_hidden is None or target_hidden.numel() == 0:
+            return
+        target_hidden = target_hidden.to(
+            device=self.model_runner.device, non_blocking=True
+        )
+        with torch.inference_mode():
+            self.draft_model.inject_target_hidden(
+                main_hidden=target_hidden,
+                start_pos=start_pos,
+                is_prefill=is_prefill,
+            )
+
     def _make_next_draft_input(
         self,
         *,
         bonus_tokens: torch.Tensor,
         new_seq_lens: torch.Tensor,
+        hidden_states: Optional[torch.Tensor] = None,
     ) -> DFlashDraftInputV2:
-        return make_draft_input_v2(bonus_tokens=bonus_tokens, new_seq_lens=new_seq_lens)
+        draft_input = make_draft_input_v2(
+            bonus_tokens=bonus_tokens, new_seq_lens=new_seq_lens
+        )
+        # Dense relays only bonus_tokens + new_seq_lens (the legacy Eagle-shaped
+        # hidden_states stays the empty placeholder, byte-identical). A draft model
+        # that owns its block forward needs the next step's anchor target hidden, so
+        # the V4 path threads it through the otherwise-unused relay slot.
+        if hidden_states is not None:
+            draft_input.hidden_states = hidden_states
+        return draft_input
 
     def _compute_base_logits(
         self, *, draft_hidden: torch.Tensor, lm_head
@@ -867,14 +970,35 @@ class DSparkWorkerV2(BaseSpecWorker):
             target_hidden=logits_output.hidden_states,
             cache_loc=batch.out_cache_loc,
             positions=positions,
+            start_pos=0,
+            is_prefill=True,
         )
+        next_main_hidden = None
+        if self._draft_owns_block_forward:
+            next_main_hidden = self._select_prefill_last_hidden(
+                hidden=logits_output.hidden_states, extend_lens=batch.extend_lens
+            )
         logits_output.hidden_states = None
 
         batch_output.next_draft_input = self._make_next_draft_input(
             bonus_tokens=next_token_ids,
             new_seq_lens=batch.seq_lens,
+            hidden_states=next_main_hidden,
         )
         return batch_output
+
+    def _select_prefill_last_hidden(
+        self,
+        *,
+        hidden: torch.Tensor,
+        extend_lens: list,
+    ) -> torch.Tensor:
+        # The first V4 decode anchors on each request's last prefill token, so its
+        # target hidden is gathered at the per-request extend boundary from the flat
+        # extend-token aux hidden.
+        device = hidden.device
+        ends = torch.tensor(extend_lens, dtype=torch.int64, device=device).cumsum(0) - 1
+        return hidden[ends]
 
     def _decode_idle_result(
         self,
@@ -921,6 +1045,179 @@ class DSparkWorkerV2(BaseSpecWorker):
             positions_2d=positions_2d,
             verify_cache_loc=verify_cache_loc,
             verify_cache_loc_2d=verify_cache_loc_2d,
+        )
+
+    def _propose_draft_block(
+        self,
+        *,
+        batch: ScheduleBatch,
+        draft_input: DFlashDraftInputV2,
+        verify_window: _VerifyWindow,
+        bs: int,
+        device: str,
+        target_model,
+        lm_head,
+        sampling_info,
+    ) -> _DraftProposal:
+        # Capability dispatch (B3). A draft model that owns its block forward runs
+        # the whole draft block (embed -> stages -> Markov head finish, plus its own
+        # confidence tap) inside ``forward_spec`` and reads from its own KV ring, so
+        # the worker delegates the proposal to it. Dense backbones run the existing
+        # paged-pool draft forward -> base-logits -> serial-Markov-sample sequence,
+        # byte-identical to before.
+        if self._draft_owns_block_forward:
+            return self._propose_draft_block_via_model(
+                batch=batch,
+                draft_input=draft_input,
+                bs=bs,
+                device=device,
+                sampling_info=sampling_info,
+            )
+
+        embed_module = target_model.get_input_embeddings()
+        draft_block_ids, draft_hidden = self._run_draft_block_forward(
+            batch=batch,
+            draft_input=draft_input,
+            verify_window=verify_window,
+            bs=bs,
+            device=device,
+            embed_module=embed_module,
+        )
+        base_logits = self._compute_base_logits(
+            draft_hidden=draft_hidden, lm_head=lm_head
+        )
+        draft_block = self._sample_draft_block(
+            base_logits=base_logits,
+            anchor_tokens=draft_block_ids[:, 0],
+            draft_hidden=draft_hidden,
+            sampling_info=sampling_info,
+        )
+        return _DraftProposal(
+            draft_block_ids=draft_block_ids,
+            draft_block=draft_block,
+            draft_hidden=draft_hidden,
+        )
+
+    def _propose_draft_block_via_model(
+        self,
+        *,
+        batch: ScheduleBatch,
+        draft_input: DFlashDraftInputV2,
+        bs: int,
+        device: str,
+        sampling_info,
+    ) -> _DraftProposal:
+        # V4-style self-contained draft: ``forward_spec`` consumes the anchor token
+        # plus the captured target hidden, runs the draft stages off its own KV ring,
+        # and finishes with the serial Markov head. The worker still owns the per-row
+        # mixed sampler (greedy rows argmax, sampling rows temperature-softmax) so the
+        # draft distribution and the RNG draw count match the dense path; it passes
+        # that sampler in and reconstructs the accept-path ``_DraftBlockResult`` from
+        # ``forward_spec``'s outputs.
+        gamma = self.gamma
+        anchor_tokens = draft_input.bonus_tokens.view(-1).to(
+            device=device, dtype=torch.long
+        )
+        main_hidden = draft_input.hidden_states.to(device=device, non_blocking=True)
+        start_pos = self._draft_start_pos(batch=batch)
+
+        greedy_mask = self._resolve_greedy_mask(bs=bs, sampling_info=sampling_info)
+        if sampling_info is None:
+            temperatures = torch.ones(bs, dtype=torch.float32, device=device)
+        else:
+            temperatures = (
+                sampling_info.temperatures.view(-1).to(torch.float32).clamp_min(1e-5)
+            )
+        sampler = self._build_block_sampler(
+            greedy_mask=greedy_mask, temperatures=temperatures
+        )
+
+        with torch.inference_mode():
+            spec_out = self.draft_model.forward_spec(
+                anchor_tokens,
+                main_hidden,
+                start_pos=start_pos,
+                sampler=sampler,
+            )
+        if spec_out is None:
+            raise RuntimeError(
+                "DSpark V4 forward_spec returned None during decode; the draft "
+                "block must run when start_pos > 0."
+            )
+        output_ids, corrected_logits = spec_out
+        draft_block_ids = output_ids[:, :gamma].contiguous()
+        draft_tokens = output_ids[:, 1:].contiguous()
+        draft_block = _DraftBlockResult(
+            draft_tokens=draft_tokens,
+            corrected_logits=corrected_logits,
+            greedy_mask=greedy_mask,
+            temperatures=temperatures,
+        )
+        return _DraftProposal(
+            draft_block_ids=draft_block_ids,
+            draft_block=draft_block,
+            draft_hidden=None,
+        )
+
+    def _draft_start_pos(self, *, batch: ScheduleBatch) -> int:
+        # The V4 draft KV ring is indexed by a scalar window position. The worker's
+        # batched ragged seq_lens collapse to a single anchor position only when the
+        # batch is position-uniform; the GPU integration that lifts this to per-row
+        # ring offsets is owned by the dsv4 backend chapter (GPU-unvalidated here).
+        return int(batch.seq_lens.max().item())
+
+    def _build_block_sampler(
+        self,
+        *,
+        greedy_mask: torch.Tensor,
+        temperatures: torch.Tensor,
+    ):
+        any_sampling = bool((~greedy_mask).any())
+        if not any_sampling:
+
+            def sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:
+                return torch.argmax(step_logits, dim=-1)
+
+        else:
+
+            def sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:
+                argmax_tokens = torch.argmax(step_logits, dim=-1)
+                probs = torch.softmax(
+                    step_logits.float() / temperatures[:, None], dim=-1
+                )
+                sampled_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)
+                return torch.where(greedy_mask, argmax_tokens, sampled_tokens)
+
+        return sampler
+
+    def _relay_confidence(
+        self,
+        *,
+        req_pool_indices: torch.Tensor,
+        draft_hidden: Optional[torch.Tensor],
+        anchor_tokens: torch.Tensor,
+        draft_tokens: torch.Tensor,
+    ) -> None:
+        # Confidence dispatch. A draft model that computes its own confidence at the
+        # correct tap (V4: post-hc_head PRE-norm) exposes it via ``last_confidence``;
+        # the worker relays that value. Dense backbones expose no such tap, so the
+        # worker computes confidence from the post-norm ``draft_hidden`` exactly as
+        # before (byte-identical).
+        model_confidence = (
+            self.draft_model.last_confidence() if self._draft_owns_confidence else None
+        )
+        if model_confidence is not None:
+            confidence = model_confidence
+        else:
+            assert draft_hidden is not None
+            confidence = self._compute_confidence(
+                draft_hidden=draft_hidden,
+                anchor_tokens=anchor_tokens,
+                draft_tokens=draft_tokens,
+            )
+        self._stash_confidence(
+            req_pool_indices=req_pool_indices,
+            confidence=confidence,
         )
 
     def _run_draft_block_forward(
@@ -1003,12 +1300,20 @@ class DSparkWorkerV2(BaseSpecWorker):
         batch.out_cache_loc = verify_cache_loc
         seq_lens_cpu_backup = batch.seq_lens_cpu
         seq_lens_sum_backup = batch.seq_lens_sum
-        if seq_lens_cpu_backup is not None:
-            batch.seq_lens_cpu = seq_lens_cpu_backup + verify_w
-            batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
-        elif draft_input.reserved_seq_lens_cpu is not None:
-            batch.seq_lens_cpu = draft_input.reserved_seq_lens_cpu
-            batch.seq_lens_sum = int(draft_input.reserved_seq_lens_sum)
+        # Verify-prep host seq-len pre-add (B5), backend-polymorphic. The dense
+        # FlashInfer / Triton verify backends add the verify window once on the GPU
+        # `seq_lens` path, so the worker pre-adds it to the host `seq_lens_cpu`. The
+        # V4-family verify backend builds metadata that self-adds the window to both
+        # `seq_lens` and `seq_lens_cpu`, so the worker must leave the host length at
+        # the prefix here to avoid a double-add; the predicate is resolved from the
+        # target attn backend's capability, not the model identity.
+        if not self._verify_backend_self_adds_seq_lens():
+            if seq_lens_cpu_backup is not None:
+                batch.seq_lens_cpu = seq_lens_cpu_backup + verify_w
+                batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
+            elif draft_input.reserved_seq_lens_cpu is not None:
+                batch.seq_lens_cpu = draft_input.reserved_seq_lens_cpu
+                batch.seq_lens_sum = int(draft_input.reserved_seq_lens_sum)
 
         verify_forward_batch, _ = verify_input.prepare_for_verify(
             batch, self.target_worker
@@ -1036,6 +1341,82 @@ class DSparkWorkerV2(BaseSpecWorker):
             logits_output=logits_output,
             can_run_cuda_graph=can_run_cuda_graph,
         )
+
+    def _commit_verify_hidden(
+        self,
+        *,
+        batch: ScheduleBatch,
+        layout: Optional[RaggedVerifyLayout],
+        hidden_strided: Optional[torch.Tensor],
+        verify_window: _VerifyWindow,
+        logits_output,
+        correct_len: torch.Tensor,
+        commit_lens: torch.Tensor,
+        bs: int,
+        run_full: bool,
+        new_seq_lens: torch.Tensor,
+    ) -> Optional[torch.Tensor]:
+        # Commit the accepted tokens' target hidden into the draft KV. A draft model
+        # that owns its KV ring (V4) takes the single committed slot per request
+        # (the accepted bonus position's target hidden) into its ring and the worker
+        # threads that hidden forward for the next step's ``forward_spec`` anchor.
+        # Dense backbones write the whole committed prefix back into the paged pool
+        # exactly as before (byte-identical) and carry no hidden across iterations.
+        if self._draft_owns_kv_injection:
+            hidden = logits_output.hidden_states
+            if hidden is None:
+                raise RuntimeError(
+                    "DSpark verify requires target hidden states, got None."
+                )
+            committed_hidden = self._select_committed_hidden(
+                hidden=hidden, correct_len=correct_len, bs=bs
+            )
+            self._inject_target_hidden_to_draft_kv(
+                target_hidden=committed_hidden,
+                cache_loc=verify_window.verify_cache_loc,
+                positions=verify_window.positions_2d.reshape(-1),
+                start_pos=int(new_seq_lens.max().item()) - 1,
+                is_prefill=False,
+            )
+            return committed_hidden
+
+        if run_full:
+            self._inject_ragged_hidden_to_draft_kv(
+                batch=batch,
+                layout=layout,
+                hidden_strided=hidden_strided,
+                commit_lens=commit_lens,
+                bs=bs,
+            )
+        else:
+            hidden = logits_output.hidden_states
+            if hidden is None:
+                raise RuntimeError(
+                    "DSpark verify requires target hidden states, got None."
+                )
+            hidden = hidden.view(bs, self.verify_num_draft_tokens, -1)
+            self._inject_target_hidden_to_draft_kv(
+                target_hidden=hidden.reshape(-1, hidden.shape[-1]),
+                cache_loc=verify_window.verify_cache_loc,
+                cache_loc_2d=verify_window.verify_cache_loc_2d,
+                positions=verify_window.positions_2d.reshape(-1),
+                commit_lens=commit_lens,
+            )
+        return None
+
+    def _select_committed_hidden(
+        self,
+        *,
+        hidden: torch.Tensor,
+        correct_len: torch.Tensor,
+        bs: int,
+    ) -> torch.Tensor:
+        # The accepted bonus position per request is at index ``correct_len`` in the
+        # gamma+1 verify window; its target hidden is the next step's anchor context
+        # and the single slot written into the V4 draft ring.
+        hidden = hidden.view(bs, self.verify_num_draft_tokens, -1)
+        row_ids = torch.arange(bs, device=hidden.device)
+        return hidden[row_ids, correct_len.to(torch.long)]
 
     def _build_ragged_verify_window(
         self,
@@ -1324,7 +1705,6 @@ class DSparkWorkerV2(BaseSpecWorker):
         prefix_lens = batch.seq_lens
 
         target_model = self.target_worker.model_runner.model
-        embed_module = target_model.get_input_embeddings()
         lm_head = getattr(target_model, "lm_head", None)
         if lm_head is None or not hasattr(lm_head, "weight"):
             raise RuntimeError(
@@ -1333,36 +1713,27 @@ class DSparkWorkerV2(BaseSpecWorker):
 
         verify_window = self._alloc_verify_window(batch=batch, bs=bs, device=device)
 
-        draft_block_ids, draft_hidden = self._run_draft_block_forward(
+        sampling_info = batch.sampling_info
+        proposal = self._propose_draft_block(
             batch=batch,
             draft_input=draft_input,
             verify_window=verify_window,
             bs=bs,
             device=device,
-            embed_module=embed_module,
-        )
-
-        base_logits = self._compute_base_logits(
-            draft_hidden=draft_hidden, lm_head=lm_head
-        )
-        sampling_info = batch.sampling_info
-        draft_block = self._sample_draft_block(
-            base_logits=base_logits,
-            anchor_tokens=draft_block_ids[:, 0],
-            draft_hidden=draft_hidden,
+            target_model=target_model,
+            lm_head=lm_head,
             sampling_info=sampling_info,
         )
+        draft_block_ids = proposal.draft_block_ids
+        draft_block = proposal.draft_block
         draft_tokens = draft_block.draft_tokens
 
         if self._confidence_head is not None:
-            confidence = self._compute_confidence(
-                draft_hidden=draft_hidden,
+            self._relay_confidence(
+                req_pool_indices=batch.req_pool_indices,
+                draft_hidden=proposal.draft_hidden,
                 anchor_tokens=draft_block_ids[:, 0],
                 draft_tokens=draft_tokens,
-            )
-            self._stash_confidence(
-                req_pool_indices=batch.req_pool_indices,
-                confidence=confidence,
             )
 
         layout = self._maybe_schedule_ragged_layout(
@@ -1415,33 +1786,24 @@ class DSparkWorkerV2(BaseSpecWorker):
         if on_publish is not None:
             on_publish(new_seq_lens)
 
-        if run_full:
-            self._inject_ragged_hidden_to_draft_kv(
-                batch=batch,
-                layout=layout,
-                hidden_strided=hidden_strided,
-                commit_lens=commit_lens,
-                bs=bs,
-            )
-        else:
-            hidden = logits_output.hidden_states
-            if hidden is None:
-                raise RuntimeError(
-                    "DSpark verify requires target hidden states, got None."
-                )
-            hidden = hidden.view(bs, self.verify_num_draft_tokens, -1)
-            self._inject_target_hidden_to_draft_kv(
-                target_hidden=hidden.reshape(-1, hidden.shape[-1]),
-                cache_loc=verify_window.verify_cache_loc,
-                cache_loc_2d=verify_window.verify_cache_loc_2d,
-                positions=verify_window.positions_2d.reshape(-1),
-                commit_lens=commit_lens,
-            )
+        next_main_hidden = self._commit_verify_hidden(
+            batch=batch,
+            layout=layout,
+            hidden_strided=hidden_strided,
+            verify_window=verify_window,
+            logits_output=logits_output,
+            correct_len=correct_len,
+            commit_lens=commit_lens,
+            bs=bs,
+            run_full=run_full,
+            new_seq_lens=new_seq_lens,
+        )
         logits_output.hidden_states = None
 
         next_draft_input = self._make_next_draft_input(
             bonus_tokens=bonus,
             new_seq_lens=new_seq_lens,
+            hidden_states=next_main_hidden,
         )
         return GenerationBatchResult(
             logits_output=logits_output,
