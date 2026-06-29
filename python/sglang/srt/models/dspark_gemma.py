@@ -215,6 +215,12 @@ class Gemma4DFlashMLP(nn.Module):
             quant_config=quant_config,
             prefix="down_proj" if not prefix else f"{prefix}.down_proj",
         )
+        hidden_activation = getattr(config, "hidden_activation", "gelu_pytorch_tanh")
+        if hidden_activation != "gelu_pytorch_tanh":
+            raise ValueError(
+                f"Gemma4DFlashMLP expects hidden_activation='gelu_pytorch_tanh', "
+                f"got '{hidden_activation}'. GeluAndMul(approximate='tanh') is hardcoded."
+            )
         self.act_fn = GeluAndMul()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
