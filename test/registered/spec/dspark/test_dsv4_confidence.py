@@ -70,6 +70,7 @@ def _make_model_stub(
     the real (unbound) methods run on CPU.
     """
     model = DeepseekV4ForCausalLMDSpark.__new__(DeepseekV4ForCausalLMDSpark)
+    torch.nn.Module.__init__(model)
     model.gamma = _GAMMA
     model.block_size = _GAMMA
     model.hc_mult = _HC_MULT
