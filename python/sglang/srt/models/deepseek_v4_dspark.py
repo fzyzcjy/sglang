@@ -2,8 +2,10 @@
 # DSparkMarkovHead / Transformer.forward_spec) but implemented with SGLang primitives.
 # The V4 DSpark draft is a block draft with its own sliding-window MLA KV (fed from the
 # target hidden states), a target-hidden projection (main_proj/main_norm), and a serial
-# Markov head. It carries no confidence head (out of scope for the static-verify MVP) and
-# reuses the target model's token embedding / lm_head for the base logits.
+# Markov head. It reuses the target model's token embedding / lm_head for the base logits.
+# When the draft config enables it, the draft also carries an opt-in confidence head that
+# consumes the post-hc_head PRE-norm draft hidden (reference model.py:862/873: x=hc_head(x),
+# confidence=confidence_head(x, markov_embed); the norm only feeds the logits).
 
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from sglang.srt.configs.deepseek_v4 import DeepSeekV4Config
+from sglang.srt.distributed.communication_op import tensor_model_parallel_all_gather
 from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.layers.linear import ColumnParallelLinear, RowParallelLinear
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
@@ -27,6 +30,7 @@ from sglang.srt.models.deepseek_v4 import (
     hc_head_torch,
     make_hc_head_params,
 )
+from sglang.srt.models.dspark import DSparkConfidenceHead
 from sglang.srt.speculative.dspark_utils import parse_dspark_draft_config
 from sglang.srt.utils import add_prefix
 
@@ -396,6 +400,31 @@ def _greedy_step_sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tens
     return step_logits.argmax(dim=-1)
 
 
+def build_dspark_v4_confidence_head(
+    *, config: DeepSeekV4Config, markov_rank: int
+) -> Optional[DSparkConfidenceHead]:
+    """Build the V4 DSpark confidence head when the draft config enables it.
+
+    Mirrors the dense ``build_confidence_head`` gating and interface (the head emits a
+    RAW accept-rate logit; ``with_markov`` concatenates the per-step markov_embed). The
+    V4 hidden size comes from ``config.hidden_size`` and the rank from the parsed draft
+    config; returns ``None`` for the static-verify checkpoints that omit the head.
+    """
+    if not bool(getattr(config, "enable_confidence_head", False)):
+        return None
+    with_markov = bool(getattr(config, "confidence_head_with_markov", markov_rank > 0))
+    if with_markov and markov_rank <= 0:
+        raise ValueError(
+            "DSpark V4 confidence_head_with_markov requires markov_rank > 0, "
+            f"got markov_rank={markov_rank}."
+        )
+    return DSparkConfidenceHead(
+        hidden_size=int(config.hidden_size),
+        markov_rank=int(markov_rank),
+        with_markov=with_markov,
+    )
+
+
 class DSparkV4Stage(DeepseekV4DecoderLayer):
     """One DSpark MTP stage (reference ``DSparkBlock`` model.py:818).
 
@@ -544,9 +573,15 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
     """V4 DSpark draft model: block draft with target-hidden-fed sliding-window MLA KV.
 
     Owns the target-hidden projection (main_proj/main_norm), the DSpark MTP stages, the
-    Markov head, and the head finish (hc_head + the target's shared lm_head). The token
-    embedding and lm_head are supplied by the target model and attached via
-    ``attach_shared_modules`` (the worker wires them in Phase b).
+    Markov head, an opt-in confidence head, and the head finish (hc_head + the target's
+    shared lm_head). The token embedding and lm_head are supplied by the target model and
+    attached via ``attach_shared_modules`` (the worker wires them in Phase b).
+
+    When the confidence head is enabled the draft computes the confidence inside its own
+    forward at the correct tap (post-hc_head, PRE-norm draft hidden) and stashes it on
+    ``self._last_confidence``; the worker relay reads it via ``last_confidence`` (the dense
+    relay's post-norm ``draft_hidden`` would be the wrong tap for V4, reference
+    model.py:862/873).
     """
 
     def __init__(
@@ -602,12 +637,28 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
             vocab_size=int(config.vocab_size),
             markov_rank=int(dspark_config.markov_rank),
         )
+        self.confidence_head = build_dspark_v4_confidence_head(
+            config=config, markov_rank=int(dspark_config.markov_rank)
+        )
         self.hc_mult = int(config.hc_mult)
         self.norm_eps = float(config.rms_norm_eps)
         self.hc_eps = float(config.hc_eps)
 
         self.embed_tokens: Optional[nn.Module] = None
         self.lm_head: Optional[nn.Module] = None
+        self._last_confidence: Optional[torch.Tensor] = None
+
+    @property
+    def enable_confidence_head(self) -> bool:
+        return self.confidence_head is not None
+
+    def last_confidence(self) -> Optional[torch.Tensor]:
+        """Confidence stashed by the most recent ``forward_head`` (worker relay, Phase b).
+
+        Returns the post-STS confidence ``[bs, gamma]`` in ``(0, 1)`` computed from the
+        post-hc_head PRE-norm tap, or ``None`` when the confidence head is disabled.
+        """
+        return self._last_confidence
 
     def attach_shared_modules(
         self, *, embed_tokens: nn.Module, lm_head: nn.Module
@@ -660,14 +711,15 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         x = x.unsqueeze(2).repeat(1, 1, self.hc_mult, 1)
         return x, main_x
 
-    def _base_logits(self, x: torch.Tensor) -> torch.Tensor:
-        if self.lm_head is None:
-            raise ValueError(
-                "DeepseekV4ForCausalLMDSpark requires the target lm_head "
-                "(call attach_shared_modules first)."
-            )
+    def _collapse_hc_head(self, x: torch.Tensor) -> torch.Tensor:
+        """Collapse the draft mHC tensor through the last stage's hc_head (PRE-norm).
+
+        Reference model.py:862 ``x = hc_head(x)``. The returned tensor is the
+        post-hc_head PRE-norm hidden that feeds the confidence head; the LM-head path
+        applies ``norm`` to it separately (model.py:863, the norm only feeds the logits).
+        """
         last = self.stages[-1]
-        x = hc_head_torch(
+        return hc_head_torch(
             x,
             last.hc_head_fn,
             last.hc_head_scale,
@@ -675,8 +727,27 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
             norm_eps=self.norm_eps,
             hc_eps=self.hc_eps,
         )
-        x = last.norm(x)
-        return F.linear(x.float(), self.lm_head.weight.float())
+
+    def _logits_from_x_post_hc(self, x_post_hc: torch.Tensor) -> torch.Tensor:
+        """LM-head logits from the post-hc_head hidden: norm -> matmul -> TP all-gather.
+
+        ``lm_head.weight`` is the target's local vocab shard under TP, so the local
+        matmul yields rank-local vocab logits; ``tensor_model_parallel_all_gather`` then
+        assembles the full vocab on every rank (a no-op at tp=1), sliced back to
+        ``org_vocab_size`` to drop the TP vocab padding. Mirrors the dense worker's
+        ``_compute_base_logits`` (dspark_worker_v2.py).
+        """
+        if self.lm_head is None:
+            raise ValueError(
+                "DeepseekV4ForCausalLMDSpark requires the target lm_head "
+                "(call attach_shared_modules first)."
+            )
+        last = self.stages[-1]
+        x = last.norm(x_post_hc)
+        local_logits = F.linear(x.float(), self.lm_head.weight.float())
+        full_logits = tensor_model_parallel_all_gather(local_logits, dim=-1)
+        org_vocab_size = int(self.lm_head.org_vocab_size)
+        return full_logits[..., :org_vocab_size]
 
     def forward_head(
         self,
@@ -687,11 +758,15 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         """Serial Markov head finish (reference ``forward_head`` model.py:860).
 
         Produces ``output_ids[block_size + 1]`` (anchor + gamma sampled) and the
-        Markov-corrected per-step logits. ``sampler`` defaults to greedy argmax.
+        Markov-corrected per-step logits. ``sampler`` defaults to greedy argmax. When the
+        confidence head is enabled it is evaluated on the post-hc_head PRE-norm tap
+        ``x_post_hc`` (reference model.py:873) and the result is stashed on
+        ``self._last_confidence`` for the worker relay.
         """
         if sampler is None:
             sampler = _greedy_step_sampler
-        base_logits = self._base_logits(x)
+        x_post_hc = self._collapse_hc_head(x)
+        base_logits = self._logits_from_x_post_hc(x_post_hc)
         sampled_tokens, corrected_logits = self.markov_head.sample_block(
             base_logits,
             first_prev_tokens=input_ids,
@@ -701,7 +776,43 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         output_ids = torch.cat(
             [input_ids.unsqueeze(1), sampled_tokens.to(input_ids.dtype)], dim=1
         )
+        self._last_confidence = self._compute_confidence(
+            x_post_hc=x_post_hc, anchor_tokens=input_ids, sampled_tokens=sampled_tokens
+        )
         return output_ids, corrected_logits
+
+    def _compute_confidence(
+        self,
+        *,
+        x_post_hc: torch.Tensor,
+        anchor_tokens: torch.Tensor,
+        sampled_tokens: torch.Tensor,
+    ) -> Optional[torch.Tensor]:
+        """Confidence on the post-hc_head PRE-norm tap; stashed for the worker relay.
+
+        Returns ``None`` when the confidence head is disabled (keeping a+b unaffected).
+        Otherwise feeds ``x_post_hc`` (the same tap the LM head's ``norm`` consumes, but
+        BEFORE the norm) and, for with_markov heads, the per-step markov_embed stack built
+        from the prev-token sequence ``[anchor, s_0, ..., s_{gamma-2}]`` (the off-by-one
+        shared with the worker). STS calibration is identity in the MVP, so the raw logit
+        is mapped to ``(0, 1)`` by sigmoid; losslessness does not depend on the value.
+        """
+        confidence_head = self.confidence_head
+        if confidence_head is None:
+            return None
+        if confidence_head.with_markov:
+            prev_seq = torch.cat(
+                [anchor_tokens.view(-1, 1), sampled_tokens[:, : self.gamma - 1]], dim=1
+            )
+            markov_embed_stack = self.markov_head.get_prev_embeddings(prev_seq)
+        else:
+            markov_embed_stack = None
+        confidence_raw = confidence_head(x_post_hc, markov_embed_stack)
+        confidence = torch.sigmoid(confidence_raw.float())
+        assert bool(
+            ((confidence > 0) & (confidence < 1)).all()
+        ), "DSpark confidence must lie in the open interval (0, 1)."
+        return confidence
 
     @torch.no_grad()
     def forward_spec(
@@ -720,6 +831,7 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         for stage in self.stages:
             x = stage(x, start_pos, input_ids, main_x)
         if start_pos == 0:
+            self._last_confidence = None
             return None
         return self.forward_head(x, input_ids, sampler=sampler)
 
@@ -727,9 +839,11 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         """Load DSpark draft weights from the V4 ``mtp.{i}.*`` checkpoint namespace.
 
         Remaps the reference ``mtp.{stage}.*`` names to the draft module tree
-        (``stages.{stage}.*``), drops the confidence head and the shared embed/lm_head
-        (supplied by the target), and routes MoE/attention weights through the V4
-        name conventions. Never goes through the NextN loader (plan §2.d).
+        (``stages.{stage}.*``), loads the confidence head when enabled (drops it
+        otherwise), drops the shared embed/lm_head (supplied by the target), and routes
+        MoE/attention weights through the V4 name conventions. Never goes through the
+        NextN loader (plan §2.d). A confidence head that is enabled but absent from the
+        checkpoint is identity-initialized with a warning (mirrors the dense head).
         """
         params_dict = dict(self.named_parameters())
         loaded_params = set()
@@ -796,11 +910,36 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
                     weight_loader(param, loaded_weight)
                     loaded_params.add(mapped)
 
+        self._maybe_identity_init_confidence_head(
+            params_dict=params_dict, loaded_params=loaded_params
+        )
+
+    def _maybe_identity_init_confidence_head(
+        self, *, params_dict: dict, loaded_params: set
+    ) -> None:
+        if self.confidence_head is None:
+            return
+        confidence_param_names = {
+            name for name in params_dict if name.startswith("confidence_head.")
+        }
+        missing = confidence_param_names - loaded_params
+        if missing:
+            logger.warning(
+                "DSpark V4 confidence head present but checkpoint is missing %s; "
+                "identity-initializing to a constant accept probability of 0.5 "
+                "(advisory-only; does not affect losslessness).",
+                sorted(missing),
+            )
+            with torch.no_grad():
+                self.confidence_head.proj.weight.zero_()
+                if self.confidence_head.proj.bias is not None:
+                    self.confidence_head.proj.bias.zero_()
+
     def _remap_dspark_weight_name(self, name: str) -> Optional[str]:
         """Map a reference ``mtp.{stage}.*`` checkpoint name to a draft param name."""
         if name.startswith(("embed.", "embed_tokens.", "head.", "lm_head.")):
             return None
-        if "confidence_head" in name or "rotary_emb.inv_freq" in name:
+        if "rotary_emb.inv_freq" in name:
             return None
 
         if not name.startswith("mtp."):
@@ -812,6 +951,11 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
 
         if rest.startswith("markov_head."):
             return f"markov_head.{rest[len('markov_head.'):]}"
+
+        if rest.startswith("confidence_head."):
+            if self.confidence_head is None:
+                return None
+            return f"confidence_head.{rest[len('confidence_head.'):]}"
 
         mapped_rest = rest
         mapped_rest = mapped_rest.replace("attn.", "self_attn.", 1)
