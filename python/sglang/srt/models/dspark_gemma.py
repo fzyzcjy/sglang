@@ -19,14 +19,13 @@ from sglang.srt.layers.radix_attention import AttentionType, RadixAttention
 from sglang.srt.layers.rotary_embedding import get_rope
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_loader.weight_utils import default_weight_loader
-from sglang.srt.models.dspark import DSparkDraftMixin, _DSPARK_SKIPPED_WEIGHT_PREFIXES
+from sglang.srt.models.dspark import DSparkDraftMixin
 from sglang.srt.models.utils import apply_qk_norm
 from sglang.srt.runtime_context import get_parallel
 from sglang.srt.speculative.dflash_utils import (
     can_dflash_slice_qkv_weight,
     parse_dflash_draft_config,
 )
-from sglang.srt.speculative.dspark_utils import parse_dspark_draft_config
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +110,9 @@ class Gemma4DFlashAttention(nn.Module):
 
         rope_theta, rope_type, partial_rotary_factor = _get_gemma4_rope_params(config)
         max_position_embeddings = int(getattr(config, "max_position_embeddings", 32768))
-        rope_scaling = None if rope_type in ("default", "") else {"rope_type": rope_type}
+        rope_scaling = (
+            None if rope_type in ("default", "") else {"rope_type": rope_type}
+        )
         self.rotary_emb = get_rope(
             head_dim,
             rotary_dim=head_dim,
@@ -162,9 +163,7 @@ class Gemma4DFlashAttention(nn.Module):
             kv_slice = slice(self.q_size, self.q_size + 2 * self.kv_size)
             weight = self.qkv_proj.weight[kv_slice]
             bias = (
-                self.qkv_proj.bias[kv_slice]
-                if self.qkv_proj.bias is not None
-                else None
+                self.qkv_proj.bias[kv_slice] if self.qkv_proj.bias is not None else None
             )
             kv = F.linear(hidden_states, weight, bias)
             k, v = kv.split([self.kv_size, self.kv_size], dim=-1)
@@ -377,7 +376,9 @@ class Gemma4DFlashDraftModel(nn.Module):
             ("gate_up_proj", "up_proj", 1),
         ]
 
-        use_alternative_attention = bool(getattr(self.config, "attention_k_eq_v", False))
+        use_alternative_attention = bool(
+            getattr(self.config, "attention_k_eq_v", False)
+        )
         params_dict = dict(self.named_parameters())
         params_dict.update(dict(self.named_buffers()))
 
@@ -385,7 +386,7 @@ class Gemma4DFlashDraftModel(nn.Module):
             if name in params_dict:
                 return name
             if name.startswith("model."):
-                stripped = name[len("model."):]
+                stripped = name[len("model.") :]
                 if stripped in params_dict:
                     return stripped
             else:
