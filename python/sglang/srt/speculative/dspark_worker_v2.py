@@ -175,6 +175,25 @@ class DSparkWorkerV2(BaseSpecWorker):
             draft_token_num=int(self.gamma), device=self.device
         )
 
+        # Optional confidence relay. The head and its relay are inert (no
+        # buffers, no events, no compute) when the draft model lacks a
+        # confidence head, so the a+b lossless decode path is unchanged.
+        self._confidence_head = getattr(self.draft_model, "confidence_head", None)
+        self._confidence_buf: Optional[torch.Tensor] = None
+        self._confidence_cpu_pinned: Optional[torch.Tensor] = None
+        self._confidence_ready = None
+        self._confidence_d2h_stream = None
+        if self._confidence_head is not None and self.tp_rank == 0:
+            logger.info(
+                "DSpark confidence head enabled (with_markov=%s); confidence is "
+                "relayed on an independent stream/event and is advisory only.",
+                getattr(self._confidence_head, "with_markov", True),
+            )
+
+    @property
+    def carries_confidence(self) -> bool:
+        return self._confidence_head is not None
+
     @property
     def target_worker(self) -> TpModelWorker:
         return self._target_worker
@@ -335,6 +354,100 @@ class DSparkWorkerV2(BaseSpecWorker):
             sampler=sampler,
         )
         return draft_tokens, corrected_logits, is_greedy, temperatures
+
+    def _build_markov_embed_stack(
+        self,
+        *,
+        anchor_tokens: torch.Tensor,
+        draft_tokens: torch.Tensor,
+    ) -> torch.Tensor:
+        # Per-step prev tokens fed to the Markov head during the serial loop:
+        # step 0 sees the anchor, step i (>0) sees the previously sampled token,
+        # i.e. prev_seq = [anchor, s_0, ..., s_{gamma-2}] (the chapter's
+        # off-by-one). markov_embed[:, i] = markov_w1(prev_seq[:, i]).
+        markov_head = self.draft_model.markov_head
+        prev_seq = torch.cat(
+            [anchor_tokens.view(-1, 1), draft_tokens[:, : self.gamma - 1]], dim=1
+        )
+        return markov_head.get_prev_embeddings(prev_seq)
+
+    def _compute_confidence(
+        self,
+        *,
+        draft_hidden: torch.Tensor,
+        anchor_tokens: torch.Tensor,
+        draft_tokens: torch.Tensor,
+    ) -> torch.Tensor:
+        # Dense DSpark: the confidence head consumes the same post-norm draft
+        # hidden that feeds base_logits (DeepSpec qwen3 modeling feeds the
+        # post-norm output_hidden to both lm_head and the confidence head). For
+        # with_markov heads it also takes the per-step markov_embed stack.
+        confidence_head = self._confidence_head
+        assert confidence_head is not None
+        if confidence_head.with_markov:
+            markov_embed_stack = self._build_markov_embed_stack(
+                anchor_tokens=anchor_tokens, draft_tokens=draft_tokens
+            )
+        else:
+            markov_embed_stack = None
+        confidence_raw = confidence_head(draft_hidden, markov_embed_stack)
+        # STS calibration is identity in the MVP (no reference); the head logit
+        # is mapped to (0, 1) by sigmoid. Losslessness does not depend on the
+        # calibration quality, only on the scheduler being non-anticipating.
+        confidence = torch.sigmoid(confidence_raw.float())
+        assert bool(
+            ((confidence > 0) & (confidence < 1)).all()
+        ), "DSpark confidence must lie in the open interval (0, 1)."
+        return confidence
+
+    def _ensure_confidence_relay_buffers(self, *, confidence: torch.Tensor) -> None:
+        if self._confidence_buf is not None:
+            return
+        device_module = torch.get_device_module(self.device)
+        req_pool_size = int(
+            self.model_runner.req_to_token_pool.req_to_token.shape[0]
+        )
+        self._confidence_buf = torch.empty(
+            (req_pool_size, self.gamma),
+            dtype=confidence.dtype,
+            device=self.device,
+        )
+        self._confidence_cpu_pinned = torch.empty(
+            (req_pool_size, self.gamma),
+            dtype=confidence.dtype,
+            pin_memory=True,
+        )
+        self._confidence_ready = device_module.Event()
+        self._confidence_d2h_stream = device_module.Stream()
+
+    def _stash_confidence(
+        self,
+        *,
+        req_pool_indices: torch.Tensor,
+        confidence: torch.Tensor,
+    ) -> None:
+        # Write confidence into the relay buffer on the forward stream, then
+        # record the independent confidence_ready event AFTER the write. The
+        # D2H copy is gated on this event (not on publish_ready, which is
+        # recorded earlier mid-worker), and runs on its own stream so the
+        # critical path issues no synchronize().
+        self._ensure_confidence_relay_buffers(confidence=confidence)
+        self._confidence_buf[req_pool_indices] = confidence
+        self._confidence_ready.record()
+
+    def pull_confidence_history(self) -> Optional[torch.Tensor]:
+        # Non-blocking: only kick the D2H copy when the forward-stream write has
+        # already completed (event.query()); otherwise reuse the stale CPU copy.
+        # Never synchronize on the critical path.
+        if self._confidence_ready is None or self._confidence_cpu_pinned is None:
+            return None
+        if self._confidence_ready.query():
+            device_module = torch.get_device_module(self.device)
+            with device_module.stream(self._confidence_d2h_stream):
+                self._confidence_cpu_pinned.copy_(
+                    self._confidence_buf, non_blocking=True
+                )
+        return self._confidence_cpu_pinned
 
     def _accept_greedy(
         self,
@@ -702,6 +815,17 @@ class DSparkWorkerV2(BaseSpecWorker):
                 sampling_info=sampling_info,
             )
         )
+
+        if self._confidence_head is not None:
+            confidence = self._compute_confidence(
+                draft_hidden=draft_hidden,
+                anchor_tokens=draft_block_ids[:, 0],
+                draft_tokens=draft_tokens,
+            )
+            self._stash_confidence(
+                req_pool_indices=batch.req_pool_indices,
+                confidence=confidence,
+            )
 
         verify_ids_2d = torch.cat(
             [draft_block_ids[:, :1], draft_tokens], dim=1
