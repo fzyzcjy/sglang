@@ -133,7 +133,7 @@ class _DSparkFlagMatrixBase(CustomTestCase):
         off_outputs = self._launch_and_capture()
         # cutoff-only with full gamma == off (no suffix truncated). The exact env
         # wiring is owned by ragged-verify-infra; this asserts the contract.
-        cutoff_env = {"SGLANG_RAGGED_VERIFY": "cutoff_only"}
+        cutoff_env = {"SGLANG_RAGGED_VERIFY": "cutoff-only"}
         cutoff_outputs = self._launch_and_capture(extra_env=cutoff_env)
         for prompt in _MATRIX_PROMPTS:
             self.assertEqual(
@@ -151,7 +151,7 @@ class _DSparkFlagMatrixBase(CustomTestCase):
         """`full` (real-N ragged) must equal `cutoff-only` under same frozen ell_r."""
         self._maybe_skip_models()
         off_outputs = self._launch_and_capture()
-        cutoff_env = {"SGLANG_RAGGED_VERIFY": "cutoff_only"}
+        cutoff_env = {"SGLANG_RAGGED_VERIFY": "cutoff-only"}
         cutoff_outputs = self._launch_and_capture(extra_env=cutoff_env)
         full_env = {"SGLANG_RAGGED_VERIFY": "full"}
         full_outputs = self._launch_and_capture(extra_env=full_env)
