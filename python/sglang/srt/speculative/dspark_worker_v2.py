@@ -1,6 +1,7 @@
 import logging
 from typing import Optional
 
+import msgspec
 import torch
 
 from sglang.srt.distributed import get_tp_group
@@ -38,6 +39,17 @@ from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.srt.speculative.triton_ops.cache_locs import assign_extend_cache_locs_func
 
 logger = logging.getLogger(__name__)
+
+
+class _VerifyWindow(msgspec.Struct, frozen=True):
+    positions_2d: torch.Tensor
+    verify_cache_loc: torch.Tensor
+    verify_cache_loc_2d: torch.Tensor
+
+
+class _TargetVerifyResult(msgspec.Struct, frozen=True):
+    logits_output: object
+    can_run_cuda_graph: bool
 
 
 class DSparkWorkerV2(BaseSpecWorker):
@@ -481,50 +493,36 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
         return batch_output
 
-    def _forward_decode(self, batch: ScheduleBatch, on_publish) -> GenerationBatchResult:
-        if batch.spec_info is None:
-            batch.spec_info = DFlashDraftInputV2.create_idle_input(device=self.device)
-        draft_input = batch.spec_info
-        if not isinstance(draft_input, DFlashDraftInputV2):
-            raise RuntimeError(
-                "DSpark spec-v2 expected DFlashDraftInputV2 state on the running batch."
-            )
-
-        if batch.forward_mode.is_idle():
-            next_draft_input = self._make_next_draft_input(
-                bonus_tokens=torch.empty((0,), device=self.device, dtype=torch.int64),
-                new_seq_lens=torch.empty((0,), device=self.device, dtype=torch.int64),
-            )
-            if on_publish is not None:
-                on_publish(next_draft_input.new_seq_lens)
-            return GenerationBatchResult(
-                logits_output=None,
-                next_token_ids=torch.empty((0,), dtype=torch.int64, device=self.device),
-                accept_lens=torch.empty((0,), dtype=torch.int32, device=self.device),
-                next_draft_input=next_draft_input,
-                can_run_cuda_graph=False,
-                speculative_num_draft_tokens=int(self.verify_num_draft_tokens),
-                new_seq_lens=next_draft_input.new_seq_lens,
-            )
-
-        batch.seq_lens.record_stream(
-            torch.get_device_module(self.device).current_stream()
+    def _decode_idle_result(
+        self,
+        *,
+        on_publish,
+    ) -> GenerationBatchResult:
+        next_draft_input = self._make_next_draft_input(
+            bonus_tokens=torch.empty((0,), device=self.device, dtype=torch.int64),
+            new_seq_lens=torch.empty((0,), device=self.device, dtype=torch.int64),
         )
-        bs = len(batch.seq_lens)
-        device = self.device
-        gamma = self.gamma
-        verify_w = self.verify_num_draft_tokens
+        if on_publish is not None:
+            on_publish(next_draft_input.new_seq_lens)
+        return GenerationBatchResult(
+            logits_output=None,
+            next_token_ids=torch.empty((0,), dtype=torch.int64, device=self.device),
+            accept_lens=torch.empty((0,), dtype=torch.int32, device=self.device),
+            next_draft_input=next_draft_input,
+            can_run_cuda_graph=False,
+            speculative_num_draft_tokens=int(self.verify_num_draft_tokens),
+            new_seq_lens=next_draft_input.new_seq_lens,
+        )
 
-        target_model = self.target_worker.model_runner.model
-        embed_module = target_model.get_input_embeddings()
-        lm_head = getattr(target_model, "lm_head", None)
-        if lm_head is None or not hasattr(lm_head, "weight"):
-            raise RuntimeError(
-                "DSpark requires the target model to expose `lm_head` with `weight`."
-            )
-
+    def _alloc_verify_window(
+        self,
+        *,
+        batch: ScheduleBatch,
+        bs: int,
+        device: str,
+    ) -> _VerifyWindow:
         prefix_lens = batch.seq_lens
-        # Allocate the gamma+1 verify window; the draft block uses the first gamma.
+        verify_w = self.verify_num_draft_tokens
         positions_2d = prefix_lens.unsqueeze(1) + self._block_pos_offsets
         verify_cache_loc = assign_extend_cache_locs_func(
             req_pool_indices=batch.req_pool_indices,
@@ -536,8 +534,27 @@ class DSparkWorkerV2(BaseSpecWorker):
             device=device,
         )
         verify_cache_loc_2d = verify_cache_loc.view(bs, verify_w)
+        return _VerifyWindow(
+            positions_2d=positions_2d,
+            verify_cache_loc=verify_cache_loc,
+            verify_cache_loc_2d=verify_cache_loc_2d,
+        )
 
-        # --- 1) Draft the gamma-slot block: [anchor, mask×(gamma-1)].
+    def _run_draft_block_forward(
+        self,
+        *,
+        batch: ScheduleBatch,
+        draft_input: DFlashDraftInputV2,
+        verify_window: _VerifyWindow,
+        bs: int,
+        device: str,
+        embed_module,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        gamma = self.gamma
+        prefix_lens = batch.seq_lens
+        positions_2d = verify_window.positions_2d
+        verify_cache_loc_2d = verify_window.verify_cache_loc_2d
+
         draft_block_ids = torch.full(
             (bs, gamma), int(self._mask_token_id), dtype=torch.long, device=device
         )
@@ -578,27 +595,21 @@ class DSparkWorkerV2(BaseSpecWorker):
         if draft_hidden is None:
             raise RuntimeError("DSpark draft model returned no hidden states.")
         draft_hidden = draft_hidden.view(bs, gamma, -1)
+        return draft_block_ids, draft_hidden
 
-        # --- 2) Serial Markov draft sampling (eager) over all gamma positions.
-        base_logits = self._compute_base_logits(
-            draft_hidden=draft_hidden, lm_head=lm_head
-        )
-        sampling_info = batch.sampling_info
-        draft_tokens, corrected_logits, is_greedy, temperatures = (
-            self._sample_draft_block(
-                base_logits=base_logits,
-                anchor_tokens=draft_block_ids[:, 0],
-                draft_hidden=draft_hidden,
-                sampling_info=sampling_info,
-            )
-        )
+    def _run_target_verify(
+        self,
+        *,
+        batch: ScheduleBatch,
+        draft_input: DFlashDraftInputV2,
+        verify_ids_2d: torch.Tensor,
+        verify_window: _VerifyWindow,
+        sampling_info,
+    ) -> _TargetVerifyResult:
+        verify_w = self.verify_num_draft_tokens
+        positions_2d = verify_window.positions_2d
+        verify_cache_loc = verify_window.verify_cache_loc
 
-        # verify candidates: [anchor, s_0..s_{gamma-1}] (gamma+1).
-        verify_ids_2d = torch.cat(
-            [draft_block_ids[:, :1], draft_tokens], dim=1
-        ).contiguous()
-
-        # --- 3) Target verify over the gamma+1 window.
         verify_input = DFlashVerifyInput(
             draft_token=verify_ids_2d.reshape(-1),
             positions=positions_2d.reshape(-1),
@@ -638,7 +649,76 @@ class DSparkWorkerV2(BaseSpecWorker):
                 draft_token_num=verify_w,
             )
 
-        # --- 4) Accept (lossless).
+        return _TargetVerifyResult(
+            logits_output=logits_output,
+            can_run_cuda_graph=can_run_cuda_graph,
+        )
+
+    def _forward_decode(self, batch: ScheduleBatch, on_publish) -> GenerationBatchResult:
+        if batch.spec_info is None:
+            batch.spec_info = DFlashDraftInputV2.create_idle_input(device=self.device)
+        draft_input = batch.spec_info
+        if not isinstance(draft_input, DFlashDraftInputV2):
+            raise RuntimeError(
+                "DSpark spec-v2 expected DFlashDraftInputV2 state on the running batch."
+            )
+
+        if batch.forward_mode.is_idle():
+            return self._decode_idle_result(on_publish=on_publish)
+
+        batch.seq_lens.record_stream(
+            torch.get_device_module(self.device).current_stream()
+        )
+        bs = len(batch.seq_lens)
+        device = self.device
+        prefix_lens = batch.seq_lens
+
+        target_model = self.target_worker.model_runner.model
+        embed_module = target_model.get_input_embeddings()
+        lm_head = getattr(target_model, "lm_head", None)
+        if lm_head is None or not hasattr(lm_head, "weight"):
+            raise RuntimeError(
+                "DSpark requires the target model to expose `lm_head` with `weight`."
+            )
+
+        verify_window = self._alloc_verify_window(batch=batch, bs=bs, device=device)
+
+        draft_block_ids, draft_hidden = self._run_draft_block_forward(
+            batch=batch,
+            draft_input=draft_input,
+            verify_window=verify_window,
+            bs=bs,
+            device=device,
+            embed_module=embed_module,
+        )
+
+        base_logits = self._compute_base_logits(
+            draft_hidden=draft_hidden, lm_head=lm_head
+        )
+        sampling_info = batch.sampling_info
+        draft_tokens, corrected_logits, is_greedy, temperatures = (
+            self._sample_draft_block(
+                base_logits=base_logits,
+                anchor_tokens=draft_block_ids[:, 0],
+                draft_hidden=draft_hidden,
+                sampling_info=sampling_info,
+            )
+        )
+
+        verify_ids_2d = torch.cat(
+            [draft_block_ids[:, :1], draft_tokens], dim=1
+        ).contiguous()
+
+        target_verify = self._run_target_verify(
+            batch=batch,
+            draft_input=draft_input,
+            verify_ids_2d=verify_ids_2d,
+            verify_window=verify_window,
+            sampling_info=sampling_info,
+        )
+        logits_output = target_verify.logits_output
+        can_run_cuda_graph = target_verify.can_run_cuda_graph
+
         if is_greedy:
             correct_len, bonus = self._accept_greedy(
                 candidates=verify_ids_2d,
@@ -664,16 +744,15 @@ class DSparkWorkerV2(BaseSpecWorker):
         if on_publish is not None:
             on_publish(new_seq_lens)
 
-        # --- 5) Materialize committed verify tokens into the draft KV cache.
         hidden = logits_output.hidden_states
         if hidden is None:
             raise RuntimeError("DSpark verify requires target hidden states, got None.")
-        hidden = hidden.view(bs, verify_w, -1)
+        hidden = hidden.view(bs, self.verify_num_draft_tokens, -1)
         self._inject_target_hidden_to_draft_kv(
             target_hidden=hidden.reshape(-1, hidden.shape[-1]),
-            cache_loc=verify_cache_loc,
-            cache_loc_2d=verify_cache_loc_2d,
-            positions=positions_2d.reshape(-1),
+            cache_loc=verify_window.verify_cache_loc,
+            cache_loc_2d=verify_window.verify_cache_loc_2d,
+            positions=verify_window.positions_2d.reshape(-1),
             commit_lens=commit_lens,
         )
         logits_output.hidden_states = None
