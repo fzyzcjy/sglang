@@ -1145,7 +1145,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         batch.seq_lens_cpu = ragged_window.seq_lens_cpu
         batch.seq_lens_sum = int(ragged_window.seq_lens_cpu.sum())
 
-        verify_forward_batch, can_run_cuda_graph = verify_input.prepare_for_verify(
+        verify_forward_batch, _ = verify_input.prepare_for_verify(
             batch, self.target_worker
         )
         batch.seq_lens_cpu = seq_lens_cpu_backup
