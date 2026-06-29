@@ -1,33 +1,41 @@
-"""DSpark tp_size=2 losslessness: cross-rank determinism + accuracy floor.
+"""DSpark tp_size=2 losslessness: near-tie token parity + accuracy floor + determinism.
 
-A tp=2 run must stay cross-rank consistent (every rank agrees, so the server is
-deterministic within a run) and preserve the target model's output quality under
-lossless greedy decoding.
+A tp=2 DSpark run must preserve the target model's output under lossless greedy
+decoding. The sound strict invariant is token-for-token parity against a tp=2
+NON-spec reference (same TP degree -- the comparison is between two tp=2 servers),
+tolerant of floating-point near-ties:
 
-It must NOT, however, be asserted token-for-token against the tp=1 baseline:
-tensor parallelism splits each reduction across ranks, so the all-reduce sums
-floating-point partials in a different order than a single GPU. That reorder
-changes the low bits of every logit, which flips the argmax at any near-tie (top-2
-logit gap <~0.25 nats) from the very first decode step. This is intrinsic to TP
-and independent of DSpark -- a plain NON-spec tp=2 server already diverges
-token-for-token from a non-spec tp=1 server on the first tokens. So tp=2-vs-tp=1
-token equality is not a sound losslessness invariant for any model.
+  * Tensor parallelism splits each reduction across ranks, so the all-reduce sums
+    fp partials in a different order than a single GPU. That reorder flips the
+    argmax at any near-tie (top-2 logit gap <~0.25 nats). So a tp=2-vs-tp=1
+    comparison is NOT sound for any model (a plain non-spec tp=2 server already
+    diverges token-for-token from a non-spec tp=1 server on the first tokens),
+    and even tp=2-vs-tp=2 exact equality is not reliable across two separate
+    server instances (measured: only 7/12 prompts match exactly at 32 tokens).
+  * What IS sound and strict: every per-token divergence of the tp=2 DSpark
+    server from the tp=2 non-spec reference must fall on a reference near-tie
+    (top-2 gap <= ``_NEAR_TIE_EPS``); a divergence at a confident reference token
+    (gap > eps) would be a real losslessness bug. Measured: all divergences are
+    <= 0.125 nats, none confident.
 
-The sound invariants here, mirroring EAGLE/DFlash:
+Additional sound invariants, mirroring EAGLE/DFlash:
   * cross-rank determinism: two identical greedy requests to the tp=2 server
     return identical text (the ranks stay in lockstep within a run);
-  * accuracy floor: GSM8K score and speculative accept length on the tp=2 server
-    clear a comfortable threshold, proving the lossless accept path is intact and
-    speculation is actually accepting drafts.
+  * accuracy floor: GSM8K score (set just below the measured non-spec baseline)
+    and speculative accept length clear a threshold well above 1, proving the
+    lossless accept path is intact and speculation is actually accepting drafts.
 """
 
 import os
 import unittest
 
-import requests
-
 from sglang.srt.utils import find_local_repo_dir, kill_process_tree
 from sglang.test.ci.ci_register import register_cuda_ci
+from sglang.test.kits.dspark_lossless_kit import (
+    capture_reference,
+    first_token_divergence,
+    greedy_request,
+)
 from sglang.test.kits.eval_accuracy_kit import GSM8KMixin
 from sglang.test.test_utils import (
     DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
@@ -41,18 +49,29 @@ register_cuda_ci(est_time=900, stage="base-b", runner_config="2-gpu-large")
 DEFAULT_TARGET_MODEL_DSPARK_QWEN3 = "Qwen/Qwen3-4B"
 DEFAULT_DRAFT_MODEL_DSPARK_QWEN3 = "deepseek-ai/dspark_qwen3_4b_block7"
 
+# Long enough to enter the regime where exact equality is unachievable; the
+# near-tie-tolerant check does the work (measured tp2: 9/12 exact + 3 near-ties
+# of 0.125 nats at 48).
+_NEAR_TIE_MAX_NEW_TOKENS = 48
 
-def _greedy_request(url: str, prompt: str, max_new_tokens: int = 32) -> str:
-    """Send a greedy generation request and return the output text."""
-    resp = requests.post(
-        url + "/generate",
-        json={
-            "text": prompt,
-            "sampling_params": {"temperature": 0, "max_new_tokens": max_new_tokens},
-        },
-    )
-    resp.raise_for_status()
-    return resp.json()["text"]
+# Confident-divergence threshold (nats). All measured tp2 divergences are <= 0.125
+# nats; 0.3 leaves margin while staying well below a confident token.
+_NEAR_TIE_EPS = 0.3
+
+_NEAR_TIE_PROMPTS = [
+    "The capital of France is",
+    "Once upon a time, there was a",
+    "def fibonacci(n):",
+    "The three primary colors are red, green, and",
+    "The future of artificial intelligence is",
+    "In a world where robots coexist with humans,",
+    "The president of the United States is",
+    "Hello, my name is",
+    "Water boils at a temperature of",
+    "The largest planet in our solar system is",
+    "To make a peanut butter sandwich, first you",
+    "The theory of relativity was developed by",
+]
 
 
 def _checkpoints_available(*model_paths: str) -> bool:
@@ -76,11 +95,13 @@ def _checkpoints_available(*model_paths: str) -> bool:
 
 
 class TestDSparkTPLosslessQwen3(CustomTestCase, GSM8KMixin):
-    """DSpark tp_size=2 cross-rank determinism + GSM8K accuracy floor. GPU-only.
+    """DSpark tp_size=2 near-tie token parity + determinism + GSM8K floor. GPU-only.
 
-    Launches a single tp=2 DSpark spec server (cuda graph disabled, no overlap)
-    and asserts the two sound TP losslessness invariants: identical text for
-    repeated greedy requests, and a GSM8K accuracy / accept-length floor.
+    setUpClass launches a tp=2 non-spec reference (eager, cuda graph disabled),
+    captures per-token text pieces and top-2 gaps, tears it down, then launches
+    the tp=2 DSpark spec server (eager, no overlap) which stays resident for the
+    tests: near-tie token parity vs the reference, cross-rank determinism, and a
+    GSM8K accuracy / accept-length floor.
     """
 
     target_model = DEFAULT_TARGET_MODEL_DSPARK_QWEN3
@@ -88,20 +109,22 @@ class TestDSparkTPLosslessQwen3(CustomTestCase, GSM8KMixin):
     attention_backend = "flashinfer"
     mem_fraction_static = 0.7
 
-    # Lossless greedy keeps tp=2 accuracy at the target model's own level
-    # (measured ~0.88 for Qwen3-4B); 0.75 is a comfortable floor. Accept length
-    # must clear 1.0 to prove speculation accepts drafts (measured ~4.1).
-    gsm8k_score_threshold = 0.75
+    # Lossless greedy keeps tp=2 accuracy at the non-spec baseline's level
+    # (measured tp2 baseline ~0.865, spec ~0.88 at 200q). 0.84 is a tight floor
+    # set just below the measured baseline -- far above the old 0.75. Accept
+    # length must clear 3.0 to prove speculation accepts drafts (measured
+    # GSM8K-dominated ~4.17, vs a no-op floor of 1.0).
+    gsm8k_score_threshold = 0.84
     gsm8k_num_examples = 200
-    gsm8k_accept_length_thres = 1.0
+    gsm8k_accept_length_thres = 3.0
 
     @property
     def model(self) -> str:
         return self.target_model
 
     @classmethod
-    def _spec_args(cls, tp_size: int) -> list:
-        return [
+    def _base_args(cls, *, spec: bool) -> list:
+        args = [
             "--trust-remote-code",
             "--attention-backend",
             cls.attention_backend,
@@ -111,13 +134,26 @@ class TestDSparkTPLosslessQwen3(CustomTestCase, GSM8KMixin):
             "1",
             "--disable-cuda-graph",
             "--tp",
-            str(tp_size),
-            "--speculative-algorithm",
-            "DSPARK",
-            "--speculative-draft-model-path",
-            cls.draft_model,
-            "--disable-overlap-schedule",
+            "2",
         ]
+        if spec:
+            args += [
+                "--speculative-algorithm",
+                "DSPARK",
+                "--speculative-draft-model-path",
+                cls.draft_model,
+                "--disable-overlap-schedule",
+            ]
+        return args
+
+    @classmethod
+    def _launch(cls, other_args: list):
+        return popen_launch_server(
+            cls.target_model,
+            DEFAULT_URL_FOR_TEST,
+            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+            other_args=other_args,
+        )
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -127,13 +163,19 @@ class TestDSparkTPLosslessQwen3(CustomTestCase, GSM8KMixin):
         if not _checkpoints_available(cls.target_model, cls.draft_model):
             cls.checkpoints_available = False
             return
-        cls.base_url = DEFAULT_URL_FOR_TEST
-        cls.process = popen_launch_server(
-            cls.target_model,
-            cls.base_url,
-            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
-            other_args=cls._spec_args(tp_size=2),
-        )
+        url = DEFAULT_URL_FOR_TEST
+        cls.base_url = url
+
+        ref = cls._launch(cls._base_args(spec=False))
+        try:
+            cls.ref_capture = {
+                p: capture_reference(url, p, _NEAR_TIE_MAX_NEW_TOKENS)
+                for p in _NEAR_TIE_PROMPTS
+            }
+        finally:
+            kill_process_tree(ref.pid)
+
+        cls.process = cls._launch(cls._base_args(spec=True))
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -153,12 +195,46 @@ class TestDSparkTPLosslessQwen3(CustomTestCase, GSM8KMixin):
         if not hasattr(self, "process"):
             self.skipTest("Server not launched (setUpClass failed or skipped).")
 
+    def test_tp2_greedy_parity_near_tie(self):
+        """Every tp=2 DSpark divergence from the tp=2 non-spec reference is a near-tie.
+
+        tp=2-vs-tp=2 exact equality is not reliable (all-reduce fp reorder flips
+        near-tie argmaxes across server instances), so the strict invariant is:
+        any per-token divergence falls on a reference top-2 near-tie (gap <= eps);
+        a divergence at a confident reference token (gap > eps) is a real
+        losslessness bug and fails.
+        """
+        self._maybe_skip()
+        confident_divergences = []
+        near_tie_count = 0
+        for prompt in _NEAR_TIE_PROMPTS:
+            reference = self.ref_capture[prompt]
+            spec_out = greedy_request(self.base_url, prompt, _NEAR_TIE_MAX_NEW_TOKENS)
+            divergence = first_token_divergence(reference, spec_out)
+            if divergence is None:
+                continue
+            if divergence.top2_gap > _NEAR_TIE_EPS:
+                confident_divergences.append((prompt, divergence))
+            else:
+                near_tie_count += 1
+        self.assertEqual(
+            confident_divergences,
+            [],
+            f"DSpark tp=2 diverged from the tp=2 non-spec reference at a confident "
+            f"token (top-2 gap > {_NEAR_TIE_EPS} nats): {confident_divergences!r}. "
+            f"A lossless accept path cannot do this.",
+        )
+        print(
+            f"tp=2 near-tie parity: {near_tie_count} near-tie divergence(s), "
+            f"0 confident, over {len(_NEAR_TIE_PROMPTS)} prompts"
+        )
+
     def test_tp2_greedy_determinism(self):
         """DSpark tp=2 greedy output must be deterministic (cross-rank consistent)."""
         self._maybe_skip()
         prompt = "The capital of Germany is"
-        out1 = _greedy_request(self.base_url, prompt)
-        out2 = _greedy_request(self.base_url, prompt)
+        out1 = greedy_request(self.base_url, prompt, 32)
+        out2 = greedy_request(self.base_url, prompt, 32)
         self.assertEqual(out1, out2, "DSpark tp=2 greedy output is not deterministic.")
         self.assertIsNone(self.process.poll())
 
