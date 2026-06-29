@@ -946,6 +946,16 @@ class DeepseekV4HipRadixBackend(
                 out_cache_loc=out_cache_loc,
             )
         elif forward_batch.forward_mode.is_target_verify():
+            if getattr(
+                getattr(forward_batch, "spec_info", None),
+                "ragged_verify_layout",
+                None,
+            ) is not None:
+                raise NotImplementedError(
+                    "DSV4 ragged verify is not supported on the HIP backend "
+                    "(DeepseekV4HipRadixBackend); disable SGLANG_RAGGED_VERIFY "
+                    "or use a CUDA device."
+                )
             metadata = self.init_forward_metadata_target_verify(
                 max_seq_len=max_seq_len,
                 req_pool_indices=req_pool_indices,
