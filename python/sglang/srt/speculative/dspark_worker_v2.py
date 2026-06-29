@@ -4,7 +4,7 @@ from typing import Optional
 import msgspec
 import torch
 
-from sglang.srt.distributed import get_tp_group
+from sglang.srt.distributed.communication_op import tensor_model_parallel_all_gather
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.managers.scheduler import GenerationBatchResult
 from sglang.srt.managers.tp_worker import TpModelWorker
@@ -19,10 +19,10 @@ from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
 from sglang.srt.speculative.dflash_info import DFlashVerifyInput
 from sglang.srt.speculative.dflash_info_v2 import DFlashDraftInputV2
 from sglang.srt.speculative.dflash_utils import (
+    _get_or_create_chain_verify_buffers,
     apply_dflash_verify_logits_adjustments,
     build_dflash_verify_target_probs,
     compute_dflash_correct_drafts_and_bonus,
-    _get_or_create_chain_verify_buffers,
 )
 from sglang.srt.speculative.draft_worker_common import (
     build_block_pos_offsets,
@@ -61,7 +61,10 @@ class DSparkWorkerV2(BaseSpecWorker):
     ``gamma+1`` window ``[anchor, s_0..s_{γ-1}]``. Lossless: greedy verify is
     argmax-match (DFlash rule), sampling verify is rejection sampling via the
     chain kernel fed the real Markov draft distribution. Model-agnostic over the
-    draft backbone (Qwen3 / Gemma4 dense). MVP: tp_size == 1.
+    draft backbone (Qwen3 / Gemma4 dense). Supports tp_size > 1: the base logits
+    are TP all-gathered to a full, per-rank-identical vocab, after which the bare
+    serial Markov sampling and accept coin auto-align across ranks via the same
+    "same seed + SPMD lockstep RNG" the main sampler relies on.
     """
 
     def __init__(
@@ -88,13 +91,6 @@ class DSparkWorkerV2(BaseSpecWorker):
         self.model_runner = target_worker.model_runner
         self.page_size = server_args.page_size
         self.device = target_worker.device
-
-        if get_tp_group().world_size != 1:
-            raise NotImplementedError(
-                "DSpark speculative decoding currently supports tp_size == 1 only "
-                f"(got tp world_size={get_tp_group().world_size}). The serial Markov "
-                "draft requires a full-vocab logits/sampler that is not yet TP-sharded."
-            )
 
         # Draft runner (separate KV cache + attention backend), shared with DFlash.
         bundle = build_draft_tp_worker(
@@ -286,25 +282,23 @@ class DSparkWorkerV2(BaseSpecWorker):
         bonus_tokens: torch.Tensor,
         new_seq_lens: torch.Tensor,
     ) -> DFlashDraftInputV2:
-        return make_draft_input_v2(
-            bonus_tokens=bonus_tokens, new_seq_lens=new_seq_lens
-        )
+        return make_draft_input_v2(bonus_tokens=bonus_tokens, new_seq_lens=new_seq_lens)
 
     def _compute_base_logits(
         self, *, draft_hidden: torch.Tensor, lm_head
     ) -> torch.Tensor:
-        # ParallelLMHead.forward is intentionally disabled; compute full-vocab base
-        # logits directly from the head weight. MVP is tp_size == 1, where the full
-        # (real) vocab lives on this rank at org_vocab_start == 0.
+        # ParallelLMHead.forward is intentionally disabled; compute base logits
+        # directly from the head weight (the local vocab shard under TP), then
+        # TP all-gather to full vocab so every rank holds an identical, full-vocab
+        # tensor, mirroring LogitsProcessor._get_logits (logits_processor.py:858).
         weight = lm_head.weight
-        if hasattr(lm_head, "shard_indices"):
-            num_org = int(lm_head.shard_indices.num_org_elements)
-        else:
-            num_org = int(weight.shape[0])
         hidden = draft_hidden
         if hidden.dtype != weight.dtype:
             hidden = hidden.to(weight.dtype)
-        return torch.matmul(hidden, weight[:num_org].T)
+        local_logits = torch.matmul(hidden, weight.T)
+        full_logits = tensor_model_parallel_all_gather(local_logits, dim=-1)
+        org_vocab_size = int(lm_head.org_vocab_size)
+        return full_logits[..., :org_vocab_size]
 
     def _sample_draft_block(
         self,
@@ -424,13 +418,13 @@ class DSparkWorkerV2(BaseSpecWorker):
     ) -> torch.Tensor:
         bs = draft_tokens.shape[0]
         out_tokens = torch.empty(
-            (bs, self.verify_num_draft_tokens), dtype=torch.int64, device=draft_tokens.device
+            (bs, self.verify_num_draft_tokens),
+            dtype=torch.int64,
+            device=draft_tokens.device,
         )
         out_tokens[:, : self.gamma].copy_(draft_tokens)
         out_tokens[:, self.gamma].fill_(0)
-        out_tokens.scatter_(
-            1, correct_len.to(torch.int64)[:, None], bonus[:, None]
-        )
+        out_tokens.scatter_(1, correct_len.to(torch.int64)[:, None], bonus[:, None])
         return out_tokens
 
     def forward_batch_generation(
@@ -448,7 +442,9 @@ class DSparkWorkerV2(BaseSpecWorker):
 
         return self._forward_decode(batch, on_publish)
 
-    def _forward_prefill(self, batch: ScheduleBatch, on_publish) -> GenerationBatchResult:
+    def _forward_prefill(
+        self, batch: ScheduleBatch, on_publish
+    ) -> GenerationBatchResult:
         batch.capture_hidden_mode = CaptureHiddenMode.FULL
         batch_output = self.target_worker.forward_batch_generation(batch)
         logits_output = batch_output.logits_output
@@ -654,7 +650,9 @@ class DSparkWorkerV2(BaseSpecWorker):
             can_run_cuda_graph=can_run_cuda_graph,
         )
 
-    def _forward_decode(self, batch: ScheduleBatch, on_publish) -> GenerationBatchResult:
+    def _forward_decode(
+        self, batch: ScheduleBatch, on_publish
+    ) -> GenerationBatchResult:
         if batch.spec_info is None:
             batch.spec_info = DFlashDraftInputV2.create_idle_input(device=self.device)
         draft_input = batch.spec_info
