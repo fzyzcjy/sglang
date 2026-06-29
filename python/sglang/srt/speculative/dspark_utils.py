@@ -145,13 +145,27 @@ def parse_dspark_draft_config(*, draft_hf_config: Any) -> DSparkDraftConfig:
                 f"Supported: {SUPPORTED_DSPARK_MARKOV_HEAD_TYPES}."
             )
 
+    raw_mask_token_id = dspark_cfg.get(
+        "mask_token_id",
+        _cfg_get(
+            text_config,
+            "mask_token_id",
+            _cfg_get(draft_hf_config, "mask_token_id", base.mask_token_id),
+        ),
+    )
+    mask_token_id = int(raw_mask_token_id) if raw_mask_token_id is not None else None
+    if mask_token_id is not None and mask_token_id < 0:
+        raise ValueError(
+            f"DSpark mask_token_id must be non-negative, got {mask_token_id}."
+        )
+
     return DSparkDraftConfig(
         num_hidden_layers=base.num_hidden_layers,
         num_target_layers=base.num_target_layers,
         gamma=base.block_size,
         target_layer_ids=base.target_layer_ids,
         mask_token=base.mask_token,
-        mask_token_id=base.mask_token_id,
+        mask_token_id=mask_token_id,
         markov_rank=markov_rank,
         markov_head_type=markov_head_type,
     )
