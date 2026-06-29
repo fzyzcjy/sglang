@@ -14,7 +14,7 @@ from sglang.test.test_utils import (
 register_cuda_ci(est_time=900, stage="base-b", runner_config="2-gpu-large")
 
 DEFAULT_TARGET_MODEL_DSPARK_QWEN3 = "Qwen/Qwen3-8B"
-DEFAULT_DRAFT_MODEL_DSPARK_QWEN3 = "z-lab/Qwen3-8B-DSpark"
+DEFAULT_DRAFT_MODEL_DSPARK_QWEN3 = "deepseek-ai/dspark_qwen3_8b_block7"
 
 _PARITY_PROMPTS = [
     "The capital of France is",

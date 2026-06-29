@@ -16,10 +16,10 @@ from sglang.test.test_utils import (
 register_cuda_ci(est_time=600, stage="base-b", runner_config="1-gpu-large")
 
 DEFAULT_TARGET_MODEL_DSPARK_QWEN3 = "Qwen/Qwen3-8B"
-DEFAULT_DRAFT_MODEL_DSPARK_QWEN3 = "z-lab/Qwen3-8B-DSpark"
+DEFAULT_DRAFT_MODEL_DSPARK_QWEN3 = "deepseek-ai/dspark_qwen3_8b_block7"
 
-DEFAULT_TARGET_MODEL_DSPARK_GEMMA4 = "google/gemma-4-9b"
-DEFAULT_DRAFT_MODEL_DSPARK_GEMMA4 = "z-lab/Gemma4-9B-DSpark"
+DEFAULT_TARGET_MODEL_DSPARK_GEMMA4 = "google/gemma-4-12B-it"
+DEFAULT_DRAFT_MODEL_DSPARK_GEMMA4 = "deepseek-ai/dspark_gemma4_12b_block7"
 
 # The ragged-verify flag (SGLANG_RAGGED_VERIFY) and RaggedVerifyLayout are owned
 # by the ragged-verify-infra chapter and are not yet landed in any speculative
