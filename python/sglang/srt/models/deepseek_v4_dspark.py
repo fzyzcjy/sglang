@@ -20,9 +20,12 @@ from sglang.srt.layers.linear import ColumnParallelLinear, RowParallelLinear
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.vocab_parallel_embedding import VocabParallelEmbedding
 from sglang.srt.model_loader.weight_utils import default_weight_loader
-from sglang.srt.models import deepseek_v2
 from sglang.srt.models.dbrx import ReplicatedLinear
-from sglang.srt.models.deepseek_v4 import make_hc_head_params, make_hc_mixing_params
+from sglang.srt.models.deepseek_v4 import (
+    DeepseekV4DecoderLayer,
+    hc_head_torch,
+    make_hc_head_params,
+)
 from sglang.srt.speculative.dspark_utils import parse_dspark_draft_config
 from sglang.srt.utils import add_prefix
 
@@ -77,9 +80,10 @@ class DSparkAttention(nn.Module):
     Mirrors the reference ``DSparkAttention`` (model.py:750). The draft KV is the
     target hidden state (``main_x``) projected through ``wkv``/``kv_norm``/rope and
     written into a per-request sliding-window ring; the draft queries attend that ring
-    plus the current full draft block (non-causal). Reuses the V4 MLA projection
-    submodules but owns its own KV ring (the production paged pool is wired by the
-    worker in Phase b).
+    plus the current full draft block (non-causal). Kept separate from the base
+    ``MQALayer`` (RadixAttention + paged pool + compressor/indexer): this draft path is
+    compress_ratio == 0, non-causal full-block, and owns its own KV ring (the production
+    paged pool is wired by the worker in Phase b).
     """
 
     def __init__(
@@ -391,12 +395,16 @@ def _greedy_step_sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tens
     return step_logits.argmax(dim=-1)
 
 
-class DSparkV4Stage(nn.Module):
+class DSparkV4Stage(DeepseekV4DecoderLayer):
     """One DSpark MTP stage (reference ``DSparkBlock`` model.py:818).
 
-    Reuses the V4 MoE and HC parameters; swaps in ``DSparkAttention``. The pure-torch
-    HC pre/post/head mirror the reference ``Block``; on GPU these align with the target
-    model's mHC numerics (the target uses fused kernels for the same math).
+    Subclasses ``DeepseekV4DecoderLayer`` to reuse its MoE, mHC mixing params, norms,
+    and the ``hc_pre``/``hc_post`` math; only the attention submodule (``DSparkAttention``
+    via ``_build_self_attn``) and the forward contract differ. The base ``hc_pre``/
+    ``hc_post`` operate on token-flattened ``[N, hc, d]``; the draft bridges its 4D
+    ``[b, s, hc, d]`` reference tensors to that contract. On GPU these reuse the target
+    model's fused mHC kernels (same math); without the fused env flags they fall back to
+    the identical pure-torch path.
     """
 
     def __init__(
@@ -409,39 +417,14 @@ class DSparkV4Stage(nn.Module):
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
     ) -> None:
-        super().__init__()
-        self.layer_id = layer_id
+        super().__init__(
+            config=config,
+            layer_id=layer_id,
+            quant_config=quant_config,
+            prefix=prefix,
+        )
         self.stage_id = stage_id
         self.dim = config.hidden_size
-        self.norm_eps = config.rms_norm_eps
-        self.hc_eps = config.hc_eps
-        self.hc_mult = hc_mult = config.hc_mult
-        self.hc_sinkhorn_iters = config.hc_sinkhorn_iters
-
-        self.attn = DSparkAttention(
-            config=config,
-            layer_id=layer_id,
-            quant_config=quant_config,
-            prefix=add_prefix("attn", prefix),
-        )
-        self.ffn = deepseek_v2.DeepseekV2MoE(
-            config=config,
-            quant_config=quant_config,
-            prefix=add_prefix("ffn", prefix),
-            layer_id=layer_id,
-            is_deepseek_v4=True,
-        )
-        self.attn_norm = RMSNorm(config.hidden_size, eps=self.norm_eps)
-        self.ffn_norm = RMSNorm(config.hidden_size, eps=self.norm_eps)
-
-        (
-            self.hc_attn_fn,
-            self.hc_ffn_fn,
-            self.hc_attn_base,
-            self.hc_ffn_base,
-            self.hc_attn_scale,
-            self.hc_ffn_scale,
-        ) = make_hc_mixing_params(hc_mult, config.hidden_size)
 
         if stage_id == 0:
             if num_target_layers <= 0:
@@ -455,61 +438,71 @@ class DSparkV4Stage(nn.Module):
                 quant_config=quant_config,
                 prefix=add_prefix("main_proj", prefix),
             )
-            self.main_norm = RMSNorm(config.hidden_size, eps=self.norm_eps)
+            self.main_norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
         if stage_id == num_stages - 1:
-            self.norm = RMSNorm(config.hidden_size, eps=self.norm_eps)
+            self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
             (
                 self.hc_head_fn,
                 self.hc_head_base,
                 self.hc_head_scale,
-            ) = make_hc_head_params(hc_mult, config.hidden_size)
+            ) = make_hc_head_params(config.hc_mult, config.hidden_size)
 
-    def hc_pre(
+    def _build_self_attn(
+        self,
+        *,
+        config: DeepSeekV4Config,
+        layer_id: int,
+        quant_config: Optional[QuantizationConfig],
+        prefix: str,
+        alt_streams: Optional[List[torch.cuda.Stream]],
+        compress_ratio_override: Optional[int],
+    ) -> nn.Module:
+        del alt_streams, compress_ratio_override
+        return DSparkAttention(
+            config=config,
+            layer_id=layer_id,
+            quant_config=quant_config,
+            prefix=prefix,
+        )
+
+    def _hc_pre_block(
         self,
         x: torch.Tensor,
         hc_fn: torch.Tensor,
         hc_scale: torch.Tensor,
         hc_base: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        from sglang.srt.layers.mhc import hc_split_sinkhorn
-
-        shape, dtype = x.size(), x.dtype
-        x = x.flatten(2).float()
-        rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
-        mixes = F.linear(x, hc_fn) * rsqrt
-        pre, post, comb = hc_split_sinkhorn(
-            mixes, hc_scale, hc_base, self.hc_mult, self.hc_sinkhorn_iters, self.hc_eps
+        """Bridge the 4D draft tensor to the base ``hc_pre`` (token-flattened ``[N, hc, d]``)."""
+        bsz, block_size = x.shape[:2]
+        y, post, comb, _ = self.hc_pre(
+            x.reshape(bsz * block_size, self.hc_mult, self.dim),
+            hc_fn,
+            hc_scale,
+            hc_base,
         )
-        y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=2)
-        return y.to(dtype), post, comb
+        return (
+            y.view(bsz, block_size, self.dim),
+            post.view(bsz, block_size, self.hc_mult),
+            comb.view(bsz, block_size, self.hc_mult, self.hc_mult),
+        )
 
-    def hc_post(
+    def _hc_post_block(
         self,
         x: torch.Tensor,
         residual: torch.Tensor,
         post: torch.Tensor,
         comb: torch.Tensor,
     ) -> torch.Tensor:
-        y = post.unsqueeze(-1) * x.unsqueeze(-2) + torch.sum(
-            comb.unsqueeze(-1) * residual.unsqueeze(-2), dim=2
+        """Bridge the 4D draft tensor to the base ``hc_post`` (token-flattened ``[N, hc, d]``)."""
+        bsz, block_size = x.shape[:2]
+        y = self.hc_post(
+            x.reshape(bsz * block_size, self.dim),
+            residual.reshape(bsz * block_size, self.hc_mult, self.dim),
+            post.reshape(bsz * block_size, self.hc_mult),
+            comb.reshape(bsz * block_size, self.hc_mult, self.hc_mult),
         )
-        return y.type_as(x)
-
-    def hc_head(
-        self,
-        x: torch.Tensor,
-        hc_fn: torch.Tensor,
-        hc_scale: torch.Tensor,
-        hc_base: torch.Tensor,
-    ) -> torch.Tensor:
-        shape, dtype = x.size(), x.dtype
-        x = x.flatten(2).float()
-        rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
-        mixes = F.linear(x, hc_fn) * rsqrt
-        pre = torch.sigmoid(mixes * hc_scale + hc_base) + self.hc_eps
-        y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=2)
-        return y.to(dtype)
+        return y.view(bsz, block_size, self.hc_mult, self.dim)
 
     def forward(
         self,
@@ -520,29 +513,29 @@ class DSparkV4Stage(nn.Module):
     ) -> torch.Tensor:
         if start_pos == 0:
             # Prefill only fills the draft KV window; the full block runs on decode.
-            return self.attn(x, start_pos, main_x)
+            return self.self_attn(x, start_pos, main_x)
 
         residual = x
-        x, post, comb = self.hc_pre(
+        x, post, comb = self._hc_pre_block(
             x, self.hc_attn_fn, self.hc_attn_scale, self.hc_attn_base
         )
-        x = self.attn_norm(x)
-        x = self.attn(x, start_pos, main_x)
-        x = self.hc_post(x, residual, post, comb)
+        x = self.input_layernorm(x)
+        x = self.self_attn(x, start_pos, main_x)
+        x = self._hc_post_block(x, residual, post, comb)
 
         residual = x
-        x, post, comb = self.hc_pre(
+        x, post, comb = self._hc_pre_block(
             x, self.hc_ffn_fn, self.hc_ffn_scale, self.hc_ffn_base
         )
-        x = self.ffn_norm(x)
+        x = self.post_attention_layernorm(x)
         x = self._run_ffn(x, input_ids)
-        x = self.hc_post(x, residual, post, comb)
+        x = self._hc_post_block(x, residual, post, comb)
         return x
 
     def _run_ffn(self, x: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
         shape = x.shape
         x = x.reshape(-1, self.dim)
-        y = self.ffn(x)
+        y = self.mlp(x)
         return y.view(shape)
 
 
@@ -609,6 +602,8 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
             markov_rank=int(dspark_config.markov_rank),
         )
         self.hc_mult = int(config.hc_mult)
+        self.norm_eps = float(config.rms_norm_eps)
+        self.hc_eps = float(config.hc_eps)
 
         self.embed_tokens: Optional[nn.Module] = None
         self.lm_head: Optional[nn.Module] = None
@@ -642,7 +637,7 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         """
         main_x = self.project_target_hidden(main_hidden)
         for stage in self.stages:
-            stage.attn.project_and_store_main_kv(
+            stage.self_attn.project_and_store_main_kv(
                 main_x, start_pos, is_prefill=is_prefill
             )
         return main_x
@@ -671,7 +666,14 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
                 "(call attach_shared_modules first)."
             )
         last = self.stages[-1]
-        x = last.hc_head(x, last.hc_head_fn, last.hc_head_scale, last.hc_head_base)
+        x = hc_head_torch(
+            x,
+            last.hc_head_fn,
+            last.hc_head_scale,
+            last.hc_head_base,
+            norm_eps=self.norm_eps,
+            hc_eps=self.hc_eps,
+        )
         x = last.norm(x)
         return F.linear(x.float(), self.lm_head.weight.float())
 
@@ -814,6 +816,10 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
             return f"markov_head.{rest[len('markov_head.'):]}"
 
         mapped_rest = rest
+        mapped_rest = mapped_rest.replace("attn.", "self_attn.", 1)
+        mapped_rest = mapped_rest.replace("ffn.", "mlp.", 1)
+        mapped_rest = mapped_rest.replace("attn_norm.", "input_layernorm.", 1)
+        mapped_rest = mapped_rest.replace("ffn_norm.", "post_attention_layernorm.", 1)
         mapped_rest = mapped_rest.replace(".w1.", ".gate_proj.")
         mapped_rest = mapped_rest.replace(".w2.", ".down_proj.")
         mapped_rest = mapped_rest.replace(".w3.", ".up_proj.")
