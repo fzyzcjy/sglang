@@ -148,6 +148,15 @@ class TestTargetVerifyGraphKey(CustomTestCase):
                 backend, bs=3, ragged_layout=layout
             )
 
+    def test_graph_num_tokens_must_equal_total(self):
+        """A graph_num_tokens != total_verify_tokens (round-up bucket) fails loud here."""
+        backend = _stub_backend(num_draft_tokens=6)
+        layout = _make_layout([6, 3, 1], graph_num_tokens=12)
+        with self.assertRaises(AssertionError):
+            DeepseekV4AttnBackend._target_verify_graph_key(
+                backend, bs=3, ragged_layout=layout
+            )
+
     def test_uniform_full_block_layout_matches_bs_block(self):
         """A uniform full-block layout (all num_draft) yields num_draft*bs tokens."""
         backend = _stub_backend(num_draft_tokens=6)

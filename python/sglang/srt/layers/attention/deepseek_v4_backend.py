@@ -595,6 +595,12 @@ class DeepseekV4AttnBackend(
             f"ragged verify graph_num_tokens={graph_num_tokens} exceeds full block "
             f"num_draft*bs={num_tokens_full_block}"
         )
+        assert graph_num_tokens == ragged_layout.total_verify_tokens, (
+            "DSV4 token-keyed verify graph requires graph_num_tokens == "
+            f"total_verify_tokens, got {graph_num_tokens} vs "
+            f"{ragged_layout.total_verify_tokens}; round-up-to-grid bucket padding "
+            "is the decode cuda-graph runner's job (infra section 12.F, not wired)."
+        )
         return graph_num_tokens, graph_num_tokens
 
     def _make_target_verify_c128_metadata(
@@ -795,10 +801,15 @@ class DeepseekV4AttnBackend(
                 verify_lens = None
                 total_verify_tokens = self.speculative_num_draft_tokens * bs
             else:
+                if not hasattr(self, "extend_start_loc_buffer"):
+                    self.extend_start_loc_buffer = torch.zeros(
+                        1025, dtype=torch.int32, device=self.device
+                    )
                 self.extend_seq_lens_buffer[:bs].copy_(ragged_layout.verify_lens)
+                self.extend_start_loc_buffer[:bs].copy_(ragged_layout.extend_start_loc)
                 extend_seq_lens = self.extend_seq_lens_buffer[:bs]
-                extend_start_loc = ragged_layout.extend_start_loc
-                verify_lens = ragged_layout.verify_lens
+                extend_start_loc = self.extend_start_loc_buffer[:bs]
+                verify_lens = self.extend_seq_lens_buffer[:bs]
                 total_verify_tokens = ragged_layout.total_verify_tokens
 
             return DSV4RawVerifyMetadata(
@@ -892,7 +903,7 @@ class DeepseekV4AttnBackend(
 
         is_ragged = raw_metadata.verify_lens is not None
         if is_ragged:
-            seq_lens = seq_lens + raw_metadata.verify_lens
+            seq_lens = seq_lens + extend_seq_lens
             num_q_tokens = raw_metadata.total_verify_tokens
             seq_lens_casual, req_pool_indices_repeated = self._expand_verify_ragged(
                 num_tokens=num_q_tokens,
