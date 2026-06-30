@@ -116,9 +116,9 @@ def _get_target_verify_bs(forward_batch: ForwardBatch) -> int:
 
 # Verify-schedule mode string constants, mirroring RaggedVerifyMode values
 # (single source of truth).
-RAGGED_VERIFY_OFF = RaggedVerifyMode.STATIC.value
-RAGGED_VERIFY_CUTOFF_ONLY = RaggedVerifyMode.CAP_ACCEPT.value
-RAGGED_VERIFY_FULL = RaggedVerifyMode.COMPACT.value
+RAGGED_VERIFY_STATIC = RaggedVerifyMode.STATIC.value
+RAGGED_VERIFY_CAP_ACCEPT = RaggedVerifyMode.CAP_ACCEPT.value
+RAGGED_VERIFY_COMPACT = RaggedVerifyMode.COMPACT.value
 RAGGED_VERIFY_CHOICES = tuple(m.value for m in RaggedVerifyMode)
 
 
@@ -860,7 +860,7 @@ class DeepseekV4AttnBackend(
         layout = _resolve_ragged_verify_layout(forward_batch)
         if layout is None:
             return None
-        if _ragged_verify_mode() != RAGGED_VERIFY_FULL:
+        if _ragged_verify_mode() != RAGGED_VERIFY_COMPACT:
             return None
         if get_parallel().attn_cp_size > 1:
             raise NotImplementedError(
