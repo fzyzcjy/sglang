@@ -276,6 +276,14 @@ class DSparkWorkerV2(BaseSpecWorker):
         # table (budget = verify-all-up-to-max). Flat is the inert default for
         # cap-accept, which has zero throughput gain; the GPU profiler hook lands
         # with the compact real-N path.
+        #
+        # Until a profiled (non-flat) table ships the hardware-aware scheduler is a
+        # no-op: lookup() returns a constant, so the verify-token budget degenerates
+        # to verify-all and every request keeps verify_len == gamma+1. The
+        # verify_lens >= 1 anchor contract (see DSparkScheduleConfig.min_verify_len
+        # and schedule_verify_lens_topk's lower-bound clamp) MUST be in place before
+        # any profiled table is supplied, because a non-flat table yields small K
+        # and would otherwise drive verify_len to 0.
         sps_table_path = os.environ.get("SGLANG_DSPARK_SPS_TABLE_PATH")
         if sps_table_path:
             return load_sps_table_from_path(sps_table_path)
@@ -654,8 +662,9 @@ class DSparkWorkerV2(BaseSpecWorker):
         device: torch.device,
     ) -> Optional[RaggedVerifyLayout]:
         # Gate: STATIC -> None (uniform path). CAP_ACCEPT/COMPACT build a ragged
-        # layout from n-2-frozen verify_lens; COMPACT additionally token-keys the
-        # graph and scatter-packs the verify window.
+        # layout from the lagged-confidence verify_lens (see _schedule_verify_lens
+        # for the >= 1-step lag); COMPACT additionally token-keys the graph and
+        # scatter-packs the verify window.
         if self._ragged_verify_mode is RaggedVerifyMode.STATIC:
             return None
         verify_lens = self._schedule_verify_lens(
@@ -678,9 +687,28 @@ class DSparkWorkerV2(BaseSpecWorker):
         device: torch.device,
     ) -> Optional[torch.Tensor]:
         # Shared cutoff/full schedule: derive per-request verify_lens (= 1 + ell_r)
-        # from the n-2-frozen confidence history, broadcast from rank 0 across the
-        # TP group for cross-rank shape consistency. Returns None (-> uniform full
+        # from a lagged confidence snapshot, broadcast from rank 0 across the TP
+        # group for cross-rank shape consistency. Returns None (-> uniform full
         # block) whenever the confidence history is not yet available.
+        #
+        # Lag (deviation from paper §5.2's "two steps prior"): there is no
+        # step-indexed ring/double buffer, just one _confidence_buf behind one
+        # non-blocking CUDA event (see pull_confidence_history). The host reads the
+        # most recent snapshot whose forward-stream write has retired, so under
+        # overlap/ZOS the effective GPU-completion lag is emergent and >= 1 step,
+        # not a structured exactly-two. Losslessness does NOT rely on this lag being
+        # any particular size: it is guaranteed by the accept-cap in
+        # _cap_correct_len (a torch.minimum that only shrinks accept), after which
+        # the bonus is re-read from the target's true distribution at the cap index.
+        #
+        # Sort source (deviation from paper §5.2's "sort by current confidence"):
+        # the same lagged survival snapshot feeds BOTH the budget K
+        # (update_budget_from_history) AND the rank/truncate (compute_verify_lens),
+        # so admission is ordered by the historical snapshot rather than the current
+        # step's confidence. This is intentional -- the accept-cap makes the result
+        # lossless regardless of the sort source, and reading current confidence on
+        # the critical path would break the no-synchronize design; the deviation
+        # only affects throughput quality, never correctness.
         if self._verify_scheduler is None:
             return None
         confidence_history = self.pull_confidence_history()

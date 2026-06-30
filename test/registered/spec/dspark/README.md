@@ -99,5 +99,12 @@ only globs `test/registered/**`).
 - **`compact` (real-N) e2e** in `test_dspark_flag_matrix.py` is `@skip` BLOCKED
   on the ragged-verify routing decision (the backend `graph_num_tokens == total`
   contract mismatch).
-- **`schedule_verify_lens_greedy`** is dead production code (only the topk
-  variant is wired); covered by tests but never called at runtime.
+- **Flat-SPS default makes the scheduler a no-op.** Without
+  `SGLANG_DSPARK_SPS_TABLE_PATH`, `_build_sps_cost_table` returns a flat
+  constant-SPS table, so the verify-token budget degenerates to
+  verify-all-up-to-max and the §5.2 hardware-aware scheduling is inert until a
+  profiled table ships (tracked with the SPS profiler/CLI work). The
+  `verify_lens >= 1` anchor contract (`DSparkScheduleConfig.min_verify_len`
+  default 1 + the topk lower-bound clamp) MUST land before any profiled table is
+  supplied: a non-flat table yields a small budget K and would otherwise drive
+  `verify_len` to 0, which `RaggedVerifyLayout` rejects.
