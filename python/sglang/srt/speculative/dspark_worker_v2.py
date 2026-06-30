@@ -34,6 +34,12 @@ from sglang.srt.speculative.dspark_accept import (
     accept_draft_tokens,
     build_out_tokens,
 )
+from sglang.srt.speculative.dspark_confidence import (
+    _CONFIDENCE_RELAY_LAG_STEPS,
+    _CONFIDENCE_RELAY_RING_DEPTH,
+    ConfidenceRelay,
+    compute_confidence,
+)
 from sglang.srt.speculative.dspark_draft import (
     DsparkDraftSampler,
     make_next_draft_input,
@@ -68,33 +74,8 @@ from sglang.srt.speculative.ragged_verify import (
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.srt.speculative.triton_ops.cache_locs import assign_extend_cache_locs_func
 from sglang.srt.utils import get_available_gpu_memory, is_cuda
-from sglang.srt.utils.async_probe import maybe_detect_in_closed_range
 
 logger = logging.getLogger(__name__)
-
-# Confidence relay ring (paper §5.2 two-steps-prior causal barrier). The K-source
-# reads the confidence stashed _CONFIDENCE_RELAY_LAG_STEPS decode steps earlier so
-# the verify budget K is causally independent of the current step's just-sampled
-# draft tokens. The ring depth must exceed the lag so the slot being read this step
-# is never the one just overwritten (slot s is rewritten at step s + depth).
-#
-# Lag-depth basis (honest, see report): this worker computes verify_lens INLINE
-# within each decode step (_forward_decode: propose -> _stash_confidence ->
-# _schedule_verify_lens, all stream-ordered on the forward stream), so there is no
-# multi-step ZOS/overlap pipeline in THIS path forcing a natural lag -- without the
-# ring the K-source would read the confidence stashed THIS step (lag 0). The ring's
-# lag is therefore a DELIBERATELY imposed causal barrier reproducing the paper's
-# two-steps-prior design, NOT an alignment to an emergent pipeline depth. Any lag
-# >= 1 already yields the barrier (K independent of the current step's tokens);
-# 2 reproduces the paper literally. The optimal value depends on the deployed ZOS /
-# overlap configuration, which cannot be measured on CPU -- it is a single tunable
-# constant and should be validated on GPU. Losslessness never depends on the lag:
-# it is guaranteed by the accept-cap in _cap_correct_len.
-_CONFIDENCE_RELAY_LAG_STEPS: int = 2
-_CONFIDENCE_RELAY_RING_DEPTH: int = _CONFIDENCE_RELAY_LAG_STEPS + 1
-# Sentinel for a ring-slot row that was never written (or written for a different
-# request), used by the per-row identity guard to mask stale rows before forming K.
-_CONFIDENCE_RELAY_UNSET_SEQ_LEN: int = -1
 
 
 class DSparkWorkerV2(BaseSpecWorker):
@@ -254,9 +235,11 @@ class DSparkWorkerV2(BaseSpecWorker):
         # buffers, no events, no compute) when the draft model lacks a
         # confidence head, so the a+b lossless decode path is unchanged.
         self._confidence_head = getattr(self.draft_model, "confidence_head", None)
-        self._confidence_ring: Optional[torch.Tensor] = None
-        self._confidence_ring_seq_lens: Optional[torch.Tensor] = None
-        self._confidence_step_ct: int = 0
+        self._confidence_relay = ConfidenceRelay(
+            device=self.device,
+            gamma=self.gamma,
+            model_runner=self.model_runner,
+        )
         if self._confidence_head is not None and self.tp_rank == 0:
             logger.info(
                 "DSpark confidence head enabled (with_markov=%s); confidence is "
@@ -552,98 +535,6 @@ class DSparkWorkerV2(BaseSpecWorker):
                 pool=pool,
             )
 
-    def _build_markov_embed_stack(
-        self,
-        *,
-        anchor_tokens: torch.Tensor,
-        draft_tokens: torch.Tensor,
-    ) -> torch.Tensor:
-        # Per-step prev tokens fed to the Markov head during the serial loop:
-        # step 0 sees the anchor, step i (>0) sees the previously sampled token,
-        # i.e. prev_seq = [anchor, s_0, ..., s_{gamma-2}] (the chapter's
-        # off-by-one). markov_embed[:, i] = markov_w1(prev_seq[:, i]).
-        markov_head = self.draft_model.markov_head
-        prev_seq = torch.cat(
-            [anchor_tokens.view(-1, 1), draft_tokens[:, : self.gamma - 1]], dim=1
-        )
-        return markov_head.get_prev_embeddings(prev_seq)
-
-    def _compute_confidence(
-        self,
-        *,
-        draft_hidden: torch.Tensor,
-        anchor_tokens: torch.Tensor,
-        draft_tokens: torch.Tensor,
-    ) -> torch.Tensor:
-        # Dense DSpark: the confidence head consumes the same post-norm draft
-        # hidden that feeds base_logits (DeepSpec qwen3 modeling feeds the
-        # post-norm output_hidden to both lm_head and the confidence head). For
-        # with_markov heads it also takes the per-step markov_embed stack.
-        confidence_head = self._confidence_head
-        assert confidence_head is not None
-        if confidence_head.with_markov:
-            markov_embed_stack = self._build_markov_embed_stack(
-                anchor_tokens=anchor_tokens, draft_tokens=draft_tokens
-            )
-        else:
-            markov_embed_stack = None
-        confidence_raw = confidence_head(draft_hidden, markov_embed_stack)
-        # STS calibration is identity in the MVP (no reference); the head logit
-        # is mapped to (0, 1) by sigmoid. Losslessness does not depend on the
-        # calibration quality, only on the scheduler being non-anticipating.
-        confidence = torch.sigmoid(confidence_raw.float())
-        # Closed interval: sigmoid saturates to exactly 0.0/1.0 at fp32 for large
-        # logits. Advisory only; async + gated, no per-step sync.
-        maybe_detect_in_closed_range(confidence, 0.0, 1.0, "DSpark confidence")
-        return confidence
-
-    def _ensure_confidence_relay_buffers(self, *, confidence: torch.Tensor) -> None:
-        if self._confidence_ring is not None:
-            return
-        req_pool_size = int(self.model_runner.req_to_token_pool.req_to_token.shape[0])
-        # Step-indexed ring (paper §5.2): depth slots, each [req_pool_size, gamma],
-        # scatter-written by req_pool_indices on the forward stream. Reads of a slot
-        # written _CONFIDENCE_RELAY_LAG_STEPS steps ago are stream-ordered after that
-        # write, so the relay stays no-synchronize on the critical path (no event /
-        # D2H stream needed -- the prior single-buffer relay's gated host copy is
-        # folded away with pull_confidence_history).
-        self._confidence_ring = torch.empty(
-            (_CONFIDENCE_RELAY_RING_DEPTH, req_pool_size, self.gamma),
-            dtype=confidence.dtype,
-            device=self.device,
-        )
-        # Per-slot per-row request identity (H1): the prefix_len stamped when the
-        # row was written, used to mask ring rows whose lag-steps-prior occupant was
-        # a different request before they enter K. Init to the unset sentinel.
-        self._confidence_ring_seq_lens = torch.full(
-            (_CONFIDENCE_RELAY_RING_DEPTH, req_pool_size),
-            _CONFIDENCE_RELAY_UNSET_SEQ_LEN,
-            dtype=torch.int64,
-            device=self.device,
-        )
-
-    def _stash_confidence(
-        self,
-        *,
-        req_pool_indices: torch.Tensor,
-        confidence: torch.Tensor,
-        prefix_lens: torch.Tensor,
-    ) -> None:
-        # Write this step's confidence into the current ring slot
-        # (step_ct % depth) on the forward stream and stamp the per-row prefix_len
-        # so a later two-steps-prior read can tell whether the slot's occupant is
-        # still the same request (H1). step_ct is advanced once per decode step in
-        # _forward_decode, after both the write and the lagged read.
-        self._ensure_confidence_relay_buffers(confidence=confidence)
-        write_slot = self._confidence_step_ct % _CONFIDENCE_RELAY_RING_DEPTH
-        self._confidence_ring[write_slot, req_pool_indices] = confidence
-        self._confidence_ring_seq_lens[write_slot].fill_(
-            _CONFIDENCE_RELAY_UNSET_SEQ_LEN
-        )
-        self._confidence_ring_seq_lens[write_slot, req_pool_indices] = prefix_lens.to(
-            torch.int64
-        )
-
     def _maybe_schedule_ragged_layout(
         self,
         *,
@@ -706,59 +597,6 @@ class DSparkWorkerV2(BaseSpecWorker):
             graph_num_tokens_floor=graph_num_tokens_floor,
         )
 
-    def _two_steps_prior_k_survival(
-        self,
-        *,
-        req_pool_indices: torch.Tensor,
-        prefix_lens: torch.Tensor,
-    ) -> Optional[torch.Tensor]:
-        # K-source survival for the verify budget: cumprod of the confidence stashed
-        # _CONFIDENCE_RELAY_LAG_STEPS decode steps ago (paper §5.2 two-steps-prior
-        # causal barrier). Reads the lagged ring slot device->device on the forward
-        # stream (stream-ordered after that slot's write, so no synchronize), so the
-        # budget K cannot depend on the current step's just-sampled draft tokens.
-        #
-        # H1 identity guard + cold-start fallback (paper-unspecified engineering
-        # choice): a ring slot is indexed by req-pool row only, and the row's
-        # occupant lag steps ago may be a DIFFERENT request (or none, at cold
-        # start). A row is the SAME request iff its stamped prefix_len is a valid
-        # ancestor of the current prefix_len -- present (>= 0), strictly smaller (a
-        # live request commits >= 1 token/step), and within lag steps of growth
-        # (<= lag * (gamma + 1)). Stale / new / just-switched rows fall back to
-        # verify-all (survival = 1.0 at every position) so they are admitted into
-        # the full window rather than carrying a stranger's confidence into K.
-        if self._confidence_ring is None or self._confidence_ring_seq_lens is None:
-            return None
-        read_slot = (
-            self._confidence_step_ct - _CONFIDENCE_RELAY_LAG_STEPS
-        ) % _CONFIDENCE_RELAY_RING_DEPTH
-        lagged_confidence = self._confidence_ring[read_slot, req_pool_indices]
-        k_survival = torch.cumprod(lagged_confidence.to(torch.float32), dim=1)
-
-        stamped_seq_lens = self._confidence_ring_seq_lens[read_slot, req_pool_indices]
-        growth = prefix_lens.to(torch.int64) - stamped_seq_lens
-        max_growth = _CONFIDENCE_RELAY_LAG_STEPS * (self.gamma + 1)
-        fresh = ((stamped_seq_lens >= 0) & (growth >= 1) & (growth <= max_growth)).view(
-            -1, 1
-        )
-        return torch.where(fresh, k_survival, torch.ones_like(k_survival))
-
-    def _current_live_sort_survival(
-        self, *, req_pool_indices: torch.Tensor
-    ) -> Optional[torch.Tensor]:
-        # Sort-source survival for the rank/truncate (paper §5.2: "sorted by the
-        # actual up-to-date confidence"): cumprod of THIS step's just-stashed
-        # confidence, read from the current ring slot (step_ct % depth) device->device
-        # on the forward stream. Always present for the current batch (it was stashed
-        # this step), so no identity guard / fallback is needed here. Distinct from
-        # the K-source, which is the two-steps-prior survival; admission is ordered by
-        # the current confidence while the budget K is set by the lagged confidence.
-        if self._confidence_ring is None:
-            return None
-        write_slot = self._confidence_step_ct % _CONFIDENCE_RELAY_RING_DEPTH
-        current_confidence = self._confidence_ring[write_slot, req_pool_indices]
-        return torch.cumprod(current_confidence.to(torch.float32), dim=1)
-
     def _verify_lens_broadcast_group(self):
         # Cross-rank shape consistency: rank 0's verify_lens is broadcast to its
         # peers. Under DP-attention each attention-TP group owns a different request
@@ -796,10 +634,10 @@ class DSparkWorkerV2(BaseSpecWorker):
         # cap index. The split affects only scheduling quality, never correctness.
         if self._verify_scheduler is None:
             return None
-        k_survival = self._two_steps_prior_k_survival(
+        k_survival = self._confidence_relay.two_steps_prior_k_survival(
             req_pool_indices=req_pool_indices, prefix_lens=prefix_lens
         )
-        sort_survival = self._current_live_sort_survival(
+        sort_survival = self._confidence_relay.current_live_sort_survival(
             req_pool_indices=req_pool_indices
         )
         if k_survival is None or sort_survival is None:
@@ -1066,23 +904,26 @@ class DSparkWorkerV2(BaseSpecWorker):
         # expose no such hook, so the worker computes confidence from the post-norm
         # ``draft_hidden`` exactly as before (byte-identical). Confidence is advisory
         # only and off by default; losslessness never depends on it.
-        compute_confidence = getattr(self.draft_model, "compute_confidence", None)
-        if compute_confidence is not None:
+        compute_confidence_hook = getattr(self.draft_model, "compute_confidence", None)
+        if compute_confidence_hook is not None:
             with torch.inference_mode():
-                confidence = compute_confidence(
+                confidence = compute_confidence_hook(
                     anchor_tokens=anchor_tokens,
                     sampled_tokens=draft_tokens,
                 )
         else:
             assert draft_hidden is not None
-            confidence = self._compute_confidence(
+            confidence = compute_confidence(
                 draft_hidden=draft_hidden,
                 anchor_tokens=anchor_tokens,
                 draft_tokens=draft_tokens,
+                confidence_head=self._confidence_head,
+                markov_head=self.draft_model.markov_head,
+                gamma=self.gamma,
             )
         if confidence is None:
             return
-        self._stash_confidence(
+        self._confidence_relay.stash(
             req_pool_indices=req_pool_indices,
             confidence=confidence,
             prefix_lens=prefix_lens,
@@ -1586,7 +1427,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             # Advance the relay step counter once per decode step, after this step's
             # write (in _stash_confidence) and lagged read (in _schedule_verify_lens)
             # so both used the same step_ct; the next step then writes the next slot.
-            self._confidence_step_ct += 1
+            self._confidence_relay.advance_step()
         run_compact = (
             self._ragged_verify_mode is RaggedVerifyMode.COMPACT and layout is not None
         )
