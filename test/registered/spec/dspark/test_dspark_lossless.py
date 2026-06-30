@@ -170,6 +170,8 @@ class _DSparkLosslessBase(CustomTestCase, GSM8KMixin):
     attention_backend: str = "flashinfer"
     disable_overlap: bool = False
     mem_fraction_static: float = 0.7
+    # Extra env for the SPEC launches only (e.g. SGLANG_RAGGED_VERIFY_MODE=compact).
+    spec_env = None
 
     # GSM8KMixin knobs. Lossless greedy keeps spec accuracy at the non-spec
     # baseline's level (measured baseline ~0.875, spec ~0.865-0.88 at 200q). 0.84
@@ -214,12 +216,13 @@ class _DSparkLosslessBase(CustomTestCase, GSM8KMixin):
         return args
 
     @classmethod
-    def _launch(cls, other_args: list):
+    def _launch(cls, other_args: list, env=None):
         return popen_launch_server(
             cls.target_model,
             DEFAULT_URL_FOR_TEST,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             other_args=other_args,
+            env=env,
         )
 
     @classmethod
@@ -242,7 +245,7 @@ class _DSparkLosslessBase(CustomTestCase, GSM8KMixin):
         finally:
             kill_process_tree(eager_ref.pid)
 
-        eager_spec = cls._launch(cls._spec_args(cuda_graph=False))
+        eager_spec = cls._launch(cls._spec_args(cuda_graph=False), env=cls.spec_env)
         try:
             cls.eager_spec_exact = {
                 p: greedy_request(url, p, _EAGER_EXACT_MAX_NEW_TOKENS)
@@ -260,7 +263,7 @@ class _DSparkLosslessBase(CustomTestCase, GSM8KMixin):
         finally:
             kill_process_tree(cg_ref.pid)
 
-        cls.process = cls._launch(cls._spec_args(cuda_graph=True))
+        cls.process = cls._launch(cls._spec_args(cuda_graph=True), env=cls.spec_env)
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -424,6 +427,23 @@ class TestDSparkLosslessGemma4(
     target_model = DEFAULT_TARGET_MODEL_DSPARK_GEMMA4
     draft_model = DEFAULT_DRAFT_MODEL_DSPARK_GEMMA4
     disable_overlap = True
+
+
+class TestDSparkLosslessQwen3Compact(
+    _DSparkLosslessBase,
+):
+    """DSpark COMPACT (real-N ragged verify) lossless parity for Qwen3.
+
+    Lossless by construction (shares _accept_greedy; the ell_r cutoff only accepts a
+    shorter correct prefix), so spec greedy output still equals the non-spec ref.
+    Exercises the compact verify path the static subclasses never hit.
+    """
+
+    __test__ = True
+    target_model = DEFAULT_TARGET_MODEL_DSPARK_QWEN3
+    draft_model = DEFAULT_DRAFT_MODEL_DSPARK_QWEN3
+    disable_overlap = False
+    spec_env = {"SGLANG_RAGGED_VERIFY_MODE": "compact"}
 
 
 if __name__ == "__main__":
