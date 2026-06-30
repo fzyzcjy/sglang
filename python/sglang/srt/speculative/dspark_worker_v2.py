@@ -288,9 +288,11 @@ class DSparkWorkerV2(BaseSpecWorker):
 
     def _build_sps_cost_table(self) -> SpsCostTable:
         # Load a pre-profiled table when a path is given, else a flat constant-SPS
-        # table (budget = verify-all-up-to-max). Flat is the inert default for
-        # cap-accept, which has zero throughput gain; the GPU profiler hook lands
-        # with the compact real-N path.
+        # table (budget = verify-all-up-to-max). The expected scheduler-on workflow
+        # is to build the table offline with sglang.benchmark.dspark_sps_profiler
+        # and pass it via --speculative-dspark-sps-table-path (see
+        # docs/advanced_features/dspark_sps_table.md); flat is the inert fallback
+        # for cap-accept, which has zero throughput gain.
         #
         # Until a profiled (non-flat) table ships the hardware-aware scheduler is a
         # no-op: lookup() returns a constant, so the verify-token budget degenerates
@@ -305,6 +307,22 @@ class DSparkWorkerV2(BaseSpecWorker):
         sps_table_path = self.server_args.speculative_dspark_sps_table_path
         if sps_table_path:
             return load_sps_table_from_path(sps_table_path)
+        if self.tp_rank == 0:
+            # Loud, once (per worker init on rank 0): the scheduler is enabled but
+            # the verify budget silently degenerates to verify-all without a
+            # profiled table. Warn rather than no-op silently so a misconfigured
+            # scheduler-on run is visible. Pass --speculative-dspark-sps-table-path
+            # to opt into the hardware-aware schedule.
+            logger.warning(
+                "DSpark ragged-verify scheduler is enabled but no "
+                "--speculative-dspark-sps-table-path was supplied. Falling back to a "
+                "flat constant-SPS table: the hardware-aware verify budget "
+                "degenerates to verify-all-up-to-gamma and yields zero throughput "
+                "gain. Profile a table offline with "
+                "`python -m sglang.benchmark.dspark_sps_profiler` and pass it via "
+                "--speculative-dspark-sps-table-path (see "
+                "docs/advanced_features/dspark_sps_table.md)."
+            )
         max_batch_tokens = max(
             1,
             int(self.server_args.max_running_requests or 1)
