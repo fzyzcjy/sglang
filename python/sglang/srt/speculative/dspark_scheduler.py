@@ -141,50 +141,6 @@ def _value_independent_descending_order(
     return torch.tensor([k[3] for k in keys], dtype=torch.int64, device=probs.device)
 
 
-def schedule_verify_lens_greedy(
-    *,
-    survival_probs: torch.Tensor,
-    sps_table: SpsCostTable,
-    cfg: DSparkScheduleConfig,
-) -> torch.Tensor:
-    cfg.validate()
-    num_requests, _gamma = survival_probs.shape
-    max_len = cfg.resolved_max_verify_len()
-
-    candidate_window = survival_probs[:, cfg.min_verify_len : max_len].to(torch.float64)
-    entries: list[tuple[float, int, int]] = []
-    for request in range(num_requests):
-        for offset in range(candidate_window.shape[1]):
-            prob = float(candidate_window[request, offset])
-            if prob >= cfg.survival_eps:
-                entries.append((prob, cfg.min_verify_len + offset, request))
-
-    entries.sort(key=lambda e: (-e[0], e[1], e[2]))
-
-    selected_extra = [0] * num_requests
-    tau_star = float(num_requests)
-    best_theta = tau_star * sps_table.lookup(num_requests)
-    for index, (prob, _position, request) in enumerate(entries, start=1):
-        candidate_tau_star = tau_star + prob
-        candidate_theta = candidate_tau_star * sps_table.lookup(num_requests + index)
-        if candidate_theta >= best_theta:
-            best_theta = candidate_theta
-            tau_star = candidate_tau_star
-            selected_extra[request] += 1
-        else:
-            break
-
-    verify_lens = torch.tensor(
-        [
-            min(max(cfg.min_verify_len + extra, cfg.min_verify_len), max_len)
-            for extra in selected_extra
-        ],
-        dtype=torch.int32,
-        device=survival_probs.device,
-    )
-    return verify_lens
-
-
 class ConfidencePrefixScheduler:
     def __init__(self, *, sps_table: SpsCostTable, cfg: DSparkScheduleConfig) -> None:
         cfg.validate()

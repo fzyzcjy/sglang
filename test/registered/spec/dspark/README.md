@@ -109,8 +109,6 @@ only globs `test/registered/**`).
 - **`compact` (real-N) e2e** in `test_dspark_flag_matrix.py` is `@skip` BLOCKED
   on the ragged-verify routing decision (the backend `graph_num_tokens == total`
   contract mismatch).
-- **`schedule_verify_lens_greedy`** is dead production code (only the topk
-  variant is wired); covered by tests but never called at runtime.
 - **Flat-SPS default makes the scheduler a no-op.** Without
   `SGLANG_DSPARK_SPS_TABLE_PATH`, `_build_sps_cost_table` returns a flat
   constant-SPS table, so the verify-token budget degenerates to

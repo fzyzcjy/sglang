@@ -7,7 +7,6 @@ from sglang.srt.speculative.dspark_scheduler import (
     DSparkScheduleConfig,
     compute_verify_token_budget,
     schedule_verify_lens,
-    schedule_verify_lens_greedy,
     schedule_verify_lens_topk,
 )
 from sglang.srt.speculative.dspark_sps_table import SpsCostTable
@@ -410,66 +409,6 @@ class TestNonAnticipating(CustomTestCase):
             survival_probs=perturbed, budget=budget, cfg=cfg
         )
         self.assertEqual(int(baseline[1].item()), int(verify_lens[1].item()))
-
-
-class TestScheduleVerifyLensGreedy(CustomTestCase):
-    def test_greedy_appendix_a_early_stops_at_theta_drop(self):
-        """Appendix A: a_1=0.8, SPS=(1.0,0.5,0.45) -> Theta drops at first extra so l_r=0."""
-        survival = torch.tensor(
-            [[0.8, 0.8 * 0.8, 0.8 * 0.8 * 0.8]], dtype=torch.float32
-        )
-        table = SpsCostTable(
-            sample_batch_tokens=[1, 2, 3],
-            sample_steps_per_sec=[1.0, 0.5, 0.45],
-            max_batch_tokens=8,
-        )
-        cfg = DSparkScheduleConfig(gamma=3)
-        verify_lens = schedule_verify_lens_greedy(
-            survival_probs=survival, sps_table=table, cfg=cfg
-        )
-        self.assertEqual(int(verify_lens[0].item()), 0)
-
-    def test_greedy_admits_extra_when_theta_increases(self):
-        """Greedy admits one extra when a high-confidence draft keeps Theta rising."""
-        survival = torch.tensor([[0.95, 0.90, 0.85]], dtype=torch.float32)
-        table = SpsCostTable(
-            sample_batch_tokens=[1, 2, 3, 4],
-            sample_steps_per_sec=[1.0, 1.0, 0.5, 0.45],
-            max_batch_tokens=8,
-        )
-        cfg = DSparkScheduleConfig(gamma=3)
-        verify_lens = schedule_verify_lens_greedy(
-            survival_probs=survival, sps_table=table, cfg=cfg
-        )
-        self.assertGreaterEqual(int(verify_lens[0].item()), 1)
-
-    def test_greedy_zero_when_first_step_drops_theta(self):
-        """Greedy admits nothing when adding the first candidate decreases Theta."""
-        survival = torch.tensor([[0.1, 0.01]], dtype=torch.float32)
-        table = SpsCostTable(
-            sample_batch_tokens=[1, 2, 3],
-            sample_steps_per_sec=[1.0, 0.2, 0.1],
-            max_batch_tokens=8,
-        )
-        cfg = DSparkScheduleConfig(gamma=2)
-        verify_lens = schedule_verify_lens_greedy(
-            survival_probs=survival, sps_table=table, cfg=cfg
-        )
-        self.assertEqual(int(verify_lens[0].item()), 0)
-
-    def test_greedy_respects_min_verify_len(self):
-        """Greedy floors every per-request length at min_verify_len."""
-        survival = torch.tensor([[0.05, 0.01, 0.005]], dtype=torch.float32)
-        table = SpsCostTable(
-            sample_batch_tokens=[1, 2, 3, 4],
-            sample_steps_per_sec=[1.0, 0.1, 0.05, 0.01],
-            max_batch_tokens=8,
-        )
-        cfg = DSparkScheduleConfig(gamma=3, min_verify_len=1)
-        verify_lens = schedule_verify_lens_greedy(
-            survival_probs=survival, sps_table=table, cfg=cfg
-        )
-        self.assertGreaterEqual(int(verify_lens[0].item()), 1)
 
 
 class TestConfidencePrefixScheduler(CustomTestCase):
