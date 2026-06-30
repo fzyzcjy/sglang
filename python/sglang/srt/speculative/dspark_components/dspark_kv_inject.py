@@ -25,7 +25,7 @@ class TargetHiddenKvInjector:
         self.verify_num_draft_tokens = verify_num_draft_tokens
         self._block_pos_offsets = block_pos_offsets
 
-    def _inject_target_hidden_to_draft_kv(
+    def inject_target_hidden(
         self,
         *,
         target_hidden: torch.Tensor,
@@ -56,7 +56,7 @@ class TargetHiddenKvInjector:
 
         pool = self.draft_model_runner.token_to_kv_pool
         if hasattr(pool, "set_swa_key_buffer_radix_fused_norm_rope"):
-            self._inject_target_hidden_to_draft_kv_mla(
+            self._inject_mla(
                 pool=pool,
                 target_hidden=target_hidden,
                 cache_loc=cache_loc,
@@ -78,7 +78,7 @@ class TargetHiddenKvInjector:
                 commit_lens=commit_lens,
             )
 
-    def _inject_target_hidden_to_draft_kv_mla(
+    def _inject_mla(
         self,
         *,
         pool,
@@ -128,7 +128,7 @@ class TargetHiddenKvInjector:
                 pool=pool,
             )
 
-    def _inject_ragged_hidden_to_draft_kv(
+    def inject_ragged(
         self,
         *,
         batch: ScheduleBatch,
@@ -156,7 +156,7 @@ class TargetHiddenKvInjector:
         )
         verify_cache_loc_2d = verify_cache_loc.view(bs, stride)
         hidden = hidden_strided.view(bs, stride, -1)
-        self._inject_target_hidden_to_draft_kv(
+        self.inject_target_hidden(
             target_hidden=hidden.reshape(-1, hidden.shape[-1]),
             cache_loc=verify_cache_loc,
             cache_loc_2d=verify_cache_loc_2d,

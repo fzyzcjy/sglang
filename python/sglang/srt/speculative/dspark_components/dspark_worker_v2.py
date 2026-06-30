@@ -615,7 +615,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             ctx_lens,
             int(sum(batch.extend_lens)),
         )
-        self._kv_injector._inject_target_hidden_to_draft_kv(
+        self._kv_injector.inject_target_hidden(
             target_hidden=logits_output.hidden_states,
             cache_loc=batch.out_cache_loc,
             positions=positions,
@@ -917,11 +917,11 @@ class DSparkWorkerV2(BaseSpecWorker):
         # Commit the accepted tokens' target hidden into the draft KV pool. Every
         # draft (dense + V4) writes the committed prefix back into its real pool here;
         # the MHA-vs-MLA write is dispatched by pool capability inside
-        # ``_inject_target_hidden_to_draft_kv``. ``commit_lens`` (= 1 + correct_len)
+        # ``inject_target_hidden``. ``commit_lens`` (= 1 + correct_len)
         # bounds the per-request committed window, and for the MLA single-latent pool
         # selects the accepted bonus slot per request.
         if run_compact:
-            self._kv_injector._inject_ragged_hidden_to_draft_kv(
+            self._kv_injector.inject_ragged(
                 batch=batch,
                 layout=layout,
                 hidden_strided=hidden_strided,
@@ -933,7 +933,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         if hidden is None:
             raise RuntimeError("DSpark verify requires target hidden states, got None.")
         hidden = hidden.view(bs, self.verify_num_draft_tokens, -1)
-        self._kv_injector._inject_target_hidden_to_draft_kv(
+        self._kv_injector.inject_target_hidden(
             target_hidden=hidden.reshape(-1, hidden.shape[-1]),
             cache_loc=verify_window.verify_cache_loc,
             cache_loc_2d=verify_window.verify_cache_loc_2d,
