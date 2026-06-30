@@ -9,6 +9,7 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
+import msgspec
 import torch
 
 from sglang.srt.environ import envs
@@ -37,6 +38,7 @@ if is_flashinfer_available():
 if TYPE_CHECKING:
     from sglang.srt.layers.radix_attention import RadixAttention
     from sglang.srt.model_executor.model_runner import ModelRunner
+    from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
     from sglang.srt.speculative.spec_info import SpecInput
 
 # Constants
@@ -64,6 +66,52 @@ class TRTLLMMHAMetadata:
     swa_page_table: torch.Tensor = None
     # full->SWA translated out_cache_loc (SWA KV-store write target)
     swa_out_cache_loc: torch.Tensor = None
+    # True when this is a DSpark compact / real-N ragged verify forward: cu_seqlens_q
+    # is the variable-stride qo_indptr and forward_extend feeds the decode kernel a
+    # variable-length (max_q_len, cum_seq_lens_q) query instead of a scalar q_len_per_req.
+    is_ragged_verify: bool = False
+
+
+class RaggedTargetVerifyGeometry(msgspec.Struct):
+    # Per-request variable-length verify geometry for the trtllm-gen decode kernel.
+    cache_seqlens_int32: torch.Tensor
+    cu_seqlens_q: torch.Tensor
+    cu_seqlens_k: torch.Tensor
+    max_seq_len_q: int
+
+
+def _resolve_ragged_verify_layout(forward_batch) -> Optional[RaggedVerifyLayout]:
+    spec_info = getattr(forward_batch, "spec_info", None)
+    if spec_info is None:
+        return None
+    return getattr(spec_info, "ragged_verify_layout", None)
+
+
+def build_ragged_target_verify_geometry(
+    *,
+    seq_lens: torch.Tensor,
+    layout: RaggedVerifyLayout,
+) -> RaggedTargetVerifyGeometry:
+    """Build the variable-length verify geometry from the prefix seq_lens + layout.
+
+    ``cache_seqlens`` is taken from the GPU ``seq_lens`` (which the worker's host
+    seq_lens_cpu pre-add never touches, so there is no double-add) plus the device
+    ``verify_lens``; ``cu_seqlens_q`` is the layout's qo_indptr (the variable
+    per-request query starts) and ``cu_seqlens_k`` is the exclusive cumsum of the
+    extended KV lengths. ``max_seq_len_q`` is the eager upper bound; the cuda-graph
+    replay overrides it with the frozen capture value.
+    """
+    cache_seqlens_int32 = (seq_lens + layout.verify_lens).to(torch.int32)
+    cu_seqlens_q = layout.qo_indptr_device.to(torch.int32)
+    cu_seqlens_k = torch.nn.functional.pad(
+        torch.cumsum(cache_seqlens_int32, dim=0, dtype=torch.int32), (1, 0)
+    )
+    return RaggedTargetVerifyGeometry(
+        cache_seqlens_int32=cache_seqlens_int32,
+        cu_seqlens_q=cu_seqlens_q,
+        cu_seqlens_k=cu_seqlens_k,
+        max_seq_len_q=max(layout.verify_lens_cpu),
+    )
 
 
 class TRTLLMHAAttnBackend(FlashInferAttnBackend):
@@ -73,6 +121,13 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
     # via the full->SWA lookup; see _fill_page_table_device), so we never need the
     # seq_lens_cpu D2H sync; opt out of it, matching trtllm_mla / triton.
     needs_cpu_seq_lens: bool = False
+
+    # Builds ragged (DSpark compact / real-N) verify metadata for the token-keyed
+    # cuda-graph path: the trtllm-gen decode kernel takes a variable-length
+    # (max_q_len, cum_seq_lens_q) query, so verify maps each request to its own
+    # verify_lens entry. The xqa impl (sm90 / sm120) rejects cum_seq_lens_q, so
+    # _assert_ragged_verify_supported fails loud there.
+    supports_ragged_verify_graph: bool = True
 
     def __init__(
         self,
@@ -339,12 +394,12 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
                 "cache_seqlens": torch.zeros(
                     max_bs, dtype=torch.int32, device=self.device
                 ),
-                "cu_seqlens_q": torch.arange(
-                    0,
-                    max_bs * self.speculative_num_draft_tokens + 1,
-                    step=self.speculative_num_draft_tokens,
-                    dtype=torch.int32,
-                    device=self.device,
+                # Refillable qo_indptr buffer (no longer a fixed-stride arange): the
+                # ragged compact-verify replay rewrites it from the padded layout's
+                # variable per-request query starts. For uniform verify it stays
+                # unread (the decode kernel takes a scalar q_len_per_req).
+                "cu_seqlens_q": torch.zeros(
+                    max_bs + 1, dtype=torch.int32, device=self.device
                 ),
                 "cu_seqlens_k": torch.zeros(
                     max_bs + 1, dtype=torch.int32, device=self.device
@@ -445,7 +500,16 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
             metadata.cu_seqlens_k = self.target_verify_metadata["cu_seqlens_k"][
                 : bs + 1
             ]
+            # Frozen capture upper bound: bucket // padded_bs == num_tokens_per_bs
+            # (gamma+1). The ragged replay keeps this max_q_len and refills only the
+            # buffer contents (cu_seqlens_q / cache_seqlens / cu_seqlens_k / page_table).
             metadata.max_seq_len_q = tokens_per_req
+            # Key the geometry on per-batch layout presence (the hard invariant): a
+            # degenerate uniform-at-bucket layout captures ragged geometry; force-uniform
+            # (negative seam) leaves the layout None so the uniform path is captured.
+            metadata.is_ragged_verify = (
+                getattr(spec_info, "ragged_verify_layout", None) is not None
+            )
             metadata.page_table = self.target_verify_metadata["page_table"][:bs, :]
             self._bind_swa_page_table(
                 metadata,
@@ -520,7 +584,26 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
         elif forward_mode.is_target_verify():
             # Here we only support topk = 1 for now.
             metadata = self.target_verify_metadata[bs]
-            metadata.cache_seqlens_int32.copy_(seq_lens + metadata.max_seq_len_q)
+            ragged_layout = getattr(spec_info, "ragged_verify_layout", None)
+            if ragged_layout is not None:
+                # Ragged compact verify: refill the buffer contents from the PADDED
+                # layout. Capture froze batch_size to padded_bs (= cu_seqlens_q.size(0)
+                # - 1) and max_q_len to gamma+1, so replay must feed padded_bs request
+                # slots whose verify_lens sum to the bucket; the decode kernel reads the
+                # refilled cu_seqlens_q while max_seq_len_q stays at the frozen capture
+                # value. cache_seqlens comes from the GPU seq_lens (never host-pre-added)
+                # plus the device verify_lens.
+                padded_layout = ragged_layout.padded_to_bucket(
+                    num_draft_tokens=self.speculative_num_draft_tokens
+                )
+                geometry = build_ragged_target_verify_geometry(
+                    seq_lens=seq_lens, layout=padded_layout
+                )
+                metadata.cache_seqlens_int32.copy_(geometry.cache_seqlens_int32)
+                metadata.cu_seqlens_q.copy_(geometry.cu_seqlens_q)
+            else:
+                # Uniform verify: cu_seqlens_q stays unread (scalar q_len_per_req).
+                metadata.cache_seqlens_int32.copy_(seq_lens + metadata.max_seq_len_q)
             metadata.cu_seqlens_k[1:].copy_(
                 torch.cumsum(metadata.cache_seqlens_int32, dim=0, dtype=torch.int32)
             )
@@ -604,6 +687,17 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
         forward_mode = forward_batch.forward_mode
         spec_info = forward_batch.spec_info
 
+        if (
+            forward_mode.is_target_verify()
+            and _resolve_ragged_verify_layout(forward_batch) is not None
+        ):
+            # Graph-admission fail-fast (mirrors FlashInfer's at flashinfer_backend.py):
+            # the runner admits a ragged verify batch on supports_ragged_verify_graph,
+            # but the variable-length (cum_seq_lens_q) query path is trtllm-gen only.
+            # Reject the xqa impl here at metadata prep (capture or replay) rather than
+            # deep inside flashinfer, so nothing silently runs the wrong uniform geometry.
+            self._assert_ragged_verify_supported()
+
         if in_capture:
             num_tokens = forward_batch.positions.numel()
             self._build_cuda_graph_metadata(
@@ -634,6 +728,20 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
                 self.token_to_kv_pool.translate_loc_from_full_to_swa(
                     forward_batch.out_cache_loc
                 )
+            )
+
+    def _assert_ragged_verify_supported(self) -> None:
+        """Fail loud on a ragged verify layout the backend cannot serve.
+
+        The variable-length (max_q_len, cum_seq_lens_q) query path is trtllm-gen
+        only; the xqa impl (sm90 / sm120) rejects cum_seq_lens_q in flashinfer, so
+        raise here rather than running the wrong (uniform) geometry.
+        """
+        if self.is_xqa_impl:
+            raise NotImplementedError(
+                "DSpark compact ragged verify (variable-length cum_seq_lens_q) "
+                "requires the trtllm-gen decode kernel; the xqa impl (sm90 / sm120) "
+                "rejects it. Disable SGLANG_RAGGED_VERIFY_MODE for this configuration."
             )
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
@@ -670,23 +778,40 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
                     torch.cumsum(seqlens_in_batch, dim=0, dtype=torch.int32), (1, 0)
                 )
         elif forward_batch.forward_mode.is_target_verify():
-            # Only support topk = 1 for now.
-            tokens_per_req = forward_batch.input_ids.shape[0] // batch_size
-            metadata.cache_seqlens_int32 = (forward_batch.seq_lens + tokens_per_req).to(
-                torch.int32
-            )
-            metadata.max_seq_len_q = tokens_per_req
-            metadata.cu_seqlens_q = torch.arange(
-                0,
-                batch_size * tokens_per_req + 1,
-                tokens_per_req,
-                dtype=torch.int32,
-                device=device,
-            )
-            metadata.cu_seqlens_k = torch.nn.functional.pad(
-                torch.cumsum(metadata.cache_seqlens_int32, dim=0, dtype=torch.int32),
-                (1, 0),
-            )
+            ragged_layout = _resolve_ragged_verify_layout(forward_batch)
+            if ragged_layout is not None:
+                # DSpark compact / real-N ragged verify: each request verifies its
+                # own verify_lens entry, so the query side is variable-length and the
+                # decode kernel reads (max_q_len, cu_seqlens_q) (see forward_extend).
+                self._assert_ragged_verify_supported()
+                geometry = build_ragged_target_verify_geometry(
+                    seq_lens=seqlens_in_batch, layout=ragged_layout
+                )
+                metadata.cache_seqlens_int32 = geometry.cache_seqlens_int32
+                metadata.max_seq_len_q = geometry.max_seq_len_q
+                metadata.cu_seqlens_q = geometry.cu_seqlens_q
+                metadata.cu_seqlens_k = geometry.cu_seqlens_k
+                metadata.is_ragged_verify = True
+            else:
+                # Only support topk = 1 for now.
+                tokens_per_req = forward_batch.input_ids.shape[0] // batch_size
+                metadata.cache_seqlens_int32 = (
+                    forward_batch.seq_lens + tokens_per_req
+                ).to(torch.int32)
+                metadata.max_seq_len_q = tokens_per_req
+                metadata.cu_seqlens_q = torch.arange(
+                    0,
+                    batch_size * tokens_per_req + 1,
+                    tokens_per_req,
+                    dtype=torch.int32,
+                    device=device,
+                )
+                metadata.cu_seqlens_k = torch.nn.functional.pad(
+                    torch.cumsum(
+                        metadata.cache_seqlens_int32, dim=0, dtype=torch.int32
+                    ),
+                    (1, 0),
+                )
 
         else:
             metadata.cache_seqlens_int32 = seqlens_in_batch.to(torch.int32)
@@ -892,21 +1017,44 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
             forward_batch.forward_mode.is_target_verify()
             or forward_batch.forward_mode.is_draft_extend_v2()
         ):
-            o = flashinfer.decode.trtllm_batch_decode_with_kv_cache(
-                query=q,
-                kv_cache=kv_cache,
-                workspace_buffer=self.workspace_buffer,
-                block_tables=page_table,
-                seq_lens=self.forward_metadata.cache_seqlens_int32,
-                max_seq_len=self.max_context_len,
-                bmm1_scale=bmm1_scale,
-                bmm2_scale=bmm2_scale,
-                window_left=layer.sliding_window_size,
-                sinks=attention_sink,
-                skip_softmax_threshold_scale_factor=envs.SGLANG_SKIP_SOFTMAX_DECODE_THRESHOLD_SCALE_FACTOR.get(),
-                out_dtype=self.q_data_type,  # model_runner.dtype
-                q_len_per_req=self.forward_metadata.max_seq_len_q,
-            )
+            if self.forward_metadata.is_ragged_verify:
+                # Ragged compact verify: variable per-request query length. The same
+                # trtllm-gen C++ op as the uniform verify above, generalized from a
+                # scalar q_len_per_req to (max_q_len, cum_seq_lens_q); batch_size is
+                # recovered inside flashinfer as cum_seq_lens_q.size(0) - 1.
+                o = flashinfer.decode.trtllm_batch_decode_with_kv_cache(
+                    query=q,
+                    kv_cache=kv_cache,
+                    workspace_buffer=self.workspace_buffer,
+                    block_tables=page_table,
+                    seq_lens=self.forward_metadata.cache_seqlens_int32,
+                    max_seq_len=self.max_context_len,
+                    bmm1_scale=bmm1_scale,
+                    bmm2_scale=bmm2_scale,
+                    window_left=layer.sliding_window_size,
+                    sinks=attention_sink,
+                    skip_softmax_threshold_scale_factor=envs.SGLANG_SKIP_SOFTMAX_DECODE_THRESHOLD_SCALE_FACTOR.get(),
+                    out_dtype=self.q_data_type,  # model_runner.dtype
+                    q_len_per_req=None,
+                    max_q_len=self.forward_metadata.max_seq_len_q,
+                    cum_seq_lens_q=self.forward_metadata.cu_seqlens_q,
+                )
+            else:
+                o = flashinfer.decode.trtllm_batch_decode_with_kv_cache(
+                    query=q,
+                    kv_cache=kv_cache,
+                    workspace_buffer=self.workspace_buffer,
+                    block_tables=page_table,
+                    seq_lens=self.forward_metadata.cache_seqlens_int32,
+                    max_seq_len=self.max_context_len,
+                    bmm1_scale=bmm1_scale,
+                    bmm2_scale=bmm2_scale,
+                    window_left=layer.sliding_window_size,
+                    sinks=attention_sink,
+                    skip_softmax_threshold_scale_factor=envs.SGLANG_SKIP_SOFTMAX_DECODE_THRESHOLD_SCALE_FACTOR.get(),
+                    out_dtype=self.q_data_type,  # model_runner.dtype
+                    q_len_per_req=self.forward_metadata.max_seq_len_q,
+                )
         else:
             o = flashinfer.prefill.trtllm_batch_context_with_kv_cache(
                 query=q,

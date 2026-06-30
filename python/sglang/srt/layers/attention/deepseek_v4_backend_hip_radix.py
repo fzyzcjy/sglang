@@ -415,6 +415,11 @@ class _GraphBucket(enum.Enum):
 class DeepseekV4HipRadixBackend(
     AttentionBackend, C4IndexerBackendMixin, CompressorBackendMixin
 ):
+    # Admitted to the ragged verify graph; the uniform TARGET_VERIFY out-graph
+    # path raises on a ragged layout, so it fails loud rather than running the
+    # wrong geometry.
+    supports_ragged_verify_graph: bool = True
+
     def __init__(
         self,
         model_runner: ModelRunner,
