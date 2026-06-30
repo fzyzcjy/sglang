@@ -1016,6 +1016,14 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             # Pre-planned (plan-stream load_batch already ran).
             # In speculative decoding, these two fields are still needed.
             graph_size_key = self._ragged_graph_size if is_ragged else self.bs
+            if is_ragged:
+                # Stored raw_num_token comes from this step's plan-stream
+                # full-load. Real-N ragged token totals vary per step, so guard
+                # against a stale cross-step value (both sides are host ints).
+                assert self.raw_num_token == ragged_layout.total_verify_tokens, (
+                    f"stale ragged raw_num_token {self.raw_num_token} != "
+                    f"{ragged_layout.total_verify_tokens}"
+                )
             self.buffers.input_ids[: self.raw_num_token].copy_(forward_batch.input_ids)
             self.buffers.positions[: self.raw_num_token].copy_(forward_batch.positions)
             if (
