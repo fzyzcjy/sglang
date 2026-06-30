@@ -56,11 +56,12 @@ def _contract_available() -> tuple[bool, str]:
     """Return (available, reason) for the dsv4 production-path block-forward contract.
 
     T1 drives the PRODUCTION dsv4 draft through the real ``DeepseekV4AttnBackend``
-    with the NON-CAUSAL full-block index builder (``get_dspark_swa_page_indices``)
-    and the standard ``forward(input_embeds, positions, forward_batch)`` returning a
-    ``DSparkV4DraftOutput``. Those symbols are landed by the model+backend impl
-    agents; until then this guardrail skips cleanly (it is the un-skipped successor
-    to the old ``test_dsv4_worker_parity`` GPU stub).
+    with the NON-CAUSAL full-block index builder ``get_dspark_swa_page_indices`` +
+    ``init_forward_metadata_dspark_draft_block`` (gated by ``is_dspark_draft``), and
+    the model ``forward(input_ids, positions, forward_batch, input_embeds=None) ->
+    DSparkV4DraftOutput`` (``.base_logits [bs*gamma, org_vocab]``). Those symbols are
+    landed by the model+backend impl agents; until then this guardrail skips cleanly
+    (it is the un-skipped successor to the old ``test_dsv4_worker_parity`` GPU stub).
     """
     try:
         from sglang.srt.layers.attention.deepseek_v4_backend import (  # noqa: F401
@@ -72,12 +73,17 @@ def _contract_available() -> tuple[bool, str]:
     from sglang.srt.layers.attention import deepseek_v4_backend as dsv4_backend
     from sglang.srt.models import deepseek_v4_dspark as dsv4_model
 
-    if not hasattr(dsv4_backend.DeepseekV4AttnBackend, "get_dspark_swa_page_indices"):
-        return (
-            False,
-            "non-causal builder DeepseekV4AttnBackend.get_dspark_swa_page_indices "
-            "not yet implemented (model+backend agents own it)",
-        )
+    backend_cls = dsv4_backend.DeepseekV4AttnBackend
+    for attr in (
+        "get_dspark_swa_page_indices",
+        "init_forward_metadata_dspark_draft_block",
+    ):
+        if not hasattr(backend_cls, attr):
+            return (
+                False,
+                f"non-causal draft-block builder DeepseekV4AttnBackend.{attr} "
+                "not yet implemented (model+backend agent owns it)",
+            )
     if not hasattr(dsv4_model, "DSparkV4DraftOutput"):
         return (
             False,

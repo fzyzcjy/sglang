@@ -4,16 +4,20 @@
 # seam. Imported by test_dsv4_block_forward_sot_parity.py.
 #
 # Design contract for the model+backend impl agents (this fixture is the executable
-# spec the T1 guardrail runs against):
+# spec the T1 guardrail runs against), per the FINAL agent-A contract:
 #
 #  * The backend exposes a NON-CAUSAL full-block index builder
-#    ``DeepseekV4AttnBackend.get_dspark_swa_page_indices`` that, for the TARGET_VERIFY
-#    draft block, hands every gamma query row the SAME ``[whole window ++ whole block]``
-#    index set (no causal triangle), padded to a multiple of PAGE_INDEX_ALIGNED_SIZE
-#    with -1 in the dead slots. This is the landing point of plan R1.
-#  * The model exposes ``forward(input_embeds, positions, forward_batch) ->
-#    DSparkV4DraftOutput`` with ``.draft_hidden`` / ``.base_logits`` (hc-collapsed
-#    dsv4 logits) / optional ``.x_post_hc``.
+#    ``DeepseekV4AttnBackend.get_dspark_swa_page_indices(*, seq_lens_casual,
+#    req_pool_indices_repeated, out_loc, block_size) -> (swa_page_indices [num_q, K],
+#    swa_topk_lengths [num_q])`` plus ``init_forward_metadata_dspark_draft_block``
+#    (gamma-token, need_compress=False, SWA-only), gated by the ``is_dspark_draft``
+#    flag. Per request it builds ``cat([arange(min(W, prefix+1)), W + arange(gamma)])``
+#    shared across all gamma rows (no causal triangle), translated to SWA, padded to
+#    64, invalid slots -1. This is the landing point of plan R1.
+#  * The model exposes ``forward(input_ids, positions, forward_batch,
+#    input_embeds=None) -> DSparkV4DraftOutput`` with ``.base_logits [bs*gamma,
+#    org_vocab]`` (hc-collapsed + norm + lm_head + TP all_gather + org_vocab crop),
+#    ``.draft_hidden [bs*gamma, hc, d]``, and ``.x_post_hc [bs*gamma, d] | None``.
 #  * ``force_causal_indices()`` is a context manager that monkeypatches the production
 #    builder to delegate to the CAUSAL ``get_swa_page_indices`` triangle, so the
 #    negative test can prove the guardrail catches a causal regression.
