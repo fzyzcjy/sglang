@@ -1401,14 +1401,11 @@ class DSparkWorkerV2(BaseSpecWorker):
             device=device,
         )
 
-        if batch.seq_lens_cpu is not None:
-            seq_lens_cpu = batch.seq_lens_cpu + torch.tensor(
-                verify_lens_cpu, dtype=batch.seq_lens_cpu.dtype
-            )
-        else:
-            seq_lens_cpu = (prefix_lens.to("cpu", dtype=torch.int32)) + torch.tensor(
-                verify_lens_cpu, dtype=torch.int32
-            )
+        if batch.seq_lens_cpu is None:
+            raise RuntimeError("DSpark decode expected batch.seq_lens_cpu, got None")
+        seq_lens_cpu = batch.seq_lens_cpu + torch.tensor(
+            verify_lens_cpu, dtype=batch.seq_lens_cpu.dtype
+        )
 
         return _RaggedVerifyWindow(
             positions=positions,
