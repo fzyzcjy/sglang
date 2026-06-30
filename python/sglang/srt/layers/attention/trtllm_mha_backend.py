@@ -9,7 +9,6 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional
 
-import msgspec
 import torch
 
 from sglang.srt.environ import envs
@@ -27,6 +26,7 @@ from sglang.srt.layers.attention.utils import canonicalize_stride
 from sglang.srt.mem_cache.memory_pool import KVWriteLoc
 from sglang.srt.mem_cache.swa_memory_pool import SWAKVPool
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
+from sglang.srt.speculative.ragged_verify import build_ragged_target_verify_geometry
 from sglang.srt.utils import is_flashinfer_available
 from sglang.srt.utils.common import is_sm90_supported, is_sm120_supported
 
@@ -72,46 +72,11 @@ class TRTLLMMHAMetadata:
     is_ragged_verify: bool = False
 
 
-class RaggedTargetVerifyGeometry(msgspec.Struct):
-    # Per-request variable-length verify geometry for the trtllm-gen decode kernel.
-    cache_seqlens_int32: torch.Tensor
-    cu_seqlens_q: torch.Tensor
-    cu_seqlens_k: torch.Tensor
-    max_seq_len_q: int
-
-
 def _resolve_ragged_verify_layout(forward_batch) -> Optional[RaggedVerifyLayout]:
     spec_info = getattr(forward_batch, "spec_info", None)
     if spec_info is None:
         return None
     return getattr(spec_info, "ragged_verify_layout", None)
-
-
-def build_ragged_target_verify_geometry(
-    *,
-    seq_lens: torch.Tensor,
-    layout: RaggedVerifyLayout,
-) -> RaggedTargetVerifyGeometry:
-    """Build the variable-length verify geometry from the prefix seq_lens + layout.
-
-    ``cache_seqlens`` is taken from the GPU ``seq_lens`` (which the worker's host
-    seq_lens_cpu pre-add never touches, so there is no double-add) plus the device
-    ``verify_lens``; ``cu_seqlens_q`` is the layout's qo_indptr (the variable
-    per-request query starts) and ``cu_seqlens_k`` is the exclusive cumsum of the
-    extended KV lengths. ``max_seq_len_q`` is the eager upper bound; the cuda-graph
-    replay overrides it with the frozen capture value.
-    """
-    cache_seqlens_int32 = (seq_lens + layout.verify_lens).to(torch.int32)
-    cu_seqlens_q = layout.qo_indptr_device.to(torch.int32)
-    cu_seqlens_k = torch.nn.functional.pad(
-        torch.cumsum(cache_seqlens_int32, dim=0, dtype=torch.int32), (1, 0)
-    )
-    return RaggedTargetVerifyGeometry(
-        cache_seqlens_int32=cache_seqlens_int32,
-        cu_seqlens_q=cu_seqlens_q,
-        cu_seqlens_k=cu_seqlens_k,
-        max_seq_len_q=max(layout.verify_lens_cpu),
-    )
 
 
 class TRTLLMHAAttnBackend(FlashInferAttnBackend):

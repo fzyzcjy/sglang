@@ -29,6 +29,7 @@ from sglang.srt.mem_cache.memory_pool import KVWriteLoc
 from sglang.srt.mem_cache.swa_memory_pool import SWAKVPool
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
 from sglang.srt.server_args import get_global_server_args
+from sglang.srt.speculative.ragged_verify import build_ragged_target_verify_geometry
 from sglang.srt.speculative.spec_info import SpecInput, SpeculativeAlgorithm
 from sglang.srt.utils import get_compiler_backend
 
@@ -420,20 +421,21 @@ class FlashAttentionBackend(AttentionBackend):
         )
 
     def _assert_no_ragged_verify(self, forward_batch: ForwardBatch) -> None:
-        # FlashAttention has no ragged (compact) verify metadata builder: the
-        # target-verify path uses the uniform gamma+1 geometry and never reads
-        # spec_info.ragged_verify_layout. supports_ragged_verify_graph is False,
-        # so graph admission already forces a ragged batch to eager here -- and
-        # eager would then silently run the wrong (uniform) geometry. Fail loud
-        # instead, mirroring the FlashInfer guard.
+        # FlashAttention serves ragged (compact) verify EAGERLY (init_forward_metadata
+        # builds the variable-length geometry from spec_info.ragged_verify_layout), but
+        # has no token-keyed cuda-graph builder yet. supports_ragged_verify_graph is
+        # False, so the runner forces a ragged batch to eager and never reaches the
+        # graph capture/replay path; this guard stays on that path as a safety net so a
+        # ragged layout can never silently run the uniform gamma+1 capture geometry.
         spec_info = forward_batch.spec_info
         if (
             forward_batch.forward_mode.is_target_verify()
             and getattr(spec_info, "ragged_verify_layout", None) is not None
         ):
             raise NotImplementedError(
-                "FlashAttention does not support DSpark compact (ragged) verify; "
-                "set SGLANG_RAGGED_VERIFY_MODE=static for this configuration."
+                "FlashAttention does not support cuda-graphed DSpark compact (ragged) "
+                "verify; supports_ragged_verify_graph is False so this batch should "
+                "have run eager. set SGLANG_RAGGED_VERIFY_MODE=static to graph it."
             )
 
     def init_forward_metadata_out_graph(
@@ -535,7 +537,6 @@ class FlashAttentionBackend(AttentionBackend):
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         """Initialize forward metadata hence all layers in the forward pass can reuse it."""
-        self._assert_no_ragged_verify(forward_batch)
         metadata = FlashAttentionMetadata()
         seqlens_in_batch = forward_batch.seq_lens
         batch_size = forward_batch.batch_size
@@ -678,26 +679,51 @@ class FlashAttentionBackend(AttentionBackend):
             self._maybe_init_local_attn_metadata(forward_batch, metadata, device)
         elif forward_batch.forward_mode.is_target_verify():
             if self.topk <= 1:
-                metadata.cache_seqlens_int32 = (
-                    forward_batch.seq_lens + self.speculative_num_draft_tokens
-                ).to(torch.int32)
-                metadata.max_seq_len_q = self.speculative_num_draft_tokens
-                metadata.max_seq_len_k = (
-                    seq_lens_cpu.max().item() + self.speculative_num_draft_tokens
+                ragged_layout = getattr(
+                    forward_batch.spec_info, "ragged_verify_layout", None
                 )
-                metadata.cu_seqlens_q = torch.arange(
-                    0,
-                    batch_size * self.speculative_num_draft_tokens + 1,
-                    self.speculative_num_draft_tokens,
-                    dtype=torch.int32,
-                    device=device,
-                )
-                metadata.cu_seqlens_k = torch.nn.functional.pad(
-                    torch.cumsum(
-                        metadata.cache_seqlens_int32, dim=0, dtype=torch.int32
-                    ),
-                    (1, 0),
-                )
+                if ragged_layout is not None:
+                    # DSpark compact (ragged) verify: each request verifies its own
+                    # verify_lens entry, so the query side is variable-length. The
+                    # flash-attn varlen kernel reads cu_seqlens_q (the layout's
+                    # qo_indptr) directly, exactly as it reads the uniform arange
+                    # below -- the forward needs no ragged-vs-uniform branch. This is
+                    # the EAGER builder; fa3 has no token-keyed ragged graph yet, so
+                    # the graphed path is reached only with cuda graph disabled (the
+                    # decode runner still attempts a ragged verify capture whenever
+                    # SGLANG_RAGGED_VERIFY_MODE=compact, which init_forward_metadata_out_graph
+                    # rejects via supports_ragged_verify_graph=False).
+                    geometry = build_ragged_target_verify_geometry(
+                        seq_lens=forward_batch.seq_lens, layout=ragged_layout
+                    )
+                    metadata.cache_seqlens_int32 = geometry.cache_seqlens_int32
+                    metadata.max_seq_len_q = geometry.max_seq_len_q
+                    metadata.max_seq_len_k = int(
+                        metadata.cache_seqlens_int32.max().item()
+                    )
+                    metadata.cu_seqlens_q = geometry.cu_seqlens_q
+                    metadata.cu_seqlens_k = geometry.cu_seqlens_k
+                else:
+                    metadata.cache_seqlens_int32 = (
+                        forward_batch.seq_lens + self.speculative_num_draft_tokens
+                    ).to(torch.int32)
+                    metadata.max_seq_len_q = self.speculative_num_draft_tokens
+                    metadata.max_seq_len_k = (
+                        seq_lens_cpu.max().item() + self.speculative_num_draft_tokens
+                    )
+                    metadata.cu_seqlens_q = torch.arange(
+                        0,
+                        batch_size * self.speculative_num_draft_tokens + 1,
+                        self.speculative_num_draft_tokens,
+                        dtype=torch.int32,
+                        device=device,
+                    )
+                    metadata.cu_seqlens_k = torch.nn.functional.pad(
+                        torch.cumsum(
+                            metadata.cache_seqlens_int32, dim=0, dtype=torch.int32
+                        ),
+                        (1, 0),
+                    )
                 metadata.page_table = self.req_to_token_pool.req_to_token[
                     forward_batch.req_pool_indices, : metadata.max_seq_len_k
                 ]

@@ -218,3 +218,39 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
             graph_num_tokens=self.graph_num_tokens,
             device=self.verify_lens.device,
         )
+
+
+class RaggedTargetVerifyGeometry(msgspec.Struct):
+    # Per-request variable-length verify geometry shared by every backend that
+    # serves a ragged (DSpark compact / real-N) verify forward.
+    cache_seqlens_int32: torch.Tensor
+    cu_seqlens_q: torch.Tensor
+    cu_seqlens_k: torch.Tensor
+    max_seq_len_q: int
+
+
+def build_ragged_target_verify_geometry(
+    *,
+    seq_lens: torch.Tensor,
+    layout: RaggedVerifyLayout,
+) -> RaggedTargetVerifyGeometry:
+    """Build the variable-length verify geometry from the prefix seq_lens + layout.
+
+    ``cache_seqlens`` is taken from the GPU ``seq_lens`` (which the worker's host
+    seq_lens_cpu pre-add never touches, so there is no double-add) plus the device
+    ``verify_lens``; ``cu_seqlens_q`` is the layout's qo_indptr (the variable
+    per-request query starts) and ``cu_seqlens_k`` is the exclusive cumsum of the
+    extended KV lengths. ``max_seq_len_q`` is the eager upper bound; the cuda-graph
+    replay overrides it with the frozen capture value.
+    """
+    cache_seqlens_int32 = (seq_lens + layout.verify_lens).to(torch.int32)
+    cu_seqlens_q = layout.qo_indptr_device.to(torch.int32)
+    cu_seqlens_k = torch.nn.functional.pad(
+        torch.cumsum(cache_seqlens_int32, dim=0, dtype=torch.int32), (1, 0)
+    )
+    return RaggedTargetVerifyGeometry(
+        cache_seqlens_int32=cache_seqlens_int32,
+        cu_seqlens_q=cu_seqlens_q,
+        cu_seqlens_k=cu_seqlens_k,
+        max_seq_len_q=max(layout.verify_lens_cpu),
+    )
