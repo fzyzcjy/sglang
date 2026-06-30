@@ -9,6 +9,7 @@ from sglang.srt.layers.attention.deepseek_v4_backend import (
     DeepseekV4AttnBackend,
     _compact_dspark_window_then_block,
     build_dspark_swa_page_indices,
+    compute_dspark_window_gather,
 )
 from sglang.srt.utils import ceil_align
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -412,6 +413,160 @@ class TestGetDsparkSwaPageIndicesOrchestrator(CustomTestCase):
             self.assertTrue((attended >= 0).all().item())
             self.assertNotIn(0, attended.tolist())
             self.assertEqual(set(attended.tolist()), expected)
+
+
+def _uniform_layout(
+    *, prefixes: list[int], block_size: int, req_ids: list[int] | None = None
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Build the uniform-gamma per-token (seq_lens_casual, req_pool) for the given prefixes."""
+    if req_ids is None:
+        req_ids = list(range(len(prefixes)))
+    seq: list[int] = []
+    req_pool: list[int] = []
+    for prefix, req in zip(prefixes, req_ids):
+        for k in range(block_size):
+            seq.append(prefix + 1 + k)
+            req_pool.append(req)
+    return (
+        torch.tensor(seq, dtype=torch.int32),
+        torch.tensor(req_pool, dtype=torch.int32),
+    )
+
+
+def _oracle_window_gather(
+    *,
+    seq_lens_casual: torch.Tensor,
+    block_size: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Reference (prefix, context, offsets, invalid) replicating the PRE-clamp ordering."""
+    s = seq_lens_casual.to(torch.int32)
+    bs = s.numel() // block_size
+    first = torch.arange(bs, dtype=torch.int64) * block_size
+    prefix = (s[first] - 1).to(torch.int32)
+    context = torch.clamp(prefix, max=SWA_WINDOW).to(torch.int32)
+    offsets_raw = (
+        prefix.to(torch.int64).unsqueeze(1)
+        - SWA_WINDOW
+        + torch.arange(SWA_WINDOW, dtype=torch.int64).unsqueeze(0)
+    )
+    invalid = offsets_raw < 0
+    offsets = offsets_raw.clamp(min=0)
+    return prefix, context, offsets, invalid
+
+
+class TestComputeDsparkWindowGather(CustomTestCase):
+    def test_fields_match_preclamp_oracle(self):
+        """offsets / invalid / context_lens match the pre-clamp reference for mixed prefixes."""
+        block_size = 3
+        prefixes = [0, 5, SWA_WINDOW, SWA_WINDOW + 7]
+        req_ids = [2, 5, 1, 6]
+        seq_lens_casual, req_pool = _uniform_layout(
+            prefixes=prefixes, block_size=block_size, req_ids=req_ids
+        )
+        gather = compute_dspark_window_gather(
+            seq_lens_casual=seq_lens_casual,
+            req_pool_indices_repeated=req_pool,
+            block_size=block_size,
+        )
+        _, context, offsets, invalid = _oracle_window_gather(
+            seq_lens_casual=seq_lens_casual, block_size=block_size
+        )
+        self.assertEqual(gather.num_q, len(prefixes) * block_size)
+        self.assertEqual(gather.bs, len(prefixes))
+        self.assertTrue(torch.equal(gather.context_lens, context))
+        self.assertTrue(torch.equal(gather.offsets, offsets))
+        self.assertTrue(torch.equal(gather.invalid, invalid))
+        self.assertEqual(gather.offsets.dtype, torch.int64)
+        self.assertEqual(gather.invalid.dtype, torch.bool)
+        self.assertEqual(gather.context_lens.dtype, torch.int32)
+        self.assertTrue(
+            torch.equal(
+                gather.req_pool_indices_per_request,
+                torch.tensor(req_ids, dtype=torch.int32),
+            )
+        )
+
+    def test_context_lens_equals_valid_offset_count(self):
+        """context_lens binds to the actual -1 positions: context == (~invalid).sum(dim=1)."""
+        block_size = 2
+        prefixes = [0, SWA_WINDOW - 1, SWA_WINDOW, SWA_WINDOW + 5]
+        seq_lens_casual, req_pool = _uniform_layout(
+            prefixes=prefixes, block_size=block_size
+        )
+        gather = compute_dspark_window_gather(
+            seq_lens_casual=seq_lens_casual,
+            req_pool_indices_repeated=req_pool,
+            block_size=block_size,
+        )
+        self.assertTrue(
+            torch.equal(gather.context_lens, (~gather.invalid).sum(dim=1).to(torch.int32))
+        )
+
+    def test_invalid_marks_exactly_pre_start_positions(self):
+        """invalid is True iff prefix - SWA_WINDOW + arange(W) < 0 (the front W-prefix cols)."""
+        block_size = 4
+        prefixes = [3, SWA_WINDOW]
+        seq_lens_casual, req_pool = _uniform_layout(
+            prefixes=prefixes, block_size=block_size
+        )
+        gather = compute_dspark_window_gather(
+            seq_lens_casual=seq_lens_casual,
+            req_pool_indices_repeated=req_pool,
+            block_size=block_size,
+        )
+        arange = torch.arange(SWA_WINDOW, dtype=torch.int64)
+        for r, prefix in enumerate(prefixes):
+            expected = (prefix - SWA_WINDOW + arange) < 0
+            self.assertTrue(torch.equal(gather.invalid[r], expected), msg=f"{prefix=}")
+
+    def test_offsets_slide_with_prefix_not_clamped_dead(self):
+        """For prefix >= W context stays W but offsets keep sliding (W+1 drops the oldest)."""
+        block_size = 1
+        arange = torch.arange(SWA_WINDOW, dtype=torch.int64)
+        offsets_by_prefix: dict[int, torch.Tensor] = {}
+        for prefix in (SWA_WINDOW - 1, SWA_WINDOW, SWA_WINDOW + 1, SWA_WINDOW + 5):
+            seq_lens_casual, req_pool = _uniform_layout(
+                prefixes=[prefix], block_size=block_size
+            )
+            gather = compute_dspark_window_gather(
+                seq_lens_casual=seq_lens_casual,
+                req_pool_indices_repeated=req_pool,
+                block_size=block_size,
+            )
+            expected = (prefix - SWA_WINDOW + arange).clamp(min=0)
+            self.assertTrue(torch.equal(gather.offsets[0], expected), msg=f"{prefix=}")
+            offsets_by_prefix[prefix] = gather.offsets[0]
+        self.assertTrue(
+            torch.equal(
+                offsets_by_prefix[SWA_WINDOW + 1], offsets_by_prefix[SWA_WINDOW] + 1
+            )
+        )
+
+    def test_bs_one_single_request(self):
+        """A single-request batch yields bs==1 and a [1, SWA_WINDOW] offsets/invalid."""
+        block_size = 5
+        seq_lens_casual, req_pool = _uniform_layout(prefixes=[9], block_size=block_size)
+        gather = compute_dspark_window_gather(
+            seq_lens_casual=seq_lens_casual,
+            req_pool_indices_repeated=req_pool,
+            block_size=block_size,
+        )
+        self.assertEqual(gather.bs, 1)
+        self.assertEqual(gather.num_q, block_size)
+        self.assertEqual(tuple(gather.offsets.shape), (1, SWA_WINDOW))
+        self.assertEqual(int(gather.context_lens[0]), 9)
+
+    def test_non_divisible_num_q_raises(self):
+        """A num_q that is not a block_size multiple trips the uniform-gamma assert."""
+        block_size = 4
+        seq_lens_casual = torch.arange(1, (block_size + 1) + 1, dtype=torch.int32)
+        req_pool = torch.zeros(block_size + 1, dtype=torch.int32)
+        with self.assertRaises(AssertionError):
+            compute_dspark_window_gather(
+                seq_lens_casual=seq_lens_casual,
+                req_pool_indices_repeated=req_pool,
+                block_size=block_size,
+            )
 
 
 if __name__ == "__main__":

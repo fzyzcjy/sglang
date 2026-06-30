@@ -15,6 +15,7 @@ from typing import (
     Union,
 )
 
+import msgspec
 import torch
 import torch.nn.functional as F
 
@@ -268,6 +269,71 @@ def _compact_dspark_window_then_block(
     block_rows = torch.arange(bs, device=device).view(-1, 1).expand(-1, block_size)
     out[block_rows, block_col] = block_swa_locs
     return out
+
+
+class DsparkWindowGather(msgspec.Struct, frozen=True):
+    num_q: int
+    bs: int
+    context_lens: torch.Tensor  # [bs] int32 = clamp(prefix_lens, max=SWA_WINDOW)
+    req_pool_indices_per_request: torch.Tensor  # [bs]
+    offsets: torch.Tensor  # [bs, SWA_WINDOW] int64, already clamp(min=0)
+    invalid: torch.Tensor  # [bs, SWA_WINDOW] bool, computed PRE-clamp
+
+
+def compute_dspark_window_gather(
+    *,
+    seq_lens_casual: torch.Tensor,
+    req_pool_indices_repeated: torch.Tensor,
+    block_size: int,
+) -> DsparkWindowGather:
+    """Pre-gather index arithmetic for the NON-CAUSAL DSpark draft-block SWA window.
+
+    Pure tensor arithmetic that turns the uniform-gamma per-token causal lengths into the
+    per-request committed-window geometry consumed by ``get_dspark_swa_page_indices``: the
+    per-request first-token prefix length, its clamped context length, the request index,
+    the window column ``offsets`` into ``req_to_token`` (most-recent-last) and the ``invalid``
+    mask for pre-start positions. Reads the module-global ``SWA_WINDOW`` (single source of
+    truth, mirroring ``build_dspark_swa_page_indices``).
+    """
+    seq_lens_casual = seq_lens_casual.to(torch.int32)
+    num_q = seq_lens_casual.size(0)
+    assert num_q % block_size == 0, (
+        f"DSpark draft block forward must be uniform-gamma: num_q={num_q} not "
+        f"divisible by block_size={block_size}."
+    )
+    bs = num_q // block_size
+    device = seq_lens_casual.device
+
+    # Per-request prefix length (committed context before the draft block) and the
+    # request's first-token row index in the uniform layout.
+    first_token = torch.arange(bs, device=device, dtype=torch.int64) * block_size
+    prefix_lens = (seq_lens_casual[first_token] - 1).to(torch.int32)
+    context_lens = torch.clamp(prefix_lens, max=SWA_WINDOW).to(torch.int32)
+    req_pool_indices_per_request = req_pool_indices_repeated[first_token]
+
+    # Window slots: the request's prefix positions [prefix - W .. prefix - 1], most
+    # recent last, future-of-block-start masked -1 (mirrors the reference window).
+    offsets = (
+        prefix_lens.to(torch.int64).unsqueeze(1)
+        - SWA_WINDOW
+        + torch.arange(SWA_WINDOW, device=device, dtype=torch.int64).unsqueeze(0)
+    )
+    # invalid MUST be computed BEFORE the clamp: a pre-start window position has a negative
+    # absolute offset, but the clamp(min=0) below rewrites those negatives to 0 so the
+    # caller's req_to_token gather stays in-bounds. Reordering to clamp-then-(offsets < 0)
+    # would make invalid all-False and silently leak the request's token-0 slot into the
+    # masked window prefix.
+    invalid = offsets < 0
+    offsets = offsets.clamp(min=0)
+
+    return DsparkWindowGather(
+        num_q=num_q,
+        bs=bs,
+        context_lens=context_lens,
+        req_pool_indices_per_request=req_pool_indices_per_request,
+        offsets=offsets,
+        invalid=invalid,
+    )
 
 
 def _create_flashmla_metadata():
@@ -2228,33 +2294,19 @@ class DeepseekV4AttnBackend(
         only the first ``swa_topk_lengths[q]`` entries (no causal mask), so the ``-1``
         padding is never attended.
         """
-        seq_lens_casual = seq_lens_casual.to(torch.int32)
-        num_q = seq_lens_casual.size(0)
-        assert num_q % block_size == 0, (
-            f"DSpark draft block forward must be uniform-gamma: num_q={num_q} not "
-            f"divisible by block_size={block_size}."
+        gather = compute_dspark_window_gather(
+            seq_lens_casual=seq_lens_casual,
+            req_pool_indices_repeated=req_pool_indices_repeated,
+            block_size=block_size,
         )
-        bs = num_q // block_size
-        device = seq_lens_casual.device
+        num_q = gather.num_q
+        bs = gather.bs
+        context_lens = gather.context_lens
+        offsets = gather.offsets
+        invalid = gather.invalid
 
-        # Per-request prefix length (committed context before the draft block) and the
-        # request's first-token row index in the uniform layout.
-        first_token = torch.arange(bs, device=device, dtype=torch.int64) * block_size
-        prefix_lens = (seq_lens_casual[first_token] - 1).to(torch.int32)
-        context_lens = torch.clamp(prefix_lens, max=SWA_WINDOW).to(torch.int32)
-        req_pool_indices_per_request = req_pool_indices_repeated[first_token]
-
-        # Window slots: the request's prefix positions [prefix - W .. prefix - 1], most
-        # recent last, future-of-block-start masked -1 (mirrors the reference window).
-        offsets = (
-            prefix_lens.to(torch.int64).unsqueeze(1)
-            - SWA_WINDOW
-            + torch.arange(SWA_WINDOW, device=device, dtype=torch.int64).unsqueeze(0)
-        )
-        invalid = offsets < 0
-        offsets = offsets.clamp(min=0)
         window_full_locs = self.req_to_token[
-            req_pool_indices_per_request[:, None].to(torch.int64), offsets
+            gather.req_pool_indices_per_request[:, None].to(torch.int64), offsets
         ]
         window_full_locs = window_full_locs.masked_fill(invalid, 0)
         window_swa_locs = self.token_to_kv_pool.translate_loc_from_full_to_swa(
