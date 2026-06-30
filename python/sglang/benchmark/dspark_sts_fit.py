@@ -7,15 +7,17 @@ from pathlib import Path
 from typing import Annotated, Optional
 
 import torch
-import typer
 
 from sglang.srt.speculative.dspark_components.dspark_sts_table import (
     DSparkStsCalibration,
 )
 
-logger = logging.getLogger(__name__)
+try:
+    import typer
+except ModuleNotFoundError:
+    typer = None
 
-app = typer.Typer(add_completion=False)
+logger = logging.getLogger(__name__)
 
 _EPS_PROB = 1e-8
 
@@ -142,7 +144,6 @@ def load_collected_shards(*, data_glob: str) -> tuple[torch.Tensor, torch.Tensor
     return torch.cat(logits_shards, dim=0), torch.cat(prefix_mask_shards, dim=0)
 
 
-@app.command()
 def fit(
     data_glob: Annotated[
         str,
@@ -196,5 +197,16 @@ def fit(
         )
 
 
-if __name__ == "__main__":
+def main() -> None:
+    if typer is None:
+        raise RuntimeError(
+            "typer is required to run the dspark_sts_fit CLI; install it with "
+            "`pip install typer`."
+        )
+    app = typer.Typer(add_completion=False)
+    app.command()(fit)
     app()
+
+
+if __name__ == "__main__":
+    main()
