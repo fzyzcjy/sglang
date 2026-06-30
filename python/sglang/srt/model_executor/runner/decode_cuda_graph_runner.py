@@ -43,6 +43,7 @@ from sglang.srt.distributed.parallel_state import (
     set_pdmux_status,
 )
 from sglang.srt.dllm.config import DllmConfig
+from sglang.srt.environ import envs
 from sglang.srt.layers.attention.dsa.utils import is_dsa_enable_prefill_cp
 from sglang.srt.layers.dp_attention import (
     DpPaddingMode,
@@ -117,12 +118,15 @@ if TYPE_CHECKING:
 def ragged_verify_full_mode_enabled(spec_algorithm: SpeculativeAlgorithm) -> bool:
     """Whether DSpark real-N ragged verify (SGLANG_RAGGED_VERIFY_MODE=compact) is on.
 
-    Gated on the spec algorithm advertising ragged-verify support. The env read
-    and the value contract live in the shared ragged-verify infra module; this
-    import is deferred so the decode runner stays importable before that module
-    lands (and returns False, keeping every existing path byte-identical).
+    Gated on DSpark specifically (M4): only DSpark builds a ragged_verify_layout,
+    so DFlash must keep the bs-keyed capture -- enabling the token-keyed capture
+    for DFlash would capture token-keyed graphs that DFlash's layout-less verify
+    can never select. The env read and the value contract live in the shared
+    ragged-verify infra module; this import is deferred so the decode runner stays
+    importable before that module lands (and returns False, keeping every existing
+    path byte-identical).
     """
-    if not spec_algorithm.is_dflash_or_dspark():
+    if not spec_algorithm.is_dspark():
         return False
     try:
         from sglang.srt.speculative.ragged_verify import (
@@ -468,6 +472,38 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             return None
         return getattr(spec_info, "ragged_verify_layout", None)
 
+    def _capture_ragged_verify_layout(self, num_tokens: int):
+        """Degenerate ragged layout baked into the token-keyed capture (C2).
+
+        The captured graph must record the ragged vectorized expansion (so
+        ``is_ragged`` is True inside ``make_forward_metadata_from_raw_verify``)
+        with every data-dependent geometry frozen to the bucket size, not to a
+        uniform full block. A uniform layout whose total == bucket ==
+        ``bs * num_tokens_per_bs`` does exactly that: it drives the ragged op
+        flavor and freezes ``repeat_interleave``'s output_size to the bucket, so
+        replay can re-feed any ragged ``verify_lens`` summing to the same bucket
+        (the padded-token contract). Returns None on the bs-keyed path so every
+        existing (non-compact) capture stays byte-identical.
+        """
+        if not self.ragged_verify_mode:
+            return None
+        if self.model_runner.is_draft_worker:
+            return None
+        if envs.SGLANG_TEST_RAGGED_VERIFY_FORCE_UNIFORM_CAPTURE.get():
+            # Negative seam (§4): bake the uniform (layout-less) geometry into the
+            # capture so the graph-vs-eager parity check provably diverges on a
+            # mixed verify_lens batch -- proves the parity test has teeth.
+            return None
+        from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
+
+        bs = num_tokens // self.num_tokens_per_bs
+        return RaggedVerifyLayout.uniform(
+            bs=bs,
+            num_draft_tokens=self.num_tokens_per_bs,
+            device=self.device,
+            grid=self.capture_num_tokens,
+        )
+
     def can_run_graph(self, forward_batch: ForwardBatch):
         # Disable for token embedding overrides (dynamic per-request)
         if forward_batch.replace_embeds is not None:
@@ -549,8 +585,46 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         )
 
     def _can_run_ragged_verify_graph(self, forward_batch: ForwardBatch, ragged_layout):
-        is_tokens_supported = (
-            ragged_layout.total_verify_tokens <= self.capture_num_tokens[-1]
+        # Backend-capability gate (H1, sits at graph admission, not eager init):
+        # a dense FlashInfer backend has no ragged verify metadata builder, so its
+        # out-graph TARGET_VERIFY would silently use the uniform prefill wrappers
+        # (no per-request geometry, no assert). Force eager here rather than select
+        # a graph with the wrong geometry. The DSV4 family (CUDA + HIP) does carry
+        # make_forward_metadata_from_raw_verify; the HIP out-graph additionally
+        # raises on a ragged layout (its TARGET_VERIFY path is still uniform), so it
+        # fails loud at the backend rather than running the wrong geometry.
+        if not hasattr(self.attn_backend, "make_forward_metadata_from_raw_verify"):
+            return False
+
+        # The captured token tier is floored to the bs-derived full block
+        # (raw_bs * num_tokens_per_bs), so the admission token budget is the larger
+        # of the real total and that floor; both must fit the largest captured
+        # tier. This also enforces raw_bs <= max_bs (mirroring the bs-keyed path's
+        # cuda_graph_bs <= max_bs gate, without which _pad_to_bucket / the bs-axis
+        # assert would crash instead of falling back to eager).
+        admission_tokens = max(
+            ragged_layout.total_verify_tokens,
+            forward_batch.batch_size * self.num_tokens_per_bs,
+        )
+        is_tokens_supported = admission_tokens <= self.capture_num_tokens[-1]
+
+        # Mirror the bs-keyed gates: DP/gathered-buffer batches that can't run the
+        # cuda graph (can_run_dp_cuda_graph False) must fall back to eager, and the
+        # require_mlp_tp_gather path derives bs from the global token count, which
+        # the ragged path does not yet support -- reject it loudly rather than
+        # silently selecting a graph at the wrong bs.
+        is_dp_supported = (
+            forward_batch.can_run_dp_cuda_graph if self.require_mlp_sync else True
+        )
+        assert not self.require_mlp_tp_gather, (
+            "DSpark compact ragged verify does not support require_mlp_tp_gather "
+            "(bs derived from global token count); disable SGLANG_RAGGED_VERIFY_MODE "
+            "or the MLP-TP-gather path."
+        )
+        assert not self.disable_padding, (
+            "DSpark compact ragged verify pads bs to the captured tier, which is "
+            "incompatible with disable_cuda_graph_padding; disable "
+            "SGLANG_RAGGED_VERIFY_MODE or enable cuda-graph padding."
         )
 
         is_encoder_lens_supported = (
@@ -578,6 +652,7 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
 
         return (
             is_tokens_supported
+            and is_dp_supported
             and is_encoder_lens_supported
             and is_tbo_supported
             and capture_hidden_mode_matches
@@ -1026,6 +1101,11 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
                 )
             self.buffers.input_ids[: self.raw_num_token].copy_(forward_batch.input_ids)
             self.buffers.positions[: self.raw_num_token].copy_(forward_batch.positions)
+            if is_ragged and graph_size_key > self.raw_num_token:
+                # Padded-token contract on the pre-planned path: zero the stale
+                # input_ids tail [raw_num_token:graph_num_tokens] so padded
+                # tokens never feed embedding / attention with a stale vocab id.
+                self.buffers.input_ids[self.raw_num_token : graph_size_key].zero_()
             if (
                 not is_ragged
                 and self.model_runner.spec_algorithm.is_dflash_or_dspark()
@@ -1052,15 +1132,27 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             # Selects the captured graph by total verify-token count rather than
             # bs, slices the token-axis buffers to the chosen graph_num_tokens
             # tier, and leaves the verify accept / sampling / KV-commit path
-            # untouched. The dense-operator graph is selected by token total, but
-            # the attention metadata wrappers stay bs-keyed (flashinfer
-            # prefill_cuda_graph_metadata is created per capture_bs). Pad bs to a
-            # captured bucket so the wrapper lookup at
-            # init_forward_metadata_out_graph resolves; padded rows reference
-            # reserved req-pool slot 0 and their output is discarded.
+            # untouched. The capture grid {b * num_draft : b in capture_bs} ties
+            # each token tier to one capture_bs, so the chosen graph_num_tokens
+            # also fixes the bs the bs-axis tensors were captured at: pad bs to
+            # graph_num_tokens // num_tokens_per_bs (which the worker floored to be
+            # >= raw_bs). Padded rows reference reserved req-pool slot 0 and their
+            # output is discarded.
             raw_num_token = ragged_layout.total_verify_tokens
-            graph_size_key = self._ragged_graph_num_tokens(raw_num_token)
-            bs = self._pad_to_bucket(raw_bs, self.capture_bs)
+            # Tier-correctness: the runner re-derives the tier from the real total
+            # and it must equal the tier baked into the layout (which the worker
+            # floored to the bs-derived full block). A mismatch means a stale /
+            # wrong-bucket layout that would pad to a tier the captured graph never
+            # recorded.
+            graph_size_key = self._ragged_graph_num_tokens(
+                max(raw_num_token, raw_bs * self.num_tokens_per_bs)
+            )
+            assert graph_size_key == ragged_layout.graph_num_tokens, (
+                f"ragged verify tier mismatch: runner tier {graph_size_key} != "
+                f"layout graph_num_tokens {ragged_layout.graph_num_tokens}"
+            )
+            bs = graph_size_key // self.num_tokens_per_bs
+            assert bs >= raw_bs, f"ragged padded bs {bs} < raw_bs {raw_bs}"
             padded_num_tokens = graph_size_key
         else:
             raw_num_token = raw_bs * self.num_tokens_per_bs
@@ -1095,7 +1187,14 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             and forward_batch.input_embeds is not None
         ):
             buffers.input_embeds[:raw_num_token].copy_(forward_batch.input_embeds)
-        # Padded tokens aren't read, so skip zeroing them.
+        # On the bs-keyed path padded tokens aren't read, so skip zeroing. The
+        # ragged path pads the token axis from the real total to the captured
+        # bucket; once the backend stops discarding the tail (C1 relaxed), those
+        # padded input_ids enter embedding / attention / KV write, so the stale
+        # tail (FOREACH_COPY leaves it untouched) must be zeroed to a safe vocab
+        # id (the padded-token contract).
+        if is_ragged and padded_num_tokens > raw_num_token:
+            self.buffers.input_ids[raw_num_token:padded_num_tokens].zero_()
         if self.enable_two_batch_overlap:
             self.tbo_plugin.replay_prepare(
                 forward_mode=self.capture_forward_mode,
@@ -1275,6 +1374,7 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
                     if self.model_runner.is_draft_worker
                     else CaptureHiddenMode.FULL
                 ),
+                ragged_verify_layout=self._capture_ragged_verify_layout(num_tokens),
             )
 
         elif self.model_runner.spec_algorithm.is_ngram():

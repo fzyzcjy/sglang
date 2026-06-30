@@ -257,6 +257,85 @@ class TestVerifyLayoutGrid(CustomTestCase):
         grid = worker._verify_layout_grid(verify_lens_cpu=[5, 2, 1])
         self.assertEqual(grid, [8])
 
+    def test_floor_lifts_bucket_when_token_graph_present(self):
+        """The bs-derived floor only applies when a token-keyed graph exists."""
+        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.COMPACT)
+        runner = types.SimpleNamespace(
+            ragged_verify_mode=True,
+            capture_num_tokens=[5, 10, 15],
+        )
+        worker.model_runner = types.SimpleNamespace(decode_cuda_graph_runner=runner)
+        # 3 requests, gamma+1 = 5, so the floor is 15; a tiny total still keys the
+        # 15-token tier (3 capture slots), not the smaller 5-token tier (1 slot).
+        floor = worker._verify_layout_graph_num_tokens_floor(num_reqs=3)
+        self.assertEqual(floor, 15)
+        layout = RaggedVerifyLayout.from_verify_lens(
+            verify_lens_cpu=[1, 1, 1],
+            device=_DEVICE,
+            grid=runner.capture_num_tokens,
+            graph_num_tokens_floor=floor,
+        )
+        self.assertEqual(layout.total_verify_tokens, 3)
+        self.assertEqual(layout.graph_num_tokens, 15)
+
+    def test_floor_is_zero_without_token_graph(self):
+        """No token-keyed graph means no bs-derived floor (eager runs on exact total)."""
+        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.COMPACT)
+        worker.model_runner = types.SimpleNamespace(decode_cuda_graph_runner=None)
+        self.assertEqual(worker._verify_layout_graph_num_tokens_floor(num_reqs=3), 0)
+
+
+class TestLayoutLessCompactCarriesDegenerateLayout(CustomTestCase):
+    def test_uniform_ragged_layout_matches_static_full_block(self):
+        """The C3 fallback layout is a uniform gamma+1 block keyed token-wise."""
+        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.COMPACT)
+        runner = types.SimpleNamespace(
+            ragged_verify_mode=True,
+            capture_num_tokens=[5, 10, 15],
+        )
+        worker.model_runner = types.SimpleNamespace(decode_cuda_graph_runner=runner)
+        layout = worker._uniform_ragged_layout(bs=2, device=_DEVICE)
+        self.assertEqual(layout.verify_lens_cpu, [5, 5])
+        self.assertEqual(layout.total_verify_tokens, 10)
+        self.assertEqual(layout.graph_num_tokens, 10)
+
+
+class TestRaggedLayoutSkippedWhenBatchExceedsCapturedGrid(CustomTestCase):
+    def _compact_worker(self, *, gamma: int, capture_num_tokens: list[int]):
+        worker = _make_worker(gamma=gamma, mode=RaggedVerifyMode.COMPACT)
+        runner = types.SimpleNamespace(
+            ragged_verify_mode=True,
+            capture_num_tokens=capture_num_tokens,
+        )
+        worker.model_runner = types.SimpleNamespace(decode_cuda_graph_runner=runner)
+        return worker
+
+    def test_uniform_layout_skipped_when_bs_exceeds_max_capture_bs(self):
+        """A layout-less compact verify with bs > max_capture_bs returns None, not a raise."""
+        # capture max tier 15 -> max_capture_bs = 15 // 5 = 3; bs=4 floors to 20 > 15.
+        worker = self._compact_worker(gamma=4, capture_num_tokens=[5, 10, 15])
+        self.assertIsNone(worker._uniform_ragged_layout(bs=4, device=_DEVICE))
+
+    def test_uniform_layout_built_when_bs_at_max_capture_bs(self):
+        """bs == max_capture_bs still builds the layout (the guard is inert when it fits)."""
+        worker = self._compact_worker(gamma=4, capture_num_tokens=[5, 10, 15])
+        layout = worker._uniform_ragged_layout(bs=3, device=_DEVICE)
+        self.assertIsNotNone(layout)
+        self.assertEqual(layout.total_verify_tokens, 15)
+
+    def test_confidence_ready_layout_skipped_when_num_reqs_exceeds_max_capture_bs(self):
+        """A confidence-ready compact batch with num_reqs > max_capture_bs returns None, not a raise."""
+        worker = self._compact_worker(gamma=4, capture_num_tokens=[5, 10, 15])
+        worker._schedule_verify_lens = lambda *, req_pool_indices, device: torch.tensor(
+            [5, 4, 5, 3], dtype=torch.int32, device=device
+        )
+        req_pool_indices = torch.arange(4, device=_DEVICE)
+        self.assertIsNone(
+            worker._maybe_schedule_ragged_layout(
+                req_pool_indices=req_pool_indices, device=_DEVICE
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

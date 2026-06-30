@@ -24,7 +24,6 @@ from torch import nn
 
 from sglang.srt.configs.deepseek_v4 import DeepSeekV4Config
 from sglang.srt.layers.layernorm import RMSNorm
-from sglang.srt.layers.linear import ColumnParallelLinear, RowParallelLinear
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.radix_attention import RadixAttention
 from sglang.srt.layers.vocab_parallel_embedding import VocabParallelEmbedding
@@ -36,6 +35,7 @@ from sglang.srt.models.dbrx import ReplicatedLinear
 from sglang.srt.models.deepseek_v4 import (
     DEEPSEEK_V4_STACKED_PARAMS_MAPPING,
     DeepseekV4DecoderLayer,
+    MqaAttentionBase,
     hc_head_torch,
     make_hc_head_params,
 )
@@ -104,17 +104,18 @@ def apply_rotary_emb(
     return y
 
 
-class DSparkAttention(nn.Module):
+class DSparkAttention(MqaAttentionBase):
     """Sliding-window sparse MLA for the V4 DSpark draft (compress_ratio == 0).
 
-    Reuses the weight / projection structure of the production ``MQALayer``
-    (``deepseek_v4.py``) at compress_ratio == 0 -- same wq_a/wkv/q_norm/wq_b/kv_norm/
-    wo_a/wo_b/attn_sink shapes, same attn-TP sharding -- but drives the production paged
-    ``DeepSeekV4TokenToKVPool`` sliding-window ring and the production sparse FlashMLA
-    kernel with a NON-CAUSAL full-block index layout (every draft-block query attends the
-    whole injected target-hidden window plus the whole draft block, reference
-    ``DSparkAttention.forward`` model.py:752). It is intentionally NOT the causal SWA
-    metadata that ``MQALayer.forward`` / the backend's default forward build.
+    Extends ``MqaAttentionBase`` to reuse the weight / projection structure of the
+    production ``MQALayer`` (``deepseek_v4.py``) at compress_ratio == 0 -- same
+    wq_a/wkv/q_norm/wq_b/kv_norm/wo_a/wo_b/attn_sink shapes, same attn-TP sharding --
+    but drives the production paged ``DeepSeekV4TokenToKVPool`` sliding-window ring and
+    the production sparse FlashMLA kernel with a NON-CAUSAL full-block index layout
+    (every draft-block query attends the whole injected target-hidden window plus the
+    whole draft block, reference ``DSparkAttention.forward`` model.py:752). It is
+    intentionally NOT the causal SWA metadata that ``MQALayer.forward`` / the backend's
+    default forward build.
     """
 
     def __init__(
@@ -124,100 +125,26 @@ class DSparkAttention(nn.Module):
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
     ) -> None:
-        super().__init__()
-        self.attn_tp_rank = get_parallel().attn_tp_rank
-        self.attn_tp_size = get_parallel().attn_tp_size
-        self.layer_id = layer_id
-        self.dim = config.hidden_size
-        self.qk_rope_head_dim = config.qk_rope_head_dim
-        self.qk_nope_head_dim = config.head_dim - config.qk_rope_head_dim
-        self.head_dim = self.qk_rope_head_dim + self.qk_nope_head_dim
-        self.rope_head_dim = config.qk_rope_head_dim
-        self.n_heads = config.num_attention_heads
-        self.n_local_heads = self.n_heads // self.attn_tp_size
-        self.n_groups = config.o_groups
-        self.n_local_groups = self.n_groups // self.attn_tp_size
-        self.q_lora_rank = config.q_lora_rank
-        self.o_lora_rank = config.o_lora_rank
-        self.window_size = int(
-            getattr(config, "sliding_window", None) or config.window_size
+        super().__init__(
+            config,
+            layer_id,
+            quant_config,
+            prefix,
+            attn_tp_rank=get_parallel().attn_tp_rank,
+            attn_tp_size=get_parallel().attn_tp_size,
+            compress_ratio=0,
+            fuse_wqa_wkv=False,
+            wo_a_fp8=False,
+            wo_a_keeps_quant_config=True,
+            wo_b_reduce_results=True,
+            rope_original_seq_len=0,
         )
-        self.eps = config.rms_norm_eps
-        self.softmax_scale = self.head_dim**-0.5
-
-        self.compress_ratio = 0
         assert (
             self.compress_ratio == 0
         ), "DSpark draft attention requires compress_ratio == 0."
-
-        assert config.head_dim == self.head_dim
-        assert config.num_key_value_heads == 1
-
-        self.attn_sink = nn.Parameter(torch.empty(self.n_heads, dtype=torch.float32))
-        self._attn_sink_local: Optional[torch.Tensor] = (
-            self.attn_sink if self.attn_tp_size == 1 else None
+        self.window_size = int(
+            getattr(config, "sliding_window", None) or config.window_size
         )
-        self.wq_a = ReplicatedLinear(
-            self.dim,
-            self.q_lora_rank,
-            bias=False,
-            quant_config=quant_config,
-            prefix=add_prefix("wq_a", prefix),
-        )
-        self.wkv = ReplicatedLinear(
-            self.dim,
-            self.head_dim,
-            bias=False,
-            quant_config=quant_config,
-            prefix=add_prefix("wkv", prefix),
-        )
-        self.q_norm = RMSNorm(self.q_lora_rank, eps=self.eps)
-        self.wq_b = ColumnParallelLinear(
-            self.q_lora_rank,
-            self.n_heads * self.head_dim,
-            bias=False,
-            quant_config=quant_config,
-            prefix=add_prefix("wq_b", prefix),
-            tp_rank=self.attn_tp_rank,
-            tp_size=self.attn_tp_size,
-        )
-        self.kv_norm = RMSNorm(self.head_dim, eps=self.eps)
-        self.wo_a = ColumnParallelLinear(
-            self.n_heads * self.head_dim // self.n_groups,
-            self.n_groups * self.o_lora_rank,
-            bias=False,
-            quant_config=quant_config,
-            prefix=add_prefix("wo_a", prefix),
-            tp_rank=self.attn_tp_rank,
-            tp_size=self.attn_tp_size,
-            params_dtype=torch.bfloat16,
-        )
-        self.wo_b = RowParallelLinear(
-            self.n_groups * self.o_lora_rank,
-            self.dim,
-            bias=False,
-            quant_config=quant_config,
-            prefix=add_prefix("wo_b", prefix),
-            tp_rank=self.attn_tp_rank,
-            tp_size=self.attn_tp_size,
-        )
-
-        from sglang.srt.layers.deepseek_v4_rope import precompute_freqs_cis
-        from sglang.srt.utils.hf_transformers_utils import get_rope_config
-
-        rope_theta, rope_scaling = get_rope_config(config)
-        rope_scaling = rope_scaling or {}
-        freqs_cis = precompute_freqs_cis(
-            dim=self.qk_rope_head_dim,
-            seqlen=config.max_position_embeddings,
-            original_seq_len=0,
-            base=rope_theta,
-            factor=rope_scaling.get("factor", 1.0),
-            beta_fast=rope_scaling.get("beta_fast", 32),
-            beta_slow=rope_scaling.get("beta_slow", 1),
-        )
-        self.register_buffer("freqs_cis", freqs_cis, persistent=False)
-        self.freqs_cis: torch.Tensor
 
         # RadixAttention is the layer handle the pool / FlashMLA paths key off (layer_id);
         # it is not invoked directly (the DSpark forward calls the sparse kernel itself).
@@ -639,6 +566,8 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         self.temperature = float(getattr(config, "temperature", 1.0))
 
         base_layer_id = int(config.num_hidden_layers)
+        self.start_layer = base_layer_id
+        self.end_layer = base_layer_id + self.num_stages
         self.stages = nn.ModuleList(
             [
                 DSparkV4Stage(
@@ -939,11 +868,11 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
                     weight_loader(param, loaded_weight)
                     loaded_params.add(mapped)
 
-        self._maybe_identity_init_confidence_head(
+        self._assert_confidence_head_loaded(
             params_dict=params_dict, loaded_params=loaded_params
         )
 
-    def _maybe_identity_init_confidence_head(
+    def _assert_confidence_head_loaded(
         self, *, params_dict: dict, loaded_params: set
     ) -> None:
         if self.confidence_head is None:
@@ -953,16 +882,11 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         }
         missing = confidence_param_names - loaded_params
         if missing:
-            logger.warning(
-                "DSpark V4 confidence head present but checkpoint is missing %s; "
-                "identity-initializing to a constant accept probability of 0.5 "
-                "(advisory-only; does not affect losslessness).",
-                sorted(missing),
+            raise ValueError(
+                f"DSpark V4 confidence head is enabled but the checkpoint is missing "
+                f"{sorted(missing)}. Provide a checkpoint with trained confidence weights, "
+                f"or disable the confidence head (enable_confidence_head=False)."
             )
-            with torch.no_grad():
-                self.confidence_head.proj.weight.zero_()
-                if self.confidence_head.proj.bias is not None:
-                    self.confidence_head.proj.bias.zero_()
 
     def _remap_dspark_weight_name(self, name: str) -> Optional[str]:
         """Map a reference ``mtp.{stage}.*`` checkpoint name to a draft param name."""
