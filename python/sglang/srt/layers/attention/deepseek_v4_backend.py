@@ -373,6 +373,64 @@ def build_block_seq_lens_casual(
     return (prefix[:, None] + steps[None, :]).reshape(-1)
 
 
+class VerifyExtendLengths(msgspec.Struct, frozen=True):
+    seq_lens_extended: torch.Tensor
+    seq_lens_cpu_extended: List[int]
+    extend_seq_lens_cpu: List[int]
+    num_tokens: int
+    extend_start_loc: Optional[torch.Tensor]
+
+
+def compute_uniform_extend_lengths(
+    *,
+    seq_lens: torch.Tensor,
+    seq_lens_cpu: List[int],
+    extend_len: int,
+) -> VerifyExtendLengths:
+    """Eager same-length verify extend: every request grows by ``extend_len`` tokens.
+
+    Serves the uniform-gamma target verify (``extend_len = speculative_num_draft_tokens``)
+    and the DSpark draft block (``extend_len = block_size``). ``seq_lens_cpu`` must already be
+    a ``list[int]`` (call sites normalize); the int contract keeps ``seq_lens_cpu_extended``
+    from degrading into a list of 0-d tensors.
+    """
+    batch_size = len(seq_lens_cpu)
+    seq_lens_extended = seq_lens + extend_len
+    seq_lens_cpu_extended = [x + extend_len for x in seq_lens_cpu]
+    extend_seq_lens_cpu = [extend_len] * batch_size
+    num_tokens = extend_len * batch_size
+    return VerifyExtendLengths(
+        seq_lens_extended=seq_lens_extended,
+        seq_lens_cpu_extended=seq_lens_cpu_extended,
+        extend_seq_lens_cpu=extend_seq_lens_cpu,
+        num_tokens=num_tokens,
+        extend_start_loc=None,
+    )
+
+
+def compute_ragged_extend_lengths(
+    *,
+    seq_lens: torch.Tensor,
+    seq_lens_cpu: List[int],
+    ragged_layout: RaggedVerifyLayout,
+) -> VerifyExtendLengths:
+    """Eager ragged verify extend: each request grows by its own ``verify_lens`` entry."""
+    extend_seq_lens_cpu = list(ragged_layout.verify_lens_cpu)
+    seq_lens_extended = seq_lens + ragged_layout.verify_lens
+    seq_lens_cpu_extended = [
+        raw + length for raw, length in zip(seq_lens_cpu, extend_seq_lens_cpu)
+    ]
+    num_tokens = ragged_layout.total_verify_tokens
+    extend_start_loc = ragged_layout.extend_start_loc
+    return VerifyExtendLengths(
+        seq_lens_extended=seq_lens_extended,
+        seq_lens_cpu_extended=seq_lens_cpu_extended,
+        extend_seq_lens_cpu=extend_seq_lens_cpu,
+        num_tokens=num_tokens,
+        extend_start_loc=extend_start_loc,
+    )
+
+
 def _create_flashmla_metadata():
     if _is_sm120:
         return None
@@ -1108,23 +1166,25 @@ class DeepseekV4AttnBackend(
         online_c128_state_slot_offset: int = 0,
         ragged_layout: Optional[RaggedVerifyLayout] = None,
     ) -> DSV4Metadata:
-        batch_size = len(seq_lens)
         if ragged_layout is None:
-            seq_lens = seq_lens + self.speculative_num_draft_tokens
-            seq_lens_cpu = [x + self.speculative_num_draft_tokens for x in seq_lens_cpu]
-            extend_seq_lens_cpu = [self.speculative_num_draft_tokens] * batch_size
-            extend_seq_lens = self._move_to_device(extend_seq_lens_cpu)
-            num_tokens = self.speculative_num_draft_tokens * batch_size
-            extend_start_loc = None
+            lengths = compute_uniform_extend_lengths(
+                seq_lens=seq_lens,
+                seq_lens_cpu=seq_lens_cpu,
+                extend_len=self.speculative_num_draft_tokens,
+            )
+            extend_seq_lens = self._move_to_device(lengths.extend_seq_lens_cpu)
         else:
-            seq_lens = seq_lens + ragged_layout.verify_lens
-            extend_seq_lens_cpu = list(ragged_layout.verify_lens_cpu)
-            seq_lens_cpu = [
-                raw + length for raw, length in zip(seq_lens_cpu, extend_seq_lens_cpu)
-            ]
+            lengths = compute_ragged_extend_lengths(
+                seq_lens=seq_lens,
+                seq_lens_cpu=seq_lens_cpu,
+                ragged_layout=ragged_layout,
+            )
             extend_seq_lens = ragged_layout.verify_lens
-            num_tokens = ragged_layout.total_verify_tokens
-            extend_start_loc = ragged_layout.extend_start_loc
+        seq_lens = lengths.seq_lens_extended
+        seq_lens_cpu = lengths.seq_lens_cpu_extended
+        extend_seq_lens_cpu = lengths.extend_seq_lens_cpu
+        num_tokens = lengths.num_tokens
+        extend_start_loc = lengths.extend_start_loc
         if out_cache_loc is None:
             out_cache_loc = seq_lens.new_zeros(num_tokens)
         return self.init_forward_metadata_prefill(
@@ -1160,25 +1220,26 @@ class DeepseekV4AttnBackend(
         because ``self.is_dspark_draft`` is set. ``need_compress=False`` skips the c4/c128
         path the draft does not have (R8: draft pool is SWA-only).
         """
-        batch_size = len(seq_lens)
-        seq_lens_block = seq_lens + block_size
         if seq_lens_cpu is None:
-            seq_lens_block_cpu = seq_lens_block.tolist()
+            seq_lens_cpu_list = seq_lens.tolist()
         else:
-            seq_lens_block_cpu = [int(x) + block_size for x in seq_lens_cpu.tolist()]
-        extend_seq_lens_cpu = [block_size] * batch_size
-        extend_seq_lens = self._move_to_device(extend_seq_lens_cpu)
-        num_tokens = block_size * batch_size
+            seq_lens_cpu_list = [int(x) for x in seq_lens_cpu.tolist()]
+        lengths = compute_uniform_extend_lengths(
+            seq_lens=seq_lens,
+            seq_lens_cpu=seq_lens_cpu_list,
+            extend_len=block_size,
+        )
+        extend_seq_lens = self._move_to_device(lengths.extend_seq_lens_cpu)
         return self.init_forward_metadata_prefill(
             max_seq_len=max_seq_len,
             req_pool_indices=req_pool_indices,
-            seq_lens=seq_lens_block,
-            seq_lens_cpu=seq_lens_block_cpu,
+            seq_lens=lengths.seq_lens_extended,
+            seq_lens_cpu=lengths.seq_lens_cpu_extended,
             out_cache_loc=out_cache_loc,
-            num_tokens=num_tokens,
+            num_tokens=lengths.num_tokens,
             extend_seq_lens=extend_seq_lens,
-            extend_seq_lens_cpu=extend_seq_lens_cpu,
-            extend_start_loc=None,
+            extend_seq_lens_cpu=lengths.extend_seq_lens_cpu,
+            extend_start_loc=lengths.extend_start_loc,
             need_compress=False,
             use_prefill_cuda_graph=False,
             dspark_block_size=block_size,
