@@ -276,6 +276,14 @@ class DSparkWorkerV2(BaseSpecWorker):
         # table (budget = verify-all-up-to-max). Flat is the inert default for
         # cap-accept, which has zero throughput gain; the GPU profiler hook lands
         # with the compact real-N path.
+        #
+        # Until a profiled (non-flat) table ships the hardware-aware scheduler is a
+        # no-op: lookup() returns a constant, so the verify-token budget degenerates
+        # to verify-all and every request keeps verify_len == gamma+1. The
+        # verify_lens >= 1 anchor contract (see DSparkScheduleConfig.min_verify_len
+        # and schedule_verify_lens_topk's lower-bound clamp) MUST be in place before
+        # any profiled table is supplied, because a non-flat table yields small K
+        # and would otherwise drive verify_len to 0.
         sps_table_path = os.environ.get("SGLANG_DSPARK_SPS_TABLE_PATH")
         if sps_table_path:
             return load_sps_table_from_path(sps_table_path)
