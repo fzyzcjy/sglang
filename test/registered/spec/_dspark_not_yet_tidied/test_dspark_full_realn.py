@@ -3,6 +3,9 @@ import unittest
 
 import torch
 
+from sglang.srt.speculative.dspark_components.dspark_verify_planner import (
+    DSparkVerifyPlanner,
+)
 from sglang.srt.speculative.dspark_components.dspark_worker_v2 import (
     DSparkWorkerV2,
     _DraftBlockResult,
@@ -21,7 +24,11 @@ def _make_worker(*, gamma: int, mode: RaggedVerifyMode = RaggedVerifyMode.COMPAC
     worker.gamma = gamma
     worker.verify_num_draft_tokens = gamma + 1
     worker.device = _DEVICE
-    worker._ragged_verify_mode = mode
+    planner = DSparkVerifyPlanner.__new__(DSparkVerifyPlanner)
+    planner.gamma = gamma
+    planner.verify_num_draft_tokens = gamma + 1
+    planner._ragged_verify_mode = mode
+    worker._verify_planner = planner
     return worker
 
 
@@ -308,6 +315,7 @@ class TestRaggedLayoutSkippedWhenBatchExceedsCapturedGrid(CustomTestCase):
             capture_num_tokens=capture_num_tokens,
         )
         worker.model_runner = types.SimpleNamespace(decode_cuda_graph_runner=runner)
+        worker._verify_planner.model_runner = worker.model_runner
         return worker
 
     def test_uniform_layout_skipped_when_bs_exceeds_max_capture_bs(self):
@@ -326,14 +334,14 @@ class TestRaggedLayoutSkippedWhenBatchExceedsCapturedGrid(CustomTestCase):
     def test_confidence_ready_layout_skipped_when_num_reqs_exceeds_max_capture_bs(self):
         """A confidence-ready compact batch with num_reqs > max_capture_bs returns None, not a raise."""
         worker = self._compact_worker(gamma=4, capture_num_tokens=[5, 10, 15])
-        worker._schedule_verify_lens = (
+        worker._verify_planner._schedule_verify_lens = (
             lambda *, req_pool_indices, prefix_lens, device: torch.tensor(
                 [5, 4, 5, 3], dtype=torch.int32, device=device
             )
         )
         req_pool_indices = torch.arange(4, device=_DEVICE)
         self.assertIsNone(
-            worker._maybe_schedule_ragged_layout(
+            worker._verify_planner.schedule_layout(
                 req_pool_indices=req_pool_indices,
                 prefix_lens=torch.full((4,), 8, device=_DEVICE),
                 device=_DEVICE,

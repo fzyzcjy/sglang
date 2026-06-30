@@ -4,7 +4,6 @@ from typing import Optional
 import torch
 
 from sglang.srt.distributed import get_tp_group
-from sglang.srt.environ import envs
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.managers.scheduler import GenerationBatchResult
 from sglang.srt.managers.tp_worker import TpModelWorker
@@ -24,12 +23,6 @@ from sglang.srt.speculative.dspark_components.dspark_accept import (
     accept_draft_tokens,
     build_out_tokens,
 )
-from sglang.srt.speculative.dspark_components.dspark_confidence import (
-    _CONFIDENCE_RELAY_LAG_STEPS,
-    _CONFIDENCE_RELAY_RING_DEPTH,
-    ConfidenceRelay,
-    compute_confidence,
-)
 from sglang.srt.speculative.dspark_components.dspark_draft import (
     DsparkDraftSampler,
     make_next_draft_input,
@@ -40,17 +33,8 @@ from sglang.srt.speculative.dspark_components.dspark_draft_proposer import (
 from sglang.srt.speculative.dspark_components.dspark_kv_inject import (
     TargetHiddenKvInjector,
 )
-from sglang.srt.speculative.dspark_components.dspark_scheduler import (
-    ConfidencePrefixScheduler,
-    DSparkScheduleConfig,
-    build_sps_cost_table,
-    compute_verify_token_budget,
-)
 from sglang.srt.speculative.dspark_components.dspark_target_verify import (
     TargetVerifyExecutor,
-)
-from sglang.srt.speculative.dspark_components.dspark_verify_planner import (
-    DSparkVerifyPlanner,
 )
 from sglang.srt.speculative.dspark_components.dspark_utils import (
     dspark_gamma_from_num_draft_tokens,
@@ -58,16 +42,9 @@ from sglang.srt.speculative.dspark_components.dspark_utils import (
 )
 from sglang.srt.speculative.dspark_components.dspark_verify import (
     alloc_verify_window,
-    ragged_layout_exceeds_captured_grid,
-    uniform_ragged_layout,
-    verify_layout_graph_num_tokens_floor,
-    verify_layout_grid,
-    verify_lens_broadcast_group,
 )
-from sglang.srt.speculative.ragged_verify import (
-    RaggedVerifyLayout,
-    RaggedVerifyMode,
-    read_ragged_verify_mode,
+from sglang.srt.speculative.dspark_components.dspark_verify_planner import (
+    DSparkVerifyPlanner,
 )
 from sglang.srt.speculative.triton_ops.cache_locs import assign_extend_cache_locs_func
 from sglang.srt.utils import get_available_gpu_memory, is_cuda
@@ -486,7 +463,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         draft_tokens = draft_block.draft_tokens
 
         if self._verify_planner.carries_confidence:
-            self._verify_planner._relay_confidence(
+            self._verify_planner.relay_confidence(
                 req_pool_indices=batch.req_pool_indices,
                 prefix_lens=prefix_lens,
                 draft_hidden=proposal.draft_hidden,
@@ -494,7 +471,7 @@ class DSparkWorkerV2(BaseSpecWorker):
                 draft_tokens=draft_tokens,
             )
 
-        layout = self._verify_planner._maybe_schedule_ragged_layout(
+        layout = self._verify_planner.schedule_layout(
             req_pool_indices=batch.req_pool_indices,
             prefix_lens=prefix_lens,
             device=device,

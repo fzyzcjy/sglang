@@ -3,6 +3,9 @@ from types import SimpleNamespace
 
 import torch
 
+from sglang.srt.speculative.dspark_components.dspark_verify_planner import (
+    DSparkVerifyPlanner,
+)
 from sglang.srt.speculative.dspark_components.dspark_worker_v2 import DSparkWorkerV2
 from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout, RaggedVerifyMode
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -22,12 +25,14 @@ def _make_worker(
     worker = DSparkWorkerV2.__new__(DSparkWorkerV2)
     worker.gamma = gamma
     worker.verify_num_draft_tokens = gamma + 1
-    worker._ragged_verify_mode = mode
-    worker._verify_scheduler = scheduler
-    worker._confidence_ring = None
-    worker._confidence_ring_seq_lens = None
-    worker._confidence_step_ct = 0
-    worker.model_runner = SimpleNamespace(decode_cuda_graph_runner=None)
+    planner = DSparkVerifyPlanner.__new__(DSparkVerifyPlanner)
+    planner.gamma = gamma
+    planner.verify_num_draft_tokens = gamma + 1
+    planner._ragged_verify_mode = mode
+    planner._verify_scheduler = scheduler
+    planner._confidence_relay = None
+    planner.model_runner = SimpleNamespace(decode_cuda_graph_runner=None)
+    worker._verify_planner = planner
     return worker
 
 
@@ -126,7 +131,7 @@ class TestRaggedGating(CustomTestCase):
     def test_off_mode_returns_none(self):
         """OFF mode never schedules a ragged layout (uniform path stays byte-identical)."""
         worker = _make_worker(gamma=4, mode=RaggedVerifyMode.STATIC, scheduler=object())
-        layout = worker._maybe_schedule_ragged_layout(
+        layout = worker._verify_planner.schedule_layout(
             req_pool_indices=torch.tensor([0, 1]),
             prefix_lens=torch.tensor([8, 8]),
             device=_DEVICE,
@@ -139,7 +144,7 @@ class TestRaggedGating(CustomTestCase):
         worker = _make_worker(
             gamma=4, mode=RaggedVerifyMode.COMPACT, scheduler=object()
         )
-        layout = worker._maybe_schedule_ragged_layout(
+        layout = worker._verify_planner.schedule_layout(
             req_pool_indices=torch.tensor([0, 1]),
             prefix_lens=torch.tensor([8, 8]),
             device=_DEVICE,
@@ -150,7 +155,7 @@ class TestRaggedGating(CustomTestCase):
     def test_cutoff_mode_without_scheduler_returns_none(self):
         """cap-accept with no scheduler (no confidence head) falls back to uniform."""
         worker = _make_worker(gamma=4, mode=RaggedVerifyMode.CAP_ACCEPT, scheduler=None)
-        layout = worker._maybe_schedule_ragged_layout(
+        layout = worker._verify_planner.schedule_layout(
             req_pool_indices=torch.tensor([0, 1]),
             prefix_lens=torch.tensor([8, 8]),
             device=_DEVICE,

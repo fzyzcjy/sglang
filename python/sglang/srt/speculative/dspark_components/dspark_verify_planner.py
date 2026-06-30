@@ -114,7 +114,7 @@ class DSparkVerifyPlanner:
             self._ragged_verify_mode is RaggedVerifyMode.COMPACT and layout is not None
         )
 
-    def _relay_confidence(
+    def relay_confidence(
         self,
         *,
         req_pool_indices: torch.Tensor,
@@ -156,7 +156,7 @@ class DSparkVerifyPlanner:
             prefix_lens=prefix_lens,
         )
 
-    def _maybe_schedule_ragged_layout(
+    def schedule_layout(
         self,
         *,
         req_pool_indices: torch.Tensor,
