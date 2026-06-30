@@ -1,6 +1,5 @@
 import unittest
 
-import pytest
 
 from sglang.srt.speculative.dspark_utils import (
     DEFAULT_DSPARK_GAMMA,

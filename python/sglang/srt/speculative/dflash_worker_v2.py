@@ -1194,9 +1194,7 @@ class DFlashWorkerV2(BaseSpecWorker):
         bonus_tokens: torch.Tensor,
         new_seq_lens: torch.Tensor,
     ) -> DFlashDraftInputV2:
-        return make_draft_input_v2(
-            bonus_tokens=bonus_tokens, new_seq_lens=new_seq_lens
-        )
+        return make_draft_input_v2(bonus_tokens=bonus_tokens, new_seq_lens=new_seq_lens)
 
     def forward_batch_generation(
         self,

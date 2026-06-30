@@ -508,7 +508,9 @@ class DSparkWorkerV2(BaseSpecWorker):
         if getattr(self.draft_model, "markov_head", None) is None:
             return _eager("no markov head")
         if self.tp_rank == 0:
-            logger.info("DSpark draft greedy proposal folded into the draft cuda graph.")
+            logger.info(
+                "DSpark draft greedy proposal folded into the draft cuda graph."
+            )
         return _DsparkDraftSampler(
             model=self.draft_model,
             gamma=self.gamma,
@@ -1347,7 +1349,9 @@ class DSparkWorkerV2(BaseSpecWorker):
                 temperatures = torch.ones(bs, dtype=torch.float32, device=device)
             else:
                 temperatures = (
-                    sampling_info.temperatures.view(-1).to(torch.float32).clamp_min(1e-5)
+                    sampling_info.temperatures.view(-1)
+                    .to(torch.float32)
+                    .clamp_min(1e-5)
                 )
             draft_block = _DraftBlockResult(
                 draft_tokens=draft_sampler.out[: bs * self.gamma].view(bs, self.gamma),
