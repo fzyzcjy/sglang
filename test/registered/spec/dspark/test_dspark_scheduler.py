@@ -6,7 +6,6 @@ from sglang.srt.speculative.dspark_scheduler import (
     ConfidencePrefixScheduler,
     DSparkScheduleConfig,
     compute_verify_token_budget,
-    schedule_verify_lens,
     schedule_verify_lens_topk,
 )
 from sglang.srt.speculative.dspark_sps_table import SpsCostTable
@@ -344,9 +343,13 @@ class TestVerifyLenAnchorContract(CustomTestCase):
         survival = _survival_from_confidence(
             torch.tensor([[0.90, 0.80, 0.70], [0.85, 0.60, 0.40]], dtype=torch.float32)
         )
-        budget = scheduler.update_budget_from_history(history_survival_probs=survival)
+        budget = compute_verify_token_budget(
+            history_survival_probs=survival, sps_table=table, cfg=cfg
+        )
         self.assertEqual(budget, 0)
-        verify_lens = scheduler.compute_verify_lens(survival_probs=survival)
+        verify_lens = scheduler.compute_verify_lens(
+            k_survival=survival, sort_survival=survival
+        )
         self.assertGreaterEqual(int(verify_lens.min().item()), 1)
         verify_lens_cpu = verify_lens.to(torch.int64).tolist()
         layout = RaggedVerifyLayout.from_verify_lens(
@@ -411,49 +414,51 @@ class TestNonAnticipating(CustomTestCase):
 
 
 class TestConfidencePrefixScheduler(CustomTestCase):
-    def test_cold_start_verifies_all(self):
-        """With no cached budget the scheduler falls back to verify-all (max per request)."""
-        survival = torch.tensor([[0.9, 0.8, 0.7]], dtype=torch.float32)
-        cfg = DSparkScheduleConfig(gamma=3)
-        scheduler = ConfidencePrefixScheduler(sps_table=_flat_table(), cfg=cfg)
-        verify_lens = scheduler.compute_verify_lens(survival_probs=survival)
-        self.assertEqual(int(verify_lens[0].item()), 3)
-
-    def test_update_budget_then_compute_uses_cached_budget(self):
-        """update_budget_from_history caches K and compute_verify_lens respects it."""
-        history = torch.tensor([[0.95, 0.30, 0.05]], dtype=torch.float32)
-        now = torch.tensor([[0.95, 0.90, 0.85]], dtype=torch.float32)
+    def test_compute_verify_lens_respects_history_budget(self):
+        """Different k_survival tensors yield different budgets and different verify_lens."""
+        low_history = torch.tensor([[0.95, 0.30, 0.05]], dtype=torch.float32)
+        high_history = torch.tensor([[0.95, 0.90, 0.85]], dtype=torch.float32)
+        sort_survival = torch.tensor([[0.95, 0.90, 0.85]], dtype=torch.float32)
         cfg = DSparkScheduleConfig(gamma=3)
         scheduler = ConfidencePrefixScheduler(sps_table=_cliff_table(), cfg=cfg)
-        budget = scheduler.update_budget_from_history(history_survival_probs=history)
-        self.assertEqual(scheduler.cached_budget, budget)
-        verify_lens = scheduler.compute_verify_lens(survival_probs=now)
-        total_extra = int(verify_lens.to(torch.int64).sum().item())
-        self.assertLessEqual(total_extra, budget)
-
-
-class TestScheduleVerifyLensHook(CustomTestCase):
-    def test_hook_returns_none_without_scheduler(self):
-        """schedule_verify_lens returns None (uniform fallback) when scheduler is None."""
-        survival = torch.tensor([[0.9, 0.8]], dtype=torch.float32)
-        self.assertIsNone(schedule_verify_lens(scheduler=None, survival_probs=survival))
-
-    def test_hook_returns_none_without_survival_probs(self):
-        """schedule_verify_lens returns None when survival_probs is None."""
-        cfg = DSparkScheduleConfig(gamma=2)
-        scheduler = ConfidencePrefixScheduler(sps_table=_flat_table(), cfg=cfg)
-        self.assertIsNone(
-            schedule_verify_lens(scheduler=scheduler, survival_probs=None)
+        low_budget = compute_verify_token_budget(
+            history_survival_probs=low_history, sps_table=scheduler.sps_table, cfg=cfg
+        )
+        high_budget = compute_verify_token_budget(
+            history_survival_probs=high_history, sps_table=scheduler.sps_table, cfg=cfg
+        )
+        self.assertNotEqual(low_budget, high_budget, "budgets must differ for this test")
+        lens_low = scheduler.compute_verify_lens(
+            k_survival=low_history, sort_survival=sort_survival
+        )
+        lens_high = scheduler.compute_verify_lens(
+            k_survival=high_history, sort_survival=sort_survival
+        )
+        self.assertFalse(
+            torch.equal(lens_low, lens_high),
+            "different k_survival budgets must produce different verify_lens",
         )
 
-    def test_hook_returns_verify_lens_tensor(self):
-        """schedule_verify_lens returns a per-request verify_lens tensor when wired."""
-        survival = torch.tensor([[0.9, 0.8, 0.7]], dtype=torch.float32)
+    def test_compute_verify_lens_is_pure_no_state_mutation(self):
+        """compute_verify_lens does not write any new attribute to the scheduler."""
         cfg = DSparkScheduleConfig(gamma=3)
         scheduler = ConfidencePrefixScheduler(sps_table=_flat_table(), cfg=cfg)
-        verify_lens = schedule_verify_lens(scheduler=scheduler, survival_probs=survival)
-        self.assertIsNotNone(verify_lens)
-        self.assertEqual(tuple(verify_lens.shape), (1,))
+        attrs_before = set(vars(scheduler).keys())
+        k_survival = torch.tensor([[0.9, 0.8, 0.7]], dtype=torch.float32)
+        sort_survival = torch.tensor([[0.9, 0.8, 0.7]], dtype=torch.float32)
+        scheduler.compute_verify_lens(k_survival=k_survival, sort_survival=sort_survival)
+        attrs_after = set(vars(scheduler).keys())
+        self.assertEqual(
+            attrs_before,
+            attrs_after,
+            f"compute_verify_lens must not mutate scheduler state; "
+            f"new attrs: {attrs_after - attrs_before}",
+        )
+        self.assertNotIn(
+            "cached_budget",
+            attrs_after,
+            "cached_budget must not exist on ConfidencePrefixScheduler (purity guard)",
+        )
 
 
 class TestDSparkScheduleConfig(CustomTestCase):
