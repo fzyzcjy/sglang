@@ -763,14 +763,18 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         # the first forward (`set_mla_kv_buffer` -> `self.kv_buffer[layer_id - self.start_layer]`).
         _nnpl = self.model_config.num_nextn_predict_layers
         model_has_mtp_layers = _nnpl is not None and _nnpl > 0
-        model_num_layers = (
-            self.model_config.num_nextn_predict_layers
-            if self.is_draft_worker and model_has_mtp_layers
-            else max(
+        if self.is_draft_worker and model_has_mtp_layers:
+            # The dsv4 DSpark draft has num_stages attention layers (one per captured
+            # target layer), not num_nextn_predict_layers; size KV pool / PP accounting
+            # to the real attention-layer count so its layer ids map in-range.
+            model_num_layers = getattr(
+                self.model, "num_stages", self.model_config.num_nextn_predict_layers
+            )
+        else:
+            model_num_layers = max(
                 self.model_config.num_hidden_layers,
                 self.model_config.num_attention_layers,
             )
-        )
         if self.model_config.hf_config.architectures[0] == "MiMoV2MTP":
             model_num_layers = 1
         elif self.model_config.hf_config.architectures[0] == "Step3p5MTP":
