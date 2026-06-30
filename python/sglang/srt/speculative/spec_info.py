@@ -120,11 +120,6 @@ class SpeculativeAlgorithm(Enum):
         infrastructure that both algorithms reuse."""
         return self.is_dflash() or self.is_dspark()
 
-    def supports_overalloc_war_verify(self) -> bool:
-        """Whether decode over-allocates the verify block and relies on the
-        write-after-read guard for in-place verify replay (DFLASH and DSPARK)."""
-        return self.is_dflash() or self.is_dspark()
-
     def is_standalone(self) -> bool:
         return self == SpeculativeAlgorithm.STANDALONE
 

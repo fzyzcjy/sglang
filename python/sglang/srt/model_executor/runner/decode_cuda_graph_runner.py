@@ -1227,7 +1227,7 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             # snapshot, so plain DECODE and DFLASH TARGET_VERIFY both qualify.
             if forward_batch.forward_mode.is_decode() or (
                 forward_batch.forward_mode.is_target_verify()
-                and self.model_runner.spec_algorithm.supports_overalloc_war_verify()
+                and self.model_runner.spec_algorithm.is_dflash_or_dspark()
             ):
                 read_done = self.device_module.Event()
                 read_done.record()
