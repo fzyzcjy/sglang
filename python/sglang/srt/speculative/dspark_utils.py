@@ -111,35 +111,66 @@ def parse_dspark_draft_config(*, draft_hf_config: Any) -> DSparkDraftConfig:
     ``block_size`` field is interpreted as ``gamma`` (number of draft positions),
     not the verify window. Confidence-head fields are intentionally ignored: the
     static-verify MVP does not build/load/use the confidence head (plan ``§0``).
+
+    Two checkpoint conventions are accepted. Dense DSpark drafts carry unprefixed
+    keys (``block_size``, ``markov_rank``, ``markov_head_type``, ``mask_token_id``,
+    ``target_layer_ids``) plus a dedicated ``*DSpark`` architecture. dsv4 DSpark
+    drafts (arch ``DeepseekV4ForCausalLM``) carry the same fields ``dspark_``-prefixed
+    on the base config (``dspark_block_size``, ``dspark_markov_rank``,
+    ``dspark_noise_token_id`` as the mask token, ``dspark_target_layer_ids``) and
+    build the dedicated ``DSparkV4MarkovHead``, so ``markov_head_type`` is implicit.
     """
     base = parse_dflash_draft_config(draft_hf_config=draft_hf_config)
 
     dspark_cfg = _get_dspark_config(draft_hf_config)
     text_config = _get_text_config(draft_hf_config)
 
-    raw_markov_rank = dspark_cfg.get(
-        "markov_rank",
-        _cfg_get(
-            text_config, "markov_rank", _cfg_get(draft_hf_config, "markov_rank", 0)
-        ),
+    prefixed_block_size = _cfg_get(draft_hf_config, "dspark_block_size", None)
+    prefixed_markov_rank = _cfg_get(draft_hf_config, "dspark_markov_rank", None)
+    prefixed_markov_head_type = _cfg_get(draft_hf_config, "dspark_markov_head_type", None)
+    prefixed_noise_token_id = _cfg_get(draft_hf_config, "dspark_noise_token_id", None)
+    prefixed_target_layer_ids = _cfg_get(draft_hf_config, "dspark_target_layer_ids", None)
+    uses_prefixed = any(
+        value is not None
+        for value in (
+            prefixed_block_size,
+            prefixed_markov_rank,
+            prefixed_noise_token_id,
+            prefixed_target_layer_ids,
+        )
+    )
+
+    raw_markov_rank = (
+        prefixed_markov_rank
+        if prefixed_markov_rank is not None
+        else dspark_cfg.get(
+            "markov_rank",
+            _cfg_get(
+                text_config, "markov_rank", _cfg_get(draft_hf_config, "markov_rank", 0)
+            ),
+        )
     )
     markov_rank = int(raw_markov_rank) if raw_markov_rank is not None else 0
     if markov_rank < 0:
         raise ValueError(f"DSpark markov_rank must be >= 0, got {markov_rank}.")
 
-    markov_head_type = dspark_cfg.get(
-        "markov_head_type",
-        _cfg_get(
-            text_config,
+    markov_head_type = (
+        prefixed_markov_head_type
+        if prefixed_markov_head_type is not None
+        else dspark_cfg.get(
             "markov_head_type",
-            _cfg_get(draft_hf_config, "markov_head_type", None),
-        ),
+            _cfg_get(
+                text_config,
+                "markov_head_type",
+                _cfg_get(draft_hf_config, "markov_head_type", None),
+            ),
+        )
     )
-    if markov_rank > 0:
-        if markov_head_type is None:
-            raise ValueError(
-                "DSpark requires markov_head_type when markov_rank > 0, got None."
-            )
+    if markov_rank > 0 and markov_head_type is None and not uses_prefixed:
+        raise ValueError(
+            "DSpark requires markov_head_type when markov_rank > 0, got None."
+        )
+    if markov_head_type is not None:
         markov_head_type = str(markov_head_type).lower()
         if markov_head_type not in SUPPORTED_DSPARK_MARKOV_HEAD_TYPES:
             raise ValueError(
@@ -147,13 +178,17 @@ def parse_dspark_draft_config(*, draft_hf_config: Any) -> DSparkDraftConfig:
                 f"Supported: {SUPPORTED_DSPARK_MARKOV_HEAD_TYPES}."
             )
 
-    raw_mask_token_id = dspark_cfg.get(
-        "mask_token_id",
-        _cfg_get(
-            text_config,
+    raw_mask_token_id = (
+        prefixed_noise_token_id
+        if prefixed_noise_token_id is not None
+        else dspark_cfg.get(
             "mask_token_id",
-            _cfg_get(draft_hf_config, "mask_token_id", base.mask_token_id),
-        ),
+            _cfg_get(
+                text_config,
+                "mask_token_id",
+                _cfg_get(draft_hf_config, "mask_token_id", base.mask_token_id),
+            ),
+        )
     )
     mask_token_id = int(raw_mask_token_id) if raw_mask_token_id is not None else None
     if mask_token_id is not None and mask_token_id < 0:
@@ -161,11 +196,31 @@ def parse_dspark_draft_config(*, draft_hf_config: Any) -> DSparkDraftConfig:
             f"DSpark mask_token_id must be non-negative, got {mask_token_id}."
         )
 
+    gamma = (
+        int(prefixed_block_size)
+        if prefixed_block_size is not None
+        else base.block_size
+    )
+
+    if prefixed_target_layer_ids is not None:
+        if not isinstance(prefixed_target_layer_ids, (list, tuple)) or not len(
+            prefixed_target_layer_ids
+        ):
+            raise ValueError(
+                "DSpark dspark_target_layer_ids must be a non-empty list of ints, "
+                f"got {prefixed_target_layer_ids!r}."
+            )
+        target_layer_ids: Optional[List[int]] = [
+            int(x) for x in prefixed_target_layer_ids
+        ]
+    else:
+        target_layer_ids = base.target_layer_ids
+
     return DSparkDraftConfig(
         num_hidden_layers=base.num_hidden_layers,
         num_target_layers=base.num_target_layers,
-        gamma=base.block_size,
-        target_layer_ids=base.target_layer_ids,
+        gamma=gamma,
+        target_layer_ids=target_layer_ids,
         mask_token=base.mask_token,
         mask_token_id=mask_token_id,
         markov_rank=markov_rank,
