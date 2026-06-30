@@ -1118,7 +1118,6 @@ class DSparkWorkerV2(BaseSpecWorker):
         strided_logits = scatter_compact_to_strided(
             compact=compact_logits,
             layout=layout,
-            bs=bs,
             fill_value=0.0,
             verify_num_draft_tokens=self.verify_num_draft_tokens,
         )
@@ -1135,7 +1134,6 @@ class DSparkWorkerV2(BaseSpecWorker):
         hidden_strided = scatter_compact_to_strided(
             compact=compact_hidden,
             layout=layout,
-            bs=bs,
             fill_value=0.0,
             verify_num_draft_tokens=self.verify_num_draft_tokens,
         )
