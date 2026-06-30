@@ -104,11 +104,15 @@ class TestNonAnticipatingScheduler(CustomTestCase):
             [[0.8, 1e-7, 1e-7, 1e-7], [0.6, 1e-7, 1e-7, 1e-7]], dtype=torch.float32
         )
         sched = self._scheduler(gamma=4)
-        base = sched.compute_verify_lens(k_survival=k_survival, sort_survival=sort_survival)
+        base = sched.compute_verify_lens(
+            k_survival=k_survival, sort_survival=sort_survival
+        )
         # Perturb only the below-eps positions (future, invalid).
         perturbed = sort_survival.clone()
         perturbed[:, 2:] = 0.999
-        changed = sched.compute_verify_lens(k_survival=k_survival, sort_survival=perturbed)
+        changed = sched.compute_verify_lens(
+            k_survival=k_survival, sort_survival=perturbed
+        )
         # Budget-capped at 2; top-2 global selection picks 1 extra per request
         # in both base and perturbed -> verify_lens must be equal.
         self.assertTrue(torch.equal(base, changed))

@@ -427,7 +427,9 @@ class TestConfidencePrefixScheduler(CustomTestCase):
         high_budget = compute_verify_token_budget(
             history_survival_probs=high_history, sps_table=scheduler.sps_table, cfg=cfg
         )
-        self.assertNotEqual(low_budget, high_budget, "budgets must differ for this test")
+        self.assertNotEqual(
+            low_budget, high_budget, "budgets must differ for this test"
+        )
         lens_low = scheduler.compute_verify_lens(
             k_survival=low_history, sort_survival=sort_survival
         )
@@ -446,7 +448,9 @@ class TestConfidencePrefixScheduler(CustomTestCase):
         attrs_before = set(vars(scheduler).keys())
         k_survival = torch.tensor([[0.9, 0.8, 0.7]], dtype=torch.float32)
         sort_survival = torch.tensor([[0.9, 0.8, 0.7]], dtype=torch.float32)
-        scheduler.compute_verify_lens(k_survival=k_survival, sort_survival=sort_survival)
+        scheduler.compute_verify_lens(
+            k_survival=k_survival, sort_survival=sort_survival
+        )
         attrs_after = set(vars(scheduler).keys())
         self.assertEqual(
             attrs_before,
