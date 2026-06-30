@@ -43,9 +43,9 @@ def _gate_runner(
         is_encoder_decoder=False,
         enable_two_batch_overlap=False,
         capture_hidden_mode=CaptureHiddenMode.NULL,
-        attn_backend=attn_backend
-        if attn_backend is not None
-        else _RaggedCapableBackend(),
+        attn_backend=(
+            attn_backend if attn_backend is not None else _RaggedCapableBackend()
+        ),
     )
 
 
