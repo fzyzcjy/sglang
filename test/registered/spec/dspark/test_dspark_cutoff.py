@@ -15,7 +15,7 @@ _DEVICE = torch.device("cpu")
 def _make_worker(
     *,
     gamma: int,
-    mode: RaggedVerifyMode = RaggedVerifyMode.CUTOFF_ONLY,
+    mode: RaggedVerifyMode = RaggedVerifyMode.CAP_ACCEPT,
     scheduler: object = object(),
 ) -> DSparkWorkerV2:
     worker = DSparkWorkerV2.__new__(DSparkWorkerV2)
@@ -122,7 +122,7 @@ class TestCutoffGreedyAccept(CustomTestCase):
 class TestRaggedGating(CustomTestCase):
     def test_off_mode_returns_none(self):
         """OFF mode never schedules a ragged layout (uniform path stays byte-identical)."""
-        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.OFF, scheduler=object())
+        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.STATIC, scheduler=object())
         layout = worker._maybe_schedule_ragged_layout(
             req_pool_indices=torch.tensor([0, 1]), device=_DEVICE
         )
@@ -130,16 +130,16 @@ class TestRaggedGating(CustomTestCase):
 
     def test_full_mode_without_confidence_returns_none(self):
         """FULL with no confidence history yet falls back to the uniform block (lossless)."""
-        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.FULL, scheduler=object())
+        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.COMPACT, scheduler=object())
         layout = worker._maybe_schedule_ragged_layout(
             req_pool_indices=torch.tensor([0, 1]), device=_DEVICE
         )
         self.assertIsNone(layout)
 
     def test_cutoff_mode_without_scheduler_returns_none(self):
-        """cutoff-only with no scheduler (no confidence head) falls back to uniform."""
+        """cap-accept with no scheduler (no confidence head) falls back to uniform."""
         worker = _make_worker(
-            gamma=4, mode=RaggedVerifyMode.CUTOFF_ONLY, scheduler=None
+            gamma=4, mode=RaggedVerifyMode.CAP_ACCEPT, scheduler=None
         )
         layout = worker._maybe_schedule_ragged_layout(
             req_pool_indices=torch.tensor([0, 1]), device=_DEVICE

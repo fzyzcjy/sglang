@@ -16,7 +16,7 @@ register_cpu_ci(est_time=10, suite="base-a-test-cpu")
 _DEVICE = torch.device("cpu")
 
 
-def _make_worker(*, gamma: int, mode: RaggedVerifyMode = RaggedVerifyMode.FULL):
+def _make_worker(*, gamma: int, mode: RaggedVerifyMode = RaggedVerifyMode.COMPACT):
     worker = DSparkWorkerV2.__new__(DSparkWorkerV2)
     worker.gamma = gamma
     worker.verify_num_draft_tokens = gamma + 1
@@ -244,14 +244,14 @@ class TestAcceptBlockPerRequest(CustomTestCase):
 
 class TestVerifyLayoutGrid(CustomTestCase):
     def test_cutoff_grid_is_total_only(self):
-        """cutoff-only never selects a token-keyed graph, so the grid is just the total."""
-        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.CUTOFF_ONLY)
+        """cap-accept never selects a token-keyed graph, so the grid is just the total."""
+        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.CAP_ACCEPT)
         grid = worker._verify_layout_grid(verify_lens_cpu=[5, 2, 1])
         self.assertEqual(grid, [8])
 
     def test_full_grid_uses_runner_token_buckets(self):
         """full aligns the layout grid with the decode runner's token-keyed capture buckets."""
-        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.FULL)
+        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.COMPACT)
         runner = types.SimpleNamespace(
             ragged_verify_mode=True,
             capture_num_tokens=[4, 8, 16, 32],
@@ -267,7 +267,7 @@ class TestVerifyLayoutGrid(CustomTestCase):
 
     def test_full_grid_falls_back_to_total_without_token_graph(self):
         """full with no token-keyed graph (eager / cuda-graph off) runs on exactly total."""
-        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.FULL)
+        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.COMPACT)
         worker.model_runner = types.SimpleNamespace(decode_cuda_graph_runner=None)
         grid = worker._verify_layout_grid(verify_lens_cpu=[5, 2, 1])
         self.assertEqual(grid, [8])

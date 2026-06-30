@@ -12,36 +12,39 @@ register_cpu_ci(est_time=10, suite="base-a-test-cpu")
 
 
 class TestReadRaggedVerifyMode(CustomTestCase):
-    def test_default_unset_is_off(self):
-        """An unset SGLANG_RAGGED_VERIFY reads as OFF."""
+    def test_default_unset_is_static(self):
+        """An unset SGLANG_RAGGED_VERIFY reads as STATIC."""
         was_set = envs.SGLANG_RAGGED_VERIFY.is_set()
         backup = envs.SGLANG_RAGGED_VERIFY.get() if was_set else None
         envs.SGLANG_RAGGED_VERIFY.clear()
         try:
-            self.assertEqual(read_ragged_verify_mode(), RaggedVerifyMode.OFF)
+            self.assertEqual(read_ragged_verify_mode(), RaggedVerifyMode.STATIC)
         finally:
             if was_set:
                 envs.SGLANG_RAGGED_VERIFY.set(backup)
 
-    def test_off_literal_is_off(self):
-        """The literal 'off' reads as OFF."""
-        with envs.SGLANG_RAGGED_VERIFY.override("off"):
-            self.assertEqual(read_ragged_verify_mode(), RaggedVerifyMode.OFF)
+    def test_canonical_values(self):
+        """The canonical values static / cap-accept / compact round-trip exactly."""
+        cases = {
+            "static": RaggedVerifyMode.STATIC,
+            "cap-accept": RaggedVerifyMode.CAP_ACCEPT,
+            "compact": RaggedVerifyMode.COMPACT,
+        }
+        for value, expected in cases.items():
+            with envs.SGLANG_RAGGED_VERIFY.override(value):
+                self.assertEqual(read_ragged_verify_mode(), expected)
 
-    def test_empty_string_is_off(self):
-        """An explicit empty string reads as OFF (matches the env-layer unset alias)."""
-        with envs.SGLANG_RAGGED_VERIFY.override(""):
-            self.assertEqual(read_ragged_verify_mode(), RaggedVerifyMode.OFF)
-
-    def test_cutoff_only(self):
-        """'cutoff-only' reads as CUTOFF_ONLY."""
-        with envs.SGLANG_RAGGED_VERIFY.override("cutoff-only"):
-            self.assertEqual(read_ragged_verify_mode(), RaggedVerifyMode.CUTOFF_ONLY)
-
-    def test_full(self):
-        """'full' reads as FULL."""
-        with envs.SGLANG_RAGGED_VERIFY.override("full"):
-            self.assertEqual(read_ragged_verify_mode(), RaggedVerifyMode.FULL)
+    def test_legacy_aliases(self):
+        """Legacy spellings (off / cutoff-only / full) resolve to the renamed modes."""
+        cases = {
+            "off": RaggedVerifyMode.STATIC,
+            "": RaggedVerifyMode.STATIC,
+            "cutoff-only": RaggedVerifyMode.CAP_ACCEPT,
+            "full": RaggedVerifyMode.COMPACT,
+        }
+        for value, expected in cases.items():
+            with envs.SGLANG_RAGGED_VERIFY.override(value):
+                self.assertEqual(read_ragged_verify_mode(), expected)
 
     def test_invalid_value_raises_loudly(self):
         """An unrecognized value raises rather than silently falling back to default."""

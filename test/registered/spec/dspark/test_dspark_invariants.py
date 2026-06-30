@@ -221,7 +221,7 @@ class TestWarBarrierAntiPattern(CustomTestCase):
 
 
 @unittest.skip(
-    "BLOCKED on ragged-verify routing decision: the real-N (`full`) path that "
+    "BLOCKED on ragged-verify routing decision: the real-N (`compact`) path that "
     "writes ragged metadata buffers (verify_lens / extend_start_loc / "
     "qo_indptr_device) inside cuda-graph replay is under team design discussion. "
     "The WAR/RAW timing regression for real-N is stubbed and not wired to run."
@@ -230,7 +230,7 @@ class TestWarBarrierRealNTimingStub(CustomTestCase):
     """Invariant 3 real-N regression (BLOCKED): under spec-v2 overlap, the
     scheduler's write to the ragged metadata buffers must wait on the existing
     war_fastpath_read_done_event before overwriting, and multi-step output must
-    be bit-equal to cutoff-only under the same n-2-frozen ell_r.
+    be bit-equal to cap-accept under the same n-2-frozen ell_r.
     """
 
     def test_real_n_metadata_copy_precedes_read_done(self):
@@ -238,7 +238,7 @@ class TestWarBarrierRealNTimingStub(CustomTestCase):
         pytest.skip("blocked on ragged-verify routing decision")
 
     def test_real_n_overlap_bit_equal_to_cutoff_only(self):
-        """spec-v2 overlap real-N multi-step output must equal cutoff-only."""
+        """spec-v2 overlap real-N multi-step output must equal cap-accept."""
         pytest.skip("blocked on ragged-verify routing decision")
 
 
