@@ -254,14 +254,20 @@ def _compact_dspark_window_then_block(
     device = window_swa_locs.device
     out = torch.full((bs, target_width), -1, dtype=torch.int32, device=device)
 
-    col = torch.arange(SWA_WINDOW, device=device, dtype=torch.int32).view(1, -1)
-    valid_window = col >= (SWA_WINDOW - context_lens.view(-1, 1))
-    packed_window_col = col - (SWA_WINDOW - context_lens.view(-1, 1))
-    rows = torch.arange(bs, device=device).view(-1, 1).expand(-1, SWA_WINDOW)
-    out[rows[valid_window], packed_window_col[valid_window]] = window_swa_locs[
-        valid_window
-    ]
+    # Left-pack the valid window suffix via gather + where, NOT boolean-mask advanced
+    # indexing: out[bool_mask] = src first calls nonzero(), a D2H host sync with a
+    # data-dependent shape, which is illegal inside cuda-graph capture (this builder runs
+    # in the recorded graph on the draft worker). gather/where are elementwise, static
+    # shape, no sync. Semantics: out[r, j] = window_swa_locs[r, (W - context_len[r]) + j]
+    # for j < context_len[r], else -1 (the valid window suffix shifted left to [0, cl)).
+    j = torch.arange(SWA_WINDOW, device=device, dtype=torch.int32).view(1, -1)
+    shift = (SWA_WINDOW - context_lens.view(-1, 1)).to(torch.int32)
+    src_col = (shift + j).clamp_(min=0, max=SWA_WINDOW - 1).to(torch.int64)
+    gathered = torch.gather(window_swa_locs, dim=1, index=src_col)
+    valid = j < context_lens.view(-1, 1)
+    out[:, :SWA_WINDOW] = torch.where(valid, gathered, -1)
 
+    # Block slots: static-shape integer advanced indexing (no nonzero) is capture-safe.
     block_col = context_lens.view(-1, 1) + torch.arange(
         block_size, device=device, dtype=torch.int32
     ).view(1, -1)
@@ -839,6 +845,7 @@ class DeepseekV4AttnBackend(
         need_compress: bool = True,
         use_prefill_cuda_graph: bool = False,
         online_c128_state_slot_offset: int = 0,
+        dspark_block_size: Optional[int] = None,
     ) -> DSV4Metadata:
         seq_lens_casual, req_pool_indices_repeated = self.expand_prefill_casually(
             num_tokens=num_tokens,
@@ -858,6 +865,7 @@ class DeepseekV4AttnBackend(
             out_loc=out_cache_loc,
             need_compress=need_compress,
             is_prefill=True,
+            dspark_block_size=dspark_block_size,
         )
         indexer_metadata = (
             self.init_forward_metadata_indexer(core_attn_metadata)
@@ -1085,6 +1093,7 @@ class DeepseekV4AttnBackend(
             extend_start_loc=None,
             need_compress=False,
             use_prefill_cuda_graph=False,
+            dspark_block_size=block_size,
         )
 
     def make_forward_metadata_from_raw_verify(
@@ -1376,6 +1385,39 @@ class DeepseekV4AttnBackend(
                 req_pool_indices=req_pool_indices,
                 seq_lens=seq_lens,
                 out_cache_loc=out_cache_loc_padded,
+            )
+        elif bucket == _GraphBucket.TARGET_VERIFY and self.is_dspark_draft:
+            # DSpark draft block capture: build the gamma-token, NON-CAUSAL, no-compression
+            # geometry directly (symmetric to eager _build_forward_metadata), NOT the
+            # target's gamma+1 causal verify with c4/c128. The draft runner captures
+            # TARGET_VERIFY with num_tokens_per_bs = gamma, so out_cache_loc / positions
+            # carry bs*gamma slots; init_forward_metadata_target_verify would have produced
+            # gamma+1 page_table / seq_lens / compression rows that the gamma swa index
+            # rebuilt in init_forward_metadata_in_graph cannot match. The draft is not
+            # ragged (uniform gamma) and SWA-only, so it skips the ragged-layout / verify_bs
+            # / online-c128 path entirely.
+            block_size = self.speculative_num_draft_tokens - 1
+            num_tokens_block = block_size * bs
+            graph_key = bs
+            assert out_cache_loc is not None
+            out_cache_loc_padded = torch.nn.functional.pad(
+                out_cache_loc,
+                pad=(0, num_tokens_block - len(out_cache_loc)),
+                mode="constant",
+                value=0,
+            )
+            self.online_c128_mtp.prepare_forward(
+                actual_forward_mode,
+                req_pool_indices,
+                seq_lens,
+            )
+            temp_metadata = self.init_forward_metadata_dspark_draft_block(
+                max_seq_len=chosen_max_seq_len,
+                req_pool_indices=req_pool_indices,
+                seq_lens=seq_lens,
+                seq_lens_cpu=seq_lens_cpu,
+                out_cache_loc=out_cache_loc_padded,
+                block_size=block_size,
             )
         elif bucket == _GraphBucket.TARGET_VERIFY:
             verify_bs = _get_target_verify_bs(forward_batch)
@@ -2088,24 +2130,38 @@ class DeepseekV4AttnBackend(
         out_loc: torch.Tensor,
         need_compress: bool = True,
         is_prefill: bool = False,
+        dspark_block_size: Optional[int] = None,
     ) -> DSV4AttnMetadata:
         assert self.swa_page_size == SWA_WINDOW
 
         seq_lens_casual = seq_lens_casual.to(torch.int32)
 
         raw_positions = seq_lens_casual - 1
-        if self.is_dspark_draft:
+        if dspark_block_size is not None:
             # NON-CAUSAL full-block draft index (R1 / Step 1b): every gamma block query of
             # a request shares the whole committed window + the whole draft block, no
-            # causal mask. Replaces the causal get_swa_page_indices for the draft backend
-            # only (gated by the draft-worker DSpark capability flag, never per-call model
-            # identity). speculative_num_draft_tokens is the verify window gamma+1; the
-            # draft block forward writes gamma slots.
+            # causal mask. Gated on the explicit dspark_block_size geometry, NOT on
+            # self.is_dspark_draft: only the uniform-gamma draft-block builder passes it
+            # (num_q = bs*gamma), while the draft worker's own decode / idle / raw-verify /
+            # plain-prefill paths leave it None and stay on the causal get_swa_page_indices.
+            # Flag-only gating fed those non-gamma geometries into the uniform-gamma assert
+            # in get_dspark_swa_page_indices and crashed cuda-graph capture (capture's
+            # gamma+1 verify geometry is not a gamma multiple). speculative_num_draft_tokens
+            # is the verify window gamma+1; the draft block forward writes gamma slots.
+            assert (
+                self.is_dspark_draft
+                and dspark_block_size == self.speculative_num_draft_tokens - 1
+            ), (
+                f"dspark_block_size={dspark_block_size} must equal gamma = "
+                f"speculative_num_draft_tokens-1={self.speculative_num_draft_tokens - 1} "
+                f"and is only valid on the DSpark draft backend "
+                f"(is_dspark_draft={self.is_dspark_draft})."
+            )
             swa_page_indices, swa_topk_lengths = self.get_dspark_swa_page_indices(
                 seq_lens_casual=seq_lens_casual,
                 req_pool_indices_repeated=req_pool_indices_repeated,
                 out_loc=out_loc,
-                block_size=self.speculative_num_draft_tokens - 1,
+                block_size=dspark_block_size,
             )
         else:
             swa_page_indices = self.get_swa_page_indices(
