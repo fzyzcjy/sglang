@@ -20,7 +20,9 @@ register_cpu_ci(est_time=30, suite="base-a-test-cpu")
 
 def _distinct_window(*, bs: int, base: int = 1) -> torch.Tensor:
     """Window with every column distinct and >= base, so a wrong gather slice is caught."""
-    return (base + torch.arange(bs * SWA_WINDOW, dtype=torch.int32)).view(bs, SWA_WINDOW)
+    return (base + torch.arange(bs * SWA_WINDOW, dtype=torch.int32)).view(
+        bs, SWA_WINDOW
+    )
 
 
 def _front_padded_window(*, context_lens: list[int], base: int = 1) -> torch.Tensor:
@@ -35,7 +37,9 @@ def _front_padded_window(*, context_lens: list[int], base: int = 1) -> torch.Ten
 
 def _distinct_block(*, bs: int, block_size: int, base: int = 900000) -> torch.Tensor:
     """Block slots distinct from the window slots so placement is identifiable."""
-    return (base + torch.arange(bs * block_size, dtype=torch.int32)).view(bs, block_size)
+    return (base + torch.arange(bs * block_size, dtype=torch.int32)).view(
+        bs, block_size
+    )
 
 
 def _oracle_build_page_indices(
@@ -89,7 +93,9 @@ class TestBuildDsparkSwaPageIndicesPlumbing(CustomTestCase):
                 context_lens=context_lens,
                 block_size=block_size,
             )
-            self.assertTrue(torch.equal(page_indices, exp_indices), msg=f"{block_size=}")
+            self.assertTrue(
+                torch.equal(page_indices, exp_indices), msg=f"{block_size=}"
+            )
             self.assertTrue(torch.equal(topk, exp_topk), msg=f"{block_size=}")
             self.assertEqual(page_indices.dtype, torch.int32)
             self.assertEqual(topk.dtype, torch.int32)
@@ -266,7 +272,9 @@ class TestCompactWindowThenBlockContract(CustomTestCase):
             window=window, block=block, context_lens=context_lens, block_size=block_size
         )
         cl = context_lens[0]
-        self.assertTrue(torch.equal(out[0, :cl], window[0, SWA_WINDOW - cl : SWA_WINDOW]))
+        self.assertTrue(
+            torch.equal(out[0, :cl], window[0, SWA_WINDOW - cl : SWA_WINDOW])
+        )
         self.assertTrue(torch.equal(out[0, cl : cl + block_size], block[0]))
         self.assertTrue((out[0, cl + block_size :] == -1).all().item())
 
@@ -357,7 +365,9 @@ class TestGetDsparkSwaPageIndicesOrchestrator(CustomTestCase):
                     t = int(topk[q])
                     self.assertEqual(t, min(prefix, SWA_WINDOW) + block_size)
                     attended = page_indices[q, :t]
-                    self.assertTrue((attended >= 0).all().item(), msg=f"{block_size=} {r=}")
+                    self.assertTrue(
+                        (attended >= 0).all().item(), msg=f"{block_size=} {r=}"
+                    )
                     self.assertTrue(
                         (page_indices[q, t:] == -1).all().item(),
                         msg=f"{block_size=} {r=}",
@@ -499,7 +509,9 @@ class TestComputeDsparkWindowGather(CustomTestCase):
             block_size=block_size,
         )
         self.assertTrue(
-            torch.equal(gather.context_lens, (~gather.invalid).sum(dim=1).to(torch.int32))
+            torch.equal(
+                gather.context_lens, (~gather.invalid).sum(dim=1).to(torch.int32)
+            )
         )
 
     def test_invalid_marks_exactly_pre_start_positions(self):
