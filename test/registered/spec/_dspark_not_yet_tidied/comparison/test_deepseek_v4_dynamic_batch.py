@@ -35,7 +35,7 @@ def _dynamic_batch_available() -> tuple[bool, str]:
     if not _CUDA_AVAILABLE:
         return False, "CUDA not available; dsv4 sparse backend is GPU-only."
     try:
-        from test.manual._dspark_reference.dsv4.block_forward_harness import (  # noqa: F401
+        from test.manual._dspark_reference.deepseek_v4.sglang_block_forward_harness import (  # noqa: F401
             HarnessUnavailable,
             build_dsv4_block_forward_harness,
         )
@@ -75,7 +75,7 @@ class TestDsv4DynamicBatch(CustomTestCase):
     def test_mixed_length_batch_rows_are_independent(self) -> None:
         """A batched row's block-forward equals the same request run alone."""
         self._skip_if_unready()
-        from test.manual._dspark_reference.dsv4.block_forward_harness import (
+        from test.manual._dspark_reference.deepseek_v4.sglang_block_forward_harness import (
             HarnessUnavailable,
             build_dsv4_block_forward_harness,
         )

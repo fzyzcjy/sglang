@@ -148,7 +148,7 @@ class _DSparkFlagMatrixBase(CustomTestCase):
         Secondary (no-teeth) lossless check: a wrong verify geometry only lowers
         accept length, not output text, so this guards losslessness but NOT the
         ragged geometry. The geometry teeth live in the graph-vs-eager logits
-        parity + negative seam tests (test_dsv4_ragged_verify_graph_parity).
+        parity + negative seam tests (test_deepseek_v4_ragged_verify_graph_parity).
         """
         self._maybe_skip_models()
         off_outputs = self._launch_and_capture()

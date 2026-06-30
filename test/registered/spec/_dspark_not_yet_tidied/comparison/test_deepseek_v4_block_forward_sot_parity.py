@@ -63,7 +63,7 @@ def _contract_available() -> tuple[bool, str]:
     (``[bs*gamma, org_vocab]``) come from the model's ``compute_base_logits`` hook the
     harness calls on that hidden. Those symbols are landed by the model+backend impl
     agents; until then this guardrail skips cleanly (it is the un-skipped successor to
-    the old ``test_dsv4_worker_parity`` GPU stub).
+    the old ``test_deepseek_v4_worker_parity`` GPU stub).
     """
     try:
         from sglang.srt.layers.attention.deepseek_v4_backend import (  # noqa: F401
@@ -174,7 +174,7 @@ class TestDsv4BlockForwardSoTParity(CustomTestCase):
         """Production block-forward base_logits match the SoT within fp8 tolerance."""
         self._skip_if_unready()
         _ensure_repo_test_package()
-        from test.manual._dspark_reference.dsv4.block_forward_harness import (
+        from test.manual._dspark_reference.deepseek_v4.sglang_block_forward_harness import (
             HarnessUnavailable,
             build_dsv4_block_forward_harness,
         )
@@ -219,7 +219,7 @@ class TestDsv4BlockForwardSoTParity(CustomTestCase):
         """
         self._skip_if_unready()
         _ensure_repo_test_package()
-        from test.manual._dspark_reference.dsv4.block_forward_harness import (
+        from test.manual._dspark_reference.deepseek_v4.sglang_block_forward_harness import (
             HarnessUnavailable,
             build_dsv4_block_forward_harness,
         )

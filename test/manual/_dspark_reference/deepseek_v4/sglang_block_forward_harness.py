@@ -1,7 +1,8 @@
-# T1/T3/T4 block-forward parity fixture (GPU). NOT a test module (leading-underscore
+# T1/T3/T4 block-forward parity fixture (GPU). NOT a test module (no `test_` prefix,
 # so CI's `test_*` glob skips it). Builds the PRODUCTION dsv4 draft block-forward and
-# the EXTERNAL SoT oracle on identical inputs, plus the negative `force_causal_indices`
-# seam. Imported by test_dsv4_block_forward_sot_parity.py / _dynamic_batch / _tp_parity /
+# the EXTERNAL SoT oracle (the sibling `modeling.py` / `sot_attention.py` in this
+# package) on identical inputs, plus the negative `force_causal_indices` seam. Imported
+# by test_deepseek_v4_block_forward_sot_parity.py / _dynamic_batch / _tp_parity /
 # _worker_parity.
 #
 # Wiring (mirrors the production worker DSparkWorkerV2 draft-block path):
@@ -26,7 +27,7 @@
 # constructed under CUDA. If any production constructor signature has drifted from the
 # mapped contract, _build raises HarnessUnavailable so the GPU tests skip cleanly (the
 # tester reconciles the signature, then re-runs). The exact numeric tolerance + negative
-# divergence threshold must be CALIBRATED on GPU (see test_dsv4_block_forward_sot_parity).
+# divergence threshold must be CALIBRATED on GPU (see test_deepseek_v4_block_forward_sot_parity).
 
 from __future__ import annotations
 

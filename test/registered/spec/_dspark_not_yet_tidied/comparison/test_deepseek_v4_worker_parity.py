@@ -66,12 +66,12 @@ class TestDsv4BlockForwardVsSoT(CustomTestCase):
     def test_v4_decode_block_matches_sot_forward_spec(self) -> None:
         """The worker's V4 draft block must equal the SoT forward_spec output tightly."""
         _ensure_repo_test_package()
-        from test.manual._dspark_reference.deepseek_v4.sot_attention import (
-            SoTDSparkAttentionOracle,
-        )
-        from test.manual._dspark_reference.dsv4.block_forward_harness import (
+        from test.manual._dspark_reference.deepseek_v4.sglang_block_forward_harness import (
             HarnessUnavailable,
             build_dsv4_block_forward_harness,
+        )
+        from test.manual._dspark_reference.deepseek_v4.sot_attention import (
+            SoTDSparkAttentionOracle,
         )
 
         try:
@@ -100,7 +100,7 @@ class TestDsv4BlockForwardVsSoT(CustomTestCase):
         sot_base_logits = harness.run_sot(oracle)
         # Through-sparse-attention fp8 tolerance: calibrated ABOVE the fp8 noise floor by
         # the tester (measure the known-correct oracle-vs-production baseline first), not
-        # bf16-tight (see test_dsv4_block_forward_sot_parity._ATOL).
+        # bf16-tight (see test_deepseek_v4_block_forward_sot_parity._ATOL).
         torch.testing.assert_close(
             prod.base_logits.float(),
             sot_base_logits.float(),

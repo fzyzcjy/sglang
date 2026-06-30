@@ -82,13 +82,13 @@ subfolders once the suite stabilizes (mirroring `attention/unittests/dsv4/`).
 | `test_dspark_rejection_harness.py` | 4 backend/kernel UT (no server) |
 | `test_dsv4_ragged_meta.py` | 4 backend metadata + graph key |
 | `test_dsv4_aux_capture_cp_guard.py` | 4 backend capture guard |
-| `test_dsv4_worker_parity.py` | 1 parity (un-skipped; delegates to T1 harness) |
-| `test_dsv4_block_forward_sot_parity.py` | 1 parity (T1 guardrail + negative causal test) |
+| `test_deepseek_v4_worker_parity.py` | 1 parity (un-skipped; delegates to T1 harness) |
+| `test_deepseek_v4_block_forward_sot_parity.py` | 1 parity (T1 guardrail + negative causal test) |
 | `test_dsv4_draft_probs_unit.py` | 2 protocol/unit (T2 draft_probs losslessness) |
-| `test_dsv4_dynamic_batch.py` | 1 parity (T3 per-row independence) |
-| `test_dsv4_tp_parity.py` | 1 parity (T4 TP=2 vs TP=1) |
+| `test_deepseek_v4_dynamic_batch.py` | 1 parity (T3 per-row independence) |
+| `test_deepseek_v4_tp_parity.py` | 1 parity (T4 TP=2 vs TP=1) |
 | `test_dsv4_injection.py` | 2 + 1 (T5 translate unit + GPU round-trip) |
-| `test_dsv4_component_parity.py` | 1 parity (granularity-A: kv-proj / projection / hc_head / markov / confidence vs SoT) |
+| `test_deepseek_v4_component_parity.py` | 1 parity (granularity-A: kv-proj / projection / hc_head / markov / confidence vs SoT) |
 | `test_dense_block_forward_parity.py` | 1 + 4 (dense granularity-B: draft forward through MHA backend vs SoT whole-block) |
 
 ## Not run by CI (reference fixtures)
@@ -100,7 +100,7 @@ qwen3/gemma4 modeling (`markov_head.py`, `draft_ops.py`, `sampling.py`,
 attention oracle, `modeling.py` = the fuller DSpark draft modeling —
 `RefTransformer.forward_spec`, the DSpark heads, and the mHC math — both vendored
 from the DeepSeek-V4-Flash-DSpark reference model.py/kernel.py) and the T1/T3/T4
-production block-forward fixture (`dsv4/block_forward_harness.py`). Imported by the
+production block-forward fixture (`deepseek_v4/sglang_block_forward_harness.py`). Imported by the
 comparison parity tests (category 1) as the numerical "standard answer" /
 production driver. Not collected as tests itself; lives under `test/manual/` (CI
 only requires every file under `test/registered/**` to be a registered test).
@@ -108,9 +108,9 @@ only requires every file under `test/registered/**` to be a registered test).
 ## Open gaps
 
 - **dsv4 block-forward parity is now guarded (T1).**
-  `test_dsv4_block_forward_sot_parity.py` drives the production
+  `test_deepseek_v4_block_forward_sot_parity.py` drives the production
   `DeepseekV4AttnBackend` non-causal full-block builder vs the external SoT oracle
-  and includes a negative causal-flip test; `test_dsv4_worker_parity.py` is
+  and includes a negative causal-flip test; `test_deepseek_v4_worker_parity.py` is
   un-skipped and delegates to the same harness. Both skip cleanly until the
   model+backend agents land the contract (`DSparkV4DraftOutput` +
   `get_dspark_swa_page_indices`), then run on GPU.

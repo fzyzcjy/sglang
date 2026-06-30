@@ -40,17 +40,17 @@ Two granularities:
 
 | Component (production symbol) | Test file :: method | What it pins against the SoT |
 |---|---|---|
-| MLA-LoRA KV projection (`wkv` + `kv_norm`, `kv_proj_only`) | `test_dsv4_component_parity.py` :: `test_kv_projection_parity` | `kv_proj_only` + `kv_norm` equals SoT `kv_norm(wkv(·))` (the MLA-LoRA weight map) |
-| Target-hidden projection (`main_proj` + `main_norm`) | `test_dsv4_component_parity.py` :: `test_target_hidden_projection_parity` | `project_target_hidden` equals SoT `main_norm(main_proj(·))` |
-| mHC head collapse (`hc_head`) | `test_dsv4_component_parity.py` :: `test_hc_head_collapse_parity` | `collapse_hc_head` equals SoT `hc_head(·)` (PRE-norm collapse) |
-| Base-logits head (`hc_head` → `norm` → `lm_head`) | `test_dsv4_component_parity.py` :: `test_base_logits_from_hidden_parity` | full-vocab base logits equal the SoT head math |
-| Markov head, serial correction | `test_dsv4_component_parity.py` :: `test_markov_head_serial_correction_parity` | `sample_block` equals the SoT serial bias-then-sample loop |
-| Confidence head | `test_dsv4_component_parity.py` :: `TestDsv4ComponentParityWithConfidence::test_confidence_head_parity` | `compute_confidence` equals the SoT confidence on the post-`hc_head` PRE-norm tap |
-| Non-causal full-block sparse attention + whole-block forward (through real `DeepseekV4AttnBackend`) | `test_dsv4_block_forward_sot_parity.py` :: `test_non_causal_block_forward_matches_sot` (+ negative `test_causal_index_regression_diverges_from_sot`) | production block-forward base logits equal the SoT within fp8 tolerance; forcing the production index builder causal makes parity diverge (proves non-causality is load-bearing) |
-| Per-row independence (dynamic batch) | `test_dsv4_dynamic_batch.py` :: `test_mixed_length_batch_rows_are_independent` | a batched row's block-forward equals the same request run alone (mixed prompt + accept lengths) |
-| Tensor-parallel sharding | `test_dsv4_tp_parity.py` :: `test_tp2_block_forward_matches_tp1_on_q_pad_gap_config` | TP=2 base logits equal TP=1 on an `n_local_heads` q-pad-gap config (2-GPU) |
-| Worker draft-block wiring | `test_dsv4_worker_parity.py` :: `test_v4_decode_block_matches_sot_forward_spec` | the worker's V4 draft block equals the SoT `forward_spec` (harness-driven) |
-| Ragged-verify cuda-graph geometry | `test_dsv4_ragged_verify_graph_parity.py` :: `test_graph_verify_logits_match_eager_on_mixed_verify_lens` (+ negative `test_force_uniform_capture_seam_makes_parity_diverge`, `test_accept_length_floor_under_mixed_verify_lens`) | compact ragged-verify cuda-graph logits equal the eager forward on mixed `verify_lens`; the force-uniform capture seam diverges; accept length stays above the floor |
+| MLA-LoRA KV projection (`wkv` + `kv_norm`, `kv_proj_only`) | `test_deepseek_v4_component_parity.py` :: `test_kv_projection_parity` | `kv_proj_only` + `kv_norm` equals SoT `kv_norm(wkv(·))` (the MLA-LoRA weight map) |
+| Target-hidden projection (`main_proj` + `main_norm`) | `test_deepseek_v4_component_parity.py` :: `test_target_hidden_projection_parity` | `project_target_hidden` equals SoT `main_norm(main_proj(·))` |
+| mHC head collapse (`hc_head`) | `test_deepseek_v4_component_parity.py` :: `test_hc_head_collapse_parity` | `collapse_hc_head` equals SoT `hc_head(·)` (PRE-norm collapse) |
+| Base-logits head (`hc_head` → `norm` → `lm_head`) | `test_deepseek_v4_component_parity.py` :: `test_base_logits_from_hidden_parity` | full-vocab base logits equal the SoT head math |
+| Markov head, serial correction | `test_deepseek_v4_component_parity.py` :: `test_markov_head_serial_correction_parity` | `sample_block` equals the SoT serial bias-then-sample loop |
+| Confidence head | `test_deepseek_v4_component_parity.py` :: `TestDsv4ComponentParityWithConfidence::test_confidence_head_parity` | `compute_confidence` equals the SoT confidence on the post-`hc_head` PRE-norm tap |
+| Non-causal full-block sparse attention + whole-block forward (through real `DeepseekV4AttnBackend`) | `test_deepseek_v4_block_forward_sot_parity.py` :: `test_non_causal_block_forward_matches_sot` (+ negative `test_causal_index_regression_diverges_from_sot`) | production block-forward base logits equal the SoT within fp8 tolerance; forcing the production index builder causal makes parity diverge (proves non-causality is load-bearing) |
+| Per-row independence (dynamic batch) | `test_deepseek_v4_dynamic_batch.py` :: `test_mixed_length_batch_rows_are_independent` | a batched row's block-forward equals the same request run alone (mixed prompt + accept lengths) |
+| Tensor-parallel sharding | `test_deepseek_v4_tp_parity.py` :: `test_tp2_block_forward_matches_tp1_on_q_pad_gap_config` | TP=2 base logits equal TP=1 on an `n_local_heads` q-pad-gap config (2-GPU) |
+| Worker draft-block wiring | `test_deepseek_v4_worker_parity.py` :: `test_v4_decode_block_matches_sot_forward_spec` | the worker's V4 draft block equals the SoT `forward_spec` (harness-driven) |
+| Ragged-verify cuda-graph geometry | `test_deepseek_v4_ragged_verify_graph_parity.py` :: `test_graph_verify_logits_match_eager_on_mixed_verify_lens` (+ negative `test_force_uniform_capture_seam_makes_parity_diverge`, `test_accept_length_floor_under_mixed_verify_lens`) | compact ragged-verify cuda-graph logits equal the eager forward on mixed `verify_lens`; the force-uniform capture seam diverges; accept length stays above the floor |
 
 ## dense (Qwen3 / Gemma4 DSpark draft) — component → protecting test
 
@@ -73,8 +73,8 @@ Two granularities:
   q/o_lora 1024, moe_intermediate 2048, n_routed_experts 256, window 128,
   hc_mult 4, gamma 5, markov_rank 256); only the draft **stage count** is a
   reduced instance count, never a faked dimension.
-- **Negative tests are part of the guardrail.** `test_dsv4_block_forward_sot_parity`
-  and `test_dsv4_ragged_verify_graph_parity` each include a negative seam that
+- **Negative tests are part of the guardrail.** `test_deepseek_v4_block_forward_sot_parity`
+  and `test_deepseek_v4_ragged_verify_graph_parity` each include a negative seam that
   must make parity diverge — otherwise the positive test could pass vacuously.
 - **The reference is not collected by CI.** It lives under `test/manual/` (CI
   only requires registered tests under `test/registered/**`); these comparison

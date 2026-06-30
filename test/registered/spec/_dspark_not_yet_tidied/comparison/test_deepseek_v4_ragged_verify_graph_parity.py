@@ -43,7 +43,7 @@ def _graph_parity_harness_available() -> tuple[bool, str]:
     if not _CUDA_AVAILABLE:
         return False, "CUDA not available; dsv4 sparse backend is GPU-only."
     try:
-        from test.manual._dspark_reference.dsv4.block_forward_harness import (  # noqa: F401
+        from test.manual._dspark_reference.deepseek_v4.sglang_block_forward_harness import (  # noqa: F401
             HarnessUnavailable,
             build_dsv4_block_forward_harness,
         )

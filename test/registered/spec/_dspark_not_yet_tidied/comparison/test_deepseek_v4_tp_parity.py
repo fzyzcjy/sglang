@@ -43,7 +43,7 @@ def _tp_parity_available() -> tuple[bool, str]:
     if _NUM_GPUS < 2:
         return False, f"TP=2 parity needs 2 GPUs, found {_NUM_GPUS}."
     try:
-        from test.manual._dspark_reference.dsv4.block_forward_harness import (  # noqa: F401
+        from test.manual._dspark_reference.deepseek_v4.sglang_block_forward_harness import (  # noqa: F401
             HarnessUnavailable,
             build_dsv4_block_forward_harness,
         )
@@ -82,7 +82,7 @@ class TestDsv4TpParity(CustomTestCase):
     def test_tp2_block_forward_matches_tp1_on_q_pad_gap_config(self) -> None:
         """TP=2 base_logits match TP=1 for an n_local_heads NOT in {64,128} config."""
         self._skip_if_unready()
-        from test.manual._dspark_reference.dsv4.block_forward_harness import (
+        from test.manual._dspark_reference.deepseek_v4.sglang_block_forward_harness import (
             HarnessUnavailable,
             build_dsv4_block_forward_harness,
         )
