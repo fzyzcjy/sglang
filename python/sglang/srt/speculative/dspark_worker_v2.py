@@ -51,6 +51,7 @@ from sglang.srt.speculative.ragged_verify import (
 from sglang.srt.speculative.reject_sampling import chain_speculative_sampling_triton
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.srt.speculative.triton_ops.cache_locs import assign_extend_cache_locs_func
+from sglang.srt.utils.async_probe import maybe_detect_in_closed_range
 
 logger = logging.getLogger(__name__)
 
@@ -601,13 +602,9 @@ class DSparkWorkerV2(BaseSpecWorker):
         # is mapped to (0, 1) by sigmoid. Losslessness does not depend on the
         # calibration quality, only on the scheduler being non-anticipating.
         confidence = torch.sigmoid(confidence_raw.float())
-        # sigmoid is mathematically in (0, 1) but saturates to exactly 0.0 / 1.0 at
-        # fp32 precision for large-magnitude logits, so the sanity check uses the
-        # closed interval (matching the V4 draft). The value is advisory only;
-        # losslessness does not depend on it.
-        assert bool(
-            ((confidence >= 0) & (confidence <= 1)).all()
-        ), "DSpark confidence must lie in [0, 1]."
+        # Closed interval: sigmoid saturates to exactly 0.0/1.0 at fp32 for large
+        # logits. Advisory only; async + gated, no per-step sync.
+        maybe_detect_in_closed_range(confidence, 0.0, 1.0, "DSpark confidence")
         return confidence
 
     def _ensure_confidence_relay_buffers(self, *, confidence: torch.Tensor) -> None:

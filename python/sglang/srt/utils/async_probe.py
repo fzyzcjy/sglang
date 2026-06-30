@@ -96,6 +96,20 @@ def maybe_detect_inf(tensor: Optional[torch.Tensor], msg: str = ""):
     torch._assert_async(~torch.any(torch.isinf(tensor)), f"Inf detected! {msg}")
 
 
+def maybe_detect_in_closed_range(
+    tensor: Optional[torch.Tensor], low: float, high: float, msg: str = ""
+):
+    """Async closed-interval [low, high] check on float values (e.g. probabilities)."""
+    if not envs.SGLANG_ENABLE_ASYNC_ASSERT.get():
+        return
+    if tensor is None or tensor.numel() == 0:
+        return
+    torch._assert_async(
+        ((tensor >= low) & (tensor <= high)).all(),
+        f"value outside [{low}, {high}]: {msg}",
+    )
+
+
 def maybe_detect_oob(indices: Optional[torch.Tensor], low: int, high: int, msg: str):
     """Async OOB check — no GPU-CPU sync, error surfaces at next sync point.
 
