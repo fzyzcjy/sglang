@@ -37,6 +37,7 @@ from sglang.srt.models.deepseek_v4 import (
     DEEPSEEK_V4_STACKED_PARAMS_MAPPING,
     DeepseekV4DecoderLayer,
     MqaAttentionBase,
+    _dequant_fp8_wo_a,
     hc_head_torch,
     make_hc_head_params,
 )
@@ -146,7 +147,7 @@ class DSparkAttention(MqaAttentionBase):
             compress_ratio=0,
             fuse_wqa_wkv=False,
             wo_a_fp8=False,
-            wo_a_keeps_quant_config=True,
+            wo_a_keeps_quant_config=False,
             wo_b_reduce_results=True,
             rope_original_seq_len=0,
         )
@@ -852,6 +853,16 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         """
         params_dict = dict(self.named_parameters())
         loaded_params = set()
+
+        weights = list(weights)
+        if any(name.endswith(".wo_a.scale") for name, _ in weights):
+            # The HF dsv4 checkpoint stores wo_a as an fp8 weight + a separate
+            # ``.wo_a.scale``, but the DSpark draft's o-projection runs a plain bf16
+            # einsum (no fp8 gemm, no weight_scale_inv applied), so the raw fp8 weight
+            # must be dequantized to bf16 at load -- mirroring the target's bf16 wo_a
+            # path. Without this the einsum consumes unscaled fp8 bytes and the whole
+            # attention output (hence every draft proposal) is garbage.
+            weights = list(_dequant_fp8_wo_a(weights))
 
         stacked_params_mapping = DEEPSEEK_V4_STACKED_PARAMS_MAPPING
         from sglang.srt.layers.moe.fused_moe_triton import FusedMoE
