@@ -4,6 +4,7 @@ from typing import Optional
 import torch
 
 from sglang.srt.distributed import get_tp_group
+from sglang.srt.environ import envs
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.managers.scheduler import GenerationBatchResult
 from sglang.srt.managers.tp_worker import TpModelWorker
@@ -53,6 +54,7 @@ from sglang.srt.speculative.dspark_scheduler import (
     ConfidencePrefixScheduler,
     DSparkScheduleConfig,
     build_sps_cost_table,
+    compute_verify_token_budget,
 )
 from sglang.srt.speculative.dspark_utils import (
     dspark_gamma_from_num_draft_tokens,
@@ -589,6 +591,15 @@ class DSparkWorkerV2(BaseSpecWorker):
             k_survival=k_survival, sort_survival=sort_survival
         ).to(device=device, dtype=torch.int32)
 
+        if envs.SGLANG_DSPARK_DEBUG_CONFIDENCE_PREFIX_SCHEDULER.get():
+            self._log_verify_lens_decision(
+                req_pool_indices=req_pool_indices,
+                prefix_lens=prefix_lens,
+                k_survival=k_survival,
+                sort_survival=sort_survival,
+                verify_lens=verify_lens,
+            )
+
         broadcast_group, group_size = verify_lens_broadcast_group(
             tp_size=self.server_args.tp_size
         )
@@ -599,6 +610,45 @@ class DSparkWorkerV2(BaseSpecWorker):
             broadcast_group.broadcast(verify_lens, src=0)
 
         return verify_lens
+
+    def _log_verify_lens_decision(
+        self,
+        *,
+        req_pool_indices: torch.Tensor,
+        prefix_lens: torch.Tensor,
+        k_survival: torch.Tensor,
+        sort_survival: torch.Tensor,
+        verify_lens: torch.Tensor,
+    ) -> None:
+        cfg = self._verify_scheduler.cfg
+        budget = compute_verify_token_budget(
+            history_survival_probs=k_survival,
+            sps_table=self._verify_scheduler.sps_table,
+            cfg=cfg,
+        )
+        max_len = cfg.resolved_max_verify_len()
+        req_ids = req_pool_indices.tolist()
+        prefixes = prefix_lens.tolist()
+        lens = verify_lens.tolist()
+        sort_rows = sort_survival.to(torch.float32).tolist()
+        logger.info(
+            "[DSPARK-CPS] step=%d num_reqs=%d budget=%d gamma=%d verify_len_range=[%d,%d]",
+            self._confidence_relay.step_ct,
+            len(req_ids),
+            budget,
+            cfg.gamma,
+            cfg.min_verify_len,
+            max_len,
+        )
+        for row in range(len(req_ids)):
+            survival_str = "[" + ", ".join(f"{p:.3f}" for p in sort_rows[row]) + "]"
+            logger.info(
+                "[DSPARK-CPS]   req=%d prefix=%d verify_len=%d sort_survival=%s",
+                int(req_ids[row]),
+                int(prefixes[row]),
+                int(lens[row]),
+                survival_str,
+            )
 
     def forward_batch_generation(
         self,
