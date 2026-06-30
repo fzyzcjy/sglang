@@ -43,7 +43,7 @@ class TargetVerifyExecutor:
         # resolved lazily on first verify and cached.
         self._verify_backend_self_adds_seq_lens_cache: Optional[bool] = None
 
-    def _run_target_verify_mode_non_compact(
+    def run_non_compact(
         self,
         *,
         batch: ScheduleBatch,
@@ -108,7 +108,7 @@ class TargetVerifyExecutor:
             can_run_cuda_graph=can_run_cuda_graph,
         )
 
-    def _commit_verify_hidden(
+    def commit_hidden(
         self,
         *,
         batch: ScheduleBatch,
@@ -147,7 +147,7 @@ class TargetVerifyExecutor:
             commit_lens=commit_lens,
         )
 
-    def _run_ragged_target_verify(
+    def _run_ragged(
         self,
         *,
         batch: ScheduleBatch,
@@ -211,7 +211,7 @@ class TargetVerifyExecutor:
             can_run_cuda_graph=can_run_cuda_graph,
         )
 
-    def _run_target_verify_mode_compact(
+    def run_compact(
         self,
         *,
         batch: ScheduleBatch,
@@ -238,7 +238,7 @@ class TargetVerifyExecutor:
             verify_num_draft_tokens=self.verify_num_draft_tokens,
             model_runner=self.model_runner,
         )
-        target_verify = self._run_ragged_target_verify(
+        target_verify = self._run_ragged(
             batch=batch,
             layout=layout,
             ragged_window=ragged_window,

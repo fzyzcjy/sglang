@@ -14,11 +14,7 @@ from sglang.srt.model_executor.forward_batch_info import (
 )
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
-from sglang.srt.speculative.dflash_info import DFlashVerifyInput
 from sglang.srt.speculative.dflash_info_v2 import DFlashDraftInputV2
-from sglang.srt.speculative.dflash_utils import (
-    apply_dflash_verify_logits_adjustments,
-)
 from sglang.srt.speculative.draft_worker_common import (
     build_block_pos_offsets,
     build_draft_tp_worker,
@@ -41,11 +37,6 @@ from sglang.srt.speculative.dspark_components.dspark_draft import (
 from sglang.srt.speculative.dspark_components.dspark_draft_proposer import (
     DraftBlockProposer,
 )
-from sglang.srt.speculative.dspark_components.dspark_info import (
-    RaggedVerifyWindow,
-    TargetVerifyResult,
-    VerifyWindow,
-)
 from sglang.srt.speculative.dspark_components.dspark_kv_inject import (
     TargetHiddenKvInjector,
 )
@@ -64,10 +55,7 @@ from sglang.srt.speculative.dspark_components.dspark_utils import (
 )
 from sglang.srt.speculative.dspark_components.dspark_verify import (
     alloc_verify_window,
-    apply_logits_adjustments_strided,
-    build_ragged_verify_window,
     ragged_layout_exceeds_captured_grid,
-    scatter_compact_to_strided,
     uniform_ragged_layout,
     verify_layout_graph_num_tokens_floor,
     verify_layout_grid,
@@ -760,19 +748,17 @@ class DSparkWorkerV2(BaseSpecWorker):
         ).contiguous()
 
         if run_compact:
-            target_verify, hidden_strided = (
-                self._verify_executor._run_target_verify_mode_compact(
-                    batch=batch,
-                    layout=layout,
-                    draft_block_ids=draft_block_ids,
-                    draft_tokens=draft_tokens,
-                    bs=bs,
-                    device=device,
-                    sampling_info=sampling_info,
-                )
+            target_verify, hidden_strided = self._verify_executor.run_compact(
+                batch=batch,
+                layout=layout,
+                draft_block_ids=draft_block_ids,
+                draft_tokens=draft_tokens,
+                bs=bs,
+                device=device,
+                sampling_info=sampling_info,
             )
         else:
-            target_verify = self._verify_executor._run_target_verify_mode_non_compact(
+            target_verify = self._verify_executor.run_non_compact(
                 batch=batch,
                 draft_input=draft_input,
                 verify_ids_2d=verify_ids_2d,
@@ -806,7 +792,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         if on_publish is not None:
             on_publish(new_seq_lens)
 
-        self._verify_executor._commit_verify_hidden(
+        self._verify_executor.commit_hidden(
             batch=batch,
             layout=layout,
             hidden_strided=hidden_strided,
