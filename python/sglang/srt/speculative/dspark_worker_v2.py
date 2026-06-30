@@ -50,6 +50,7 @@ from sglang.srt.speculative.ragged_verify import (
 from sglang.srt.speculative.reject_sampling import chain_speculative_sampling_triton
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.srt.speculative.triton_ops.cache_locs import assign_extend_cache_locs_func
+from sglang.srt.utils import get_available_gpu_memory, is_cuda
 from sglang.srt.utils.async_probe import maybe_detect_in_closed_range
 
 logger = logging.getLogger(__name__)
@@ -75,7 +76,8 @@ class _TargetVerifyResult(msgspec.Struct, frozen=True):
 
 class _DraftBlockResult(msgspec.Struct, frozen=True):
     draft_tokens: torch.Tensor
-    corrected_logits: torch.Tensor
+    # None on the captured greedy fast path (only _accept_sampling reads it).
+    corrected_logits: Optional[torch.Tensor]
     greedy_mask: torch.Tensor
     temperatures: torch.Tensor
 
@@ -91,12 +93,51 @@ class _DraftForwardResult(msgspec.Struct, frozen=True):
     draft_block_ids: torch.Tensor
     raw_hidden: torch.Tensor
     draft_hidden_3d: torch.Tensor
+    # True iff the draft forward replayed a cuda graph (in-graph sampler wrote out).
+    can_run_graph: bool
 
 
 class _DraftProposal(msgspec.Struct, frozen=True):
     draft_block_ids: torch.Tensor
     draft_block: _DraftBlockResult
     draft_hidden: Optional[torch.Tensor]
+
+
+def _greedy_step_sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:
+    del step_idx
+    return torch.argmax(step_logits, dim=-1)
+
+
+class _DsparkDraftSampler:
+    """Capture-safe greedy proposal (model.compute_base_logits + Markov argmax) folded
+    into the draft cuda graph, like DFlash #29395. Greedy-only/no-RNG: the worker reads
+    ``out`` only for all-greedy batches, else eager. tp=1 only (compute_base_logits'
+    vocab all-gather is a no-op at tp=1 but an uncapturable collective above it).
+    """
+
+    def __init__(self, *, model, gamma, max_bs, device):
+        self.model = model
+        self.markov_head = model.markov_head
+        self.gamma = int(gamma)
+        # Proposed draft tokens [bs*gamma]: written in-graph, read after replay.
+        self.out = torch.empty(
+            (int(max_bs) * self.gamma,), dtype=torch.int64, device=device
+        )
+
+    def __call__(self, hidden_states, input_ids):
+        bs = hidden_states.shape[0] // self.gamma
+        # Same path the worker runs eagerly: model base logits -> serial Markov argmax.
+        base_logits = self.model.compute_base_logits(hidden_states).view(
+            bs, self.gamma, -1
+        )
+        anchor = input_ids.view(bs, self.gamma)[:, 0]
+        draft_tokens, _ = self.markov_head.sample_block(
+            base_logits,
+            first_prev_tokens=anchor,
+            hidden_states=hidden_states.view(bs, self.gamma, -1),
+            sampler=_greedy_step_sampler,
+        )
+        self.out[: draft_tokens.numel()].copy_(draft_tokens.reshape(-1))
 
 
 class DSparkWorkerV2(BaseSpecWorker):
@@ -378,11 +419,51 @@ class DSparkWorkerV2(BaseSpecWorker):
         self._draft_worker.init_attention_backends()
 
     def init_cuda_graphs(self):
-        # The serial Markov loop is eager (it cannot be captured); only the draft
-        # backbone forward may be graph-captured. No in-graph draft sampler.
+        # Greedy proposal folds into the draft cuda graph via the draft_sampler hook;
+        # sampling batches fall back to eager. tp=1 only.
+        self._draft_sampler = None
         capture_decode_cuda_graph = not self.server_args.disable_cuda_graph
+        if is_cuda() and capture_decode_cuda_graph:
+            available_mem = get_available_gpu_memory(self.device, self.gpu_id)
+            if available_mem < 1.0:
+                capture_decode_cuda_graph = False
+                logger.warning(
+                    "Disable DSpark draft cuda graph because only %.2f GB GPU "
+                    "memory is available after target backend initialization.",
+                    available_mem,
+                )
+        if capture_decode_cuda_graph:
+            # Must run before capture so the draft graph folds the sampler in.
+            self._draft_sampler = self._maybe_build_draft_sampler()
+            self.draft_model_runner.draft_sampler = self._draft_sampler
         self._draft_worker.init_cuda_graphs(
             capture_decode_cuda_graph=capture_decode_cuda_graph
+        )
+
+    def _maybe_build_draft_sampler(self):
+        def _eager(reason):
+            if self.tp_rank == 0:
+                logger.info(
+                    "DSpark draft greedy proposal kept eager (reason=%s).", reason
+                )
+            return None
+
+        if get_tp_group().world_size != 1:
+            # compute_base_logits' vocab all-gather is uncapturable above tp=1.
+            return _eager("tp>1")
+        if self.gamma <= 0:
+            return _eager("gamma<=0")
+        if not hasattr(self.draft_model, "compute_base_logits"):
+            return _eager("no compute_base_logits")
+        if getattr(self.draft_model, "markov_head", None) is None:
+            return _eager("no markov head")
+        if self.tp_rank == 0:
+            logger.info("DSpark draft greedy proposal folded into the draft cuda graph.")
+        return _DsparkDraftSampler(
+            model=self.draft_model,
+            gamma=self.gamma,
+            max_bs=max(self.server_args.cuda_graph_config.decode.bs),
+            device=self.device,
         )
 
     def clear_cache_pool(self):
@@ -1146,15 +1227,38 @@ class DSparkWorkerV2(BaseSpecWorker):
             embed_module=embed_module,
         )
         draft_block_ids = fwd.draft_block_ids
-        base_logits = self.draft_model.compute_base_logits(fwd.raw_hidden).view(
-            bs, self.gamma, -1
-        )
-        draft_block = self._sample_draft_block(
-            base_logits=base_logits,
-            anchor_tokens=draft_block_ids[:, 0],
-            draft_hidden=fwd.draft_hidden_3d,
-            sampling_info=sampling_info,
-        )
+
+        draft_sampler = getattr(self, "_draft_sampler", None)
+        all_greedy = sampling_info is None or sampling_info.is_all_greedy
+        if draft_sampler is not None and fwd.can_run_graph and all_greedy:
+            # Captured greedy proposal: compute_base_logits + Markov argmax already ran
+            # in the draft cuda graph and wrote draft_sampler.out. Read it instead of
+            # the eager matmul + serial loop. corrected_logits unused on the greedy
+            # accept path, so None; greedy_mask/temperatures are cheap.
+            if sampling_info is None:
+                temperatures = torch.ones(bs, dtype=torch.float32, device=device)
+            else:
+                temperatures = (
+                    sampling_info.temperatures.view(-1).to(torch.float32).clamp_min(1e-5)
+                )
+            draft_block = _DraftBlockResult(
+                draft_tokens=draft_sampler.out[: bs * self.gamma].view(bs, self.gamma),
+                corrected_logits=None,
+                greedy_mask=self._resolve_greedy_mask(
+                    bs=bs, sampling_info=sampling_info
+                ),
+                temperatures=temperatures,
+            )
+        else:
+            base_logits = self.draft_model.compute_base_logits(fwd.raw_hidden).view(
+                bs, self.gamma, -1
+            )
+            draft_block = self._sample_draft_block(
+                base_logits=base_logits,
+                anchor_tokens=draft_block_ids[:, 0],
+                draft_hidden=fwd.draft_hidden_3d,
+                sampling_info=sampling_info,
+            )
         return _DraftProposal(
             draft_block_ids=draft_block_ids,
             draft_block=draft_block,
@@ -1270,6 +1374,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             draft_block_ids=draft_block_ids,
             raw_hidden=raw_hidden,
             draft_hidden_3d=draft_hidden_3d,
+            can_run_graph=draft_out.can_run_graph,
         )
 
     def _run_target_verify_mode_non_compact(
