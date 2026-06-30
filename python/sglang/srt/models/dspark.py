@@ -38,6 +38,46 @@ def gather_and_crop_vocab(
     return full_logits[..., : int(lm_head.org_vocab_size)]
 
 
+def run_markov_block(
+    head: nn.Module,
+    base_logits: torch.Tensor,
+    *,
+    first_prev_tokens: torch.Tensor,
+    hidden_states: Optional[torch.Tensor],
+    sampler: StepSampler,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Serial Markov draft loop shared by the stateless heads (the dense
+    ``VanillaMarkov`` and the dsv4 ``DSparkV4MarkovHead``): step k corrects
+    ``base_logits[:, k]`` via ``head.apply_step_logits`` conditioned on the
+    previous step's sampled token, then ``sampler`` draws the next token.
+    Stateful heads (``RNNHead``) override ``sample_block`` directly.
+    Returns ``(draft_tokens [bs, gamma], corrected_logits [bs, gamma, vocab])``.
+    """
+    batch_size, proposal_len = base_logits.shape[:2]
+    if proposal_len == 0:
+        empty = torch.empty(batch_size, 0, dtype=torch.long, device=base_logits.device)
+        return empty, base_logits
+
+    sampled_tokens = []
+    corrected_logits = []
+    prev_tokens = first_prev_tokens.long()
+    for step_idx in range(proposal_len):
+        step_hidden = None if hidden_states is None else hidden_states[:, step_idx, ...]
+        step_logits = head.apply_step_logits(
+            base_logits[:, step_idx, :],
+            token_ids=prev_tokens,
+            hidden_states=step_hidden,
+        )
+        next_tokens = sampler(step_logits, step_idx)
+        sampled_tokens.append(next_tokens)
+        corrected_logits.append(step_logits.unsqueeze(1))
+        prev_tokens = next_tokens
+    return (
+        torch.stack(sampled_tokens, dim=1),
+        torch.cat(corrected_logits, dim=1),
+    )
+
+
 class VanillaMarkov(nn.Module):
     """Memoryless Markov head: bias = w2(w1(prev_token)). Ignores hidden state.
 
@@ -99,32 +139,12 @@ class VanillaMarkov(nn.Module):
         hidden_states: Optional[torch.Tensor],
         sampler: StepSampler,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        batch_size, proposal_len = base_logits.shape[:2]
-        if proposal_len == 0:
-            empty = torch.empty(
-                batch_size, 0, dtype=torch.long, device=base_logits.device
-            )
-            return empty, base_logits
-
-        sampled_tokens = []
-        corrected_logits = []
-        prev_tokens = first_prev_tokens.long()
-        for step_idx in range(proposal_len):
-            step_hidden = (
-                None if hidden_states is None else hidden_states[:, step_idx, ...]
-            )
-            step_logits = self.apply_step_logits(
-                base_logits[:, step_idx, :],
-                token_ids=prev_tokens,
-                hidden_states=step_hidden,
-            )
-            next_tokens = sampler(step_logits, step_idx)
-            sampled_tokens.append(next_tokens)
-            corrected_logits.append(step_logits.unsqueeze(1))
-            prev_tokens = next_tokens
-        return (
-            torch.stack(sampled_tokens, dim=1),
-            torch.cat(corrected_logits, dim=1),
+        return run_markov_block(
+            self,
+            base_logits,
+            first_prev_tokens=first_prev_tokens,
+            hidden_states=hidden_states,
+            sampler=sampler,
         )
 
 

@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable, Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 import msgspec
 import torch
@@ -41,7 +41,12 @@ from sglang.srt.models.deepseek_v4 import (
     hc_head_torch,
     make_hc_head_params,
 )
-from sglang.srt.models.dspark import DSparkConfidenceHead, gather_and_crop_vocab
+from sglang.srt.models.dspark import (
+    DSparkConfidenceHead,
+    StepSampler,
+    gather_and_crop_vocab,
+    run_markov_block,
+)
 from sglang.srt.runtime_context import get_parallel
 from sglang.srt.speculative.dspark_components.dspark_utils import (
     parse_dspark_draft_config,
@@ -53,9 +58,6 @@ from sglang.srt.speculative.ragged_verify import (
 from sglang.srt.utils import add_prefix
 
 logger = logging.getLogger(__name__)
-
-# A per-step sampler: (step_logits [bs, vocab], step_idx) -> sampled tokens [bs].
-StepSampler = Callable[[torch.Tensor, int], torch.Tensor]
 
 # FlashMLA's fp8 sparse decode kernel only specializes h_q for {64, 128}; the draft pads
 # its per-rank query heads up to this when tp shards them below 64.
@@ -359,27 +361,13 @@ class DSparkV4MarkovHead(nn.Module):
         hidden_states: Optional[torch.Tensor],
         sampler: StepSampler,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        batch_size, proposal_len = base_logits.shape[:2]
-        if proposal_len == 0:
-            empty = torch.empty(
-                batch_size, 0, dtype=torch.long, device=base_logits.device
-            )
-            return empty, base_logits
-
-        sampled_tokens: List[torch.Tensor] = []
-        corrected_logits: List[torch.Tensor] = []
-        prev_tokens = first_prev_tokens.long()
-        for step_idx in range(proposal_len):
-            step_logits = self.apply_step_logits(
-                base_logits[:, step_idx, :],
-                token_ids=prev_tokens,
-                hidden_states=None,
-            )
-            next_tokens = sampler(step_logits, step_idx)
-            sampled_tokens.append(next_tokens)
-            corrected_logits.append(step_logits.unsqueeze(1))
-            prev_tokens = next_tokens
-        return torch.stack(sampled_tokens, dim=1), torch.cat(corrected_logits, dim=1)
+        return run_markov_block(
+            self,
+            base_logits,
+            first_prev_tokens=first_prev_tokens,
+            hidden_states=hidden_states,
+            sampler=sampler,
+        )
 
 
 def build_dspark_v4_confidence_head(
