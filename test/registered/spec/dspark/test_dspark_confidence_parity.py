@@ -1,11 +1,10 @@
 import importlib
 import os
 import sys
+import types
 import unittest
 
 import torch
-
-import types
 
 from sglang.srt.models.dspark import (
     DSparkConfidenceHead,
@@ -258,9 +257,7 @@ class TestMissingConfidenceWeightsRaises(CustomTestCase):
             with_markov=True,
         )
         stub = types.SimpleNamespace(confidence_head=head)
-        params_dict = {
-            f"confidence_head.{k}": v for k, v in head.named_parameters()
-        }
+        params_dict = {f"confidence_head.{k}": v for k, v in head.named_parameters()}
         with self.assertRaises(ValueError):
             DSparkDraftMixin._load_confidence_weights(
                 stub,
