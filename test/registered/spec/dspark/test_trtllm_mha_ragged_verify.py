@@ -66,9 +66,7 @@ class TestRaggedTargetVerifyGeometry(CustomTestCase):
             verify_lens_cpu=[8, 1, 3], device=_DEVICE, grid=_GRID
         )
         seq_lens = torch.tensor([10, 20, 30], dtype=torch.int32)
-        geometry = build_ragged_target_verify_geometry(
-            seq_lens=seq_lens, layout=layout
-        )
+        geometry = build_ragged_target_verify_geometry(seq_lens=seq_lens, layout=layout)
         self.assertEqual(geometry.cache_seqlens_int32.tolist(), [18, 21, 33])
         self.assertEqual(geometry.cu_seqlens_q.tolist(), [0, 8, 9, 12])
         self.assertEqual(geometry.cu_seqlens_k.tolist(), [0, 18, 39, 72])
@@ -80,9 +78,7 @@ class TestRaggedTargetVerifyGeometry(CustomTestCase):
             verify_lens_cpu=[8, 1, 3], device=_DEVICE, grid=_GRID
         )
         seq_lens = torch.tensor([10, 20, 30], dtype=torch.int64)
-        geometry = build_ragged_target_verify_geometry(
-            seq_lens=seq_lens, layout=layout
-        )
+        geometry = build_ragged_target_verify_geometry(seq_lens=seq_lens, layout=layout)
         self.assertEqual(geometry.cache_seqlens_int32.dtype, torch.int32)
         self.assertEqual(geometry.cu_seqlens_q.dtype, torch.int32)
         self.assertEqual(geometry.cu_seqlens_k.dtype, torch.int32)
@@ -93,12 +89,8 @@ class TestRaggedTargetVerifyGeometry(CustomTestCase):
             verify_lens_cpu=[8, 1, 3], device=_DEVICE, grid=_GRID
         )
         seq_lens = torch.tensor([10, 20, 30], dtype=torch.int32)
-        geometry = build_ragged_target_verify_geometry(
-            seq_lens=seq_lens, layout=layout
-        )
-        self.assertEqual(
-            int(geometry.cu_seqlens_q[-1]), layout.total_verify_tokens
-        )
+        geometry = build_ragged_target_verify_geometry(seq_lens=seq_lens, layout=layout)
+        self.assertEqual(int(geometry.cu_seqlens_q[-1]), layout.total_verify_tokens)
 
 
 class TestPaddedRaggedVerifyGeometry(CustomTestCase):
@@ -117,9 +109,7 @@ class TestPaddedRaggedVerifyGeometry(CustomTestCase):
         self.assertEqual(padded.qo_indptr_device.tolist(), [0, 8, 9, 12, 32])
         # seq_lens carries the capture fill value (1) on the padded slot.
         seq_lens = torch.tensor([10, 20, 30, 1], dtype=torch.int32)
-        geometry = build_ragged_target_verify_geometry(
-            seq_lens=seq_lens, layout=padded
-        )
+        geometry = build_ragged_target_verify_geometry(seq_lens=seq_lens, layout=padded)
         self.assertEqual(geometry.cu_seqlens_q.tolist(), [0, 8, 9, 12, 32])
         self.assertEqual(geometry.cache_seqlens_int32.tolist(), [18, 21, 33, 21])
         self.assertEqual(int(geometry.cu_seqlens_k[-1]), 18 + 21 + 33 + 21)
@@ -133,9 +123,7 @@ class TestPaddedRaggedVerifyGeometry(CustomTestCase):
             graph_num_tokens_floor=24,
         )
         padded = raw.padded_to_bucket(num_draft_tokens=8)
-        self.assertEqual(
-            int(padded.qo_indptr_device[-1]), padded.graph_num_tokens
-        )
+        self.assertEqual(int(padded.qo_indptr_device[-1]), padded.graph_num_tokens)
         self.assertEqual(padded.qo_indptr_device.numel(), padded.bs + 1)
 
 
@@ -149,9 +137,7 @@ class TestNegativeSeamGeometry(CustomTestCase):
         uniform = RaggedVerifyLayout.uniform(
             bs=3, num_draft_tokens=8, device=_DEVICE, grid=_GRID
         )
-        g_ragged = build_ragged_target_verify_geometry(
-            seq_lens=seq_lens, layout=ragged
-        )
+        g_ragged = build_ragged_target_verify_geometry(seq_lens=seq_lens, layout=ragged)
         g_uniform = build_ragged_target_verify_geometry(
             seq_lens=seq_lens, layout=uniform
         )
