@@ -53,7 +53,7 @@ class _DSparkFlagMatrixBase(CustomTestCase):
 
     `static` (uniform full block) is the baseline. `cap-accept` must be
     bit-equal to `static` when given full gamma. `compact` (real-N ragged) must
-    equal `cap-accept` under the same n-2-frozen ell_r. The server's output-text
+    equal `cap-accept` under the same lagged ell_r. The server's output-text
     losslessness is asserted here; the backend-level `ragged == concat-of-uniform`
     bitwise check is owned by the dense / dsv4 backend chapters and only
     referenced (not re-implemented) here.

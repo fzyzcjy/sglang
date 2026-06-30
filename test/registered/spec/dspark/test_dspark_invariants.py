@@ -40,9 +40,10 @@ class TestNonAnticipatingScheduler(CustomTestCase):
 
     Invariant 2 (non-anticipating): the decision to verify position k must not
     depend on the realized token x_{r,k}. c-v1 satisfies this structurally --
-    compute_verify_lens only consumes the n-2-frozen survival_probs tensor, never
-    the verified tokens. These tests guard the real scheduler's invariants
-    (budget adherence, range, determinism, eps gating) that make that safe.
+    compute_verify_lens only consumes the lagged-confidence survival_probs tensor
+    (the host's most recent retired snapshot, lag >= 1 step), never the verified
+    tokens. These tests guard the real scheduler's invariants (budget adherence,
+    range, determinism, eps gating) that make that safe.
     """
 
     def _scheduler(self, gamma=4, budget=3) -> ConfidencePrefixScheduler:
@@ -239,7 +240,7 @@ class TestWarBarrierRealNTimingStub(CustomTestCase):
     """Invariant 3 real-N regression (BLOCKED): under spec-v2 overlap, the
     scheduler's write to the ragged metadata buffers must wait on the existing
     war_fastpath_read_done_event before overwriting, and multi-step output must
-    be bit-equal to cap-accept under the same n-2-frozen ell_r.
+    be bit-equal to cap-accept under the same lagged ell_r.
     """
 
     def test_real_n_metadata_copy_precedes_read_done(self):
