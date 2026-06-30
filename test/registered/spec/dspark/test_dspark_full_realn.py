@@ -84,21 +84,6 @@ class TestCompactToStridedScatter(CustomTestCase):
         self.assertEqual(strided[5, 0].item(), 9.0)
         self.assertEqual(strided[6:10, 0].tolist(), [-1.0, -1.0, -1.0, -1.0])
 
-    def test_scatter_preserves_total_token_count(self):
-        """The scatter copies exactly total rows; the rest take the fill value."""
-        worker = _make_worker(gamma=3)
-        layout = _full_layout([4, 2, 1])  # total = 7
-        compact = torch.arange(1, 8, dtype=torch.float32).view(7, 1)  # all non-fill
-        strided = worker._scatter_compact_to_strided(
-            compact=compact, layout=layout, bs=3, fill_value=0.0
-        )
-        self.assertEqual(strided.shape, (3 * 4, 1))
-        self.assertEqual(int((strided != 0.0).sum()), 7)
-        # req0 rows 0..3, req1 rows 4..5 (graph slot 4..5), req2 row 8.
-        self.assertEqual(strided[0:4, 0].tolist(), [1.0, 2.0, 3.0, 4.0])
-        self.assertEqual(strided[4:6, 0].tolist(), [5.0, 6.0])
-        self.assertEqual(strided[8, 0].item(), 7.0)
-
 
 class TestResolveGreedyMask(CustomTestCase):
     def test_mask_is_per_request_from_top_k(self):

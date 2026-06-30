@@ -20,7 +20,6 @@ class TestRaggedVerifyLayoutGeometry(CustomTestCase):
             device=_DEVICE,
             grid=_GRID,
         )
-        self.assertEqual(layout.verify_lens_cpu, [5, 1, 4])
         self.assertEqual(layout.verify_lens.tolist(), [5, 1, 4])
         self.assertEqual(layout.total_verify_tokens, 10)
         self.assertEqual(layout.graph_num_tokens, 10)

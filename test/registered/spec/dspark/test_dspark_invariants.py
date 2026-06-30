@@ -3,7 +3,13 @@ import unittest
 from pathlib import Path
 
 import pytest
+import torch
 
+from sglang.srt.speculative.dspark_scheduler import (
+    ConfidencePrefixScheduler,
+    DSparkScheduleConfig,
+)
+from sglang.srt.speculative.dspark_sps_table import SpsCostTable
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
@@ -17,129 +23,71 @@ _DECODE_RUNNER = (
 _SCHEDULER = _REPO_ROOT / "python/sglang/srt/managers/scheduler.py"
 
 
-def _select_verify_lengths(
-    confidences: list[list[float]], total_budget: int
-) -> list[int]:
-    """Reference non-anticipating selector: distribute a frozen total_budget K
-    across requests by greedily picking the highest n-2 confidence draft
-    positions, where ell_r counts how many leading positions of request r are
-    selected.
-
-    This mirrors the c-v1 contract: the decision uses ONLY the n-2 confidence
-    snapshot (its argument here), never the realized verified token x_{r,k}.
-    Draft positions within a request are selected as a prefix (lengths are
-    monotone), with a value-independent tie-break (request index, then position
-    index) so the result is reproducible and TP-consistent.
-    """
-    ranked: list[tuple[float, int, int]] = []
-    for r, conf_row in enumerate(confidences):
-        for k, conf in enumerate(conf_row):
-            # Tie-break key excludes any token realization: (-conf, r, k).
-            ranked.append((conf, r, k))
-    ranked.sort(key=lambda item: (-item[0], item[1], item[2]))
-
-    lengths = [0] * len(confidences)
-    picked = 0
-    # Track, per request, the highest contiguous prefix selected so far.
-    selected_positions: list[set[int]] = [set() for _ in confidences]
-    for _, r, k in ranked:
-        if picked >= total_budget:
-            break
-        selected_positions[r].add(k)
-        picked += 1
-    for r, positions in enumerate(selected_positions):
-        # ell_r = longest leading prefix [0..ell-1] fully selected.
-        ell = 0
-        while ell in positions:
-            ell += 1
-        lengths[r] = ell
-    return lengths
+def _flat_sps_table() -> SpsCostTable:
+    return SpsCostTable(
+        sample_batch_tokens=[1], sample_steps_per_sec=[1.0], max_batch_tokens=256
+    )
 
 
-class TestNonAnticipatingInvariant(CustomTestCase):
-    """Invariant 2: the decision to verify position k must not depend on the
-    realized verified token x_{r,k}. c-v1 satisfies this trivially because K and
-    ell_r come from the n-2 snapshot. These property tests guard the contract
-    against any future fresh-ranking follow-up.
+class TestNonAnticipatingScheduler(CustomTestCase):
+    """Property tests against the real ConfidencePrefixScheduler.
+
+    Invariant 2 (non-anticipating): the decision to verify position k must not
+    depend on the realized token x_{r,k}. c-v1 satisfies this structurally --
+    compute_verify_lens only consumes the n-2-frozen survival_probs tensor, never
+    the verified tokens. These tests guard the real scheduler's invariants
+    (budget adherence, range, determinism, eps gating) that make that safe.
     """
 
-    def test_ell_invariant_to_future_suffix_perturbation(self):
-        """Perturbing the future-dependent suffix a_{r,k+1:} must not change ell_r."""
-        base = [
-            [0.9, 0.8, 0.4, 0.3],
-            [0.7, 0.6, 0.2, 0.1],
-            [0.95, 0.5, 0.45, 0.05],
-        ]
-        budget = 5
-        base_lengths = _select_verify_lengths(base, budget)
+    def _scheduler(self, gamma=4, budget=3) -> ConfidencePrefixScheduler:
+        cfg = DSparkScheduleConfig(gamma=gamma)
+        sched = ConfidencePrefixScheduler(sps_table=_flat_sps_table(), cfg=cfg)
+        sched.cached_budget = budget
+        return sched
 
-        # Perturb only positions strictly after each request's selected prefix.
-        perturbed = [row[:] for row in base]
-        for r, ell in enumerate(base_lengths):
-            for k in range(ell + 1, len(perturbed[r])):
-                perturbed[r][k] = 0.0  # arbitrary future-dependent value
-        perturbed_lengths = _select_verify_lengths(perturbed, budget)
-
-        self.assertEqual(
-            perturbed_lengths,
-            base_lengths,
-            "ell_r changed after perturbing only the future suffix.",
+    def test_output_depends_only_on_survival_probs(self):
+        """The scheduler sees only survival_probs (never tokens), so the same
+        frozen snapshot yields identical verify_lens regardless of what tokens
+        are realized -- the structural core of non-anticipating."""
+        survival = torch.tensor(
+            [[0.9, 0.8, 0.4, 0.1], [0.7, 0.6, 0.3, 0.05]], dtype=torch.float32
         )
+        sched = self._scheduler(gamma=4, budget=3)
+        out1 = sched.compute_verify_lens(survival_probs=survival)
+        out2 = sched.compute_verify_lens(survival_probs=survival.clone())
+        self.assertTrue(torch.equal(out1, out2))
 
-    def test_ell_invariant_under_tie_in_future_suffix(self):
-        """Ties in the future suffix must not flip an already-decided prefix ell_r."""
-        base = [
-            [0.9, 0.5, 0.5, 0.5],
-            [0.8, 0.5, 0.5, 0.5],
-        ]
-        budget = 3
-        base_lengths = _select_verify_lengths(base, budget)
+    def test_extra_budget_never_exceeds_frozen_budget(self):
+        """sum(verify_lens - min_verify_len) <= frozen budget K (real invariant)."""
+        survival = torch.rand(8, 6, dtype=torch.float32) * 0.9 + 0.05
+        budget = 5
+        sched = self._scheduler(gamma=6, budget=budget)
+        verify_lens = sched.compute_verify_lens(survival_probs=survival)
+        extra = int((verify_lens - sched.cfg.min_verify_len).sum().item())
+        self.assertLessEqual(extra, budget)
 
-        perturbed = [row[:] for row in base]
-        # Introduce ties in the suffix only (positions past the decided prefix).
-        for r, ell in enumerate(base_lengths):
-            for k in range(ell + 1, len(perturbed[r])):
-                perturbed[r][k] = 0.5
-        perturbed_lengths = _select_verify_lengths(perturbed, budget)
-        self.assertEqual(perturbed_lengths, base_lengths)
+    def test_verify_lens_clamped_to_min_max(self):
+        """Every verify_len lies in [min_verify_len, max_verify_len]."""
+        survival = torch.rand(5, 4, dtype=torch.float32)
+        sched = self._scheduler(gamma=4, budget=10)
+        verify_lens = sched.compute_verify_lens(survival_probs=survival)
+        self.assertTrue(bool((verify_lens >= sched.cfg.min_verify_len).all()))
+        self.assertTrue(bool((verify_lens <= sched.cfg.resolved_max_verify_len()).all()))
 
-    def test_total_selected_equals_budget_when_capacity(self):
-        """Sum of ell_r equals the frozen budget K when enough positions exist."""
-        confidences = [
-            [0.9, 0.8, 0.7],
-            [0.85, 0.6, 0.5],
-        ]
-        budget = 4
-        lengths = _select_verify_lengths(confidences, budget)
-        # Greedy fills the budget; the selected prefixes total at most K, and
-        # because top picks here form prefixes, total equals K.
-        self.assertLessEqual(sum(lengths), budget)
-
-    def test_lengths_are_prefix_monotone(self):
-        """Each ell_r counts a leading prefix, so lengths stay within row width."""
-        confidences = [
-            [0.9, 0.1, 0.05],
-            [0.4, 0.95, 0.3],
-        ]
-        budget = 6
-        lengths = _select_verify_lengths(confidences, budget)
-        for r, ell in enumerate(lengths):
-            self.assertGreaterEqual(ell, 0)
-            self.assertLessEqual(ell, len(confidences[r]))
-
-    def test_confidence_quality_does_not_affect_losslessness(self):
-        """Scrambling confidence values (any q) keeps the selection well-formed.
-
-        Confidence numerical quality only affects throughput, never the
-        non-anticipating property: any frozen confidence array yields a valid,
-        causally-independent ell_r selection.
-        """
-        good = [[0.99, 0.98], [0.97, 0.96]]
-        bad = [[0.01, 0.02], [0.03, 0.04]]
-        budget = 2
-        good_lengths = _select_verify_lengths(good, budget)
-        bad_lengths = _select_verify_lengths(bad, budget)
-        self.assertEqual(sum(good_lengths), sum(bad_lengths))
+    def test_below_eps_positions_do_not_drive_selection(self):
+        """A position below survival_eps is a non-candidate: swapping its value
+        (while keeping valid positions fixed) must not change verify_lens."""
+        survival = torch.tensor(
+            [[0.9, 0.8, 1e-7, 1e-7], [0.7, 0.6, 1e-7, 1e-7]], dtype=torch.float32
+        )
+        sched = self._scheduler(gamma=4, budget=2)
+        base = sched.compute_verify_lens(survival_probs=survival)
+        # Perturb only the below-eps positions (future, invalid).
+        perturbed = survival.clone()
+        perturbed[:, 2:] = 0.999
+        changed = sched.compute_verify_lens(survival_probs=perturbed)
+        # Valid positions unchanged -> selection must not change.
+        self.assertTrue(torch.equal(base, changed))
 
 
 class TestWarBarrierCapability(CustomTestCase):

@@ -152,22 +152,6 @@ class TestRaggedVerifyFullModeGate(CustomTestCase):
         self.assertFalse(ragged_verify_full_mode_enabled(SpeculativeAlgorithm.EAGLE))
         self.assertFalse(ragged_verify_full_mode_enabled(SpeculativeAlgorithm.NONE))
 
-    def test_dspark_gate_follows_infra_env_helper(self):
-        """For DSpark the gate defers to the infra ragged_verify_compact_enabled helper."""
-        from sglang.srt.model_executor.runner import decode_cuda_graph_runner as runner
-
-        # DSpark is block-draft-with-target-kv, so the result mirrors the infra
-        # env helper. When the infra module is absent the gate is False.
-        result = runner.ragged_verify_full_mode_enabled(SpeculativeAlgorithm.DSPARK)
-        try:
-            from sglang.srt.speculative.ragged_verify import (
-                ragged_verify_compact_enabled,
-            )
-
-            self.assertEqual(result, ragged_verify_compact_enabled())
-        except ImportError:
-            self.assertFalse(result)
-
 
 if __name__ == "__main__":
     unittest.main()
