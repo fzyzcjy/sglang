@@ -582,8 +582,35 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         )
 
     def _can_run_ragged_verify_graph(self, forward_batch: ForwardBatch, ragged_layout):
-        is_tokens_supported = (
-            ragged_layout.total_verify_tokens <= self.capture_num_tokens[-1]
+        # The captured token tier is floored to the bs-derived full block
+        # (raw_bs * num_tokens_per_bs), so the admission token budget is the larger
+        # of the real total and that floor; both must fit the largest captured
+        # tier. This also enforces raw_bs <= max_bs (mirroring the bs-keyed path's
+        # cuda_graph_bs <= max_bs gate, without which _pad_to_bucket / the bs-axis
+        # assert would crash instead of falling back to eager).
+        admission_tokens = max(
+            ragged_layout.total_verify_tokens,
+            forward_batch.batch_size * self.num_tokens_per_bs,
+        )
+        is_tokens_supported = admission_tokens <= self.capture_num_tokens[-1]
+
+        # Mirror the bs-keyed gates: DP/gathered-buffer batches that can't run the
+        # cuda graph (can_run_dp_cuda_graph False) must fall back to eager, and the
+        # require_mlp_tp_gather path derives bs from the global token count, which
+        # the ragged path does not yet support -- reject it loudly rather than
+        # silently selecting a graph at the wrong bs.
+        is_dp_supported = (
+            forward_batch.can_run_dp_cuda_graph if self.require_mlp_sync else True
+        )
+        assert not self.require_mlp_tp_gather, (
+            "DSpark compact ragged verify does not support require_mlp_tp_gather "
+            "(bs derived from global token count); disable SGLANG_RAGGED_VERIFY_MODE "
+            "or the MLP-TP-gather path."
+        )
+        assert not self.disable_padding, (
+            "DSpark compact ragged verify pads bs to the captured tier, which is "
+            "incompatible with disable_cuda_graph_padding; disable "
+            "SGLANG_RAGGED_VERIFY_MODE or enable cuda-graph padding."
         )
 
         is_encoder_lens_supported = (
@@ -611,6 +638,7 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
 
         return (
             is_tokens_supported
+            and is_dp_supported
             and is_encoder_lens_supported
             and is_tbo_supported
             and capture_hidden_mode_matches
