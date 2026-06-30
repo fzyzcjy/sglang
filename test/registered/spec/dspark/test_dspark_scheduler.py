@@ -2,13 +2,13 @@ import unittest
 
 import torch
 
-from sglang.srt.speculative.dspark_scheduler import (
+from sglang.srt.speculative.dspark_components.dspark_scheduler import (
     ConfidencePrefixScheduler,
     DSparkScheduleConfig,
     compute_verify_token_budget,
     schedule_verify_lens_topk,
 )
-from sglang.srt.speculative.dspark_sps_table import SpsCostTable
+from sglang.srt.speculative.dspark_components.dspark_sps_table import SpsCostTable
 from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase

@@ -42,7 +42,9 @@ from sglang.srt.models.deepseek_v4 import (
 )
 from sglang.srt.models.dspark import DSparkConfidenceHead, gather_and_crop_vocab
 from sglang.srt.runtime_context import get_parallel
-from sglang.srt.speculative.dspark_utils import parse_dspark_draft_config
+from sglang.srt.speculative.dspark_components.dspark_utils import (
+    parse_dspark_draft_config,
+)
 from sglang.srt.utils import add_prefix
 
 logger = logging.getLogger(__name__)
