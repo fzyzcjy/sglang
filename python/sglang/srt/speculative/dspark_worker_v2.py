@@ -711,9 +711,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         # the real ragged batch does (C3). Geometry matches the static full block.
         verify_lens_cpu = [self.verify_num_draft_tokens] * bs
         grid = self._verify_layout_grid(verify_lens_cpu=verify_lens_cpu)
-        graph_num_tokens_floor = self._verify_layout_graph_num_tokens_floor(
-            num_reqs=bs
-        )
+        graph_num_tokens_floor = self._verify_layout_graph_num_tokens_floor(num_reqs=bs)
         return RaggedVerifyLayout.from_verify_lens(
             verify_lens_cpu=verify_lens_cpu,
             device=device,
