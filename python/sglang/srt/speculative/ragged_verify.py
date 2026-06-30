@@ -14,10 +14,9 @@ logger = logging.getLogger(__name__)
 
 
 class RaggedVerifyMode(str, Enum):
-    # Named by what the verify forward actually computes:
+    # Named by what the verify forward computes:
     #   STATIC     — uniform gamma+1 block per request (default).
-    #   CAP_ACCEPT — full block, but caps accept at per-request ell_r (lossless
-    #                harness, no throughput gain).
+    #   CAP_ACCEPT — full block, caps accept at per-request ell_r (lossless harness).
     #   COMPACT    — only total = sum(1+ell_r) tokens (real-N, throughput gain).
     STATIC = "static"
     CAP_ACCEPT = "cap-accept"

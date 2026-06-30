@@ -110,9 +110,8 @@ def _get_target_verify_bs(forward_batch: ForwardBatch) -> int:
     return draft_count // draft_token_num
 
 
-# Verify-schedule mode string constants, mirroring RaggedVerifyMode so this
-# backend compares against the canonical values without importing the enum (it
-# is read before the speculative module is guaranteed importable here).
+# Verify-schedule mode string constants, mirroring RaggedVerifyMode values
+# (single source of truth). Legacy aliases (off/cutoff-only/full) resolved at read.
 RAGGED_VERIFY_OFF = RaggedVerifyMode.STATIC.value
 RAGGED_VERIFY_CUTOFF_ONLY = RaggedVerifyMode.CAP_ACCEPT.value
 RAGGED_VERIFY_FULL = RaggedVerifyMode.COMPACT.value
@@ -120,9 +119,7 @@ RAGGED_VERIFY_CHOICES = tuple(m.value for m in RaggedVerifyMode)
 
 
 def _ragged_verify_mode() -> str:
-    # Read the raw env value and resolve it through the alias map so legacy
-    # spellings (off / cutoff-only / full) are accepted identically to the new
-    # canonical values (static / cap-accept / compact).
+    # Resolve through the alias map so legacy spellings are accepted.
     from sglang.srt.speculative.ragged_verify import _LEGACY_MODE_ALIASES
 
     raw = envs.SGLANG_RAGGED_VERIFY.get()

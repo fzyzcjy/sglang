@@ -125,7 +125,7 @@ class TestAcceptBlockPerRequest(CustomTestCase):
         return logits
 
     def test_all_greedy_uses_argmax_match_path(self):
-        """An all-greedy mask routes _accept_block to the argmax-match (DFlash) rule."""
+        """An all-greedy mask routes _accept_draft_tokens to the argmax-match (DFlash) rule."""
         gamma = 4
         worker = _make_worker(gamma=gamma)
         vocab = 64
@@ -138,7 +138,7 @@ class TestAcceptBlockPerRequest(CustomTestCase):
             greedy_mask=torch.tensor([True]),
             temperatures=torch.ones(1),
         )
-        correct_len, bonus = worker._accept_block(
+        correct_len, bonus = worker._accept_draft_tokens(
             candidates=candidates,
             target_logits=logits,
             draft_block=draft_block,
@@ -149,7 +149,7 @@ class TestAcceptBlockPerRequest(CustomTestCase):
         self.assertEqual(bonus.tolist(), [41])
 
     def test_all_sampling_uses_only_chain_kernel_path(self):
-        """An all-sampling mask routes _accept_block to _accept_sampling exactly once (no greedy call)."""
+        """An all-sampling mask routes _accept_draft_tokens to _accept_sampling exactly once (no greedy call)."""
         gamma = 4
         worker = _make_worker(gamma=gamma)
         bs = 2
@@ -178,7 +178,7 @@ class TestAcceptBlockPerRequest(CustomTestCase):
 
         worker._accept_greedy = fake_greedy
         worker._accept_sampling = fake_sampling
-        correct_len, bonus = worker._accept_block(
+        correct_len, bonus = worker._accept_draft_tokens(
             candidates=candidates,
             target_logits=target_logits,
             draft_block=draft_block,
@@ -229,7 +229,7 @@ class TestAcceptBlockPerRequest(CustomTestCase):
         worker._accept_greedy = fake_greedy
         worker._accept_sampling = fake_sampling
 
-        correct_len, bonus = worker._accept_block(
+        correct_len, bonus = worker._accept_draft_tokens(
             candidates=candidates,
             target_logits=target_logits,
             draft_block=draft_block,

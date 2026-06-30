@@ -291,16 +291,10 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
 
     def _verify_backend_self_adds_seq_lens(self) -> bool:
-        # Backend-driven (not model-identity) predicate for the verify-prep host
-        # seq-len pre-add. The dense FlashInfer / Triton verify backends add the
-        # verify window once on the GPU `seq_lens` path, so the worker must pre-add
-        # the window to the host `seq_lens_cpu`. The V4-family verify backend builds
-        # its own target-verify metadata that self-adds `speculative_num_draft_tokens`
-        # to both `seq_lens` and `seq_lens_cpu`, so pre-adding on the host would
-        # double-add. The V4-family backend is the one that owns a raw target-verify
-        # metadata builder; dense backends do not expose it, so this returns False
-        # for them and the dense pre-add stays byte-identical. Cached because the
-        # resolved target attn backend does not change after init.
+        # True when the target attn backend self-adds the verify window to both
+        # seq_lens and seq_lens_cpu (V4), so the worker must NOT pre-add on the host
+        # (would double-add). Dense backends add only on the GPU path, so the worker
+        # pre-adds the host side. Detected by capability, cached.
         if self._verify_backend_self_adds_seq_lens_cache is None:
             backend = self.target_worker.model_runner.attn_backend
             self._verify_backend_self_adds_seq_lens_cache = hasattr(
@@ -659,12 +653,9 @@ class DSparkWorkerV2(BaseSpecWorker):
         req_pool_indices: torch.Tensor,
         device: torch.device,
     ) -> Optional[RaggedVerifyLayout]:
-        # Single gate for the ragged-verify path. STATIC -> None (the static
-        # uniform-gamma path is byte-identical). CAP_ACCEPT runs the full
-        # bs*(gamma+1) window and only caps accept per request. COMPACT builds the
-        # real-N ragged layout (token-keyed graph + per-request compact verify +
-        # compact->strided scatter). Both schedules share the n-2-frozen
-        # verify_lens; only the grid (and downstream execution) differ.
+        # Gate: STATIC -> None (uniform path). CAP_ACCEPT/COMPACT build a ragged
+        # layout from n-2-frozen verify_lens; COMPACT additionally token-keys the
+        # graph and scatter-packs the verify window.
         if self._ragged_verify_mode is RaggedVerifyMode.STATIC:
             return None
         verify_lens = self._schedule_verify_lens(
@@ -720,11 +711,8 @@ class DSparkWorkerV2(BaseSpecWorker):
         return verify_lens
 
     def _verify_layout_grid(self, *, verify_lens_cpu: list[int]) -> list[int]:
-        # cap-accept runs the full bs*(gamma+1) block and never selects a
-        # token-keyed graph, so its grid only needs to contain the total. compact
-        # selects a token-keyed decode graph: align the layout grid with the
-        # decode runner's capture token buckets so graph_num_tokens lands on a
-        # captured tier.
+        # COMPACT aligns the grid to the decode runner's token buckets so
+        # graph_num_tokens lands on a captured tier; else [total] suffices.
         total = sum(verify_lens_cpu)
         if self._ragged_verify_mode is not RaggedVerifyMode.COMPACT:
             return [total]
@@ -845,7 +833,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         bonus = predicts[accept_pos].to(torch.int64)
         return correct_len, bonus
 
-    def _accept_block(
+    def _accept_draft_tokens(
         self,
         *,
         candidates: torch.Tensor,
@@ -855,35 +843,31 @@ class DSparkWorkerV2(BaseSpecWorker):
         draft_input: DFlashDraftInputV2,
         cutoff_layout: Optional[RaggedVerifyLayout] = None,
     ):
-        # Per-request accept (review M4). Greedy rows (top_k <= 1) use the DFlash
-        # argmax-match rule; sampling rows use the rejection-sampling chain kernel.
-        # When the batch is uniform we take the single matching branch directly so
-        # the all-greedy / all-sampling paths stay byte-identical to before. A
-        # mixed batch runs both and selects per row by the greedy mask -- still
-        # lossless (each row gets its own correct rule) and now without forcing
-        # greedy rows onto the chain kernel.
+        # Per-request accept (greedy argmax-match vs rejection sampling), dispatched
+        # by batch composition. Both rules are lossless.
         greedy_mask = draft_block.greedy_mask
-        if bool(greedy_mask.all()):
+        # Read is_all_greedy (host-side) not bool(greedy_mask.all()): the latter is a
+        # GPU .item() that syncs the critical path.
+        all_greedy = sampling_info is None or sampling_info.is_all_greedy
+        if all_greedy:
             return self._accept_greedy(
                 candidates=candidates,
                 target_logits=target_logits,
                 cutoff_layout=cutoff_layout,
             )
+        # Not all-greedy: run BOTH the chain kernel (sampling rows) and argmax-match
+        # (greedy rows) and select per row via greedy_mask below. This also covers the
+        # all-sampling case correctly -- greedy_mask is all-False there, so torch.where
+        # picks the sampling result for every row -- so we deliberately do NOT branch on
+        # bool(greedy_mask.any()): that was another per-step host sync (is_nonzero ->
+        # item -> cudaStreamSynchronize), and "all sampling" is just as host-knowable as
+        # "all greedy". The extra argmax-match pass is cheap and draws no RNG, so the
+        # sampling RNG stream is unchanged.
         draft_probs = torch.softmax(
             draft_block.corrected_logits.float()
             / draft_block.temperatures[:, None, None],
             dim=-1,
         )
-        if not bool(greedy_mask.any()):
-            return self._accept_sampling(
-                candidates=candidates,
-                target_logits=target_logits,
-                draft_probs=draft_probs,
-                sampling_info=sampling_info,
-                draft_input=draft_input,
-                cutoff_layout=cutoff_layout,
-            )
-
         greedy_len, greedy_bonus = self._accept_greedy(
             candidates=candidates,
             target_logits=target_logits,
@@ -1773,7 +1757,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         logits_output = target_verify.logits_output
         can_run_cuda_graph = target_verify.can_run_cuda_graph
 
-        correct_len, bonus = self._accept_block(
+        correct_len, bonus = self._accept_draft_tokens(
             candidates=verify_ids_2d,
             target_logits=logits_output.next_token_logits,
             draft_block=draft_block,
