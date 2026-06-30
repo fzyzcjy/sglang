@@ -19,8 +19,8 @@ class StsDataRecorder:
     ) -> None:
         logits = confidence_raw.detach().to(device="cpu", dtype=torch.float32)
         positions = torch.arange(self.gamma).view(1, -1)
-        counts = num_correct_drafts.detach().to(device="cpu", dtype=torch.int64).view(
-            -1, 1
+        counts = (
+            num_correct_drafts.detach().to(device="cpu", dtype=torch.int64).view(-1, 1)
         )
         prefix_mask = (positions < counts).to(torch.float32)
         self._logits_buffer.append(logits)
