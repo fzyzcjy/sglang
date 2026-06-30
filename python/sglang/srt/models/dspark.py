@@ -13,6 +13,7 @@ from typing import Callable, Iterable, Optional, Tuple
 import torch
 from torch import nn
 
+from sglang.srt.distributed.communication_op import tensor_model_parallel_all_gather
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models.dflash import DFlashDraftModel
 from sglang.srt.speculative.dspark_utils import parse_dspark_draft_config
@@ -21,6 +22,13 @@ logger = logging.getLogger(__name__)
 
 # A per-step sampler: (step_logits [bs, vocab], step_idx) -> sampled tokens [bs].
 StepSampler = Callable[[torch.Tensor, int], torch.Tensor]
+
+
+def gather_and_crop_vocab(
+    local_logits: torch.Tensor, lm_head: nn.Module
+) -> torch.Tensor:
+    full_logits = tensor_model_parallel_all_gather(local_logits, dim=-1)
+    return full_logits[..., : int(lm_head.org_vocab_size)]
 
 
 class VanillaMarkov(nn.Module):
