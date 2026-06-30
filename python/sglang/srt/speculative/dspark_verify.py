@@ -236,18 +236,17 @@ def compact_verify_ids(
     total: int,
     device: str,
 ) -> torch.Tensor:
-    # Pack [anchor, s_0..s_{ell_r-1}] per request into a compact total-token
-    # 1d tensor. anchor = draft_block_ids[:, 0]; s_k = draft_tokens[:, k].
-    verify_ids = torch.empty((total,), dtype=torch.int64, device=device)
-    offset = 0
+    # Pack [anchor, s_0..s_{ell_r-1}] per request into a compact 1d tensor.
+    # anchor = draft_block_ids[:, 0]; s_k = draft_tokens[:, k].
+    verify_lens = torch.tensor(verify_lens_cpu, device=device, dtype=torch.int64)
+    req_id, within = compact_row_index(
+        verify_lens=verify_lens, total=total, device=device
+    )
     anchors = draft_block_ids[:, 0]
-    for r, verify_len in enumerate(verify_lens_cpu):
-        verify_ids[offset] = anchors[r]
-        ell_r = verify_len - 1
-        if ell_r > 0:
-            verify_ids[offset + 1 : offset + verify_len] = draft_tokens[r, :ell_r]
-        offset += verify_len
-    return verify_ids
+    # within==0 -> anchor; else draft_tokens[:, within-1] (clamp masked at 0).
+    drafts = draft_tokens[req_id, (within - 1).clamp_min(0)]
+    verify_ids = torch.where(within == 0, anchors[req_id], drafts)
+    return verify_ids.to(torch.int64)
 
 
 def scatter_compact_to_strided(
@@ -272,12 +271,32 @@ def scatter_compact_to_strided(
         dtype=compact.dtype,
         device=compact.device,
     )
-    offset = 0
-    for r, verify_len in enumerate(layout.verify_lens_cpu):
-        dst = r * stride
-        strided[dst : dst + verify_len] = compact[offset : offset + verify_len]
-        offset += verify_len
+    req_id, within = compact_row_index(
+        verify_lens=layout.verify_lens,
+        total=layout.total_verify_tokens,
+        device=compact.device,
+    )
+    strided_pos = req_id * stride + within
+    strided.index_copy_(0, strided_pos, compact)
     return strided
+
+
+def compact_row_index(
+    *,
+    verify_lens: torch.Tensor,
+    total: int,
+    device,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    # (req_id, within) for each compact row: which request owns it and the
+    # offset inside that request. From frozen verify_lens -> no GPU sync.
+    verify_lens = verify_lens.to(device=device, dtype=torch.int64)
+    bs = int(verify_lens.numel())
+    req_id = torch.arange(bs, device=device, dtype=torch.int64).repeat_interleave(
+        verify_lens
+    )
+    start = torch.cumsum(verify_lens, dim=0) - verify_lens  # exclusive start
+    within = torch.arange(total, device=device, dtype=torch.int64) - start[req_id]
+    return req_id, within
 
 
 def apply_logits_adjustments_strided(
