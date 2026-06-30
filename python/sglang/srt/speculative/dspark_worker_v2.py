@@ -196,6 +196,8 @@ class DSparkWorkerV2(BaseSpecWorker):
         self._draft_worker = bundle.draft_worker
         self.draft_model_runner = bundle.draft_model_runner
         self.draft_model = bundle.draft_model
+        # Built in init_cuda_graphs when the greedy proposal folds into the graph.
+        self._draft_sampler = None
 
         dspark_config = parse_dspark_draft_config(
             draft_hf_config=self.draft_model_runner.model_config.hf_config
@@ -421,7 +423,6 @@ class DSparkWorkerV2(BaseSpecWorker):
     def init_cuda_graphs(self):
         # Greedy proposal folds into the draft cuda graph via the draft_sampler hook;
         # sampling batches fall back to eager. tp=1 only.
-        self._draft_sampler = None
         capture_decode_cuda_graph = not self.server_args.disable_cuda_graph
         if is_cuda() and capture_decode_cuda_graph:
             available_mem = get_available_gpu_memory(self.device, self.gpu_id)
@@ -1228,7 +1229,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
         draft_block_ids = fwd.draft_block_ids
 
-        draft_sampler = getattr(self, "_draft_sampler", None)
+        draft_sampler = self._draft_sampler
         all_greedy = sampling_info is None or sampling_info.is_all_greedy
         if draft_sampler is not None and fwd.can_run_graph and all_greedy:
             # Captured greedy proposal: compute_base_logits + Markov argmax already ran
