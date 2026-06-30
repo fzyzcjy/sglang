@@ -254,9 +254,8 @@ class TestDsv4ConfidenceTapPoint(CustomTestCase):
 
         model.confidence_head.forward = _spy
         x_post_hc = torch.randn(bsz, _GAMMA, _HIDDEN)
-        model._compute_confidence(
-            x_post_hc=x_post_hc, anchor_tokens=anchor, sampled_tokens=sampled
-        )
+        model._x_post_hc = x_post_hc.reshape(bsz * _GAMMA, _HIDDEN)
+        model.compute_confidence(anchor_tokens=anchor, sampled_tokens=sampled)
         self.assertTrue(torch.allclose(captured["stack"], expected_stack, atol=1e-6))
 
 
