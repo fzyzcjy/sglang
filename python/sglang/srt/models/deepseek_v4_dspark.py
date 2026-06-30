@@ -511,14 +511,21 @@ class DSparkV4Stage(DeepseekV4DecoderLayer):
             x, self.hc_ffn_fn, self.hc_ffn_scale, self.hc_ffn_base
         )
         x = self.post_attention_layernorm(x)
-        x = self._run_ffn(x)
+        x = self._run_ffn(x, forward_batch)
         x = self._hc_post_block(x, residual, post, comb)
         return x
 
-    def _run_ffn(self, x: torch.Tensor) -> torch.Tensor:
+    def _run_ffn(self, x: torch.Tensor, forward_batch: ForwardBatch) -> torch.Tensor:
         shape = x.shape
         x = x.reshape(-1, self.dim)
-        y = self.mlp(x)
+        # dsv4 MoE routes experts by a hash of the token ids, so the MoE needs an
+        # input id per row. The draft block forward flattens the mHC channels into the
+        # row dim, so repeat each token's id across its channels. No dp gather (the
+        # draft runs tp-only), so input_ids_global == input_ids.
+        input_ids = forward_batch.input_ids
+        if input_ids is not None and input_ids.shape[0] != x.shape[0]:
+            input_ids = input_ids.repeat_interleave(x.shape[0] // input_ids.shape[0])
+        y = self.mlp(x, input_ids=input_ids, input_ids_global=input_ids)
         return y.view(shape)
 
 
