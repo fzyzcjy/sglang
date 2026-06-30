@@ -286,9 +286,15 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         # DSpark real-N (SGLANG_RAGGED_VERIFY_MODE=compact); every other path (normal
         # decode, EAGLE/DFlash verify, DSpark cap-accept) keeps the bs-keyed
         # graph and stays byte-identical.
-        self.ragged_verify_mode = ragged_verify_full_mode_enabled(
-            self.model_runner.spec_algorithm
-        ) and (self.capture_forward_mode == ForwardMode.TARGET_VERIFY)
+        self.ragged_verify_mode = (
+            ragged_verify_full_mode_enabled(self.model_runner.spec_algorithm)
+            and (self.capture_forward_mode == ForwardMode.TARGET_VERIFY)
+            # The DSpark draft block forward also runs in TARGET_VERIFY mode but is
+            # layout-less (uniform gamma); only the target verify runner carries a
+            # ragged layout. Token-keying the draft graph captures token-keyed graphs
+            # its bs-keyed (layout-less) replay can never select -> KeyError.
+            and not self.model_runner.is_draft_worker
+        )
         self.capture_num_tokens: Optional[list[int]] = (
             self._build_ragged_verify_token_buckets()
             if self.ragged_verify_mode
