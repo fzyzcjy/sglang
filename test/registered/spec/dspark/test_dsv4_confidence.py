@@ -127,6 +127,12 @@ def _make_model_stub(
         if with_confidence
         else None
     )
+    with torch.no_grad():
+        for param in model.markov_head.parameters():
+            param.normal_()
+        if model.confidence_head is not None:
+            for param in model.confidence_head.parameters():
+                param.normal_()
     model._last_confidence = None
     return model
 
