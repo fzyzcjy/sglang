@@ -11,6 +11,7 @@ from sglang.srt.speculative.dspark_scheduler import (
     schedule_verify_lens_topk,
 )
 from sglang.srt.speculative.dspark_sps_table import SpsCostTable
+from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 
@@ -120,16 +121,20 @@ class TestComputeVerifyTokenBudget(CustomTestCase):
 
 class TestScheduleVerifyLensTopk(CustomTestCase):
     def test_topk_does_not_exceed_budget(self):
-        """Total extra verify length never exceeds the supplied budget."""
+        """Total extra verify length (above the floor) never exceeds the budget."""
         torch.manual_seed(2)
         survival = _survival_from_confidence(torch.rand(5, 7) * 0.4 + 0.55)
         cfg = DSparkScheduleConfig(gamma=7)
+        floor = max(cfg.min_verify_len, 1)
         for budget in (0, 1, 5, 12, 100):
             verify_lens = schedule_verify_lens_topk(
                 survival_probs=survival, budget=budget, cfg=cfg
             )
-            total_extra = int((verify_lens.to(torch.int64)).sum().item())
+            # verify_lens counts the anchor (= 1 + ell_r); extra is the count above
+            # the floor, which is what the budget bounds.
+            total_extra = int((verify_lens.to(torch.int64) - floor).sum().item())
             self.assertLessEqual(total_extra, budget)
+            self.assertGreaterEqual(int(verify_lens.min().item()), 1)
 
     def test_total_equals_anchors_plus_lens(self):
         """The forward total R + sum(verify_lens) equals an independently-derived
@@ -277,11 +282,81 @@ class TestScheduleVerifyLensTopk(CustomTestCase):
         """Tie-break depends only on (a, position, request), not on token values."""
         survival = torch.tensor([[0.8, 0.8, 0.8], [0.8, 0.8, 0.8]], dtype=torch.float32)
         cfg = DSparkScheduleConfig(gamma=3)
+        floor = max(cfg.min_verify_len, 1)
         verify_lens = schedule_verify_lens_topk(
             survival_probs=survival, budget=3, cfg=cfg
         )
-        total_extra = int(verify_lens.to(torch.int64).sum().item())
+        total_extra = int((verify_lens.to(torch.int64) - floor).sum().item())
         self.assertEqual(total_extra, 3)
+
+
+class TestVerifyLenAnchorContract(CustomTestCase):
+    """verify_lens counts the anchor (= 1 + ell_r) and must be >= 1 for every
+    request: RaggedVerifyLayout rejects < 1 and _cap_correct_len reads
+    ell_r = verify_lens - 1. Guards the C1 off-by-one that a non-flat SPS table
+    plus small/zero budget used to trigger under the old min_verify_len=0 default.
+    """
+
+    def test_default_min_verify_len_is_one(self):
+        """The default config floors verify_lens at the anchor (min_verify_len=1)."""
+        self.assertEqual(DSparkScheduleConfig(gamma=4).min_verify_len, 1)
+
+    def test_small_budget_keeps_anchor_with_default_config(self):
+        """budget in {0,1,2} with the default config never drops below verify_len=1."""
+        survival = _survival_from_confidence(
+            torch.tensor(
+                [[0.95, 0.90, 0.40], [0.80, 0.20, 0.10], [0.99, 0.97, 0.50]],
+                dtype=torch.float32,
+            )
+        )
+        cfg = DSparkScheduleConfig(gamma=3)
+        for budget in (0, 1, 2):
+            verify_lens = schedule_verify_lens_topk(
+                survival_probs=survival, budget=budget, cfg=cfg
+            )
+            self.assertGreaterEqual(int(verify_lens.min().item()), 1)
+
+    def test_explicit_zero_min_still_clamped_to_anchor(self):
+        """Even an explicit min_verify_len=0 is clamped to >= 1 (double safeguard)."""
+        survival = _survival_from_confidence(
+            torch.tensor([[0.9, 0.8, 0.7], [0.6, 0.5, 0.4]], dtype=torch.float32)
+        )
+        cfg = DSparkScheduleConfig(gamma=3, min_verify_len=0)
+        verify_lens = schedule_verify_lens_topk(
+            survival_probs=survival, budget=0, cfg=cfg
+        )
+        self.assertGreaterEqual(int(verify_lens.min().item()), 1)
+        self.assertTrue(
+            torch.equal(verify_lens, torch.tensor([1, 1], dtype=torch.int32))
+        )
+
+    def test_non_flat_table_small_budget_feeds_ragged_layout(self):
+        """A non-flat SPS table that yields a small budget produces verify_lens
+        that RaggedVerifyLayout.from_verify_lens accepts (no ValueError)."""
+        # A steep SPS cliff right after the anchor batch (B = num_requests = 2)
+        # makes any extra batch token collapse Theta, so the budget argmax keeps B
+        # at the anchors only (K == 0).
+        table = SpsCostTable(
+            sample_batch_tokens=[2, 3],
+            sample_steps_per_sec=[1.0, 0.1],
+            max_batch_tokens=64,
+        )
+        cfg = DSparkScheduleConfig(gamma=3)
+        scheduler = ConfidencePrefixScheduler(sps_table=table, cfg=cfg)
+        survival = _survival_from_confidence(
+            torch.tensor([[0.90, 0.80, 0.70], [0.85, 0.60, 0.40]], dtype=torch.float32)
+        )
+        budget = scheduler.update_budget_from_history(history_survival_probs=survival)
+        self.assertEqual(budget, 0)
+        verify_lens = scheduler.compute_verify_lens(survival_probs=survival)
+        self.assertGreaterEqual(int(verify_lens.min().item()), 1)
+        verify_lens_cpu = verify_lens.to(torch.int64).tolist()
+        layout = RaggedVerifyLayout.from_verify_lens(
+            verify_lens_cpu=verify_lens_cpu,
+            device=torch.device("cpu"),
+            grid=[sum(verify_lens_cpu)],
+        )
+        self.assertEqual(layout.verify_lens_cpu, verify_lens_cpu)
 
 
 class TestNonAnticipating(CustomTestCase):

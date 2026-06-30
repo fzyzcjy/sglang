@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class DSparkScheduleConfig(msgspec.Struct):
     gamma: int
-    min_verify_len: int = 0
+    min_verify_len: int = 1
     max_verify_len: int = 0
     survival_eps: float = 1e-6
 
@@ -115,7 +115,12 @@ def schedule_verify_lens_topk(
         (num_requests,), cfg.min_verify_len, dtype=torch.int64, device=device
     )
     verify_lens = min_len + selected_extra
-    verify_lens = torch.clamp(verify_lens, min=cfg.min_verify_len, max=max_len)
+    # verify_lens counts tokens including the anchor (= 1 + ell_r), so it must be
+    # >= 1 for every request: RaggedVerifyLayout rejects < 1 and _cap_correct_len
+    # reads ell_r = verify_lens - 1. The lower bound is max(min_verify_len, 1) so
+    # an explicit min_verify_len=0 still cannot produce an anchor-less request.
+    lower_bound = max(cfg.min_verify_len, 1)
+    verify_lens = torch.clamp(verify_lens, min=lower_bound, max=max_len)
     return verify_lens.to(torch.int32)
 
 
@@ -209,7 +214,11 @@ class ConfidencePrefixScheduler:
             cfg=self.cfg,
         )
         verify_lens_64 = verify_lens.to(torch.int64)
-        total_extra = int((verify_lens_64 - self.cfg.min_verify_len).sum().item())
+        # Measure admitted extra against the effective floor max(min_verify_len, 1)
+        # so the anchor padding added by the lower-bound clamp is not miscounted as
+        # budget overflow when an explicit min_verify_len=0 is clamped up to 1.
+        effective_floor = max(self.cfg.min_verify_len, 1)
+        total_extra = int((verify_lens_64 - effective_floor).sum().item())
         assert (
             total_extra <= budget
         ), f"DSpark verify-len budget violated: extra={total_extra} > budget={budget}"
