@@ -315,19 +315,15 @@ class TestDsv4ConfidenceWeightRemap(CustomTestCase):
         self.assertIsNone(self._remap(model, "lm_head.weight"))
         self.assertIsNone(self._remap(model, "embed_tokens.weight"))
 
-    def test_missing_confidence_weights_identity_init(self) -> None:
-        """Enabled head absent from checkpoint is identity-initialized to constant 0.5."""
+    def test_missing_confidence_weights_raises(self) -> None:
+        """Enabled head absent from checkpoint raises ValueError instead of degrading."""
         model = _make_model_stub(with_confidence=True)
-        with torch.no_grad():
-            model.confidence_head.proj.weight.fill_(7.0)
-            model.confidence_head.proj.bias.fill_(7.0)
         params_dict = dict(model.confidence_head.named_parameters())
         params_dict = {f"confidence_head.{k}": v for k, v in params_dict.items()}
-        model._maybe_identity_init_confidence_head(
-            params_dict=params_dict, loaded_params=set()
-        )
-        self.assertTrue(bool((model.confidence_head.proj.weight == 0).all()))
-        self.assertTrue(bool((model.confidence_head.proj.bias == 0).all()))
+        with self.assertRaises(ValueError):
+            model._assert_confidence_head_loaded(
+                params_dict=params_dict, loaded_params=set()
+            )
 
 
 if __name__ == "__main__":

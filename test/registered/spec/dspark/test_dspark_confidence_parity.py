@@ -5,8 +5,11 @@ import unittest
 
 import torch
 
+import types
+
 from sglang.srt.models.dspark import (
     DSparkConfidenceHead,
+    DSparkDraftMixin,
     build_confidence_head,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -243,33 +246,27 @@ class TestBuildConfidenceHead(CustomTestCase):
             build_confidence_head(cfg)
 
 
-class TestIdentityInitConstant(CustomTestCase):
+class TestMissingConfidenceWeightsRaises(CustomTestCase):
     hidden_size = 32
     markov_rank = 8
-    batch_size = 2
-    gamma = 3
 
-    def test_zero_init_gives_constant_half_after_sigmoid(self):
-        """Identity-init (zero proj) -> logit 0 -> sigmoid -> constant 0.5."""
+    def test_missing_confidence_weights_raises(self) -> None:
+        """Dense draft with enabled confidence head raises ValueError when weights are absent."""
         head = DSparkConfidenceHead(
             hidden_size=self.hidden_size,
             markov_rank=self.markov_rank,
             with_markov=True,
         )
-        with torch.no_grad():
-            head.proj.weight.zero_()
-            head.proj.bias.zero_()
-        hidden = torch.randn(self.batch_size, self.gamma, self.hidden_size)
-        markov_embed = torch.randn(self.batch_size, self.gamma, self.markov_rank)
-        with torch.no_grad():
-            raw = head(hidden, markov_embed)
-            confidence = torch.sigmoid(raw.float())
-        torch.testing.assert_close(
-            confidence,
-            torch.full_like(confidence, 0.5),
-            atol=_ATOL,
-            rtol=_RTOL,
-        )
+        stub = types.SimpleNamespace(confidence_head=head)
+        params_dict = {
+            f"confidence_head.{k}": v for k, v in head.named_parameters()
+        }
+        with self.assertRaises(ValueError):
+            DSparkDraftMixin._load_confidence_weights(
+                stub,
+                confidence_weights=[],
+                params_dict=params_dict,
+            )
 
 
 if __name__ == "__main__":
