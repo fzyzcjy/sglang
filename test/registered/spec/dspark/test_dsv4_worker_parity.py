@@ -55,12 +55,12 @@ class TestDsv4WorkerParityVsSoT(CustomTestCase):
     def test_v4_decode_block_matches_sot_forward_spec(self) -> None:
         """The worker's V4 draft block must equal the SoT forward_spec output tightly."""
         _ensure_repo_test_package()
+        from test.srt.speculative._dspark_reference.deepseek_v4.sot_attention import (
+            SoTDSparkAttentionOracle,
+        )
         from test.srt.speculative._dspark_reference.dsv4.block_forward_harness import (
             HarnessUnavailable,
             build_dsv4_block_forward_harness,
-        )
-        from test.srt.speculative._dspark_reference.dsv4.sot_dspark_attention import (
-            SoTDSparkAttentionOracle,
         )
 
         try:

@@ -146,7 +146,7 @@ class TestDsv4BlockForwardSoTParity(CustomTestCase):
         production model so the production tensors are authoritative.
         """
         _ensure_repo_test_package()
-        from test.srt.speculative._dspark_reference.dsv4.sot_dspark_attention import (
+        from test.srt.speculative._dspark_reference.deepseek_v4.sot_attention import (
             SoTDSparkAttentionOracle,
         )
 
