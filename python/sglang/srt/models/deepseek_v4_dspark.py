@@ -24,6 +24,7 @@ from torch import nn
 
 from sglang.srt.configs.deepseek_v4 import DeepSeekV4Config
 from sglang.srt.layers.layernorm import RMSNorm
+from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.radix_attention import RadixAttention
 from sglang.srt.layers.vocab_parallel_embedding import VocabParallelEmbedding
@@ -703,7 +704,7 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         input_embeds: Optional[torch.Tensor] = None,
         get_embedding: bool = False,
         pp_proxy_tensors=None,
-    ) -> DSparkV4DraftOutput:
+    ) -> LogitsProcessorOutput:
         """Standard SGLang draft forward: embed -> DSpark stages -> raw backbone hidden.
 
         The worker builds the draft block ForwardBatch (TARGET_VERIFY mode, the gamma block
@@ -723,7 +724,11 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         for stage in self.stages:
             x = stage(positions, x, forward_batch)
 
-        return DSparkV4DraftOutput(draft_hidden=x)
+        # Return the raw [bs*gamma, hc, d] backbone hidden as a plain LogitsProcessorOutput
+        # (next_token_logits stays None; the worker calls compute_base_logits on
+        # hidden_states post-forward). LogitsProcessorOutput is the only struct the cuda
+        # graph runner's execute accepts, so this is what lets the draft be captured.
+        return LogitsProcessorOutput(next_token_logits=None, hidden_states=x)
 
     def collapse_hc_head(self, x: torch.Tensor) -> torch.Tensor:
         """Collapse the draft mHC tensor through the last stage's hc_head (PRE-norm).
