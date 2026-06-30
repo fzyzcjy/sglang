@@ -7,7 +7,9 @@ from sglang.srt.environ import envs
 from sglang.srt.managers.overlap_utils import FutureMap, ResolvedConfidence
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.server_args import ServerArgs
-from sglang.srt.speculative.dspark_components.dspark_confidence import compute_confidence
+from sglang.srt.speculative.dspark_components.dspark_confidence import (
+    compute_confidence,
+)
 from sglang.srt.speculative.dspark_components.dspark_scheduler import (
     DSparkScheduleConfig,
     HostConfidenceBudgetPlanner,
