@@ -129,6 +129,9 @@ def handle_speculative_decoding(server_args: ServerArgs) -> None:
 
 
 def _handle_dflash(server_args: ServerArgs) -> None:
+    if not server_args.device.startswith("cuda"):
+        raise ValueError("DFLASH speculative decoding only supports CUDA device.")
+
     if server_args.enable_dp_attention:
         raise ValueError(
             "Currently DFLASH speculative decoding does not support dp attention."
@@ -243,6 +246,9 @@ def _handle_dflash(server_args: ServerArgs) -> None:
 
 
 def _handle_dspark(server_args: ServerArgs) -> None:
+    if not server_args.device.startswith("cuda"):
+        raise ValueError("DSpark speculative decoding only supports CUDA device.")
+
     if server_args.enable_dp_attention:
         raise ValueError(
             "Currently DSpark speculative decoding does not support dp attention."
