@@ -419,11 +419,29 @@ class FlashAttentionBackend(AttentionBackend):
             num_splits=self.num_splits,
         )
 
+    def _assert_no_ragged_verify(self, forward_batch: ForwardBatch) -> None:
+        # FlashAttention has no ragged (compact) verify metadata builder: the
+        # target-verify path uses the uniform gamma+1 geometry and never reads
+        # spec_info.ragged_verify_layout. supports_ragged_verify_graph is False,
+        # so graph admission already forces a ragged batch to eager here -- and
+        # eager would then silently run the wrong (uniform) geometry. Fail loud
+        # instead, mirroring the FlashInfer guard.
+        spec_info = forward_batch.spec_info
+        if (
+            forward_batch.forward_mode.is_target_verify()
+            and getattr(spec_info, "ragged_verify_layout", None) is not None
+        ):
+            raise NotImplementedError(
+                "FlashAttention does not support DSpark compact (ragged) verify; "
+                "set SGLANG_RAGGED_VERIFY_MODE=static for this configuration."
+            )
+
     def init_forward_metadata_out_graph(
         self,
         forward_batch: ForwardBatch,
         in_capture: bool = False,
     ):
+        self._assert_no_ragged_verify(forward_batch)
         bs = forward_batch.batch_size
         req_pool_indices = forward_batch.req_pool_indices
         seq_lens = forward_batch.seq_lens
@@ -517,6 +535,7 @@ class FlashAttentionBackend(AttentionBackend):
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         """Initialize forward metadata hence all layers in the forward pass can reuse it."""
+        self._assert_no_ragged_verify(forward_batch)
         metadata = FlashAttentionMetadata()
         seqlens_in_batch = forward_batch.seq_lens
         batch_size = forward_batch.batch_size
