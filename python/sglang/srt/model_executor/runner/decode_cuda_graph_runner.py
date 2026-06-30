@@ -118,12 +118,15 @@ if TYPE_CHECKING:
 def ragged_verify_full_mode_enabled(spec_algorithm: SpeculativeAlgorithm) -> bool:
     """Whether DSpark real-N ragged verify (SGLANG_RAGGED_VERIFY_MODE=compact) is on.
 
-    Gated on the spec algorithm advertising ragged-verify support. The env read
-    and the value contract live in the shared ragged-verify infra module; this
-    import is deferred so the decode runner stays importable before that module
-    lands (and returns False, keeping every existing path byte-identical).
+    Gated on DSpark specifically (M4): only DSpark builds a ragged_verify_layout,
+    so DFlash must keep the bs-keyed capture -- enabling the token-keyed capture
+    for DFlash would capture token-keyed graphs that DFlash's layout-less verify
+    can never select. The env read and the value contract live in the shared
+    ragged-verify infra module; this import is deferred so the decode runner stays
+    importable before that module lands (and returns False, keeping every existing
+    path byte-identical).
     """
-    if not spec_algorithm.is_dflash_or_dspark():
+    if not spec_algorithm.is_dspark():
         return False
     try:
         from sglang.srt.speculative.ragged_verify import (
@@ -582,6 +585,17 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         )
 
     def _can_run_ragged_verify_graph(self, forward_batch: ForwardBatch, ragged_layout):
+        # Backend-capability gate (H1, sits at graph admission, not eager init):
+        # a dense FlashInfer backend has no ragged verify metadata builder, so its
+        # out-graph TARGET_VERIFY would silently use the uniform prefill wrappers
+        # (no per-request geometry, no assert). Force eager here rather than select
+        # a graph with the wrong geometry. The DSV4 family (CUDA + HIP) does carry
+        # make_forward_metadata_from_raw_verify; the HIP out-graph additionally
+        # raises on a ragged layout (its TARGET_VERIFY path is still uniform), so it
+        # fails loud at the backend rather than running the wrong geometry.
+        if not hasattr(self.attn_backend, "make_forward_metadata_from_raw_verify"):
+            return False
+
         # The captured token tier is floored to the bs-derived full block
         # (raw_bs * num_tokens_per_bs), so the admission token budget is the larger
         # of the real total and that floor; both must fit the largest captured

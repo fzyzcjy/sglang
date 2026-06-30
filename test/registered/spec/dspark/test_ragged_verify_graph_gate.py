@@ -1,14 +1,27 @@
 import types
 import unittest
 
+from sglang.srt.environ import envs
 from sglang.srt.model_executor.forward_batch_info import CaptureHiddenMode
 from sglang.srt.model_executor.runner.decode_cuda_graph_runner import (
     DecodeCudaGraphRunner,
+    ragged_verify_full_mode_enabled,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 
 register_cpu_ci(est_time=10, suite="base-a-test-cpu")
+
+
+class _RaggedCapableBackend:
+    """A backend stub that advertises the DSV4 ragged verify metadata builder."""
+
+    def make_forward_metadata_from_raw_verify(self):  # pragma: no cover - marker
+        raise NotImplementedError
+
+
+class _RaggedIncapableBackend:
+    """A backend stub (e.g. FlashInfer) with no ragged verify metadata builder."""
 
 
 def _gate_runner(
@@ -18,6 +31,7 @@ def _gate_runner(
     require_mlp_sync: bool = False,
     require_mlp_tp_gather: bool = False,
     disable_padding: bool = False,
+    attn_backend: object = None,
 ) -> types.SimpleNamespace:
     """A runner stub carrying only the fields _can_run_ragged_verify_graph reads."""
     return types.SimpleNamespace(
@@ -29,6 +43,9 @@ def _gate_runner(
         is_encoder_decoder=False,
         enable_two_batch_overlap=False,
         capture_hidden_mode=CaptureHiddenMode.NULL,
+        attn_backend=attn_backend
+        if attn_backend is not None
+        else _RaggedCapableBackend(),
     )
 
 
@@ -108,6 +125,45 @@ class TestRaggedVerifyGraphAdmission(CustomTestCase):
         fb = _gate_forward_batch(batch_size=2)
         with self.assertRaises(AssertionError):
             _can_run(runner, fb, _gate_layout(5))
+
+    def test_rejects_backend_without_ragged_metadata_builder(self):
+        """A backend without make_forward_metadata_from_raw_verify forces eager (H1)."""
+        runner = _gate_runner(
+            capture_num_tokens=[4, 8, 16, 32],
+            num_tokens_per_bs=4,
+            attn_backend=_RaggedIncapableBackend(),
+        )
+        fb = _gate_forward_batch(batch_size=2)
+        self.assertFalse(_can_run(runner, fb, _gate_layout(5)))
+
+
+class TestRaggedVerifyModeGate(CustomTestCase):
+    def test_dflash_never_enables_token_keyed_capture(self):
+        """DFlash never enables the token-keyed ragged capture, even in compact mode (M4)."""
+        from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
+
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override("compact"):
+            self.assertFalse(
+                ragged_verify_full_mode_enabled(SpeculativeAlgorithm.DFLASH)
+            )
+
+    def test_dspark_enables_token_keyed_capture_in_compact_mode(self):
+        """DSpark enables the token-keyed ragged capture in compact mode (M4)."""
+        from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
+
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override("compact"):
+            self.assertTrue(
+                ragged_verify_full_mode_enabled(SpeculativeAlgorithm.DSPARK)
+            )
+
+    def test_dspark_stays_bs_keyed_outside_compact_mode(self):
+        """DSpark keeps the bs-keyed capture when the mode is not compact (M4)."""
+        from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
+
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override("static"):
+            self.assertFalse(
+                ragged_verify_full_mode_enabled(SpeculativeAlgorithm.DSPARK)
+            )
 
 
 if __name__ == "__main__":
