@@ -304,12 +304,13 @@ class DSparkConfidenceHead(nn.Module):
         hidden_size: int,
         markov_rank: int,
         with_markov: bool = True,
+        bias: bool = True,
         dtype: torch.dtype = torch.float32,
     ) -> None:
         super().__init__()
         self.with_markov = bool(with_markov)
         input_dim = int(hidden_size) + (int(markov_rank) if self.with_markov else 0)
-        self.proj = nn.Linear(input_dim, 1, dtype=dtype)
+        self.proj = nn.Linear(input_dim, 1, bias=bias, dtype=dtype)
 
     def forward(
         self,

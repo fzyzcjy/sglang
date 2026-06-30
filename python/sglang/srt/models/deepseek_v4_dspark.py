@@ -390,11 +390,17 @@ def build_dspark_v4_confidence_head(
     Mirrors the dense ``build_confidence_head`` gating and interface (the head emits a
     RAW accept-rate logit; ``with_markov`` concatenates the per-step markov_embed). The
     V4 hidden size comes from ``config.hidden_size`` and the rank from the parsed draft
-    config; returns ``None`` for the static-verify checkpoints that omit the head.
+    config. The head is built by default (the DSpark draft checkpoints carry trained
+    confidence weights); only an explicit ``enable_confidence_head=False`` opts out. The
+    ``proj`` matches the checkpoint's DeepSpec ``AcceptRatePredictor`` layout (a single
+    weight, no bias).
     """
-    if not bool(getattr(config, "enable_confidence_head", False)):
+    if getattr(config, "enable_confidence_head", None) is False:
         return None
-    with_markov = bool(getattr(config, "confidence_head_with_markov", markov_rank > 0))
+    with_markov_cfg = getattr(config, "confidence_head_with_markov", None)
+    with_markov = (
+        (markov_rank > 0) if with_markov_cfg is None else bool(with_markov_cfg)
+    )
     if with_markov and markov_rank <= 0:
         raise ValueError(
             "DSpark V4 confidence_head_with_markov requires markov_rank > 0, "
@@ -404,6 +410,7 @@ def build_dspark_v4_confidence_head(
         hidden_size=int(config.hidden_size),
         markov_rank=int(markov_rank),
         with_markov=with_markov,
+        bias=False,
     )
 
 
