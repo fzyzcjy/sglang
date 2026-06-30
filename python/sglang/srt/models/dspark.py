@@ -333,15 +333,21 @@ class DSparkConfidenceHead(nn.Module):
         return self.proj(features).squeeze(-1)
 
 
-def build_confidence_head(config) -> Optional[nn.Module]:
-    """Build the DSpark confidence head when the draft config enables it.
+def build_confidence_head(config) -> nn.Module:
+    """Build the DSpark confidence head (always enabled).
 
-    Returns ``None`` when no confidence head is configured (the a+b static-verify
-    checkpoints), keeping the head and its relay strictly opt-in.
+    Mirrors ``build_dspark_v4_confidence_head``: the ``enable_confidence_head`` flag is
+    not read, because a DSpark draft checkpoint is expected to carry trained confidence
+    weights. A config that lacks the field is only warned about; a checkpoint that
+    genuinely lacks the weights is surfaced later by the weight-load assert. The ``proj``
+    keeps the reference ``AcceptRatePredictor`` bias (dense checkpoints ship it, unlike
+    the bias-less DSpark V4 head).
     """
-    enable = bool(getattr(config, "enable_confidence_head", False))
-    if not enable:
-        return None
+    if not hasattr(config, "enable_confidence_head"):
+        logger.warning(
+            "DSpark draft config has no enable_confidence_head field; treating the "
+            "confidence head as enabled."
+        )
     hidden_size = int(config.hidden_size)
     markov_rank = int(getattr(config, "markov_rank", 0))
     with_markov = bool(getattr(config, "confidence_head_with_markov", markov_rank > 0))

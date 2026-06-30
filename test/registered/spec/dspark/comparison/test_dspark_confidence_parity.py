@@ -204,10 +204,22 @@ class TestMarkovEmbedOffByOne(CustomTestCase):
 
 
 class TestBuildConfidenceHead(CustomTestCase):
-    def test_disabled_returns_none(self):
-        """build_confidence_head returns None when enable_confidence_head is False."""
+    def test_disable_flag_still_builds(self):
+        """The head is built even when enable_confidence_head is False (flag not read)."""
         cfg = _HeadConfig(hidden_size=64, markov_rank=16, enable_confidence_head=False)
-        self.assertIsNone(build_confidence_head(cfg))
+        self.assertIsInstance(build_confidence_head(cfg), DSparkConfidenceHead)
+
+    def test_warns_when_field_absent(self):
+        """A config lacking enable_confidence_head warns once, then builds the head."""
+        cfg = types.SimpleNamespace(
+            hidden_size=64, markov_rank=16, confidence_head_with_markov=True
+        )
+        with self.assertLogs("sglang.srt.models.dspark", level="WARNING") as captured:
+            head = build_confidence_head(cfg)
+        self.assertIsInstance(head, DSparkConfidenceHead)
+        self.assertTrue(
+            any("enable_confidence_head" in message for message in captured.output)
+        )
 
     def test_enabled_with_markov_input_dim(self):
         """Enabled with_markov head has proj in_features == hidden_size + markov_rank."""
