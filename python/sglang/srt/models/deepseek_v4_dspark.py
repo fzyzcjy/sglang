@@ -49,6 +49,10 @@ logger = logging.getLogger(__name__)
 # A per-step sampler: (step_logits [bs, vocab], step_idx) -> sampled tokens [bs].
 StepSampler = Callable[[torch.Tensor, int], torch.Tensor]
 
+# FlashMLA's fp8 sparse decode kernel only specializes h_q for {64, 128}; the draft pads
+# its per-rank query heads up to this when tp shards them below 64.
+_PAD_NUM_HEADS = 64
+
 
 class DSparkV4DraftOutput(msgspec.Struct, frozen=True):
     """Structured output of ``DeepseekV4ForCausalLMDSpark.forward`` (worker contract).
@@ -240,14 +244,13 @@ class DSparkAttention(MqaAttentionBase):
         q = self._compute_q(hidden_states, positions)
         attn_sink = self._local_attn_sink()
 
-        # FlashMLA's fp8 sparse decode kernel only specializes h_q for {64, 128}; pad the
-        # per-rank query heads (and attn_sink) up to 64 like MQALayer and slice the output
-        # heads back afterward.
-        if self.n_local_heads < 64:
-            q_padded = q.new_zeros(q.shape[0], 64, self.head_dim)
+        # Pad the per-rank query heads (and attn_sink) up to the kernel's supported h_q
+        # like MQALayer and slice the output heads back afterward.
+        if self.n_local_heads < _PAD_NUM_HEADS:
+            q_padded = q.new_zeros(q.shape[0], _PAD_NUM_HEADS, self.head_dim)
             q_padded[:, : self.n_local_heads, :] = q
             q = q_padded
-            sink_padded = attn_sink.new_zeros(64)
+            sink_padded = attn_sink.new_zeros(_PAD_NUM_HEADS)
             sink_padded[: self.n_local_heads] = attn_sink
             attn_sink = sink_padded
 
@@ -422,11 +425,17 @@ class DSparkV4Stage(DeepseekV4DecoderLayer):
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
     ) -> None:
+        # is_nextn disables the MoE hash topk (config.num_hash_layers gates it on the
+        # target's first layers by layer_id). The draft uses draft-local layer ids
+        # (0..num_stages-1), which would otherwise be misread as those hash layers; the
+        # draft gate is the normal noaux_tc gate (its checkpoint carries gate.bias), so
+        # force the non-hash path like NextN. It only affects this MoE construction.
         super().__init__(
             config=config,
             layer_id=layer_id,
             quant_config=quant_config,
             prefix=prefix,
+            is_nextn=True,
         )
         self.stage_id = stage_id
         self.dim = config.hidden_size
@@ -511,21 +520,14 @@ class DSparkV4Stage(DeepseekV4DecoderLayer):
             x, self.hc_ffn_fn, self.hc_ffn_scale, self.hc_ffn_base
         )
         x = self.post_attention_layernorm(x)
-        x = self._run_ffn(x, forward_batch)
+        x = self._run_ffn(x)
         x = self._hc_post_block(x, residual, post, comb)
         return x
 
-    def _run_ffn(self, x: torch.Tensor, forward_batch: ForwardBatch) -> torch.Tensor:
+    def _run_ffn(self, x: torch.Tensor) -> torch.Tensor:
         shape = x.shape
         x = x.reshape(-1, self.dim)
-        # dsv4 MoE routes experts by a hash of the token ids, so the MoE needs an
-        # input id per row. The draft block forward flattens the mHC channels into the
-        # row dim, so repeat each token's id across its channels. No dp gather (the
-        # draft runs tp-only), so input_ids_global == input_ids.
-        input_ids = forward_batch.input_ids
-        if input_ids is not None and input_ids.shape[0] != x.shape[0]:
-            input_ids = input_ids.repeat_interleave(x.shape[0] // input_ids.shape[0])
-        y = self.mlp(x, input_ids=input_ids, input_ids_global=input_ids)
+        y = self.mlp(x)
         return y.view(shape)
 
 
