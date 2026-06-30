@@ -1254,7 +1254,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             base_logits = base_logits.view(bs, gamma, -1)
         return base_logits
 
-    def _run_target_verify(
+    def _run_target_verify_mode_non_compact(
         self,
         *,
         batch: ScheduleBatch,
@@ -1533,7 +1533,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             draft_token_num=self.verify_num_draft_tokens,
         )
 
-    def _verify_full(
+    def _run_target_verify_mode_compact(
         self,
         *,
         batch: ScheduleBatch,
@@ -1685,7 +1685,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         ).contiguous()
 
         if run_compact:
-            target_verify, hidden_strided = self._verify_full(
+            target_verify, hidden_strided = self._run_target_verify_mode_compact(
                 batch=batch,
                 layout=layout,
                 draft_block_ids=draft_block_ids,
@@ -1695,7 +1695,7 @@ class DSparkWorkerV2(BaseSpecWorker):
                 sampling_info=sampling_info,
             )
         else:
-            target_verify = self._run_target_verify(
+            target_verify = self._run_target_verify_mode_non_compact(
                 batch=batch,
                 draft_input=draft_input,
                 verify_ids_2d=verify_ids_2d,
