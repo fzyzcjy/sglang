@@ -722,36 +722,36 @@ class DSparkWorkerV2(BaseSpecWorker):
         device: torch.device,
     ) -> Optional[torch.Tensor]:
         # Shared cutoff/full schedule: derive per-request verify_lens (= 1 + ell_r)
-        # from a lagged confidence snapshot, broadcast from rank 0 across the TP
+        # from the confidence relay buffer, broadcast from rank 0 across the TP
         # group for cross-rank shape consistency. Returns None (-> uniform full
-        # block) whenever the confidence history is not yet available.
+        # block) whenever the relay buffer has not been written yet.
         #
-        # Lag (deviation from paper §5.2's "two steps prior"): there is no
-        # step-indexed ring/double buffer, just one _confidence_buf behind one
-        # non-blocking CUDA event (see pull_confidence_history). The host reads the
-        # most recent snapshot whose forward-stream write has retired, so under
-        # overlap/ZOS the effective GPU-completion lag is emergent and >= 1 step,
-        # not a structured exactly-two. Losslessness does NOT rely on this lag being
-        # any particular size: it is guaranteed by the accept-cap in
-        # _cap_correct_len (a torch.minimum that only shrinks accept), after which
-        # the bonus is re-read from the target's true distribution at the cap index.
+        # Gather source: the per-request confidence is gathered directly off the
+        # device relay buffer (_confidence_buf[req_pool_indices], device->device),
+        # so the critical path keeps the no-synchronize design (no req_pool_indices
+        # D2H to index a pinned host buffer). This reads the LIVE device buffer
+        # written on the forward stream this step rather than the >= 1-step lagged
+        # pinned snapshot that pull_confidence_history exposes; the lag for THIS
+        # path therefore collapses toward 0. Losslessness does NOT depend on the lag
+        # size: it is guaranteed by the accept-cap in _cap_correct_len (a
+        # torch.minimum that only shrinks accept), after which the bonus is re-read
+        # from the target's true distribution at the cap index. The lag change
+        # affects only scheduling quality (which budget K / ranking is used), never
+        # correctness. pull_confidence_history's lagged-snapshot relay is retained
+        # for callers that want the gated host copy.
         #
         # Sort source (deviation from paper §5.2's "sort by current confidence"):
-        # the same lagged survival snapshot feeds BOTH the budget K
+        # the same survival snapshot feeds BOTH the budget K
         # (update_budget_from_history) AND the rank/truncate (compute_verify_lens),
-        # so admission is ordered by the historical snapshot rather than the current
-        # step's confidence. This is intentional -- the accept-cap makes the result
-        # lossless regardless of the sort source, and reading current confidence on
-        # the critical path would break the no-synchronize design; the deviation
-        # only affects throughput quality, never correctness.
+        # so admission is ordered by one snapshot. This is intentional -- the
+        # accept-cap makes the result lossless regardless of the sort source; the
+        # deviation only affects throughput quality, never correctness.
         if self._verify_scheduler is None:
             return None
-        confidence_history = self.pull_confidence_history()
-        if confidence_history is None:
+        if self._confidence_buf is None:
             return None
 
-        req_pool_indices_cpu = req_pool_indices.to("cpu", dtype=torch.int64)
-        confidence = confidence_history[req_pool_indices_cpu].to(self.device)
+        confidence = self._confidence_buf[req_pool_indices]
         survival_probs = torch.cumprod(confidence.to(torch.float32), dim=1)
 
         self._verify_scheduler.update_budget_from_history(
