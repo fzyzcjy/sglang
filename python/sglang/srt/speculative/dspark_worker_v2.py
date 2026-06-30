@@ -5,6 +5,11 @@ import msgspec
 import torch
 
 from sglang.srt.distributed import get_tp_group
+from sglang.srt.layers.dp_attention import (
+    get_attention_tp_group,
+    get_attention_tp_size,
+    is_dp_attention_enabled,
+)
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.managers.scheduler import GenerationBatchResult
 from sglang.srt.managers.tp_worker import TpModelWorker
@@ -807,6 +812,34 @@ class DSparkWorkerV2(BaseSpecWorker):
         ).view(-1, 1)
         return torch.where(fresh, k_survival, torch.ones_like(k_survival))
 
+    def _current_live_sort_survival(
+        self, *, req_pool_indices: torch.Tensor
+    ) -> Optional[torch.Tensor]:
+        # Sort-source survival for the rank/truncate (paper §5.2: "sorted by the
+        # actual up-to-date confidence"): cumprod of THIS step's just-stashed
+        # confidence, read from the current ring slot (step_ct % depth) device->device
+        # on the forward stream. Always present for the current batch (it was stashed
+        # this step), so no identity guard / fallback is needed here. Distinct from
+        # the K-source, which is the two-steps-prior survival; admission is ordered by
+        # the current confidence while the budget K is set by the lagged confidence.
+        if self._confidence_ring is None:
+            return None
+        write_slot = self._confidence_step_ct % _CONFIDENCE_RELAY_RING_DEPTH
+        current_confidence = self._confidence_ring[write_slot, req_pool_indices]
+        return torch.cumprod(current_confidence.to(torch.float32), dim=1)
+
+    def _verify_lens_broadcast_group(self):
+        # Cross-rank shape consistency: rank 0's verify_lens is broadcast to its
+        # peers. Under DP-attention each attention-TP group owns a different request
+        # shard, so the broadcast MUST stay inside get_attention_tp_group() (mirror
+        # sampler.py) -- broadcasting across the full TP group would overwrite peer
+        # shards' verify_lens and desync the now layout-/token-count-affecting
+        # schedule (H2). Without DP-attention the TP group is correct. Returns the
+        # group and its world size; size <= 1 means no broadcast is needed.
+        if is_dp_attention_enabled():
+            return get_attention_tp_group(), get_attention_tp_size()
+        return get_tp_group(), self.server_args.tp_size
+
     def _schedule_verify_lens(
         self,
         *,
@@ -815,42 +848,45 @@ class DSparkWorkerV2(BaseSpecWorker):
         device: torch.device,
     ) -> Optional[torch.Tensor]:
         # Shared cutoff/full schedule: derive per-request verify_lens (= 1 + ell_r)
-        # from the confidence relay ring, broadcast from rank 0 across the TP group
-        # for cross-rank shape consistency. Returns None (-> uniform full block)
-        # whenever the ring has not been written yet.
+        # from the confidence relay ring, broadcast from rank 0 across the (attention)
+        # TP group for cross-rank shape consistency. Returns None (-> uniform full
+        # block) whenever the ring has not been written yet.
         #
-        # K source = two-steps-prior survival (see _two_steps_prior_k_survival); the
-        # same lagged survival also drives the rank/truncate here -- the sort-source
-        # split to the current live confidence (paper §5.2) lands in the next step.
-        # Losslessness does NOT depend on the lag or the sort source: it is
-        # guaranteed by the accept-cap in _cap_correct_len (a torch.minimum that only
-        # shrinks accept), after which the bonus is re-read from the target's true
-        # distribution at the cap index. The lag / sort source affect only scheduling
-        # quality (which budget K / ranking is used), never correctness.
+        # Two distinct survival sources (paper §5.2):
+        #   - K source = two-steps-prior survival (_two_steps_prior_k_survival):
+        #     fixes the verify budget K, causally independent of this step's tokens.
+        #   - sort source = current live survival (_current_live_sort_survival):
+        #     ranks/truncates admission by the actual up-to-date confidence.
+        # update_budget_from_history caches K from the lagged survival, then
+        # compute_verify_lens ranks the current survival under that cached K.
+        # Losslessness does NOT depend on either source: it is guaranteed by the
+        # accept-cap in _cap_correct_len (a torch.minimum that only shrinks accept),
+        # after which the bonus is re-read from the target's true distribution at the
+        # cap index. The split affects only scheduling quality, never correctness.
         if self._verify_scheduler is None:
             return None
         k_survival = self._two_steps_prior_k_survival(
             req_pool_indices=req_pool_indices, prefix_lens=prefix_lens
         )
-        if k_survival is None:
+        sort_survival = self._current_live_sort_survival(
+            req_pool_indices=req_pool_indices
+        )
+        if k_survival is None or sort_survival is None:
             return None
 
         self._verify_scheduler.update_budget_from_history(
             history_survival_probs=k_survival
         )
         verify_lens = self._verify_scheduler.compute_verify_lens(
-            survival_probs=k_survival
+            survival_probs=sort_survival
         ).to(device=device, dtype=torch.int32)
 
-        if self.server_args.tp_size > 1:
-            # GroupCoordinator.broadcast maps the local src rank to a global rank
-            # via self.ranks[src]; passing src=0 to dist.broadcast directly would
-            # use a GLOBAL rank and broadcast from the wrong source when the TP
-            # group's ranks[0] != 0 (review A6). Use the group wrapper so rank 0 is
-            # the TP-local source. DP-attention follow-up must switch to
-            # get_attention_tp_group().broadcast (mirror sampler.py); c-v1 is
-            # TP-only.
-            get_tp_group().broadcast(verify_lens, src=0)
+        broadcast_group, group_size = self._verify_lens_broadcast_group()
+        if group_size > 1:
+            # GroupCoordinator.broadcast maps the local src rank to a global rank via
+            # self.ranks[src], so passing src=0 broadcasts from the group-local rank 0
+            # (not a global rank) even when the group's ranks[0] != 0 (review A6).
+            broadcast_group.broadcast(verify_lens, src=0)
 
         return verify_lens
 
