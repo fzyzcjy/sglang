@@ -73,6 +73,45 @@ def make_tiny_dsv4_config(
     return config
 
 
+def make_real_dsv4_config(
+    *,
+    enable_confidence_head: bool = False,
+    n_stages: int = 1,
+    gamma: int = 5,
+):
+    """Build a real-dimension ``DeepSeekV4Config`` carrying the dsv4 DSpark draft fields.
+
+    The ``DeepSeekV4Config`` field defaults ARE the real DeepSeek-V4-Flash dims
+    (hidden_size 4096, head_dim 512 = qk_nope 448 + qk_rope 64, v_head_dim 512, vocab
+    129280, q/o_lora 1024, o_groups 8, moe_intermediate 2048, n_routed_experts 256,
+    window_size 128, hc_mult 4, index_head_dim 128, index_topk 512), so this sets only the
+    ``dspark_*`` prefixed draft fields + the draft stage count and lets every per-tensor
+    dimension stand at its real default. ``n_stages`` is the draft stage count: the draft
+    builds ``len(dspark_target_layer_ids)`` stages (the per-stage MLA-LoRA + mHC + MoE),
+    NOT the 43-layer target backbone, so it is a reduced instance count, not a faked
+    dimension. ``head_dim`` (not a config field) is derived and attached so the
+    DSparkAttention assert and ``make_ref_args_from_config`` both read 512.
+    """
+    from sglang.srt.configs.deepseek_v4 import DeepSeekV4Config
+
+    config = DeepSeekV4Config(
+        architectures=["DeepseekV4ForCausalLM"],
+        num_hidden_layers=n_stages,
+        rope_scaling={},
+        compress_ratios=[0] * n_stages,
+        quantization_config=None,
+    )
+    config.head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
+    config.dspark_block_size = gamma
+    config.dspark_markov_rank = 256
+    config.dspark_noise_token_id = 128799
+    config.dspark_target_layer_ids = list(range(n_stages))
+    config.temperature = 0.0
+    config.enable_confidence_head = enable_confidence_head
+    config.confidence_head_with_markov = enable_confidence_head
+    return config
+
+
 def make_ref_args_from_config(config):
     """Build the vendored SoT ``RefModelArgs`` matching the tiny SGLang config dims.
 
@@ -298,6 +337,7 @@ def force_native_ops(model: torch.nn.Module) -> None:
 
 __all__ = [
     "make_tiny_dsv4_config",
+    "make_real_dsv4_config",
     "make_ref_args_from_config",
     "sync_sot_to_sgl_dsv4",
     "attach_shared_modules_from_ref",
