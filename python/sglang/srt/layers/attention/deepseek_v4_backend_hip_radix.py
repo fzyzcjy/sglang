@@ -865,6 +865,24 @@ class DeepseekV4HipRadixBackend(
                 out_cache_loc=out_cache_loc_padded,
             )
         elif bucket == _GraphBucket.TARGET_VERIFY:
+            if (
+                getattr(
+                    getattr(forward_batch, "spec_info", None),
+                    "ragged_verify_layout",
+                    None,
+                )
+                is not None
+            ):
+                # Graph-admission fail-fast: the out-graph TARGET_VERIFY path
+                # hardcodes num_tokens_v = num_draft * bs and never reads the
+                # ragged layout, so a ragged batch would silently run the uniform
+                # geometry. Reject it here (mirrors the eager _build_forward_metadata
+                # guard) so DSV4 ragged verify never runs the wrong geometry on HIP.
+                raise NotImplementedError(
+                    "DSV4 ragged verify is not supported on the HIP backend "
+                    "(DeepseekV4HipRadixBackend) cuda-graph path; disable "
+                    "SGLANG_RAGGED_VERIFY_MODE or use a CUDA device."
+                )
             assert out_cache_loc is not None
             num_tokens_v = self.speculative_num_draft_tokens * bs
             out_cache_loc_padded = torch.nn.functional.pad(
