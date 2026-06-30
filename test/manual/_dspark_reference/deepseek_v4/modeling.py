@@ -39,7 +39,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from test.srt.speculative._dspark_reference.deepseek_v4.sot_attention import (
+from test.manual._dspark_reference.deepseek_v4.sot_attention import (
     SoTDSparkAttentionOracle,
     apply_rotary_emb,
     precompute_freqs_cis,

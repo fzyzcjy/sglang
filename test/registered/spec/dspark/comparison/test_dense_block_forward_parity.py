@@ -21,7 +21,7 @@ _ATOL = 2e-3
 _RTOL = 2e-3
 
 _REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..")
 )
 
 
@@ -84,7 +84,7 @@ def _build_dense_models(*, model_type: str, seed: int, device):
     _setup_sglang_runtime()
     torch.manual_seed(seed)
     if model_type == "qwen3":
-        from test.srt.speculative._dspark_reference.qwen3.modeling import (
+        from test.manual._dspark_reference.qwen3.modeling import (
             Qwen3DSparkModel as RefModel,
         )
 
@@ -97,7 +97,7 @@ def _build_dense_models(*, model_type: str, seed: int, device):
             True,
         )
     elif model_type == "gemma4":
-        from test.srt.speculative._dspark_reference.gemma4.modeling import (
+        from test.manual._dspark_reference.gemma4.modeling import (
             Gemma4DSparkModel as RefModel,
         )
 

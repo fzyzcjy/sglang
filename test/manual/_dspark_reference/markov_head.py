@@ -2,7 +2,7 @@
 # Copied verbatim except: `from deepspec.utils.sampling import sample_tokens`
 # replaced with the local shim import so this oracle runs without the
 # DeepSpec package installed.
-from test.srt.speculative._dspark_reference.sampling import sample_tokens
+from test.manual._dspark_reference.sampling import sample_tokens
 from typing import Optional
 
 import torch

@@ -1,7 +1,7 @@
 # Shared dsv4 DSpark parity fixtures: the tiny config, the SoT RefModelArgs builder, and
 # the SoT->SGLang weight-sync helper. Imported by BOTH the granularity-A component parity
 # test and the granularity-B block-forward harness so the MLA-LoRA weight mapping has a
-# single source of truth. NOT a test module (no register_*; lives under test/srt/).
+# single source of truth. NOT a test module (no register_*; lives under test/manual/).
 
 from __future__ import annotations
 
@@ -118,7 +118,7 @@ def make_ref_args_from_config(config):
     The reference oracle and the production draft must share identical dims so the weight
     sync is a 1:1 copy and the only remaining difference is the math impl.
     """
-    from test.srt.speculative._dspark_reference.deepseek_v4.modeling import RefModelArgs
+    from test.manual._dspark_reference.deepseek_v4.modeling import RefModelArgs
 
     return RefModelArgs(
         vocab_size=int(config.vocab_size),

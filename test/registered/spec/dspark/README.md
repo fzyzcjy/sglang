@@ -11,11 +11,14 @@ guards:
 3. **Model e2e / accuracy** (GPU) — real checkpoint + lossless/accuracy floor
 4. **Attention backend / cuda-graph** (GPU UT) — verify metadata + graph capture/replay
 
-**Filing rule (temporary):** while the suite is still being built up, all four
-categories live together in this folder (`test/registered/spec/dspark/`). A
-final reorg into per-category subfolders (mirroring `attention/unittests/dsv4/`)
-is deferred until the suite stabilizes — do **not** create ad-hoc subfolders
-before then; just tag each test with its category in the section below.
+**Filing rule:** the category-1 model-parity tests (production draft forward vs
+the DeepSpec / DeepSeek-V4-Flash source-of-truth, both dsv4 and dense) live in
+the `comparison/` subfolder, which holds exactly those SoT-comparison tests. The
+other three categories live together in this folder
+(`test/registered/spec/dspark/`); a further reorg into per-category subfolders
+(mirroring `attention/unittests/dsv4/`) is deferred until the suite stabilizes —
+do **not** create other ad-hoc subfolders before then; just tag each test with
+its category in the section below.
 
 ## Categories (target framework)
 
@@ -90,7 +93,7 @@ subfolders once the suite stabilizes (mirroring `attention/unittests/dsv4/`).
 
 ## Not run by CI (reference fixtures)
 
-`test/srt/speculative/_dspark_reference/` — a vendored copy of the DeepSpec
+`test/manual/_dspark_reference/` — a vendored copy of the DeepSpec
 qwen3/gemma4 modeling (`markov_head.py`, `draft_ops.py`, `sampling.py`,
 `qwen3/`, `gemma4/`) plus the DSpark V4 source-of-truth oracle: the
 `deepseek_v4/` package (`sot_attention.py` = the pure-torch non-causal sparse
@@ -98,9 +101,9 @@ attention oracle, `modeling.py` = the fuller DSpark draft modeling —
 `RefTransformer.forward_spec`, the DSpark heads, and the mHC math — both vendored
 from the DeepSeek-V4-Flash-DSpark reference model.py/kernel.py) and the T1/T3/T4
 production block-forward fixture (`dsv4/block_forward_harness.py`). Imported by the
-parity tests (category 1) as the numerical "standard answer" / production driver.
-Not collected as tests itself; lives under `test/srt/` (CI only globs
-`test/registered/**`).
+comparison parity tests (category 1) as the numerical "standard answer" /
+production driver. Not collected as tests itself; lives under `test/manual/` (CI
+only requires every file under `test/registered/**` to be a registered test).
 
 ## Open gaps
 

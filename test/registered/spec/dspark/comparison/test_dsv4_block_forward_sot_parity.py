@@ -25,7 +25,7 @@ _RTOL = 5e-2
 _MIN_NEGATIVE_DIVERGENCE = 0.5
 
 _REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..")
 )
 
 
@@ -148,7 +148,7 @@ class TestDsv4BlockForwardSoTParity(CustomTestCase):
         production model so the production tensors are authoritative.
         """
         _ensure_repo_test_package()
-        from test.srt.speculative._dspark_reference.deepseek_v4.sot_attention import (
+        from test.manual._dspark_reference.deepseek_v4.sot_attention import (
             SoTDSparkAttentionOracle,
         )
 
@@ -174,7 +174,7 @@ class TestDsv4BlockForwardSoTParity(CustomTestCase):
         """Production block-forward base_logits match the SoT within fp8 tolerance."""
         self._skip_if_unready()
         _ensure_repo_test_package()
-        from test.srt.speculative._dspark_reference.dsv4.block_forward_harness import (
+        from test.manual._dspark_reference.dsv4.block_forward_harness import (
             HarnessUnavailable,
             build_dsv4_block_forward_harness,
         )
@@ -219,7 +219,7 @@ class TestDsv4BlockForwardSoTParity(CustomTestCase):
         """
         self._skip_if_unready()
         _ensure_repo_test_package()
-        from test.srt.speculative._dspark_reference.dsv4.block_forward_harness import (
+        from test.manual._dspark_reference.dsv4.block_forward_harness import (
             HarnessUnavailable,
             build_dsv4_block_forward_harness,
         )

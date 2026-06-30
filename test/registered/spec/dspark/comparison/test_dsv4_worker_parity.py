@@ -25,7 +25,7 @@ _DSV4_DRAFT_MODEL = os.environ.get(
 )
 
 _REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..")
 )
 
 
@@ -66,10 +66,10 @@ class TestDsv4BlockForwardVsSoT(CustomTestCase):
     def test_v4_decode_block_matches_sot_forward_spec(self) -> None:
         """The worker's V4 draft block must equal the SoT forward_spec output tightly."""
         _ensure_repo_test_package()
-        from test.srt.speculative._dspark_reference.deepseek_v4.sot_attention import (
+        from test.manual._dspark_reference.deepseek_v4.sot_attention import (
             SoTDSparkAttentionOracle,
         )
-        from test.srt.speculative._dspark_reference.dsv4.block_forward_harness import (
+        from test.manual._dspark_reference.dsv4.block_forward_harness import (
             HarnessUnavailable,
             build_dsv4_block_forward_harness,
         )

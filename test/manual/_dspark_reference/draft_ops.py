@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from test.srt.speculative._dspark_reference.sampling import logits_to_probs
+from test.manual._dspark_reference.sampling import logits_to_probs
 from typing import Optional
 
 import torch

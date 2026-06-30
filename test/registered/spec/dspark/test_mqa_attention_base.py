@@ -65,7 +65,7 @@ def _make_yarn_config():
     ``rope_scaling["original_max_position_embeddings"]`` directly, so MQALayer-mode
     construction needs the YARN keys present (and a real compress_ratios table).
     """
-    from test.srt.speculative._dspark_reference.deepseek_v4.parity_fixture import (
+    from test.manual._dspark_reference.deepseek_v4.parity_fixture import (
         make_real_dsv4_config,
     )
 
@@ -97,7 +97,7 @@ class TestMqaAttentionBaseConstruction(CustomTestCase):
         try:
             _ensure_repo_test_package()
             _setup_cpu_runtime()
-            from test.srt.speculative._dspark_reference.deepseek_v4.parity_fixture import (
+            from test.manual._dspark_reference.deepseek_v4.parity_fixture import (
                 make_real_dsv4_config,
             )
 

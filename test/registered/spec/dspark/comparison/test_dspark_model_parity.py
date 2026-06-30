@@ -19,7 +19,7 @@ _ATOL_LOGITS = 1e-4
 _RTOL_LOGITS = 1e-4
 
 _REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..")
 )
 
 
@@ -283,7 +283,7 @@ class TestQwen3DSparkModelParity(CustomTestCase):
             return
         try:
             _ensure_repo_test_package()
-            from test.srt.speculative._dspark_reference.qwen3.modeling import (
+            from test.manual._dspark_reference.qwen3.modeling import (
                 Qwen3DSparkModel as RefQwen3DSparkModel,
             )
 
@@ -400,7 +400,7 @@ class TestQwen3DSparkModelParity(CustomTestCase):
             self.skipTest(f"Import error: {self._import_error}")
 
         _ensure_repo_test_package()
-        from test.srt.speculative._dspark_reference.markov_head import (
+        from test.manual._dspark_reference.markov_head import (
             VanillaMarkov as RefVanillaMarkov,
         )
 
@@ -493,7 +493,7 @@ class TestGemma4DSparkModelParity(CustomTestCase):
             return
         try:
             _ensure_repo_test_package()
-            from test.srt.speculative._dspark_reference.gemma4.modeling import (
+            from test.manual._dspark_reference.gemma4.modeling import (
                 Gemma4DSparkModel as RefGemma4,
             )
 
@@ -601,7 +601,7 @@ class TestGemma4DSparkModelParity(CustomTestCase):
             self.skipTest(f"Import error: {self._import_error}")
 
         _ensure_repo_test_package()
-        from test.srt.speculative._dspark_reference.markov_head import (
+        from test.manual._dspark_reference.markov_head import (
             VanillaMarkov as RefVanillaMarkov,
         )
 

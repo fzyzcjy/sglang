@@ -101,7 +101,7 @@ class TestDsv4AttnWeightloadParity(CustomTestCase):
             return
         try:
             _ensure_repo_test_package()
-            from test.srt.speculative._dspark_reference.deepseek_v4.parity_fixture import (
+            from test.manual._dspark_reference.deepseek_v4.parity_fixture import (
                 make_real_dsv4_config,
             )
 

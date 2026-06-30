@@ -6,8 +6,8 @@
 # This module requires `transformers` (Qwen3 model classes). It is used only
 # by the GPU-tier parity test (test_dspark_model_parity.py) and is not imported
 # by CPU-only tests.
-from test.srt.speculative._dspark_reference.markov_head import build_markov_head
-from test.srt.speculative._dspark_reference.sampling import sample_tokens
+from test.manual._dspark_reference.markov_head import build_markov_head
+from test.manual._dspark_reference.sampling import sample_tokens
 from typing import Callable, Optional
 
 import torch
