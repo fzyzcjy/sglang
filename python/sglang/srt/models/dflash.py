@@ -184,10 +184,19 @@ class DFlashAttention(nn.Module):
             q, k, v = self.forward_prepare_npu(positions, hidden_states)
         else:
             q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
+            dumper.dump("attn__q_proj_out", q)
+            dumper.dump("attn__k_proj_out", k)
+            dumper.dump("attn__v_proj_out", v)
             q, k = apply_qk_norm(q, k, self.q_norm, self.k_norm, self.head_dim)
+            dumper.dump("attn__q_norm_out", q)
+            dumper.dump("attn__k_norm_out", k)
             q, k = self.rotary_emb(positions, q, k)
+            dumper.dump("attn__q_rope_out", q)
+            dumper.dump("attn__k_rope_out", k)
         attn_output = self.attn(q, k, v, forward_batch)
+        dumper.dump("attn__core_out", attn_output)
         output, _ = self.o_proj(attn_output)
+        dumper.dump("attn__o_proj_out", output)
         return output
 
     def kv_proj_only(
@@ -265,8 +274,13 @@ class DFlashMLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate_up, _ = self.gate_up_proj(x)
+        gate, up = gate_up.chunk(2, dim=-1)
+        dumper.dump("mlp__gate_proj_out", gate)
+        dumper.dump("mlp__up_proj_out", up)
         x = self.act_fn(gate_up)
+        dumper.dump("mlp__act_out", x)
         x, _ = self.down_proj(x)
+        dumper.dump("mlp__down_proj_out", x)
         return x
 
 
@@ -300,6 +314,7 @@ class DFlashDecoderLayer(nn.Module):
             hidden_states = self.input_layernorm(hidden_states)
         else:
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
+        dumper.dump("attn__input_ln_out", hidden_states)
 
         attn_out = self.self_attn(
             positions=positions,
@@ -307,6 +322,7 @@ class DFlashDecoderLayer(nn.Module):
             forward_batch=forward_batch,
         )
         hidden_states, residual = self.post_attention_layernorm(attn_out, residual)
+        dumper.dump("mlp__post_attn_ln_out", hidden_states)
         hidden_states = self.mlp(hidden_states)
         return hidden_states, residual
 
