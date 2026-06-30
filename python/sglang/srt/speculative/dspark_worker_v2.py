@@ -294,7 +294,10 @@ class DSparkWorkerV2(BaseSpecWorker):
         #
         # Until a profiled (non-flat) table ships the hardware-aware scheduler is a
         # no-op: lookup() returns a constant, so the verify-token budget degenerates
-        # to verify-all and every request keeps verify_len == gamma+1. The
+        # to verify-all and every request keeps verify_len == gamma (the scheduler's
+        # resolved_max_verify_len caps at gamma, so compact verifies the anchor plus
+        # up to gamma-1 drafts; this is lossless -- _cap_correct_len caps accept and
+        # the bonus is re-read from the target distribution). The
         # verify_lens >= 1 anchor contract (see DSparkScheduleConfig.min_verify_len
         # and schedule_verify_lens_topk's lower-bound clamp) MUST be in place before
         # any profiled table is supplied, because a non-flat table yields small K
@@ -677,13 +680,49 @@ class DSparkWorkerV2(BaseSpecWorker):
             req_pool_indices=req_pool_indices, device=device
         )
         if verify_lens is None:
+            # COMPACT token-keys the verify graph and captures it with a ragged
+            # layout, so a layout-less compact verify (confidence not ready at
+            # startup / after reset) must still carry a degenerate uniform layout
+            # to hit the same token-keyed graph (C3); otherwise it would fall
+            # through to a bs-keyed replay key that the token-keyed graph dict
+            # never recorded. CAP_ACCEPT stays bs-keyed, so None is correct there.
+            if self._ragged_verify_mode is RaggedVerifyMode.COMPACT:
+                return self._uniform_ragged_layout(
+                    bs=len(req_pool_indices), device=device
+                )
             return None
         verify_lens_cpu = verify_lens.to("cpu").tolist()
+        if self._ragged_layout_exceeds_captured_grid(num_reqs=len(verify_lens_cpu)):
+            return None
         grid = self._verify_layout_grid(verify_lens_cpu=verify_lens_cpu)
+        graph_num_tokens_floor = self._verify_layout_graph_num_tokens_floor(
+            num_reqs=len(verify_lens_cpu)
+        )
         return RaggedVerifyLayout.from_verify_lens(
             verify_lens_cpu=verify_lens_cpu,
             device=device,
             grid=grid,
+            graph_num_tokens_floor=graph_num_tokens_floor,
+        )
+
+    def _uniform_ragged_layout(
+        self, *, bs: int, device: torch.device
+    ) -> Optional[RaggedVerifyLayout]:
+        # The degenerate uniform layout (verify_lens = [gamma+1] * bs) that a
+        # layout-less compact verify carries so it hits the same token-keyed graph
+        # the real ragged batch does (C3). Geometry matches the static full block.
+        # A batch too large for any captured tier gets no layout and falls to the
+        # bs-keyed eager path instead of crashing round_up_grid.
+        if self._ragged_layout_exceeds_captured_grid(num_reqs=bs):
+            return None
+        verify_lens_cpu = [self.verify_num_draft_tokens] * bs
+        grid = self._verify_layout_grid(verify_lens_cpu=verify_lens_cpu)
+        graph_num_tokens_floor = self._verify_layout_graph_num_tokens_floor(num_reqs=bs)
+        return RaggedVerifyLayout.from_verify_lens(
+            verify_lens_cpu=verify_lens_cpu,
+            device=device,
+            grid=grid,
+            graph_num_tokens_floor=graph_num_tokens_floor,
         )
 
     def _schedule_verify_lens(
@@ -755,6 +794,20 @@ class DSparkWorkerV2(BaseSpecWorker):
             return [total]
         return capture_num_tokens
 
+    def _verify_layout_graph_num_tokens_floor(self, *, num_reqs: int) -> int:
+        # The token-keyed capture grid {b * num_draft : b in capture_bs} ties each
+        # token tier to one capture_bs, whose graph captured exactly b request
+        # slots. A batch whose real total rounds up to a tier with fewer slots than
+        # num_reqs would not fit, so floor the bucket to this batch's bs-derived
+        # full block. Zero (no floor) when no token-keyed graph exists, where the
+        # bucket is the real total run eager.
+        if (
+            self._ragged_verify_mode is not RaggedVerifyMode.COMPACT
+            or self._ragged_capture_num_tokens() is None
+        ):
+            return 0
+        return num_reqs * self.verify_num_draft_tokens
+
     def _ragged_capture_num_tokens(self) -> Optional[list[int]]:
         # The decode runner owns the token-keyed capture grid (Plan B). Read it so
         # graph_num_tokens = round_up_grid(total, capture_num_tokens) selects a
@@ -766,6 +819,20 @@ class DSparkWorkerV2(BaseSpecWorker):
         if runner is None or not getattr(runner, "ragged_verify_mode", False):
             return None
         return runner.capture_num_tokens
+
+    def _ragged_layout_exceeds_captured_grid(self, *, num_reqs: int) -> bool:
+        # The token-keyed capture grid tops out at capture_num_tokens[-1] ==
+        # max_capture_bs * (gamma+1). graph_num_tokens is floored to this batch's
+        # bs-derived full block (num_reqs * verify_num_draft_tokens), so a batch
+        # with num_reqs > max_capture_bs would drive round_up_grid past its max
+        # tier and raise in from_verify_lens -- BEFORE the runner's
+        # _can_run_ragged_verify_graph eager-fallback gate can run. Skip the ragged
+        # layout for such a batch so the verify falls through to the bs-keyed eager
+        # path (which rejects bs > max_bs). Inert for num_reqs <= max_capture_bs.
+        capture_num_tokens = self._ragged_capture_num_tokens()
+        if capture_num_tokens is None:
+            return False
+        return num_reqs * self.verify_num_draft_tokens > capture_num_tokens[-1]
 
     def _cap_correct_len(
         self,

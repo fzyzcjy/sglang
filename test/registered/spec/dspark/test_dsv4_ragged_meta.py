@@ -148,10 +148,19 @@ class TestTargetVerifyGraphKey(CustomTestCase):
                 backend, bs=3, ragged_layout=layout
             )
 
-    def test_graph_num_tokens_must_equal_total(self):
-        """A graph_num_tokens != total_verify_tokens (round-up bucket) fails loud here."""
+    def test_graph_num_tokens_above_total_keys_by_bucket(self):
+        """A round-up bucket graph_num_tokens > total keys the graph by the bucket."""
         backend = _stub_backend(num_draft_tokens=6)
         layout = _make_layout([6, 3, 1], graph_num_tokens=12)
+        key, num_tokens = DeepseekV4AttnBackend._target_verify_graph_key(
+            backend, bs=3, ragged_layout=layout
+        )
+        self.assertEqual((key, num_tokens), (12, 12))
+
+    def test_total_above_graph_num_tokens_fails_loud(self):
+        """A total_verify_tokens exceeding the round-up bucket fails loud here."""
+        backend = _stub_backend(num_draft_tokens=6)
+        layout = _make_layout([6, 3, 1], graph_num_tokens=8)
         with self.assertRaises(AssertionError):
             DeepseekV4AttnBackend._target_verify_graph_key(
                 backend, bs=3, ragged_layout=layout

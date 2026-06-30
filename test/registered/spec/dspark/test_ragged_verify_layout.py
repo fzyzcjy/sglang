@@ -101,6 +101,112 @@ class TestRaggedVerifyLayoutUniform(CustomTestCase):
         self.assertEqual(layout.total_verify_tokens, layout.graph_num_tokens)
 
 
+class TestRaggedVerifyLayoutGraphNumTokensFloor(CustomTestCase):
+    def test_floor_lifts_bucket_to_bs_derived_full_block(self):
+        """A small total floored to bs*num_draft selects the slot-sufficient tier."""
+        # 4 anchor-only requests (total 4) on a capture grid {b*8}: without a floor
+        # the bucket would be 4 (b=... too few slots); the floor bs*num_draft=32
+        # lifts it to the 32-token tier whose graph has 4 request slots.
+        layout = RaggedVerifyLayout.from_verify_lens(
+            verify_lens_cpu=[1, 1, 1, 1],
+            device=_DEVICE,
+            grid=[8, 16, 32, 64],
+            graph_num_tokens_floor=4 * 8,
+        )
+        self.assertEqual(layout.total_verify_tokens, 4)
+        self.assertEqual(layout.graph_num_tokens, 32)
+
+    def test_floor_below_total_is_inert(self):
+        """A floor below the real total does not change the rounded bucket."""
+        layout = RaggedVerifyLayout.from_verify_lens(
+            verify_lens_cpu=[5, 5, 1],
+            device=_DEVICE,
+            grid=_GRID,
+            graph_num_tokens_floor=2,
+        )
+        self.assertEqual(layout.total_verify_tokens, 11)
+        self.assertEqual(layout.graph_num_tokens, 16)
+
+
+class TestRaggedVerifyLayoutPaddedToBucket(CustomTestCase):
+    def test_same_bs_ragged_extends_last_request_into_discarded_tail(self):
+        """When padded_bs == bs but total < bucket, the last request absorbs the shortfall."""
+        # bs=1 already a capture_bs, but ragged (total 4 < bucket 8): no synthetic
+        # request slot, so the last (only) request's window is extended to fill the
+        # bucket; the extra tokens land in [4, 8), which the runner discards.
+        layout = RaggedVerifyLayout.from_verify_lens(
+            verify_lens_cpu=[4],
+            device=_DEVICE,
+            grid=[8, 16, 32, 64],
+            graph_num_tokens_floor=1 * 8,
+        )
+        self.assertEqual(layout.graph_num_tokens, 8)
+        padded = layout.padded_to_bucket(num_draft_tokens=8)
+        self.assertEqual(padded.bs, 1)
+        self.assertEqual(padded.total_verify_tokens, 8)
+        self.assertEqual(padded.verify_lens_cpu, [8])
+
+    def test_pads_short_batch_to_capture_bs_with_synthetic_requests(self):
+        """A batch with fewer requests than the captured bs gets synthetic slots."""
+        # raw_bs=2 but the floor lifts the bucket to 4 capture slots (32 tokens):
+        # the two synthetic requests + leftover absorb the shortfall after the two
+        # real requests, all in the discarded tail.
+        layout = RaggedVerifyLayout.from_verify_lens(
+            verify_lens_cpu=[3, 1],
+            device=_DEVICE,
+            grid=[8, 16, 32, 64],
+            graph_num_tokens_floor=4 * 8,
+        )
+        self.assertEqual(layout.graph_num_tokens, 32)
+        padded = layout.padded_to_bucket(num_draft_tokens=8)
+        self.assertEqual(padded.bs, 4)
+        self.assertEqual(padded.verify_lens_cpu[:2], [3, 1])
+        self.assertEqual(padded.total_verify_tokens, 32)
+        self.assertEqual(sum(padded.verify_lens_cpu), 32)
+        self.assertTrue(all(v >= 1 for v in padded.verify_lens_cpu))
+        self.assertEqual(padded.qo_indptr_device.tolist()[-1], 32)
+
+    def test_same_bs_ragged_keeps_real_prefix_then_extends_last(self):
+        """When padded_bs == bs, real-request prefix verify_lens stay except the last."""
+        layout = RaggedVerifyLayout.from_verify_lens(
+            verify_lens_cpu=[3, 1],
+            device=_DEVICE,
+            grid=[8, 16, 32, 64],
+            graph_num_tokens_floor=2 * 8,
+        )
+        self.assertEqual(layout.graph_num_tokens, 16)
+        padded = layout.padded_to_bucket(num_draft_tokens=8)
+        self.assertEqual(padded.bs, 2)
+        self.assertEqual(padded.verify_lens_cpu[0], 3)
+        self.assertEqual(padded.total_verify_tokens, 16)
+        self.assertEqual(sum(padded.verify_lens_cpu), 16)
+
+    def test_unpadded_full_bucket_returns_self(self):
+        """A layout already filling its bucket (uniform) is returned unchanged."""
+        layout = RaggedVerifyLayout.uniform(
+            bs=3,
+            num_draft_tokens=8,
+            device=_DEVICE,
+            grid=[8, 16, 24, 64],
+        )
+        padded = layout.padded_to_bucket(num_draft_tokens=8)
+        self.assertIs(padded, layout)
+
+    def test_synthetic_requests_each_verify_at_least_one(self):
+        """Every synthetic trailing request keeps verify_len >= 1 (anchor contract)."""
+        layout = RaggedVerifyLayout.from_verify_lens(
+            verify_lens_cpu=[2],
+            device=_DEVICE,
+            grid=[8, 16, 32, 64],
+            graph_num_tokens_floor=4 * 8,
+        )
+        self.assertEqual(layout.graph_num_tokens, 32)
+        padded = layout.padded_to_bucket(num_draft_tokens=8)
+        self.assertEqual(padded.bs, 4)
+        self.assertEqual(padded.total_verify_tokens, 32)
+        self.assertTrue(all(v >= 1 for v in padded.verify_lens_cpu))
+
+
 class TestRaggedVerifyLayoutValidation(CustomTestCase):
     def test_rejects_empty_batch(self):
         """An empty verify_lens list is rejected."""

@@ -142,13 +142,14 @@ class _DSparkFlagMatrixBase(CustomTestCase):
                 f"cap-accept (full gamma) != static for prompt {prompt!r}",
             )
 
-    @unittest.skip(
-        "BLOCKED on ragged-verify routing decision: the `compact` real-N path "
-        "(ragged-verify execution + num-tokens-keyed cuda-graph) is under team "
-        "design discussion. This e2e entry is stubbed and not wired to run."
-    )
     def test_compact_mode_equals_cap_accept_same_frozen_ell(self):
-        """`compact` (real-N ragged) must equal `cap-accept` under same frozen ell_r."""
+        """`compact` (real-N ragged) must equal `cap-accept` under same frozen ell_r.
+
+        Secondary (no-teeth) lossless check: a wrong verify geometry only lowers
+        accept length, not output text, so this guards losslessness but NOT the
+        ragged geometry. The geometry teeth live in the graph-vs-eager logits
+        parity + negative seam tests (test_dsv4_ragged_verify_graph_parity).
+        """
         self._maybe_skip_models()
         off_outputs = self._launch_and_capture()
         cap_env = {"SGLANG_RAGGED_VERIFY_MODE": "cap-accept"}

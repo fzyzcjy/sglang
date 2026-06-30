@@ -698,6 +698,11 @@ class Envs:
     # accept per request (lossless harness); "compact" = real-N, only total tokens
     # computed (throughput gain). Legacy off/cutoff-only/full accepted as aliases.
     SGLANG_RAGGED_VERIFY_MODE = EnvStr("static")
+    # Test-only negative seam (§4): force the token-keyed verify capture to bake
+    # the uniform (non-ragged) geometry even in compact mode, so a graph-vs-eager
+    # parity check provably diverges. Off in prod; flipped only by the negative
+    # geometry test to prove the parity check has teeth.
+    SGLANG_TEST_RAGGED_VERIFY_FORCE_UNIFORM_CAPTURE = EnvBool(False)
     # Skip draft_extend while adaptive spec is at steps=0 (drafting disabled).
     # Saves the per-step draft forward, but the draft KV goes stale: an upshift
     # back to steps>0 starts from a cold draft state (low accept until it recovers).

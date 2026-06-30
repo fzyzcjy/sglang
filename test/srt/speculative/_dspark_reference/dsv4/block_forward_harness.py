@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 from dataclasses import dataclass
 from typing import Iterator, List, Sequence
 
@@ -68,14 +69,18 @@ def _require_cuda() -> None:
 class _StubModelRunner:
     """The minimal ModelRunner surface DeepseekV4AttnBackend.__init__ reads.
 
-    Per the mapped contract the backend reads device / page_size / req_to_token_pool /
-    token_to_kv_pool / req_to_token, and detects is_dspark_draft from
-    is_draft_worker + spec_algorithm.is_dspark(). Nothing else is touched in __init__.
+    The backend reads device / page_size / req_to_token_pool / token_to_kv_pool /
+    req_to_token / hisparse_coordinator, model_config (head_dim / v_head_dim /
+    hf_text_config) and server_args (the fp4-indexer + speculative fields), and detects
+    is_dspark_draft from is_draft_worker + spec_algorithm.is_dspark().
     """
 
     def __init__(
-        self, *, device, page_size, req_to_token_pool, token_to_kv_pool
+        self, *, device, page_size, req_to_token_pool, token_to_kv_pool, config
     ) -> None:
+        import types
+
+        from sglang.srt.server_args import get_global_server_args
         from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 
         self.device = device
@@ -85,6 +90,13 @@ class _StubModelRunner:
         self.req_to_token = req_to_token_pool.req_to_token
         self.is_draft_worker = True
         self.spec_algorithm = SpeculativeAlgorithm.DSPARK
+        self.hisparse_coordinator = None
+        self.server_args = get_global_server_args()
+        self.model_config = types.SimpleNamespace(
+            head_dim=config.head_dim,
+            v_head_dim=config.v_head_dim,
+            hf_text_config=config,
+        )
 
 
 class Dsv4BlockForwardHarness:
@@ -176,6 +188,7 @@ class Dsv4BlockForwardHarness:
                 "tp_size>1 block-forward requires a 2-rank launch (T4 is 2-gpu-tier); "
                 "the tester runs it under an initialized tp=2 model-parallel group."
             )
+        self._ensure_sglang_runtime()
         try:
             self._build_inner()
         except HarnessUnavailable:
@@ -187,6 +200,42 @@ class Dsv4BlockForwardHarness:
                 f"dsv4 block-forward harness could not construct the production object "
                 f"graph (signature drift or missing GPU kernel): {type(exc).__name__}: {exc}"
             ) from exc
+
+    def _ensure_sglang_runtime(self) -> None:
+        """Set the global server args + a single-rank model-parallel group that the
+        production DeepseekV4AttnBackend / draft model read at construction.
+
+        Mirrors the component parity test's ``_setup_sglang_runtime``: the harness builds
+        the real backend + TP-sharded projections standalone (no scheduler), so neither
+        the global server args nor the model-parallel group exist yet.
+        """
+        from sglang.srt.distributed.parallel_state import (
+            init_distributed_environment,
+            initialize_model_parallel,
+            model_parallel_is_initialized,
+        )
+        from sglang.srt.server_args import (
+            ServerArgs,
+            set_global_server_args_for_scheduler,
+        )
+
+        set_global_server_args_for_scheduler(ServerArgs(model_path="dummy"))
+        os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
+        os.environ.setdefault("MASTER_PORT", "29662")
+        os.environ.setdefault("RANK", "0")
+        os.environ.setdefault("WORLD_SIZE", "1")
+        os.environ.setdefault("LOCAL_RANK", "0")
+        if not torch.distributed.is_initialized():
+            init_distributed_environment(
+                world_size=1, rank=0, local_rank=0, backend="nccl"
+            )
+        if not model_parallel_is_initialized():
+            initialize_model_parallel(
+                tensor_model_parallel_size=1,
+                expert_model_parallel_size=1,
+                pipeline_model_parallel_size=1,
+                backend="nccl",
+            )
 
     def _build_inner(self) -> None:
         from test.srt.speculative._dspark_reference.deepseek_v4.modeling import (
@@ -204,7 +253,7 @@ class Dsv4BlockForwardHarness:
             DeepseekV4AttnBackend,
         )
         from sglang.srt.mem_cache.deepseek_v4_memory_pool import DeepSeekV4TokenToKVPool
-        from sglang.srt.mem_cache.req_to_token_pool import ReqToTokenPool
+        from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
         from sglang.srt.models.deepseek_v4_dspark import DeepseekV4ForCausalLMDSpark
         from sglang.srt.runtime_context import get_parallel
 
@@ -239,7 +288,7 @@ class Dsv4BlockForwardHarness:
             c4_state_pool_size=0,
             c128_state_pool_size=0,
             page_size=page_size,
-            swa_page_size=_WINDOW_SIZE,
+            swa_page_size=page_size,
             dtype=dtype,
             c4_state_dtype=torch.float32,
             c128_state_dtype=torch.float32,
@@ -268,6 +317,7 @@ class Dsv4BlockForwardHarness:
             page_size=page_size,
             req_to_token_pool=req_to_token_pool,
             token_to_kv_pool=pool,
+            config=config,
         )
         self._attn_backend = DeepseekV4AttnBackend(model_runner=model_runner)
 

@@ -5,7 +5,7 @@ import unittest
 import torch
 
 from sglang.srt.layers.layernorm import RMSNorm
-from sglang.srt.models import deepseek_v4_dspark as dsv4
+from sglang.srt.models import dspark as dspark_base
 from sglang.srt.models.deepseek_v4 import hc_head_torch, make_hc_head_params
 from sglang.srt.models.deepseek_v4_dspark import (
     DeepseekV4ForCausalLMDSpark,
@@ -148,11 +148,11 @@ class TestDsv4ConfidenceTapPoint(CustomTestCase):
             self._captured_gather_dim = dim
             return tensor
 
-        self._orig_gather = dsv4.tensor_model_parallel_all_gather
-        dsv4.tensor_model_parallel_all_gather = _fake_all_gather
+        self._orig_gather = dspark_base.tensor_model_parallel_all_gather
+        dspark_base.tensor_model_parallel_all_gather = _fake_all_gather
 
     def tearDown(self) -> None:
-        dsv4.tensor_model_parallel_all_gather = self._orig_gather
+        dspark_base.tensor_model_parallel_all_gather = self._orig_gather
 
     def test_confidence_consumes_x_post_hc_not_norm_not_pre_hc_head(self) -> None:
         """V4 confidence must see post-hc_head PRE-norm x, not norm(x) and not pre_hc_head."""
@@ -179,8 +179,12 @@ class TestDsv4ConfidenceTapPoint(CustomTestCase):
 
         model.confidence_head.forward = _spy
 
-        input_ids = torch.randint(0, _VOCAB, (bsz,))
-        model.forward_head(x, input_ids)
+        anchor_tokens = torch.randint(0, _VOCAB, (bsz,))
+        sampled_tokens = torch.randint(0, _VOCAB, (bsz, _GAMMA))
+        model.compute_base_logits(x)
+        model.compute_confidence(
+            anchor_tokens=anchor_tokens, sampled_tokens=sampled_tokens
+        )
 
         fed = captured["hidden"]
         self.assertTrue(torch.allclose(fed, expected_x_post_hc, atol=1e-5))
@@ -195,7 +199,7 @@ class TestDsv4ConfidenceTapPoint(CustomTestCase):
         model = _make_model_stub(with_confidence=False)
         bsz = 2
         x = torch.randn(bsz, _GAMMA, _HC_MULT, _HIDDEN)
-        x_post_hc = model._collapse_hc_head(x)
+        x_post_hc = model.collapse_hc_head(x)
         logits = model._logits_from_x_post_hc(x_post_hc)
 
         normed = model.stages[-1].norm(x_post_hc)
@@ -212,15 +216,21 @@ class TestDsv4ConfidenceTapPoint(CustomTestCase):
             weight=torch.randn(padded_vocab, _HIDDEN), org_vocab_size=_VOCAB
         )
         x = torch.randn(1, _GAMMA, _HC_MULT, _HIDDEN)
-        logits = model._logits_from_x_post_hc(model._collapse_hc_head(x))
+        logits = model._logits_from_x_post_hc(model.collapse_hc_head(x))
         self.assertEqual(logits.shape[-1], _VOCAB)
 
     def test_confidence_is_none_when_head_disabled(self) -> None:
         """Disabled confidence head leaves _last_confidence None (a+b unaffected)."""
         model = _make_model_stub(with_confidence=False)
         x = torch.randn(2, _GAMMA, _HC_MULT, _HIDDEN)
-        input_ids = torch.randint(0, _VOCAB, (2,))
-        model.forward_head(x, input_ids)
+        anchor_tokens = torch.randint(0, _VOCAB, (2,))
+        sampled_tokens = torch.randint(0, _VOCAB, (2, _GAMMA))
+        model.compute_base_logits(x)
+        self.assertIsNone(
+            model.compute_confidence(
+                anchor_tokens=anchor_tokens, sampled_tokens=sampled_tokens
+            )
+        )
         self.assertIsNone(model._last_confidence)
         self.assertIsNone(model.last_confidence())
 
@@ -229,8 +239,12 @@ class TestDsv4ConfidenceTapPoint(CustomTestCase):
         model = _make_model_stub(with_confidence=True)
         bsz = 2
         x = torch.randn(bsz, _GAMMA, _HC_MULT, _HIDDEN)
-        input_ids = torch.randint(0, _VOCAB, (bsz,))
-        model.forward_head(x, input_ids)
+        anchor_tokens = torch.randint(0, _VOCAB, (bsz,))
+        sampled_tokens = torch.randint(0, _VOCAB, (bsz, _GAMMA))
+        model.compute_base_logits(x)
+        model.compute_confidence(
+            anchor_tokens=anchor_tokens, sampled_tokens=sampled_tokens
+        )
         confidence = model.last_confidence()
         self.assertIsNotNone(confidence)
         self.assertEqual(confidence.shape, (bsz, _GAMMA))

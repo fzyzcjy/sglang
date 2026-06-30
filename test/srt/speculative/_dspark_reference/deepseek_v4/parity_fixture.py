@@ -58,6 +58,7 @@ def make_tiny_dsv4_config(
         rope_theta=10000,
         rope_scaling={},
         compress_ratios=[],
+        quantization_config=None,
         hc_mult=4,
         hc_sinkhorn_iters=20,
         hc_eps=1e-6,
@@ -237,6 +238,17 @@ def sync_sot_to_sgl_dsv4(*, ref, sgl, config, sync_ffn: bool = False) -> None:
             if sgl.confidence_head.proj.bias is not None:
                 sgl.confidence_head.proj.bias.zero_()
 
+        # Allocator hygiene: the SoT model and a few SGLang modules allocate weights with
+        # torch.empty (the checkpoint-load contract); any element not overwritten above
+        # keeps uninitialized GPU memory, which can be NaN/inf depending on allocator
+        # history and makes the parity harness order-dependent (a prior test's freed
+        # buffers leak in). Map non-finite garbage to 0 on BOTH sides so equal positions
+        # stay equal; finite synced weights and the config-derived RoPE table are untouched.
+        for module in (ref, sgl):
+            for tensor in list(module.parameters()) + list(module.buffers()):
+                if tensor.is_floating_point():
+                    tensor.nan_to_num_(nan=0.0, posinf=0.0, neginf=0.0)
+
 
 def attach_shared_modules_from_ref(*, sgl, ref, config, device) -> None:
     """Build the shared embed_tokens / lm_head with the SoT weights and attach them.
@@ -260,6 +272,16 @@ def attach_shared_modules_from_ref(*, sgl, ref, config, device) -> None:
     )
     org_vocab = int(config.vocab_size)
     with torch.no_grad():
+        # The vendored SoT embed/head weights are torch.empty (the SoT model expects a
+        # checkpoint load); the parity harness uses random weights, so initialize them
+        # deterministically here. Left as-is they inherit uninitialized GPU memory, which
+        # can be NaN depending on allocator history -- a prior test's freed buffers leak
+        # in and the harness becomes order-dependent.
+        generator = torch.Generator(device=device).manual_seed(0)
+        ref.embed.weight.normal_(generator=generator)
+        ref.head.weight.normal_(generator=generator)
+        embed.weight.zero_()
+        lm_head.weight.zero_()
         embed.weight[:org_vocab].copy_(ref.embed.weight.to(embed.weight.dtype))
         lm_head.weight[:org_vocab].copy_(ref.head.weight.to(lm_head.weight.dtype))
     sgl.attach_shared_modules(embed_tokens=embed, lm_head=lm_head)
