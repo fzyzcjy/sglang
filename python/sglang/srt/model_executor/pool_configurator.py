@@ -154,11 +154,7 @@ class DefaultPoolConfigurator(MemoryPoolConfigurator):
                 scale_kv_cell_size_per_token_for_dflash,
             )
 
-            draft_num_layers = (
-                mr.dspark_draft_num_layers
-                if mr.spec_algorithm.is_dspark()
-                else mr.dflash_draft_num_layers
-            )
+            draft_num_layers = mr.dflash_or_dspark_draft_num_layers
             if (
                 draft_num_layers is not None
                 and int(draft_num_layers) > 0

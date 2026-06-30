@@ -432,12 +432,9 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         # auxiliary hidden capture mode. TODO: expose this to server args?
         self.eagle_use_aux_hidden_state = False
         self.eagle_draft_num_layers = None
-        self.dflash_use_aux_hidden_state = False
-        self.dflash_target_layer_ids = None
-        self.dflash_draft_num_layers = None
-        self.dspark_use_aux_hidden_state = False
-        self.dspark_target_layer_ids = None
-        self.dspark_draft_num_layers = None
+        self.dflash_or_dspark_use_aux_hidden_state = False
+        self.dflash_or_dspark_target_layer_ids = None
+        self.dflash_or_dspark_draft_num_layers = None
         if (
             (self.spec_algorithm.is_eagle() or self.spec_algorithm.is_standalone())
             and not self.is_draft_worker
@@ -536,13 +533,10 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                         "DSPARK requires markov_rank > 0 in the draft config, "
                         f"got markov_rank={dspark_draft_config.markov_rank}."
                     )
-                self.dspark_use_aux_hidden_state = True
-                self.dspark_draft_num_layers = int(draft_num_layers)
-                self.dspark_target_layer_ids = target_layer_ids
-            else:
-                self.dflash_use_aux_hidden_state = True
-                self.dflash_draft_num_layers = int(draft_num_layers)
-                self.dflash_target_layer_ids = target_layer_ids
+
+            self.dflash_or_dspark_use_aux_hidden_state = True
+            self.dflash_or_dspark_draft_num_layers = int(draft_num_layers)
+            self.dflash_or_dspark_target_layer_ids = target_layer_ids
 
         # Apply the rank zero filter to logger
         if server_args.show_time_cost:
@@ -1054,23 +1048,22 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             self.model.set_eagle3_layers_to_capture(
                 self.eagle_aux_hidden_state_layer_ids
             )
-        if self.dflash_use_aux_hidden_state:
-            if not hasattr(self.model, "set_dflash_layers_to_capture"):
-                raise ValueError(
-                    f"Model {self.model.__class__.__name__} does not implement "
-                    "set_dflash_layers_to_capture, which is required for DFLASH."
+        if self.dflash_or_dspark_use_aux_hidden_state:
+            if self.spec_algorithm.is_dspark() and hasattr(
+                self.model, "set_dspark_layers_to_capture"
+            ):
+                self.model.set_dspark_layers_to_capture(
+                    self.dflash_or_dspark_target_layer_ids
                 )
-            self.model.set_dflash_layers_to_capture(self.dflash_target_layer_ids)
-        if self.dspark_use_aux_hidden_state:
-            if hasattr(self.model, "set_dspark_layers_to_capture"):
-                self.model.set_dspark_layers_to_capture(self.dspark_target_layer_ids)
             elif hasattr(self.model, "set_dflash_layers_to_capture"):
-                self.model.set_dflash_layers_to_capture(self.dspark_target_layer_ids)
+                self.model.set_dflash_layers_to_capture(
+                    self.dflash_or_dspark_target_layer_ids
+                )
             else:
                 raise ValueError(
                     f"Model {self.model.__class__.__name__} implements neither "
                     "set_dspark_layers_to_capture nor set_dflash_layers_to_capture, "
-                    "one of which is required for DSPARK."
+                    "one of which is required for DFLASH/DSPARK."
                 )
 
     def remote_instance_init_transfer_engine(self):
