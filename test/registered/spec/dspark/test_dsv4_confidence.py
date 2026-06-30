@@ -274,11 +274,26 @@ class TestDsv4ConfidenceTapPoint(CustomTestCase):
 
 
 class TestDsv4ConfidenceBuild(CustomTestCase):
-    def test_build_returns_none_when_disabled(self) -> None:
-        """build_dspark_v4_confidence_head returns None unless enable_confidence_head."""
+    def test_build_ignores_disable_flag(self) -> None:
+        """The head is built even when enable_confidence_head is False (flag not read)."""
         config = _DsparkConfig(enable_confidence_head=False)
-        self.assertIsNone(
-            build_dspark_v4_confidence_head(config=config, markov_rank=_MARKOV_RANK)
+        head = build_dspark_v4_confidence_head(config=config, markov_rank=_MARKOV_RANK)
+        self.assertIsInstance(head, DSparkConfidenceHead)
+
+    def test_build_warns_when_field_absent(self) -> None:
+        """A config lacking enable_confidence_head warns once, then builds the head."""
+        config = types.SimpleNamespace(
+            hidden_size=_HIDDEN, confidence_head_with_markov=True
+        )
+        with self.assertLogs(
+            "sglang.srt.models.deepseek_v4_dspark", level="WARNING"
+        ) as captured:
+            head = build_dspark_v4_confidence_head(
+                config=config, markov_rank=_MARKOV_RANK
+            )
+        self.assertIsInstance(head, DSparkConfidenceHead)
+        self.assertTrue(
+            any("enable_confidence_head" in message for message in captured.output)
         )
 
     def test_build_returns_head_when_enabled(self) -> None:
