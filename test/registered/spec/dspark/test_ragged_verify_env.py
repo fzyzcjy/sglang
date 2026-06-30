@@ -34,17 +34,13 @@ class TestReadRaggedVerifyMode(CustomTestCase):
             with envs.SGLANG_RAGGED_VERIFY_MODE.override(value):
                 self.assertEqual(read_ragged_verify_mode(), expected)
 
-    def test_legacy_aliases(self):
-        """Legacy spellings (off / cutoff-only / full) resolve to the renamed modes."""
-        cases = {
-            "off": RaggedVerifyMode.STATIC,
-            "": RaggedVerifyMode.STATIC,
-            "cutoff-only": RaggedVerifyMode.CAP_ACCEPT,
-            "full": RaggedVerifyMode.COMPACT,
-        }
-        for value, expected in cases.items():
-            with envs.SGLANG_RAGGED_VERIFY_MODE.override(value):
-                self.assertEqual(read_ragged_verify_mode(), expected)
+    def test_removed_legacy_spellings_raise(self):
+        """Removed legacy spellings (off / cutoff-only / full / empty) raise ValueError."""
+        for value in ("off", "", "cutoff-only", "full"):
+            with self.subTest(value=value):
+                with envs.SGLANG_RAGGED_VERIFY_MODE.override(value):
+                    with self.assertRaises(ValueError):
+                        read_ragged_verify_mode()
 
     def test_invalid_value_raises_loudly(self):
         """An unrecognized value raises rather than silently falling back to default."""
