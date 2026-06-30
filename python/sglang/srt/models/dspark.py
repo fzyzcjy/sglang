@@ -446,6 +446,52 @@ class DSparkDraftMixin:
                 if self.confidence_head.proj.bias is not None:
                     self.confidence_head.proj.bias.zero_()
 
+    def write_target_hidden_kv(
+        self,
+        *,
+        target_hidden: torch.Tensor,
+        pool,
+        positions: torch.Tensor,
+        cache_loc: torch.Tensor,
+        cache_loc_2d: Optional[torch.Tensor] = None,
+        commit_lens: Optional[torch.Tensor] = None,
+    ) -> None:
+        """Write the committed target hidden's K/V into every draft layer's pool slot.
+
+        Dense MHA counterpart of the V4 ``write_target_hidden_kv`` (which writes an MLA
+        latent ring). Per-layer kv_proj -> k/v norm -> k rope -> set_kv_buffer; the
+        worker owns device transfer + slot selection. cache_loc_2d + commit_lens select
+        the prefix-valid write, else flat cache_loc.
+        """
+        ctx_hidden = self.project_target_hidden(target_hidden)
+        for layer in self.layers:
+            attn = layer.self_attn
+            k, v = attn.kv_proj_only(ctx_hidden)
+            k = attn.apply_k_norm(k)
+            k = attn.apply_k_rope(positions, k)
+            v = attn.apply_v_norm(v)
+            k = k.view(-1, attn.num_kv_heads, attn.head_dim)
+            v = v.view(-1, attn.num_kv_heads, attn.head_dim)
+            if cache_loc_2d is not None and commit_lens is not None:
+                pool.set_kv_buffer_prefix_valid(
+                    attn.attn,
+                    cache_loc_2d,
+                    commit_lens,
+                    k,
+                    v,
+                    attn.attn.k_scale,
+                    attn.attn.v_scale,
+                )
+            else:
+                pool.set_kv_buffer(
+                    attn.attn,
+                    cache_loc,
+                    k,
+                    v,
+                    attn.attn.k_scale,
+                    attn.attn.v_scale,
+                )
+
 
 class DSparkDraftModel(DSparkDraftMixin, DFlashDraftModel):
     """DSpark dense draft model: DFlash KV-injection backbone + serial Markov head."""
