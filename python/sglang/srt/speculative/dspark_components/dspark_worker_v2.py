@@ -10,8 +10,6 @@ from sglang.srt.managers.scheduler import GenerationBatchResult
 from sglang.srt.managers.tp_worker import TpModelWorker
 from sglang.srt.model_executor.forward_batch_info import (
     CaptureHiddenMode,
-    ForwardBatch,
-    ForwardMode,
     compute_position,
 )
 from sglang.srt.server_args import ServerArgs
@@ -39,16 +37,11 @@ from sglang.srt.speculative.dspark_components.dspark_confidence import (
 from sglang.srt.speculative.dspark_components.dspark_draft import (
     DsparkDraftSampler,
     make_next_draft_input,
-    resolve_greedy_mask,
-    sample_draft_block,
 )
 from sglang.srt.speculative.dspark_components.dspark_draft_proposer import (
     DraftBlockProposer,
 )
 from sglang.srt.speculative.dspark_components.dspark_info import (
-    DraftBlockResult,
-    DraftForwardResult,
-    DraftProposal,
     RaggedVerifyWindow,
     TargetVerifyResult,
     VerifyWindow,
@@ -82,7 +75,6 @@ from sglang.srt.speculative.ragged_verify import (
     RaggedVerifyMode,
     read_ragged_verify_mode,
 )
-from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.srt.speculative.triton_ops.cache_locs import assign_extend_cache_locs_func
 from sglang.srt.utils import get_available_gpu_memory, is_cuda
 
@@ -964,7 +956,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
 
         sampling_info = batch.sampling_info
-        proposal = self._proposer._propose_draft_block(
+        proposal = self._proposer.propose(
             batch=batch,
             draft_input=draft_input,
             verify_window=verify_window,

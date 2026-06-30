@@ -39,7 +39,7 @@ class DraftBlockProposer:
         self._draft_block_spec_info = draft_block_spec_info
         self._draft_sampler = None
 
-    def _propose_draft_block(
+    def propose(
         self,
         *,
         batch: ScheduleBatch,
@@ -59,7 +59,7 @@ class DraftBlockProposer:
         # ``[bs, gamma, vocab]`` reshape is MANDATORY: markov ``sample_block`` reads
         # ``shape[:2]`` as ``(bs, proposal_len)`` and indexes ``[:, step, :]``.
         embed_module = target_model.get_input_embeddings()
-        fwd = self._run_draft_block_forward(
+        fwd = self._run_forward(
             batch=batch,
             draft_input=draft_input,
             verify_window=verify_window,
@@ -110,7 +110,7 @@ class DraftBlockProposer:
             draft_hidden=fwd.draft_hidden_3d,
         )
 
-    def _run_draft_block_forward(
+    def _run_forward(
         self,
         *,
         batch: ScheduleBatch,
