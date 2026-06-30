@@ -146,7 +146,6 @@ def sparse_attn(
     """
     b, m, h, d = q.size()
     topk = topk_idxs.size(-1)
-    device = q.device
 
     out = torch.empty_like(q, dtype=torch.float32)
     q_f = q.float()
