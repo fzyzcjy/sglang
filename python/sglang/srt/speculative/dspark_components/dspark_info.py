@@ -14,7 +14,6 @@ class RaggedVerifyWindow(msgspec.Struct, frozen=True):
     positions: torch.Tensor
     verify_cache_loc: torch.Tensor
     verify_ids: torch.Tensor
-    seq_lens_cpu: torch.Tensor
 
 
 class TargetVerifyResult(msgspec.Struct, frozen=True):
