@@ -278,7 +278,9 @@ class TestMqaAttentionBaseConstruction(CustomTestCase):
         self.assertEqual(base.n_local_heads, n_heads // 2)
         self.assertEqual(base.n_local_groups, o_groups // 2)
         # wq_b output (n_heads*head_dim) sharded over tp=2 -> half the rows per partition.
-        self.assertEqual(tuple(base.wq_b.weight.shape), (n_heads * head_dim // 2, q_lora))
+        self.assertEqual(
+            tuple(base.wq_b.weight.shape), (n_heads * head_dim // 2, q_lora)
+        )
         # attn_sink is replicated over the full n_heads (not sharded).
         self.assertEqual(tuple(base.attn_sink.shape), (n_heads,))
 
