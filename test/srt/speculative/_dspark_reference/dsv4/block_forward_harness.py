@@ -204,7 +204,7 @@ class Dsv4BlockForwardHarness:
             DeepseekV4AttnBackend,
         )
         from sglang.srt.mem_cache.deepseek_v4_memory_pool import DeepSeekV4TokenToKVPool
-        from sglang.srt.mem_cache.req_to_token_pool import ReqToTokenPool
+        from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
         from sglang.srt.models.deepseek_v4_dspark import DeepseekV4ForCausalLMDSpark
         from sglang.srt.runtime_context import get_parallel
 
