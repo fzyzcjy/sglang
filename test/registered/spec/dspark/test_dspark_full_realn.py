@@ -300,5 +300,42 @@ class TestLayoutLessCompactCarriesDegenerateLayout(CustomTestCase):
         self.assertEqual(layout.graph_num_tokens, 10)
 
 
+class TestRaggedLayoutSkippedWhenBatchExceedsCapturedGrid(CustomTestCase):
+    def _compact_worker(self, *, gamma: int, capture_num_tokens: list[int]):
+        worker = _make_worker(gamma=gamma, mode=RaggedVerifyMode.COMPACT)
+        runner = types.SimpleNamespace(
+            ragged_verify_mode=True,
+            capture_num_tokens=capture_num_tokens,
+        )
+        worker.model_runner = types.SimpleNamespace(decode_cuda_graph_runner=runner)
+        return worker
+
+    def test_uniform_layout_skipped_when_bs_exceeds_max_capture_bs(self):
+        """A layout-less compact verify with bs > max_capture_bs returns None, not a raise."""
+        # capture max tier 15 -> max_capture_bs = 15 // 5 = 3; bs=4 floors to 20 > 15.
+        worker = self._compact_worker(gamma=4, capture_num_tokens=[5, 10, 15])
+        self.assertIsNone(worker._uniform_ragged_layout(bs=4, device=_DEVICE))
+
+    def test_uniform_layout_built_when_bs_at_max_capture_bs(self):
+        """bs == max_capture_bs still builds the layout (the guard is inert when it fits)."""
+        worker = self._compact_worker(gamma=4, capture_num_tokens=[5, 10, 15])
+        layout = worker._uniform_ragged_layout(bs=3, device=_DEVICE)
+        self.assertIsNotNone(layout)
+        self.assertEqual(layout.total_verify_tokens, 15)
+
+    def test_confidence_ready_layout_skipped_when_num_reqs_exceeds_max_capture_bs(self):
+        """A confidence-ready compact batch with num_reqs > max_capture_bs returns None, not a raise."""
+        worker = self._compact_worker(gamma=4, capture_num_tokens=[5, 10, 15])
+        worker._schedule_verify_lens = lambda *, req_pool_indices, device: torch.tensor(
+            [5, 4, 5, 3], dtype=torch.int32, device=device
+        )
+        req_pool_indices = torch.arange(4, device=_DEVICE)
+        self.assertIsNone(
+            worker._maybe_schedule_ragged_layout(
+                req_pool_indices=req_pool_indices, device=_DEVICE
+            )
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

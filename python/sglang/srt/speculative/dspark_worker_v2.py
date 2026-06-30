@@ -692,6 +692,8 @@ class DSparkWorkerV2(BaseSpecWorker):
                 )
             return None
         verify_lens_cpu = verify_lens.to("cpu").tolist()
+        if self._ragged_layout_exceeds_captured_grid(num_reqs=len(verify_lens_cpu)):
+            return None
         grid = self._verify_layout_grid(verify_lens_cpu=verify_lens_cpu)
         graph_num_tokens_floor = self._verify_layout_graph_num_tokens_floor(
             num_reqs=len(verify_lens_cpu)
@@ -705,10 +707,14 @@ class DSparkWorkerV2(BaseSpecWorker):
 
     def _uniform_ragged_layout(
         self, *, bs: int, device: torch.device
-    ) -> RaggedVerifyLayout:
+    ) -> Optional[RaggedVerifyLayout]:
         # The degenerate uniform layout (verify_lens = [gamma+1] * bs) that a
         # layout-less compact verify carries so it hits the same token-keyed graph
         # the real ragged batch does (C3). Geometry matches the static full block.
+        # A batch too large for any captured tier gets no layout and falls to the
+        # bs-keyed eager path instead of crashing round_up_grid.
+        if self._ragged_layout_exceeds_captured_grid(num_reqs=bs):
+            return None
         verify_lens_cpu = [self.verify_num_draft_tokens] * bs
         grid = self._verify_layout_grid(verify_lens_cpu=verify_lens_cpu)
         graph_num_tokens_floor = self._verify_layout_graph_num_tokens_floor(num_reqs=bs)
@@ -813,6 +819,20 @@ class DSparkWorkerV2(BaseSpecWorker):
         if runner is None or not getattr(runner, "ragged_verify_mode", False):
             return None
         return runner.capture_num_tokens
+
+    def _ragged_layout_exceeds_captured_grid(self, *, num_reqs: int) -> bool:
+        # The token-keyed capture grid tops out at capture_num_tokens[-1] ==
+        # max_capture_bs * (gamma+1). graph_num_tokens is floored to this batch's
+        # bs-derived full block (num_reqs * verify_num_draft_tokens), so a batch
+        # with num_reqs > max_capture_bs would drive round_up_grid past its max
+        # tier and raise in from_verify_lens -- BEFORE the runner's
+        # _can_run_ragged_verify_graph eager-fallback gate can run. Skip the ragged
+        # layout for such a batch so the verify falls through to the bs-keyed eager
+        # path (which rejects bs > max_bs). Inert for num_reqs <= max_capture_bs.
+        capture_num_tokens = self._ragged_capture_num_tokens()
+        if capture_num_tokens is None:
+            return False
+        return num_reqs * self.verify_num_draft_tokens > capture_num_tokens[-1]
 
     def _cap_correct_len(
         self,
