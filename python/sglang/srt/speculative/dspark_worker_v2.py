@@ -23,16 +23,17 @@ from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
 from sglang.srt.speculative.dflash_info import DFlashVerifyInput
 from sglang.srt.speculative.dflash_info_v2 import DFlashDraftInputV2
 from sglang.srt.speculative.dflash_utils import (
-    _get_or_create_chain_verify_buffers,
     apply_dflash_verify_logits_adjustments,
-    build_dflash_verify_target_probs,
-    compute_dflash_correct_drafts_and_bonus,
 )
 from sglang.srt.speculative.draft_worker_common import (
     build_block_pos_offsets,
     build_draft_tp_worker,
     make_draft_block_spec_info,
     make_draft_input_v2,
+)
+from sglang.srt.speculative.dspark_accept import (
+    accept_draft_tokens,
+    build_out_tokens,
 )
 from sglang.srt.speculative.dspark_info import (
     DraftBlockResult,
@@ -59,7 +60,6 @@ from sglang.srt.speculative.ragged_verify import (
     RaggedVerifyMode,
     read_ragged_verify_mode,
 )
-from sglang.srt.speculative.reject_sampling import chain_speculative_sampling_triton
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.srt.speculative.triton_ops.cache_locs import assign_extend_cache_locs_func
 from sglang.srt.utils import get_available_gpu_memory, is_cuda
@@ -982,180 +982,6 @@ class DSparkWorkerV2(BaseSpecWorker):
             return False
         return num_reqs * self.verify_num_draft_tokens > capture_num_tokens[-1]
 
-    def _cap_correct_len(
-        self,
-        *,
-        correct_len: torch.Tensor,
-        layout: RaggedVerifyLayout,
-    ) -> torch.Tensor:
-        # Cutoff-only cap: commit at most ell_r = verify_len - 1 correct drafts per
-        # request. Capping accept is lossless -- fewer correctly-verified drafts are
-        # committed and the bonus (recomputed by callers at the capped index) is
-        # still the target's true next token at the cap.
-        ell_r = (layout.verify_lens.to(device=correct_len.device) - 1).to(
-            correct_len.dtype
-        )
-        return torch.minimum(correct_len, ell_r)
-
-    def _accept_greedy(
-        self,
-        *,
-        candidates: torch.Tensor,
-        target_logits: torch.Tensor,
-        cutoff_layout: Optional[RaggedVerifyLayout] = None,
-    ):
-        bs = candidates.shape[0]
-        target_predict = torch.argmax(target_logits, dim=-1).view(
-            bs, self.verify_num_draft_tokens
-        )
-        correct_len, bonus = compute_dflash_correct_drafts_and_bonus(
-            candidates=candidates,
-            target_predict=target_predict,
-        )
-        if cutoff_layout is not None:
-            correct_len = self._cap_correct_len(
-                correct_len=correct_len, layout=cutoff_layout
-            )
-            row_ids = torch.arange(bs, device=target_predict.device)
-            bonus = target_predict[row_ids, correct_len.to(torch.long)].to(torch.int64)
-        return correct_len, bonus
-
-    def _accept_sampling(
-        self,
-        *,
-        candidates: torch.Tensor,
-        target_logits: torch.Tensor,
-        draft_probs: torch.Tensor,
-        sampling_info,
-        draft_input: DFlashDraftInputV2,
-        cutoff_layout: Optional[RaggedVerifyLayout] = None,
-    ):
-        bs = candidates.shape[0]
-        device = candidates.device
-        gamma = self.gamma
-        target_probs = build_dflash_verify_target_probs(
-            next_token_logits=target_logits,
-            sampling_info=sampling_info,
-            draft_token_num=self.verify_num_draft_tokens,
-            bs=bs,
-            max_top_k=draft_input.max_top_k,
-            uniform_top_k_value=draft_input.uniform_top_k_value,
-        )
-        (
-            retrieve_index,
-            retrieve_next_token,
-            retrieve_next_sibling,
-            predicts,
-            accept_index,
-            accept_token_num,
-        ) = _get_or_create_chain_verify_buffers(
-            bs=bs,
-            draft_token_num=self.verify_num_draft_tokens,
-            device=device,
-        )
-        uniform_samples = torch.rand((bs, gamma), dtype=torch.float32, device=device)
-        uniform_samples_final = torch.rand((bs,), dtype=torch.float32, device=device)
-        candidates_i64 = candidates.to(torch.int64)
-        chain_speculative_sampling_triton(
-            predicts=predicts,
-            accept_index=accept_index,
-            accept_token_num=accept_token_num,
-            candidates=candidates_i64,
-            retrive_index=retrieve_index,
-            retrive_next_token=retrieve_next_token,
-            retrive_next_sibling=retrieve_next_sibling,
-            uniform_samples=uniform_samples,
-            uniform_samples_for_final_sampling=uniform_samples_final,
-            target_probs=target_probs,
-            draft_probs=draft_probs,
-            threshold_single=1.0,
-            threshold_acc=1.0,
-            deterministic=True,
-        )
-        correct_len = accept_token_num
-        if cutoff_layout is not None:
-            correct_len = self._cap_correct_len(
-                correct_len=correct_len, layout=cutoff_layout
-            )
-        row_ids = torch.arange(bs, dtype=torch.long, device=device)
-        accept_pos = accept_index[row_ids, correct_len.to(torch.long)].to(torch.long)
-        bonus = predicts[accept_pos].to(torch.int64)
-        return correct_len, bonus
-
-    def _accept_draft_tokens(
-        self,
-        *,
-        candidates: torch.Tensor,
-        target_logits: torch.Tensor,
-        draft_block: DraftBlockResult,
-        sampling_info,
-        draft_input: DFlashDraftInputV2,
-        cutoff_layout: Optional[RaggedVerifyLayout] = None,
-    ):
-        # Per-request accept (greedy argmax-match vs rejection sampling), dispatched
-        # by batch composition. Both rules are lossless.
-        greedy_mask = draft_block.greedy_mask
-        # All-greedy fast path. is_all_greedy is host-side, so the branch is sync-free.
-        all_greedy = sampling_info is None or sampling_info.is_all_greedy
-        if all_greedy:
-            return self._accept_greedy(
-                candidates=candidates,
-                target_logits=target_logits,
-                cutoff_layout=cutoff_layout,
-            )
-        draft_probs = torch.softmax(
-            draft_block.corrected_logits.float()
-            / draft_block.temperatures[:, None, None],
-            dim=-1,
-        )
-        # All-sampling fast path: no greedy rows -> only the chain kernel (host-side, sync-free).
-        if not sampling_info.is_any_greedy:
-            return self._accept_sampling(
-                candidates=candidates,
-                target_logits=target_logits,
-                draft_probs=draft_probs,
-                sampling_info=sampling_info,
-                draft_input=draft_input,
-                cutoff_layout=cutoff_layout,
-            )
-        # Mixed: run both rules and select per row by greedy_mask.
-        greedy_len, greedy_bonus = self._accept_greedy(
-            candidates=candidates,
-            target_logits=target_logits,
-            cutoff_layout=cutoff_layout,
-        )
-        sampling_len, sampling_bonus = self._accept_sampling(
-            candidates=candidates,
-            target_logits=target_logits,
-            draft_probs=draft_probs,
-            sampling_info=sampling_info,
-            draft_input=draft_input,
-            cutoff_layout=cutoff_layout,
-        )
-        correct_len = torch.where(
-            greedy_mask, greedy_len.to(sampling_len.dtype), sampling_len
-        )
-        bonus = torch.where(greedy_mask, greedy_bonus, sampling_bonus)
-        return correct_len, bonus
-
-    def _build_out_tokens(
-        self,
-        *,
-        draft_tokens: torch.Tensor,
-        correct_len: torch.Tensor,
-        bonus: torch.Tensor,
-    ) -> torch.Tensor:
-        bs = draft_tokens.shape[0]
-        out_tokens = torch.empty(
-            (bs, self.verify_num_draft_tokens),
-            dtype=torch.int64,
-            device=draft_tokens.device,
-        )
-        out_tokens[:, : self.gamma].copy_(draft_tokens)
-        out_tokens[:, self.gamma].fill_(0)
-        out_tokens.scatter_(1, correct_len.to(torch.int64)[:, None], bonus[:, None])
-        return out_tokens
-
     def forward_batch_generation(
         self,
         batch: ScheduleBatch,
@@ -1902,18 +1728,24 @@ class DSparkWorkerV2(BaseSpecWorker):
         logits_output = target_verify.logits_output
         can_run_cuda_graph = target_verify.can_run_cuda_graph
 
-        correct_len, bonus = self._accept_draft_tokens(
+        correct_len, bonus = accept_draft_tokens(
             candidates=verify_ids_2d,
             target_logits=logits_output.next_token_logits,
             draft_block=draft_block,
             sampling_info=sampling_info,
             draft_input=draft_input,
+            gamma=self.gamma,
+            verify_num_draft_tokens=self.verify_num_draft_tokens,
             cutoff_layout=layout,
         )
 
         commit_lens = correct_len.to(torch.int32) + 1
-        out_tokens = self._build_out_tokens(
-            draft_tokens=draft_tokens, correct_len=correct_len, bonus=bonus
+        out_tokens = build_out_tokens(
+            draft_tokens=draft_tokens,
+            correct_len=correct_len,
+            bonus=bonus,
+            verify_num_draft_tokens=self.verify_num_draft_tokens,
+            gamma=self.gamma,
         )
         new_seq_lens = prefix_lens + commit_lens.to(prefix_lens.dtype)
         if on_publish is not None:
