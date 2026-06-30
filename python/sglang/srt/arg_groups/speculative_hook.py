@@ -331,7 +331,9 @@ def _handle_dspark(server_args: ServerArgs) -> None:
             )
 
     elif gamma is None and server_args.speculative_num_draft_tokens is not None:
-        from sglang.srt.speculative.dspark_components.dspark_utils import parse_dspark_draft_config
+        from sglang.srt.speculative.dspark_components.dspark_utils import (
+            parse_dspark_draft_config,
+        )
 
         model_override_args = json.loads(server_args.json_model_override_args)
         config_gamma: Optional[int] = None

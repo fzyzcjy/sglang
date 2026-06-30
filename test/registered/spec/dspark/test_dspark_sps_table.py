@@ -214,7 +214,9 @@ class TestProfilerConversion(CustomTestCase):
         """Run the profiler against a monkeypatched bench returning fake results."""
         from sglang.benchmark import dspark_sps_profiler
         from sglang.srt.server_args import ServerArgs
-        from sglang.srt.speculative.dspark_components.dspark_sps_table import load_sps_table_from_path
+        from sglang.srt.speculative.dspark_components.dspark_sps_table import (
+            load_sps_table_from_path,
+        )
 
         repeats = iter(batches_per_repeat)
 
