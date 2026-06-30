@@ -5,6 +5,7 @@ import unittest
 
 import torch
 
+from sglang.srt.environ import envs
 from sglang.test.ci.ci_register import register_cuda_ci
 from sglang.test.test_utils import CustomTestCase
 
@@ -264,6 +265,11 @@ class TestDsv4ComponentParityWithConfidence(TestDsv4ComponentParity):
     """Granularity-A parity with the confidence head enabled (post-hc_head PRE-norm tap)."""
 
     enable_confidence_head = True
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override("cap-accept"):
+            super().setUpClass()
 
     @_requires_cuda
     def test_confidence_head_parity(self) -> None:

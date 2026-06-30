@@ -4,6 +4,7 @@ import unittest
 
 import torch
 
+from sglang.srt.environ import envs
 from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.models import dspark as dspark_base
 from sglang.srt.models.deepseek_v4 import hc_head_torch, make_hc_head_params
@@ -274,6 +275,20 @@ class TestDsv4ConfidenceTapPoint(CustomTestCase):
 
 
 class TestDsv4ConfidenceBuild(CustomTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        mode = envs.SGLANG_RAGGED_VERIFY_MODE.override("cap-accept")
+        mode.__enter__()
+        self.addCleanup(mode.__exit__, None, None, None)
+
+    def test_static_mode_returns_none(self) -> None:
+        """Static ragged-verify never consults confidence, so no head is built."""
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override("static"):
+            config = _DsparkConfig(enable_confidence_head=True)
+            self.assertIsNone(
+                build_dspark_v4_confidence_head(config=config, markov_rank=_MARKOV_RANK)
+            )
+
     def test_build_ignores_disable_flag(self) -> None:
         """The head is built even when enable_confidence_head is False (flag not read)."""
         config = _DsparkConfig(enable_confidence_head=False)

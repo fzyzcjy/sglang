@@ -45,6 +45,10 @@ from sglang.srt.runtime_context import get_parallel
 from sglang.srt.speculative.dspark_components.dspark_utils import (
     parse_dspark_draft_config,
 )
+from sglang.srt.speculative.ragged_verify import (
+    RaggedVerifyMode,
+    read_ragged_verify_mode,
+)
 from sglang.srt.utils import add_prefix
 
 logger = logging.getLogger(__name__)
@@ -385,17 +389,20 @@ def _greedy_step_sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tens
 def build_dspark_v4_confidence_head(
     *, config: DeepSeekV4Config, markov_rank: int
 ) -> Optional[DSparkConfidenceHead]:
-    """Build the V4 DSpark confidence head when the draft config enables it.
+    """Build the V4 DSpark confidence head (enabled outside static ragged-verify).
 
     Mirrors the dense ``build_confidence_head`` interface (the head emits a RAW
     accept-rate logit; ``with_markov`` concatenates the per-step markov_embed). The V4
     hidden size comes from ``config.hidden_size`` and the rank from the parsed draft
-    config. The head is ALWAYS built (the ``enable_confidence_head`` flag is not read): a
-    DSpark draft checkpoint is expected to carry trained confidence weights, so a missing
-    config field is only warned about, and a checkpoint that genuinely lacks the weights
-    is surfaced by the weight-load assert. The ``proj`` matches the checkpoint's DeepSpec
-    ``AcceptRatePredictor`` layout (a single weight, no bias).
+    config. ``static`` ragged-verify uses a uniform block and never consults the head, so
+    the head is skipped there; otherwise it is ALWAYS built (the ``enable_confidence_head``
+    flag is not read): a DSpark draft checkpoint is expected to carry trained confidence
+    weights, so a missing config field is only warned about, and a checkpoint that
+    genuinely lacks the weights is surfaced by the weight-load assert. The ``proj`` matches
+    the checkpoint's DeepSpec ``AcceptRatePredictor`` layout (a single weight, no bias).
     """
+    if read_ragged_verify_mode() is RaggedVerifyMode.STATIC:
+        return None
     if not hasattr(config, "enable_confidence_head"):
         logger.warning(
             "DSpark draft config has no enable_confidence_head field; treating the "

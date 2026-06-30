@@ -20,6 +20,10 @@ from sglang.srt.models.dflash import DFlashDraftModel
 from sglang.srt.speculative.dspark_components.dspark_utils import (
     parse_dspark_draft_config,
 )
+from sglang.srt.speculative.ragged_verify import (
+    RaggedVerifyMode,
+    read_ragged_verify_mode,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -333,16 +337,19 @@ class DSparkConfidenceHead(nn.Module):
         return self.proj(features).squeeze(-1)
 
 
-def build_confidence_head(config) -> nn.Module:
-    """Build the DSpark confidence head (always enabled).
+def build_confidence_head(config) -> Optional[nn.Module]:
+    """Build the DSpark confidence head (enabled outside static ragged-verify).
 
-    Mirrors ``build_dspark_v4_confidence_head``: the ``enable_confidence_head`` flag is
-    not read, because a DSpark draft checkpoint is expected to carry trained confidence
-    weights. A config that lacks the field is only warned about; a checkpoint that
-    genuinely lacks the weights is surfaced later by the weight-load assert. The ``proj``
-    keeps the reference ``AcceptRatePredictor`` bias (dense checkpoints ship it, unlike
-    the bias-less DSpark V4 head).
+    Mirrors ``build_dspark_v4_confidence_head``: ``static`` ragged-verify uses a uniform
+    block and never consults the head, so it is skipped there; otherwise the
+    ``enable_confidence_head`` flag is not read, because a DSpark draft checkpoint is
+    expected to carry trained confidence weights. A config that lacks the field is only
+    warned about; a checkpoint that genuinely lacks the weights is surfaced later by the
+    weight-load assert. The ``proj`` keeps the reference ``AcceptRatePredictor`` bias
+    (dense checkpoints ship it, unlike the bias-less DSpark V4 head).
     """
+    if read_ragged_verify_mode() is RaggedVerifyMode.STATIC:
+        return None
     if not hasattr(config, "enable_confidence_head"):
         logger.warning(
             "DSpark draft config has no enable_confidence_head field; treating the "

@@ -6,6 +6,7 @@ import unittest
 
 import torch
 
+from sglang.srt.environ import envs
 from sglang.srt.models.dspark import (
     DSparkConfidenceHead,
     DSparkDraftMixin,
@@ -204,6 +205,18 @@ class TestMarkovEmbedOffByOne(CustomTestCase):
 
 
 class TestBuildConfidenceHead(CustomTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        mode = envs.SGLANG_RAGGED_VERIFY_MODE.override("cap-accept")
+        mode.__enter__()
+        self.addCleanup(mode.__exit__, None, None, None)
+
+    def test_static_mode_returns_none(self):
+        """Static ragged-verify never consults confidence, so no head is built."""
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override("static"):
+            cfg = _HeadConfig(hidden_size=64, markov_rank=16, enable_confidence_head=True)
+            self.assertIsNone(build_confidence_head(cfg))
+
     def test_disable_flag_still_builds(self):
         """The head is built even when enable_confidence_head is False (flag not read)."""
         cfg = _HeadConfig(hidden_size=64, markov_rank=16, enable_confidence_head=False)
