@@ -1,3 +1,4 @@
+import functools
 import unittest
 
 import torch
@@ -59,6 +60,76 @@ def _bruteforce_budget(
     return best_extra
 
 
+def schedule_verify_lens_topk_vanilla(
+    *,
+    survival_probs: torch.Tensor,
+    budget: int,
+    cfg: DSparkScheduleConfig,
+) -> torch.Tensor:
+    """Readable plain-Python reference for ``schedule_verify_lens_topk``.
+
+    Same contract as the production function: spend a global ``budget`` of extra
+    verify positions across all requests, always taking the highest-survival
+    candidates first, then turn each request's admitted count into a per-request
+    ``verify_len`` (anchor + admitted drafts). The production version expresses this
+    with GPU tensor ops plus a value-independent argsort; this one is a flat list
+    sort so the equivalence is easy to read and check.
+    """
+    cfg.validate()
+    num_requests, _gamma = survival_probs.shape
+    max_len = cfg.resolved_max_verify_len()
+    device = survival_probs.device
+
+    # Gate candidates in the input dtype (matches the production
+    # ``candidate_window >= survival_eps``) and read survival as float64 for ranking.
+    valid_rows = (survival_probs >= cfg.survival_eps).tolist()
+    survival_rows = survival_probs.to(torch.float64).tolist()
+
+    # One candidate per (request, extra position) in the window [min_verify_len,
+    # max_len) whose survival clears the eps gate.
+    candidates: list[tuple[float, int, int]] = []
+    for request in range(num_requests):
+        for position in range(cfg.min_verify_len, max_len):
+            if valid_rows[request][position]:
+                candidates.append((survival_rows[request][position], position, request))
+
+    # Rank by survival descending, breaking ties by (position, request) ascending so
+    # the order depends only on coordinates, never on token values (value-independent
+    # tie-break). (position, request) is unique per candidate, so no further key is
+    # needed.
+    candidates.sort(key=lambda candidate: (-candidate[0], candidate[1], candidate[2]))
+
+    selected_extra = [0] * num_requests
+    for _survival, _position, request in candidates[: max(int(budget), 0)]:
+        selected_extra[request] += 1
+
+    # verify_len counts the anchor (= 1 + admitted drafts); floor at
+    # max(min_verify_len, 1) so an explicit min_verify_len=0 still keeps the anchor,
+    # and cap at max_len.
+    lower_bound = max(cfg.min_verify_len, 1)
+    verify_lens = [
+        min(max(cfg.min_verify_len + extra, lower_bound), max_len)
+        for extra in selected_extra
+    ]
+    return torch.tensor(verify_lens, dtype=torch.int32, device=device)
+
+
+# Every property test below runs against both the production function and the
+# vanilla reference (parameterized via subTest), so the readable reference is held
+# to exactly the same contract.
+_TOPK_IMPLS = (schedule_verify_lens_topk, schedule_verify_lens_topk_vanilla)
+
+
+def _for_each_impl(test_method):
+    @functools.wraps(test_method)
+    def wrapper(self):
+        for impl in _TOPK_IMPLS:
+            with self.subTest(impl=impl.__name__):
+                test_method(self, impl)
+
+    return wrapper
+
+
 class TestComputeVerifyTokenBudget(CustomTestCase):
     def test_budget_argmax_matches_bruteforce_scan_flat_table(self):
         """compute_verify_token_budget K equals a naive scan with a flat SPS table."""
@@ -118,23 +189,23 @@ class TestComputeVerifyTokenBudget(CustomTestCase):
 
 
 class TestScheduleVerifyLensTopk(CustomTestCase):
-    def test_topk_does_not_exceed_budget(self):
+    @_for_each_impl
+    def test_topk_does_not_exceed_budget(self, impl):
         """Total extra verify length (above the floor) never exceeds the budget."""
         torch.manual_seed(2)
         survival = _survival_from_confidence(torch.rand(5, 7) * 0.4 + 0.55)
         cfg = DSparkScheduleConfig(gamma=7)
         floor = max(cfg.min_verify_len, 1)
         for budget in (0, 1, 5, 12, 100):
-            verify_lens = schedule_verify_lens_topk(
-                survival_probs=survival, budget=budget, cfg=cfg
-            )
+            verify_lens = impl(survival_probs=survival, budget=budget, cfg=cfg)
             # verify_lens counts the anchor (= 1 + ell_r); extra is the count above
             # the floor, which is what the budget bounds.
             total_extra = int((verify_lens.to(torch.int64) - floor).sum().item())
             self.assertLessEqual(total_extra, budget)
             self.assertGreaterEqual(int(verify_lens.min().item()), 1)
 
-    def test_total_equals_anchors_plus_lens(self):
+    @_for_each_impl
+    def test_total_equals_anchors_plus_lens(self, impl):
         """The forward total R + sum(verify_lens) equals an independently-derived
         R + R*min_verify_len + admitted_count (mid-pool budget, no max clamp)."""
         # One candidate per request lands above the others so budget=2 admits
@@ -147,9 +218,7 @@ class TestScheduleVerifyLensTopk(CustomTestCase):
         )
         num_requests, max_len, budget = 2, 4, 2
         cfg = DSparkScheduleConfig(gamma=max_len, min_verify_len=1)
-        verify_lens = schedule_verify_lens_topk(
-            survival_probs=survival, budget=budget, cfg=cfg
-        )
+        verify_lens = impl(survival_probs=survival, budget=budget, cfg=cfg)
         actual_total = num_requests + int(verify_lens.to(torch.int64).sum().item())
         # RHS derived only from R, min_verify_len, and the admitted count (= budget
         # here, since budget < candidate count), never from sum(verify_lens).
@@ -157,7 +226,8 @@ class TestScheduleVerifyLensTopk(CustomTestCase):
         expected_total = num_requests + num_requests * cfg.min_verify_len + admitted
         self.assertEqual(actual_total, expected_total)
 
-    def test_admission_is_contiguous_prefix(self):
+    @_for_each_impl
+    def test_admission_is_contiguous_prefix(self, impl):
         """Under a budget-limited scenario each request's admitted positions form
         the contiguous prefix [min, min+l_r) -- not a scattered subset (C9)."""
         # Survival is strictly monotone non-increasing per request (the cumprod
@@ -168,9 +238,7 @@ class TestScheduleVerifyLensTopk(CustomTestCase):
         )
         cfg = DSparkScheduleConfig(gamma=4)
         budget = 3
-        verify_lens = schedule_verify_lens_topk(
-            survival_probs=survival, budget=budget, cfg=cfg
-        )
+        verify_lens = impl(survival_probs=survival, budget=budget, cfg=cfg)
         # Independently reproduce the global top-budget selection and group the
         # admitted positions by request.
         num_requests, max_len = survival.shape[0], cfg.resolved_max_verify_len()
@@ -202,7 +270,8 @@ class TestScheduleVerifyLensTopk(CustomTestCase):
                 f"{expected_prefix}",
             )
 
-    def test_higher_confidence_admitted_first(self):
+    @_for_each_impl
+    def test_higher_confidence_admitted_first(self, impl):
         """A budget too small for both requests favors the higher-survival
         request's prefix (rank-preserving, most-confident-first) (C14)."""
         # Request 0 dominates request 1 at every position; with budget=2 both
@@ -212,9 +281,7 @@ class TestScheduleVerifyLensTopk(CustomTestCase):
             dtype=torch.float32,
         )
         cfg = DSparkScheduleConfig(gamma=4)
-        verify_lens = schedule_verify_lens_topk(
-            survival_probs=survival, budget=2, cfg=cfg
-        )
+        verify_lens = impl(survival_probs=survival, budget=2, cfg=cfg)
         extra = verify_lens.to(torch.int64) - cfg.min_verify_len
         self.assertEqual(int(extra[0].item()), 2)
         self.assertEqual(int(extra[1].item()), 0)
@@ -237,52 +304,49 @@ class TestScheduleVerifyLensTopk(CustomTestCase):
         )
         self.assertTrue(torch.allclose(survival, expected, atol=1e-6))
 
-    def test_min_and_max_enter_the_budget(self):
+    @_for_each_impl
+    def test_min_and_max_enter_the_budget(self, impl):
         """min_verify_len floors and max_verify_len caps every per-request length."""
         survival = torch.tensor([[0.99, 0.99, 0.99, 0.99, 0.99]], dtype=torch.float32)
         cfg = DSparkScheduleConfig(gamma=5, min_verify_len=1, max_verify_len=3)
-        verify_lens = schedule_verify_lens_topk(
-            survival_probs=survival, budget=100, cfg=cfg
-        )
+        verify_lens = impl(survival_probs=survival, budget=100, cfg=cfg)
         self.assertGreaterEqual(int(verify_lens.min().item()), 1)
         self.assertLessEqual(int(verify_lens.max().item()), 3)
 
-    def test_budget_zero_returns_min_verify_len(self):
+    @_for_each_impl
+    def test_budget_zero_returns_min_verify_len(self, impl):
         """budget=0 yields l_r = min_verify_len for all requests."""
         survival = torch.tensor([[0.9, 0.8], [0.7, 0.6]], dtype=torch.float32)
         cfg = DSparkScheduleConfig(gamma=2, min_verify_len=1)
-        verify_lens = schedule_verify_lens_topk(
-            survival_probs=survival, budget=0, cfg=cfg
-        )
+        verify_lens = impl(survival_probs=survival, budget=0, cfg=cfg)
         self.assertTrue(
             torch.equal(verify_lens, torch.tensor([1, 1], dtype=torch.int32))
         )
 
-    def test_large_budget_selects_all_candidates(self):
+    @_for_each_impl
+    def test_large_budget_selects_all_candidates(self, impl):
         """A budget >= candidate count selects clamp(gamma, min, max) per request."""
         survival = torch.tensor([[0.9, 0.8, 0.7]], dtype=torch.float32)
         cfg = DSparkScheduleConfig(gamma=3)
-        verify_lens = schedule_verify_lens_topk(
-            survival_probs=survival, budget=1000, cfg=cfg
-        )
+        verify_lens = impl(survival_probs=survival, budget=1000, cfg=cfg)
         self.assertEqual(int(verify_lens[0].item()), 3)
 
-    def test_tie_break_is_deterministic(self):
+    @_for_each_impl
+    def test_tie_break_is_deterministic(self, impl):
         """Identical inputs produce identical verify_lens across repeated calls."""
         survival = torch.full((3, 4), 0.8, dtype=torch.float32)
         cfg = DSparkScheduleConfig(gamma=4)
-        first = schedule_verify_lens_topk(survival_probs=survival, budget=5, cfg=cfg)
-        second = schedule_verify_lens_topk(survival_probs=survival, budget=5, cfg=cfg)
+        first = impl(survival_probs=survival, budget=5, cfg=cfg)
+        second = impl(survival_probs=survival, budget=5, cfg=cfg)
         self.assertTrue(torch.equal(first, second))
 
-    def test_tie_break_is_value_independent(self):
+    @_for_each_impl
+    def test_tie_break_is_value_independent(self, impl):
         """Tie-break depends only on (a, position, request), not on token values."""
         survival = torch.tensor([[0.8, 0.8, 0.8], [0.8, 0.8, 0.8]], dtype=torch.float32)
         cfg = DSparkScheduleConfig(gamma=3)
         floor = max(cfg.min_verify_len, 1)
-        verify_lens = schedule_verify_lens_topk(
-            survival_probs=survival, budget=3, cfg=cfg
-        )
+        verify_lens = impl(survival_probs=survival, budget=3, cfg=cfg)
         total_extra = int((verify_lens.to(torch.int64) - floor).sum().item())
         self.assertEqual(total_extra, 3)
 
@@ -298,7 +362,8 @@ class TestVerifyLenAnchorContract(CustomTestCase):
         """The default config floors verify_lens at the anchor (min_verify_len=1)."""
         self.assertEqual(DSparkScheduleConfig(gamma=4).min_verify_len, 1)
 
-    def test_small_budget_keeps_anchor_with_default_config(self):
+    @_for_each_impl
+    def test_small_budget_keeps_anchor_with_default_config(self, impl):
         """budget in {0,1,2} with the default config never drops below verify_len=1."""
         survival = _survival_from_confidence(
             torch.tensor(
@@ -308,20 +373,17 @@ class TestVerifyLenAnchorContract(CustomTestCase):
         )
         cfg = DSparkScheduleConfig(gamma=3)
         for budget in (0, 1, 2):
-            verify_lens = schedule_verify_lens_topk(
-                survival_probs=survival, budget=budget, cfg=cfg
-            )
+            verify_lens = impl(survival_probs=survival, budget=budget, cfg=cfg)
             self.assertGreaterEqual(int(verify_lens.min().item()), 1)
 
-    def test_explicit_zero_min_still_clamped_to_anchor(self):
+    @_for_each_impl
+    def test_explicit_zero_min_still_clamped_to_anchor(self, impl):
         """Even an explicit min_verify_len=0 is clamped to >= 1 (double safeguard)."""
         survival = _survival_from_confidence(
             torch.tensor([[0.9, 0.8, 0.7], [0.6, 0.5, 0.4]], dtype=torch.float32)
         )
         cfg = DSparkScheduleConfig(gamma=3, min_verify_len=0)
-        verify_lens = schedule_verify_lens_topk(
-            survival_probs=survival, budget=0, cfg=cfg
-        )
+        verify_lens = impl(survival_probs=survival, budget=0, cfg=cfg)
         self.assertGreaterEqual(int(verify_lens.min().item()), 1)
         self.assertTrue(
             torch.equal(verify_lens, torch.tensor([1, 1], dtype=torch.int32))
@@ -361,7 +423,8 @@ class TestVerifyLenAnchorContract(CustomTestCase):
 
 
 class TestNonAnticipating(CustomTestCase):
-    def test_lens_topk_non_anticipating_under_future_perturbation(self):
+    @_for_each_impl
+    def test_lens_topk_non_anticipating_under_future_perturbation(self, impl):
         """Perturbing future-dependent a[r, k:] leaves l_r >= k unchanged (incl. ties)."""
         base = torch.tensor(
             [
@@ -373,9 +436,7 @@ class TestNonAnticipating(CustomTestCase):
         )
         cfg = DSparkScheduleConfig(gamma=4)
         budget = 5
-        baseline = schedule_verify_lens_topk(
-            survival_probs=base, budget=budget, cfg=cfg
-        )
+        baseline = impl(survival_probs=base, budget=budget, cfg=cfg)
 
         request, cut = 1, 2
         for delta in (-0.05, -0.2, 0.05, 0.0):
@@ -384,9 +445,7 @@ class TestNonAnticipating(CustomTestCase):
             perturbed[request, cut:] = torch.clamp(
                 torch.minimum(future + delta, base[request, cut - 1]), min=0.0
             )
-            verify_lens = schedule_verify_lens_topk(
-                survival_probs=perturbed, budget=budget, cfg=cfg
-            )
+            verify_lens = impl(survival_probs=perturbed, budget=budget, cfg=cfg)
             admitted_prefix_unchanged = min(int(baseline[request].item()), cut) == min(
                 int(verify_lens[request].item()), cut
             )
@@ -395,22 +454,76 @@ class TestNonAnticipating(CustomTestCase):
                 msg=f"prefix admission changed under future perturbation delta={delta}",
             )
 
-    def test_other_requests_unaffected_by_one_request_future(self):
+    @_for_each_impl
+    def test_other_requests_unaffected_by_one_request_future(self, impl):
         """Perturbing one request's future does not change other requests' lengths."""
         base = torch.tensor(
             [[0.95, 0.90, 0.20], [0.93, 0.88, 0.15]], dtype=torch.float32
         )
         cfg = DSparkScheduleConfig(gamma=3)
         budget = 2
-        baseline = schedule_verify_lens_topk(
-            survival_probs=base, budget=budget, cfg=cfg
-        )
+        baseline = impl(survival_probs=base, budget=budget, cfg=cfg)
         perturbed = base.clone()
         perturbed[0, 2] = 0.01
-        verify_lens = schedule_verify_lens_topk(
-            survival_probs=perturbed, budget=budget, cfg=cfg
-        )
+        verify_lens = impl(survival_probs=perturbed, budget=budget, cfg=cfg)
         self.assertEqual(int(baseline[1].item()), int(verify_lens[1].item()))
+
+
+class TestVanillaMatchesReference(CustomTestCase):
+    def test_random_inputs_match_reference(self):
+        """schedule_verify_lens_topk_vanilla matches schedule_verify_lens_topk
+        bit-for-bit across many randomized (survival, budget, cfg) inputs."""
+        torch.manual_seed(20260630)
+        num_trials = 4000
+        for trial in range(num_trials):
+            num_requests = int(torch.randint(1, 6, ()).item())
+            gamma = int(torch.randint(1, 9, ()).item())
+
+            # Mix dtypes (stresses the eps-gate dtype path), continuous vs coarse
+            # confidence (coarse -> exact ties), and an occasional saturated row.
+            dtype = torch.float32 if trial % 2 == 0 else torch.float64
+            confidence = torch.rand(num_requests, gamma, dtype=dtype)
+            if trial % 3 == 0:
+                confidence = (confidence * 4).round() / 4
+            if trial % 7 == 0:
+                confidence = torch.ones(num_requests, gamma, dtype=dtype)
+            survival = torch.cumprod(confidence, dim=1)
+
+            min_verify_len = int(torch.randint(0, gamma + 1, ()).item())
+            # 0 is the "resolve to gamma" sentinel; otherwise a concrete cap in
+            # [min_verify_len, gamma].
+            if torch.rand(()).item() < 0.5:
+                max_verify_len = 0
+            else:
+                max_verify_len = int(
+                    torch.randint(min_verify_len, gamma + 1, ()).item()
+                )
+            survival_eps = float(
+                [1e-6, 1e-3, 0.1, 0.5][int(torch.randint(0, 4, ()).item())]
+            )
+            budget = int(torch.randint(0, num_requests * gamma + 3, ()).item())
+
+            cfg = DSparkScheduleConfig(
+                gamma=gamma,
+                min_verify_len=min_verify_len,
+                max_verify_len=max_verify_len,
+                survival_eps=survival_eps,
+            )
+            reference = schedule_verify_lens_topk(
+                survival_probs=survival, budget=budget, cfg=cfg
+            )
+            vanilla = schedule_verify_lens_topk_vanilla(
+                survival_probs=survival, budget=budget, cfg=cfg
+            )
+            self.assertTrue(
+                torch.equal(reference, vanilla),
+                msg=(
+                    f"mismatch on trial {trial}: budget={budget} "
+                    f"min={min_verify_len} max={max_verify_len} eps={survival_eps} "
+                    f"survival={survival.tolist()} "
+                    f"reference={reference.tolist()} vanilla={vanilla.tolist()}"
+                ),
+            )
 
 
 class TestConfidencePrefixScheduler(CustomTestCase):
