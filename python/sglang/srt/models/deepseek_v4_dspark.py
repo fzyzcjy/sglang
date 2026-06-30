@@ -810,10 +810,11 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         recent ``compute_base_logits`` (the same tap the LM head's ``norm`` consumes, but
         BEFORE the norm, reference model.py:873) and, for with_markov heads, the per-step
         markov_embed stack built from the prev-token sequence ``[anchor, s_0, ...,
-        s_{gamma-2}]`` (the off-by-one shared with the worker). STS calibration is identity
-        in the MVP, so the raw logit is mapped to ``(0, 1)`` by sigmoid; losslessness does
-        not depend on the value. ``anchor_tokens`` is ``[bs]``; ``sampled_tokens`` is
-        ``[bs, gamma]``. Returns ``[bs, gamma]``.
+        s_{gamma-2}]`` (the off-by-one shared with the worker). ``confidence_head.apply_sts``
+        applies the per-position STS temperature (identity when no table is loaded) then
+        sigmoid, mapping the raw logit to ``(0, 1)``; losslessness does not depend on the
+        value. ``anchor_tokens`` is ``[bs]``; ``sampled_tokens`` is ``[bs, gamma]``.
+        Returns ``[bs, gamma]``.
         """
         confidence_head = self.confidence_head
         if confidence_head is None:
@@ -834,7 +835,7 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         else:
             markov_embed_stack = None
         confidence_raw = confidence_head(x_post_hc, markov_embed_stack)
-        confidence = torch.sigmoid(confidence_raw.float())
+        confidence = confidence_head.apply_sts(confidence_raw)
         assert bool(
             ((confidence >= 0) & (confidence <= 1)).all()
         ), "DSpark confidence must lie in [0, 1]."
