@@ -513,7 +513,10 @@ class DSparkWorkerV2(BaseSpecWorker):
         markov_head = self.draft_model.markov_head
         bs = base_logits.shape[0]
         greedy_mask = self._resolve_greedy_mask(bs=bs, sampling_info=sampling_info)
-        any_sampling = bool((~greedy_mask).any())
+        # any_sampling == not is_all_greedy, read host-side (is_all_greedy is a
+        # Python bool on sampling_info) so this branch draws no GPU sync. No
+        # sampling_info -> all-greedy fast path (argmax only, no RNG draw).
+        any_sampling = sampling_info is not None and not sampling_info.is_all_greedy
 
         if sampling_info is None:
             temperatures = torch.ones(bs, dtype=torch.float32, device=self.device)
