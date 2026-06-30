@@ -15,6 +15,7 @@ from typing import (
     Union,
 )
 
+import msgspec
 import torch
 import torch.nn.functional as F
 
@@ -132,6 +133,28 @@ def _resolve_ragged_verify_layout(
     if spec_info is None:
         return None
     return getattr(spec_info, "ragged_verify_layout", None)
+
+
+def compute_target_verify_graph_key(
+    *,
+    bs: int,
+    num_draft_tokens: int,
+    ragged_layout: Optional[RaggedVerifyLayout],
+) -> Tuple[int, int]:
+    num_tokens_full_block = num_draft_tokens * bs
+    if ragged_layout is None:
+        return bs, num_tokens_full_block
+    graph_num_tokens = ragged_layout.graph_num_tokens
+    total_verify_tokens = ragged_layout.total_verify_tokens
+    assert graph_num_tokens <= num_tokens_full_block, (
+        f"ragged verify graph_num_tokens={graph_num_tokens} exceeds full block "
+        f"num_draft*bs={num_tokens_full_block}"
+    )
+    assert total_verify_tokens <= graph_num_tokens, (
+        f"ragged verify total_verify_tokens={total_verify_tokens} exceeds the "
+        f"round-up bucket graph_num_tokens={graph_num_tokens}"
+    )
+    return graph_num_tokens, graph_num_tokens
 
 
 T = TypeVar("T", bound=Optional[torch.Tensor])
@@ -268,6 +291,144 @@ def _compact_dspark_window_then_block(
     block_rows = torch.arange(bs, device=device).view(-1, 1).expand(-1, block_size)
     out[block_rows, block_col] = block_swa_locs
     return out
+
+
+class DsparkWindowGather(msgspec.Struct, frozen=True):
+    num_q: int
+    bs: int
+    context_lens: torch.Tensor  # [bs] int32 = clamp(prefix_lens, max=SWA_WINDOW)
+    req_pool_indices_per_request: torch.Tensor  # [bs]
+    offsets: torch.Tensor  # [bs, SWA_WINDOW] int64, already clamp(min=0)
+    invalid: torch.Tensor  # [bs, SWA_WINDOW] bool, computed PRE-clamp
+
+
+def compute_dspark_window_gather(
+    *,
+    seq_lens_casual: torch.Tensor,
+    req_pool_indices_repeated: torch.Tensor,
+    block_size: int,
+) -> DsparkWindowGather:
+    """Pre-gather index arithmetic for the NON-CAUSAL DSpark draft-block SWA window.
+
+    Pure tensor arithmetic that turns the uniform-gamma per-token causal lengths into the
+    per-request committed-window geometry consumed by ``get_dspark_swa_page_indices``: the
+    per-request first-token prefix length, its clamped context length, the request index,
+    the window column ``offsets`` into ``req_to_token`` (most-recent-last) and the ``invalid``
+    mask for pre-start positions. Reads the module-global ``SWA_WINDOW`` (single source of
+    truth, mirroring ``build_dspark_swa_page_indices``).
+    """
+    seq_lens_casual = seq_lens_casual.to(torch.int32)
+    num_q = seq_lens_casual.size(0)
+    assert num_q % block_size == 0, (
+        f"DSpark draft block forward must be uniform-gamma: num_q={num_q} not "
+        f"divisible by block_size={block_size}."
+    )
+    bs = num_q // block_size
+    device = seq_lens_casual.device
+
+    # Per-request prefix length (committed context before the draft block) and the
+    # request's first-token row index in the uniform layout.
+    first_token = torch.arange(bs, device=device, dtype=torch.int64) * block_size
+    prefix_lens = (seq_lens_casual[first_token] - 1).to(torch.int32)
+    context_lens = torch.clamp(prefix_lens, max=SWA_WINDOW).to(torch.int32)
+    req_pool_indices_per_request = req_pool_indices_repeated[first_token]
+
+    # Window slots: the request's prefix positions [prefix - W .. prefix - 1], most
+    # recent last, future-of-block-start masked -1 (mirrors the reference window).
+    offsets = (
+        prefix_lens.to(torch.int64).unsqueeze(1)
+        - SWA_WINDOW
+        + torch.arange(SWA_WINDOW, device=device, dtype=torch.int64).unsqueeze(0)
+    )
+    # invalid MUST be computed BEFORE the clamp: a pre-start window position has a negative
+    # absolute offset, but the clamp(min=0) below rewrites those negatives to 0 so the
+    # caller's req_to_token gather stays in-bounds. Reordering to clamp-then-(offsets < 0)
+    # would make invalid all-False and silently leak the request's token-0 slot into the
+    # masked window prefix.
+    invalid = offsets < 0
+    offsets = offsets.clamp(min=0)
+
+    return DsparkWindowGather(
+        num_q=num_q,
+        bs=bs,
+        context_lens=context_lens,
+        req_pool_indices_per_request=req_pool_indices_per_request,
+        offsets=offsets,
+        invalid=invalid,
+    )
+
+
+def build_block_seq_lens_casual(
+    *,
+    seq_lens: torch.Tensor,
+    block_size: int,
+    device: torch.device,
+) -> torch.Tensor:
+    # The per-token causal length for a uniform-gamma draft block: request r's gamma
+    # tokens have causal lengths prefix_r + 1 .. prefix_r + gamma (the non-causal index
+    # builder only reads the first-token prefix per request, but the layout must match
+    # expand_prefill_casually's [prefix+1 .. prefix+gamma] ordering).
+    prefix = seq_lens.to(torch.int32)
+    steps = torch.arange(1, block_size + 1, device=device, dtype=torch.int32)
+    return (prefix[:, None] + steps[None, :]).reshape(-1)
+
+
+class VerifyExtendLengths(msgspec.Struct, frozen=True):
+    seq_lens_extended: torch.Tensor
+    seq_lens_cpu_extended: List[int]
+    extend_seq_lens_cpu: List[int]
+    num_tokens: int
+    extend_start_loc: Optional[torch.Tensor]
+
+
+def compute_uniform_extend_lengths(
+    *,
+    seq_lens: torch.Tensor,
+    seq_lens_cpu: List[int],
+    extend_len: int,
+) -> VerifyExtendLengths:
+    """Eager same-length verify extend: every request grows by ``extend_len`` tokens.
+
+    Serves the uniform-gamma target verify (``extend_len = speculative_num_draft_tokens``)
+    and the DSpark draft block (``extend_len = block_size``). ``seq_lens_cpu`` must already be
+    a ``list[int]`` (call sites normalize); the int contract keeps ``seq_lens_cpu_extended``
+    from degrading into a list of 0-d tensors.
+    """
+    batch_size = len(seq_lens_cpu)
+    seq_lens_extended = seq_lens + extend_len
+    seq_lens_cpu_extended = [x + extend_len for x in seq_lens_cpu]
+    extend_seq_lens_cpu = [extend_len] * batch_size
+    num_tokens = extend_len * batch_size
+    return VerifyExtendLengths(
+        seq_lens_extended=seq_lens_extended,
+        seq_lens_cpu_extended=seq_lens_cpu_extended,
+        extend_seq_lens_cpu=extend_seq_lens_cpu,
+        num_tokens=num_tokens,
+        extend_start_loc=None,
+    )
+
+
+def compute_ragged_extend_lengths(
+    *,
+    seq_lens: torch.Tensor,
+    seq_lens_cpu: List[int],
+    ragged_layout: RaggedVerifyLayout,
+) -> VerifyExtendLengths:
+    """Eager ragged verify extend: each request grows by its own ``verify_lens`` entry."""
+    extend_seq_lens_cpu = list(ragged_layout.verify_lens_cpu)
+    seq_lens_extended = seq_lens + ragged_layout.verify_lens
+    seq_lens_cpu_extended = [
+        raw + length for raw, length in zip(seq_lens_cpu, extend_seq_lens_cpu)
+    ]
+    num_tokens = ragged_layout.total_verify_tokens
+    extend_start_loc = ragged_layout.extend_start_loc
+    return VerifyExtendLengths(
+        seq_lens_extended=seq_lens_extended,
+        seq_lens_cpu_extended=seq_lens_cpu_extended,
+        extend_seq_lens_cpu=extend_seq_lens_cpu,
+        num_tokens=num_tokens,
+        extend_start_loc=extend_start_loc,
+    )
 
 
 def _create_flashmla_metadata():
@@ -729,20 +890,11 @@ class DeepseekV4AttnBackend(
         bs: int,
         ragged_layout: Optional[RaggedVerifyLayout],
     ) -> Tuple[int, int]:
-        num_tokens_full_block = self.speculative_num_draft_tokens * bs
-        if ragged_layout is None:
-            return bs, num_tokens_full_block
-        graph_num_tokens = ragged_layout.graph_num_tokens
-        total_verify_tokens = ragged_layout.total_verify_tokens
-        assert graph_num_tokens <= num_tokens_full_block, (
-            f"ragged verify graph_num_tokens={graph_num_tokens} exceeds full block "
-            f"num_draft*bs={num_tokens_full_block}"
+        return compute_target_verify_graph_key(
+            bs=bs,
+            num_draft_tokens=self.speculative_num_draft_tokens,
+            ragged_layout=ragged_layout,
         )
-        assert total_verify_tokens <= graph_num_tokens, (
-            f"ragged verify total_verify_tokens={total_verify_tokens} exceeds the "
-            f"round-up bucket graph_num_tokens={graph_num_tokens}"
-        )
-        return graph_num_tokens, graph_num_tokens
 
     def _make_target_verify_c128_metadata(
         self,
@@ -1014,23 +1166,25 @@ class DeepseekV4AttnBackend(
         online_c128_state_slot_offset: int = 0,
         ragged_layout: Optional[RaggedVerifyLayout] = None,
     ) -> DSV4Metadata:
-        batch_size = len(seq_lens)
         if ragged_layout is None:
-            seq_lens = seq_lens + self.speculative_num_draft_tokens
-            seq_lens_cpu = [x + self.speculative_num_draft_tokens for x in seq_lens_cpu]
-            extend_seq_lens_cpu = [self.speculative_num_draft_tokens] * batch_size
-            extend_seq_lens = self._move_to_device(extend_seq_lens_cpu)
-            num_tokens = self.speculative_num_draft_tokens * batch_size
-            extend_start_loc = None
+            lengths = compute_uniform_extend_lengths(
+                seq_lens=seq_lens,
+                seq_lens_cpu=seq_lens_cpu,
+                extend_len=self.speculative_num_draft_tokens,
+            )
+            extend_seq_lens = self._move_to_device(lengths.extend_seq_lens_cpu)
         else:
-            seq_lens = seq_lens + ragged_layout.verify_lens
-            extend_seq_lens_cpu = list(ragged_layout.verify_lens_cpu)
-            seq_lens_cpu = [
-                raw + length for raw, length in zip(seq_lens_cpu, extend_seq_lens_cpu)
-            ]
+            lengths = compute_ragged_extend_lengths(
+                seq_lens=seq_lens,
+                seq_lens_cpu=seq_lens_cpu,
+                ragged_layout=ragged_layout,
+            )
             extend_seq_lens = ragged_layout.verify_lens
-            num_tokens = ragged_layout.total_verify_tokens
-            extend_start_loc = ragged_layout.extend_start_loc
+        seq_lens = lengths.seq_lens_extended
+        seq_lens_cpu = lengths.seq_lens_cpu_extended
+        extend_seq_lens_cpu = lengths.extend_seq_lens_cpu
+        num_tokens = lengths.num_tokens
+        extend_start_loc = lengths.extend_start_loc
         if out_cache_loc is None:
             out_cache_loc = seq_lens.new_zeros(num_tokens)
         return self.init_forward_metadata_prefill(
@@ -1066,25 +1220,26 @@ class DeepseekV4AttnBackend(
         because ``self.is_dspark_draft`` is set. ``need_compress=False`` skips the c4/c128
         path the draft does not have (R8: draft pool is SWA-only).
         """
-        batch_size = len(seq_lens)
-        seq_lens_block = seq_lens + block_size
         if seq_lens_cpu is None:
-            seq_lens_block_cpu = seq_lens_block.tolist()
+            seq_lens_cpu_list = seq_lens.tolist()
         else:
-            seq_lens_block_cpu = [int(x) + block_size for x in seq_lens_cpu.tolist()]
-        extend_seq_lens_cpu = [block_size] * batch_size
-        extend_seq_lens = self._move_to_device(extend_seq_lens_cpu)
-        num_tokens = block_size * batch_size
+            seq_lens_cpu_list = [int(x) for x in seq_lens_cpu.tolist()]
+        lengths = compute_uniform_extend_lengths(
+            seq_lens=seq_lens,
+            seq_lens_cpu=seq_lens_cpu_list,
+            extend_len=block_size,
+        )
+        extend_seq_lens = self._move_to_device(lengths.extend_seq_lens_cpu)
         return self.init_forward_metadata_prefill(
             max_seq_len=max_seq_len,
             req_pool_indices=req_pool_indices,
-            seq_lens=seq_lens_block,
-            seq_lens_cpu=seq_lens_block_cpu,
+            seq_lens=lengths.seq_lens_extended,
+            seq_lens_cpu=lengths.seq_lens_cpu_extended,
             out_cache_loc=out_cache_loc,
-            num_tokens=num_tokens,
+            num_tokens=lengths.num_tokens,
             extend_seq_lens=extend_seq_lens,
-            extend_seq_lens_cpu=extend_seq_lens_cpu,
-            extend_start_loc=None,
+            extend_seq_lens_cpu=lengths.extend_seq_lens_cpu,
+            extend_start_loc=lengths.extend_start_loc,
             need_compress=False,
             use_prefill_cuda_graph=False,
             dspark_block_size=block_size,
@@ -1107,13 +1262,15 @@ class DeepseekV4AttnBackend(
         if is_ragged:
             seq_lens = seq_lens + extend_seq_lens
             num_q_tokens = raw_metadata.total_verify_tokens
-            seq_lens_casual, req_pool_indices_repeated = self._expand_verify_ragged(
-                num_tokens=num_q_tokens,
-                seq_lens=seq_lens,
-                extend_seq_lens=extend_seq_lens,
-                extend_start_loc=raw_metadata.extend_start_loc,
-                req_pool_indices=req_pool_indices,
-                padded_num_tokens=out_cache_loc.shape[0],
+            seq_lens_casual, req_pool_indices_repeated = (
+                self._expand_prefill_casually_vectorized(
+                    num_tokens=num_q_tokens,
+                    seq_lens=seq_lens,
+                    extend_seq_lens=extend_seq_lens,
+                    extend_start_loc=raw_metadata.extend_start_loc,
+                    req_pool_indices=req_pool_indices,
+                    padded_num_tokens=out_cache_loc.shape[0],
+                )
             )
         else:
             seq_lens = seq_lens + self.speculative_num_draft_tokens
@@ -1294,13 +1451,11 @@ class DeepseekV4AttnBackend(
     def _dspark_seq_lens_casual(
         self, *, seq_lens: torch.Tensor, block_size: int
     ) -> torch.Tensor:
-        # The per-token causal length for a uniform-gamma draft block: request r's gamma
-        # tokens have causal lengths prefix_r + 1 .. prefix_r + gamma (the non-causal index
-        # builder only reads the first-token prefix per request, but the layout must match
-        # expand_prefill_casually's [prefix+1 .. prefix+gamma] ordering).
-        prefix = seq_lens.to(torch.int32)
-        steps = torch.arange(1, block_size + 1, **self.cuda_int32_kwargs)
-        return (prefix[:, None] + steps[None, :]).reshape(-1)
+        return build_block_seq_lens_casual(
+            seq_lens=seq_lens,
+            block_size=block_size,
+            device=self.cuda_int32_kwargs["device"],
+        )
 
     def init_forward_metadata_out_graph(
         self,
@@ -1985,24 +2140,6 @@ class DeepseekV4AttnBackend(
         )
         return o
 
-    def _expand_verify_ragged(
-        self,
-        num_tokens: int,
-        seq_lens: torch.Tensor,
-        extend_seq_lens: torch.Tensor,
-        extend_start_loc: torch.Tensor,
-        req_pool_indices: torch.Tensor,
-        padded_num_tokens: Optional[int],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        return self._expand_prefill_casually_vectorized(
-            num_tokens=num_tokens,
-            seq_lens=seq_lens,
-            extend_seq_lens=extend_seq_lens,
-            extend_start_loc=extend_start_loc,
-            req_pool_indices=req_pool_indices,
-            padded_num_tokens=padded_num_tokens,
-        )
-
     def expand_prefill_casually(
         self,
         num_tokens: int,
@@ -2228,33 +2365,19 @@ class DeepseekV4AttnBackend(
         only the first ``swa_topk_lengths[q]`` entries (no causal mask), so the ``-1``
         padding is never attended.
         """
-        seq_lens_casual = seq_lens_casual.to(torch.int32)
-        num_q = seq_lens_casual.size(0)
-        assert num_q % block_size == 0, (
-            f"DSpark draft block forward must be uniform-gamma: num_q={num_q} not "
-            f"divisible by block_size={block_size}."
+        gather = compute_dspark_window_gather(
+            seq_lens_casual=seq_lens_casual,
+            req_pool_indices_repeated=req_pool_indices_repeated,
+            block_size=block_size,
         )
-        bs = num_q // block_size
-        device = seq_lens_casual.device
+        num_q = gather.num_q
+        bs = gather.bs
+        context_lens = gather.context_lens
+        offsets = gather.offsets
+        invalid = gather.invalid
 
-        # Per-request prefix length (committed context before the draft block) and the
-        # request's first-token row index in the uniform layout.
-        first_token = torch.arange(bs, device=device, dtype=torch.int64) * block_size
-        prefix_lens = (seq_lens_casual[first_token] - 1).to(torch.int32)
-        context_lens = torch.clamp(prefix_lens, max=SWA_WINDOW).to(torch.int32)
-        req_pool_indices_per_request = req_pool_indices_repeated[first_token]
-
-        # Window slots: the request's prefix positions [prefix - W .. prefix - 1], most
-        # recent last, future-of-block-start masked -1 (mirrors the reference window).
-        offsets = (
-            prefix_lens.to(torch.int64).unsqueeze(1)
-            - SWA_WINDOW
-            + torch.arange(SWA_WINDOW, device=device, dtype=torch.int64).unsqueeze(0)
-        )
-        invalid = offsets < 0
-        offsets = offsets.clamp(min=0)
         window_full_locs = self.req_to_token[
-            req_pool_indices_per_request[:, None].to(torch.int64), offsets
+            gather.req_pool_indices_per_request[:, None].to(torch.int64), offsets
         ]
         window_full_locs = window_full_locs.masked_fill(invalid, 0)
         window_swa_locs = self.token_to_kv_pool.translate_loc_from_full_to_swa(

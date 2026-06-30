@@ -13,6 +13,7 @@ from sglang.srt.layers.attention.deepseek_v4_backend import (
     DeepseekV4AttnBackend,
     _ragged_verify_mode,
     _resolve_ragged_verify_layout,
+    compute_target_verify_graph_key,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
@@ -123,56 +124,50 @@ class TestResolveRaggedVerifyLayout(CustomTestCase):
 class TestTargetVerifyGraphKey(CustomTestCase):
     def test_bs_keyed_when_no_layout(self):
         """Without a ragged layout the key stays (bs, num_draft*bs), byte-identical."""
-        backend = _stub_backend(num_draft_tokens=6)
-        key, num_tokens = DeepseekV4AttnBackend._target_verify_graph_key(
-            backend, bs=3, ragged_layout=None
+        key, num_tokens = compute_target_verify_graph_key(
+            bs=3, num_draft_tokens=6, ragged_layout=None
         )
         self.assertEqual(key, 3)
         self.assertEqual(num_tokens, 18)
 
     def test_token_keyed_when_full_layout(self):
         """A compact ragged layout keys the graph by graph_num_tokens."""
-        backend = _stub_backend(num_draft_tokens=6)
         layout = _make_layout([6, 3, 1])
-        key, num_tokens = DeepseekV4AttnBackend._target_verify_graph_key(
-            backend, bs=3, ragged_layout=layout
+        key, num_tokens = compute_target_verify_graph_key(
+            bs=3, num_draft_tokens=6, ragged_layout=layout
         )
         self.assertEqual(key, 10)
         self.assertEqual(num_tokens, 10)
 
     def test_graph_num_tokens_above_full_block_fails_loud(self):
         """graph_num_tokens may never exceed the full-block num_draft*bs budget."""
-        backend = _stub_backend(num_draft_tokens=6)
         layout = _make_layout([6, 3, 1], graph_num_tokens=24)
         with self.assertRaises(AssertionError):
-            DeepseekV4AttnBackend._target_verify_graph_key(
-                backend, bs=3, ragged_layout=layout
+            compute_target_verify_graph_key(
+                bs=3, num_draft_tokens=6, ragged_layout=layout
             )
 
     def test_graph_num_tokens_above_total_keys_by_bucket(self):
         """A round-up bucket graph_num_tokens > total keys the graph by the bucket."""
-        backend = _stub_backend(num_draft_tokens=6)
         layout = _make_layout([6, 3, 1], graph_num_tokens=12)
-        key, num_tokens = DeepseekV4AttnBackend._target_verify_graph_key(
-            backend, bs=3, ragged_layout=layout
+        key, num_tokens = compute_target_verify_graph_key(
+            bs=3, num_draft_tokens=6, ragged_layout=layout
         )
         self.assertEqual((key, num_tokens), (12, 12))
 
     def test_total_above_graph_num_tokens_fails_loud(self):
         """A total_verify_tokens exceeding the round-up bucket fails loud here."""
-        backend = _stub_backend(num_draft_tokens=6)
         layout = _make_layout([6, 3, 1], graph_num_tokens=8)
         with self.assertRaises(AssertionError):
-            DeepseekV4AttnBackend._target_verify_graph_key(
-                backend, bs=3, ragged_layout=layout
+            compute_target_verify_graph_key(
+                bs=3, num_draft_tokens=6, ragged_layout=layout
             )
 
     def test_uniform_full_block_layout_matches_bs_block(self):
         """A uniform full-block layout (all num_draft) yields num_draft*bs tokens."""
-        backend = _stub_backend(num_draft_tokens=6)
         layout = _make_layout([6, 6, 6])
-        key, num_tokens = DeepseekV4AttnBackend._target_verify_graph_key(
-            backend, bs=3, ragged_layout=layout
+        key, num_tokens = compute_target_verify_graph_key(
+            bs=3, num_draft_tokens=6, ragged_layout=layout
         )
         self.assertEqual(key, 18)
         self.assertEqual(num_tokens, 18)
@@ -182,9 +177,8 @@ class TestTargetVerifyGraphKey(CustomTestCase):
         layout = _make_layout([6, 3, 1])
         self.assertEqual(layout.total_verify_tokens, 10)
         self.assertEqual(layout.extend_start_loc.tolist(), [0, 6, 9])
-        backend = _stub_backend(num_draft_tokens=6)
-        key, num_tokens = DeepseekV4AttnBackend._target_verify_graph_key(
-            backend, bs=3, ragged_layout=layout
+        key, num_tokens = compute_target_verify_graph_key(
+            bs=3, num_draft_tokens=6, ragged_layout=layout
         )
         self.assertEqual((key, num_tokens), (10, 10))
 
