@@ -85,17 +85,22 @@ subfolders once the suite stabilizes (mirroring `attention/unittests/dsv4/`).
 | `test_dsv4_dynamic_batch.py` | 1 parity (T3 per-row independence) |
 | `test_dsv4_tp_parity.py` | 1 parity (T4 TP=2 vs TP=1) |
 | `test_dsv4_injection.py` | 2 + 1 (T5 translate unit + GPU round-trip) |
+| `test_dsv4_component_parity.py` | 1 parity (granularity-A: kv-proj / projection / hc_head / markov / confidence vs SoT) |
+| `test_dense_block_forward_parity.py` | 1 + 4 (dense granularity-B: draft forward through MHA backend vs SoT whole-block) |
 
 ## Not run by CI (reference fixtures)
 
 `test/srt/speculative/_dspark_reference/` — a vendored copy of the DeepSpec
 qwen3/gemma4 modeling (`markov_head.py`, `draft_ops.py`, `sampling.py`,
-`qwen3/`, `gemma4/`) plus the DSpark V4 source-of-truth oracle
-(`dsv4/sot_dspark_attention.py` from the DeepSeek-V4-Flash-DSpark reference
-model.py/kernel.py) and the T1/T3/T4 production block-forward fixture
-(`dsv4/block_forward_harness.py`). Imported by the parity tests (category 1) as
-the numerical "standard answer" / production driver. Not collected as tests
-itself; lives under `test/srt/` (CI only globs `test/registered/**`).
+`qwen3/`, `gemma4/`) plus the DSpark V4 source-of-truth oracle: the
+`deepseek_v4/` package (`sot_attention.py` = the pure-torch non-causal sparse
+attention oracle, `modeling.py` = the fuller DSpark draft modeling —
+`RefTransformer.forward_spec`, the DSpark heads, and the mHC math — both vendored
+from the DeepSeek-V4-Flash-DSpark reference model.py/kernel.py) and the T1/T3/T4
+production block-forward fixture (`dsv4/block_forward_harness.py`). Imported by the
+parity tests (category 1) as the numerical "standard answer" / production driver.
+Not collected as tests itself; lives under `test/srt/` (CI only globs
+`test/registered/**`).
 
 ## Open gaps
 
