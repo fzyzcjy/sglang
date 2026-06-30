@@ -149,60 +149,126 @@ class TestFlatTableLookupIsConstant(CustomTestCase):
 
 
 class TestProfileSpsTable(CustomTestCase):
-    def test_profile_builds_increasing_batch_tokens(self):
-        """profile_sps_table emits probes at B = num_requests * (1 + gamma)."""
-
-        def fake_timer(worker: object, num_requests: int, gamma: int) -> float:
-            return 0.001 * num_requests
-
+    def test_profile_sorts_out_of_order_probes(self):
+        """profile_sps_table sorts probes by batch_tokens into a valid table."""
         table = profile_sps_table(
-            target_worker=object(),
-            probe_request_counts=[1, 2, 4],
-            gamma=7,
-            iters=3,
-            time_uniform_verify_step=fake_timer,
+            probes=[(32, 500.0), (8, 1000.0), (16, 950.0)],
         )
         self.assertEqual(table.sample_batch_tokens, [8, 16, 32])
-        self.assertEqual(table.max_batch_tokens, 32)
-        self.assertEqual(len(table.sample_steps_per_sec), 3)
+        self.assertEqual(table.sample_steps_per_sec, [1000.0, 950.0, 500.0])
 
-    def test_profile_rejects_invalid_gamma(self):
-        """profile_sps_table raises for gamma < 1."""
+    def test_profile_passes_steps_per_sec_through_unchanged(self):
+        """profile_sps_table stores each probe's steps_per_sec verbatim."""
+        table = profile_sps_table(probes=[(4, 1234.5), (8, 678.25)])
+        self.assertEqual(table.sample_steps_per_sec, [1234.5, 678.25])
+
+    def test_profile_rejects_duplicate_batch_tokens(self):
+        """profile_sps_table rejects duplicate batch_tokens (caller medians first)."""
         with self.assertRaises(ValueError):
-            profile_sps_table(
-                target_worker=object(),
-                probe_request_counts=[1],
-                gamma=0,
-                iters=1,
-                time_uniform_verify_step=lambda w, r, g: 0.001,
-            )
+            profile_sps_table(probes=[(8, 1000.0), (8, 900.0)])
 
-    def test_profile_rejects_invalid_iters(self):
-        """profile_sps_table raises for iters < 1."""
+    def test_profile_rejects_empty_probes(self):
+        """profile_sps_table raises when given no probes."""
         with self.assertRaises(ValueError):
-            profile_sps_table(
-                target_worker=object(),
-                probe_request_counts=[1],
-                gamma=7,
-                iters=0,
-                time_uniform_verify_step=lambda w, r, g: 0.001,
-            )
+            profile_sps_table(probes=[])
 
-    def test_profile_takes_median_across_iters(self):
-        """profile_sps_table uses the median duration across iters per probe."""
-        durations = iter([0.01, 0.001, 0.02])
+    def test_profile_max_batch_tokens_defaults_to_largest_probe(self):
+        """profile_sps_table defaults max_batch_tokens to the largest batch_tokens."""
+        table = profile_sps_table(probes=[(8, 1000.0), (64, 480.0), (16, 950.0)])
+        self.assertEqual(table.max_batch_tokens, 64)
 
-        def jittery_timer(worker: object, num_requests: int, gamma: int) -> float:
-            return next(durations)
-
+    def test_profile_honors_explicit_max_batch_tokens(self):
+        """profile_sps_table uses an explicit max_batch_tokens clamp bound."""
         table = profile_sps_table(
-            target_worker=object(),
-            probe_request_counts=[1],
-            gamma=7,
-            iters=3,
-            time_uniform_verify_step=jittery_timer,
+            probes=[(8, 1000.0), (16, 950.0)], max_batch_tokens=256
         )
-        self.assertAlmostEqual(table.sample_steps_per_sec[0], 1.0 / 0.01, places=6)
+        self.assertEqual(table.max_batch_tokens, 256)
+
+
+def _make_bench_result(*, batch_size: int, output_throughput: float):
+    """Build a BenchOneCaseResult fake with only the conversion-relevant fields set."""
+    from sglang.benchmark.one_batch_server import BenchOneCaseResult
+
+    output_len = 1024
+    return BenchOneCaseResult(
+        run_name="test",
+        batch_size=batch_size,
+        input_len=512,
+        output_len=output_len,
+        latency=1.0,
+        input_throughput=1.0,
+        output_throughput=output_throughput,
+        overall_throughput=1.0,
+        last_ttft=0.1,
+        last_gen_throughput=output_throughput,
+        acc_length=-1.0,
+    )
+
+
+class TestProfilerConversion(CustomTestCase):
+    def _profile_with_fake_results(self, batches_per_repeat):
+        """Run the profiler against a monkeypatched bench returning fake results."""
+        from sglang.benchmark import dspark_sps_profiler
+        from sglang.srt.server_args import ServerArgs
+        from sglang.srt.speculative.dspark_sps_table import load_sps_table_from_path
+
+        repeats = iter(batches_per_repeat)
+
+        def fake_run_benchmark_internal(server_args, bench_args):
+            results = [
+                _make_bench_result(batch_size=bs, output_throughput=tput)
+                for bs, tput in next(repeats)
+            ]
+            return results, {}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "sps.json"
+            original = dspark_sps_profiler.run_benchmark_internal
+            dspark_sps_profiler.run_benchmark_internal = fake_run_benchmark_internal
+            try:
+                dspark_sps_profiler.profile(
+                    ServerArgs(model_path="dummy"),
+                    dspark_sps_profiler.BenchArgs(base_url="http://localhost:0"),
+                    dspark_sps_profiler.ProfilerArgs(
+                        out=str(out_path), repeats=len(batches_per_repeat)
+                    ),
+                )
+            finally:
+                dspark_sps_profiler.run_benchmark_internal = original
+            return load_sps_table_from_path(str(out_path))
+
+    def test_conversion_sets_batch_tokens_and_steps_per_sec(self):
+        """batch_tokens = batch_size and steps_per_sec = output_throughput / batch_size."""
+        table = self._profile_with_fake_results(
+            [[(2, 1000.0), (4, 1600.0), (8, 2400.0)]]
+        )
+        self.assertEqual(table.sample_batch_tokens, [2, 4, 8])
+        self.assertAlmostEqual(table.sample_steps_per_sec[0], 500.0, places=6)
+        self.assertAlmostEqual(table.sample_steps_per_sec[1], 400.0, places=6)
+        self.assertAlmostEqual(table.sample_steps_per_sec[2], 300.0, places=6)
+
+    def test_conversion_medians_across_repeats(self):
+        """Repeats of the same batch size are medianed per batch_tokens."""
+        # bs=4 yields steps_per_sec 250, 200, 300 across three repeats -> median 250.
+        table = self._profile_with_fake_results(
+            [[(4, 1000.0)], [(4, 800.0)], [(4, 1200.0)]]
+        )
+        self.assertEqual(table.sample_batch_tokens, [4])
+        self.assertAlmostEqual(table.sample_steps_per_sec[0], 250.0, places=6)
+
+    def test_conversion_keeps_non_monotone_samples_without_crashing(self):
+        """A non-monotone steps_per_sec sweep warns in self-check but does not crash."""
+        # bs=8 has a higher steps_per_sec than bs=4 (non-monotone rise > 10%).
+        table = self._profile_with_fake_results([[(4, 1000.0), (8, 8000.0)]])
+        self.assertEqual(table.sample_batch_tokens, [4, 8])
+        self.assertAlmostEqual(table.sample_steps_per_sec[0], 250.0, places=6)
+        self.assertAlmostEqual(table.sample_steps_per_sec[1], 1000.0, places=6)
+
+    def test_conversion_skips_degenerate_output_throughput(self):
+        """Cases with output_throughput <= 0 are dropped, not turned into bad probes."""
+        table = self._profile_with_fake_results([[(4, 0.0), (8, 2400.0)]])
+        self.assertEqual(table.sample_batch_tokens, [8])
+        self.assertAlmostEqual(table.sample_steps_per_sec[0], 300.0, places=6)
 
 
 if __name__ == "__main__":
