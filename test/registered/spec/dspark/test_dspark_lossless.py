@@ -146,7 +146,12 @@ class _DSparkLosslessBase(CustomTestCase, GSM8KMixin):
     target_model: str = ""
     draft_model: str = ""
     other_launch_args: list = []
-    attention_backend: str = "flashinfer"
+    # All DSpark lossless tests run the real sync-free path (trtllm_mha target +
+    # fa4 draft); COMPACT additionally requires it (flashinfer cannot capture
+    # ragged verify in a cuda graph).
+    attention_backend: str = "trtllm_mha"
+    # Spec-only draft attention backend; None leaves it at the server default.
+    draft_attention_backend: str = "fa4"
     disable_overlap: bool = False
     mem_fraction_static: float = 0.7
     # Extra env for the SPEC launches only (e.g. SGLANG_RAGGED_VERIFY_MODE=compact).
@@ -189,6 +194,11 @@ class _DSparkLosslessBase(CustomTestCase, GSM8KMixin):
             "--speculative-draft-model-path",
             cls.draft_model,
         ]
+        if cls.draft_attention_backend is not None:
+            args += [
+                "--speculative-draft-attention-backend",
+                cls.draft_attention_backend,
+            ]
         if cls.disable_overlap:
             args.append("--disable-overlap-schedule")
         args.extend(cls.other_launch_args)
