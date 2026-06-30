@@ -132,18 +132,27 @@ class TestScheduleVerifyLensTopk(CustomTestCase):
             self.assertLessEqual(total_extra, budget)
 
     def test_total_equals_anchors_plus_lens(self):
-        """actual_total == R + sum(verify_lens) holds (anchors plus per-request lens)."""
-        torch.manual_seed(3)
-        survival = _survival_from_confidence(torch.rand(4, 7) * 0.4 + 0.55)
-        cfg = DSparkScheduleConfig(gamma=7)
+        """The forward total R + sum(verify_lens) equals an independently-derived
+        R + R*min_verify_len + admitted_count (mid-pool budget, no max clamp)."""
+        # One candidate per request lands above the others so budget=2 admits
+        # exactly one extra per request (verify_len = 2 = min+1), staying below
+        # max_len=4 so the clamp never masks the length and a +1 mutation shifts
+        # the total. min/floor clamp is inert (every request gets one extra).
+        survival = torch.tensor(
+            [[0.90, 0.80, 0.30, 0.20], [0.85, 0.70, 0.25, 0.15]],
+            dtype=torch.float32,
+        )
+        num_requests, max_len, budget = 2, 4, 2
+        cfg = DSparkScheduleConfig(gamma=max_len, min_verify_len=1)
         verify_lens = schedule_verify_lens_topk(
-            survival_probs=survival, budget=10, cfg=cfg
+            survival_probs=survival, budget=budget, cfg=cfg
         )
-        num_requests = survival.shape[0]
         actual_total = num_requests + int(verify_lens.to(torch.int64).sum().item())
-        self.assertEqual(
-            actual_total, num_requests + int(verify_lens.to(torch.int64).sum().item())
-        )
+        # RHS derived only from R, min_verify_len, and the admitted count (= budget
+        # here, since budget < candidate count), never from sum(verify_lens).
+        admitted = budget
+        expected_total = num_requests + num_requests * cfg.min_verify_len + admitted
+        self.assertEqual(actual_total, expected_total)
 
     def test_admission_is_contiguous_prefix(self):
         """Each request's admitted positions form a contiguous prefix (l_r = count)."""
