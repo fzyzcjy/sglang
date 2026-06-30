@@ -925,7 +925,10 @@ class DeepseekV4AttnBackend(
             num_q_tokens = num_draft_tokens * bs
             seq_lens_casual, req_pool_indices_repeated = (
                 self.expand_extend_with_same_length(
-                    bs, num_draft_tokens, seq_lens, req_pool_indices
+                    bs=bs,
+                    qo_len=num_draft_tokens,
+                    seq_lens=seq_lens,
+                    req_pool_indices=req_pool_indices,
                 )
             )
         core_attn_metadata = self.make_core_attn_metadata(
@@ -1820,6 +1823,7 @@ class DeepseekV4AttnBackend(
 
     def expand_extend_with_same_length(
         self,
+        *,
         bs: int,
         qo_len: int,
         seq_lens: torch.Tensor,

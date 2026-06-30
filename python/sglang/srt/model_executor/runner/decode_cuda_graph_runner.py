@@ -439,7 +439,7 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             variant_label=variant_label,
         )
 
-    def _capture_graph_size(self, bs: int, num_tokens: int) -> int:
+    def _capture_graph_size(self, *, bs: int, num_tokens: int) -> int:
         """Resolve the ShapeKey size for a capture/replay shape.
 
         Token-keyed (ragged verify) graphs are identified by the total verify
@@ -950,7 +950,7 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             )
             with canary_ctx:
                 shape_key = self._make_graph_key(
-                    self._capture_graph_size(bs, num_tokens),
+                    self._capture_graph_size(bs=bs, num_tokens=num_tokens),
                     stream_idx,
                     variant_label,
                 )
