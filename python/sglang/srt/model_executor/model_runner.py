@@ -533,6 +533,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                         "DSPARK requires markov_rank > 0 in the draft config, "
                         f"got markov_rank={dspark_draft_config.markov_rank}."
                     )
+                if dspark_draft_config.target_layer_ids is not None:
+                    target_layer_ids = list(dspark_draft_config.target_layer_ids)
 
             self.dflash_or_dspark_use_aux_hidden_state = True
             self.dflash_or_dspark_draft_num_layers = int(draft_num_layers)
