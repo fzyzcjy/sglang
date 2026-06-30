@@ -387,16 +387,20 @@ def build_dspark_v4_confidence_head(
 ) -> Optional[DSparkConfidenceHead]:
     """Build the V4 DSpark confidence head when the draft config enables it.
 
-    Mirrors the dense ``build_confidence_head`` gating and interface (the head emits a
-    RAW accept-rate logit; ``with_markov`` concatenates the per-step markov_embed). The
-    V4 hidden size comes from ``config.hidden_size`` and the rank from the parsed draft
-    config. The head is built by default (the DSpark draft checkpoints carry trained
-    confidence weights); only an explicit ``enable_confidence_head=False`` opts out. The
-    ``proj`` matches the checkpoint's DeepSpec ``AcceptRatePredictor`` layout (a single
-    weight, no bias).
+    Mirrors the dense ``build_confidence_head`` interface (the head emits a RAW
+    accept-rate logit; ``with_markov`` concatenates the per-step markov_embed). The V4
+    hidden size comes from ``config.hidden_size`` and the rank from the parsed draft
+    config. The head is ALWAYS built (the ``enable_confidence_head`` flag is not read): a
+    DSpark draft checkpoint is expected to carry trained confidence weights, so a missing
+    config field is only warned about, and a checkpoint that genuinely lacks the weights
+    is surfaced by the weight-load assert. The ``proj`` matches the checkpoint's DeepSpec
+    ``AcceptRatePredictor`` layout (a single weight, no bias).
     """
-    if getattr(config, "enable_confidence_head", None) is False:
-        return None
+    if not hasattr(config, "enable_confidence_head"):
+        logger.warning(
+            "DSpark draft config has no enable_confidence_head field; treating the "
+            "confidence head as enabled."
+        )
     with_markov_cfg = getattr(config, "confidence_head_with_markov", None)
     with_markov = (
         (markov_rank > 0) if with_markov_cfg is None else bool(with_markov_cfg)
