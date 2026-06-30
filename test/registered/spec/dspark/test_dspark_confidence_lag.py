@@ -8,6 +8,7 @@ import torch
 from sglang.srt.speculative.dspark_scheduler import (
     ConfidencePrefixScheduler,
     DSparkScheduleConfig,
+    compute_verify_token_budget,
 )
 from sglang.srt.speculative.dspark_sps_table import SpsCostTable
 from sglang.srt.speculative.dspark_worker_v2 import (
@@ -165,14 +166,20 @@ class TestCrossStepLagBarrier(CustomTestCase):
         k_survival = worker._two_steps_prior_k_survival(
             req_pool_indices=idx, prefix_lens=prefix_lens[-1]
         )
-        budget_k = worker._verify_scheduler.update_budget_from_history(
-            history_survival_probs=k_survival
+        sps_table = worker._verify_scheduler.sps_table
+        cfg = worker._verify_scheduler.cfg
+        budget_k = compute_verify_token_budget(
+            history_survival_probs=k_survival, sps_table=sps_table, cfg=cfg
         )
-        budget_from_low = worker._verify_scheduler.update_budget_from_history(
-            history_survival_probs=torch.cumprod(low.to(torch.float32), dim=1)
+        budget_from_low = compute_verify_token_budget(
+            history_survival_probs=torch.cumprod(low.to(torch.float32), dim=1),
+            sps_table=sps_table,
+            cfg=cfg,
         )
-        budget_from_high = worker._verify_scheduler.update_budget_from_history(
-            history_survival_probs=torch.cumprod(high.to(torch.float32), dim=1)
+        budget_from_high = compute_verify_token_budget(
+            history_survival_probs=torch.cumprod(high.to(torch.float32), dim=1),
+            sps_table=sps_table,
+            cfg=cfg,
         )
         self.assertNotEqual(
             budget_from_low,

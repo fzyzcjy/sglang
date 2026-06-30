@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import msgspec
 import torch
@@ -146,26 +145,17 @@ class ConfidencePrefixScheduler:
         cfg.validate()
         self.sps_table = sps_table
         self.cfg = cfg
-        self.cached_budget: Optional[int] = None
 
-    def update_budget_from_history(
-        self, *, history_survival_probs: torch.Tensor
-    ) -> int:
-        self.cached_budget = compute_verify_token_budget(
-            history_survival_probs=history_survival_probs,
+    def compute_verify_lens(
+        self, *, k_survival: torch.Tensor, sort_survival: torch.Tensor
+    ) -> torch.Tensor:
+        budget = compute_verify_token_budget(
+            history_survival_probs=k_survival,
             sps_table=self.sps_table,
             cfg=self.cfg,
         )
-        return self.cached_budget
-
-    def compute_verify_lens(self, *, survival_probs: torch.Tensor) -> torch.Tensor:
-        num_requests, _gamma = survival_probs.shape
-        if self.cached_budget is None:
-            budget = num_requests * self.cfg.resolved_max_verify_len()
-        else:
-            budget = self.cached_budget
         verify_lens = schedule_verify_lens_topk(
-            survival_probs=survival_probs,
+            survival_probs=sort_survival,
             budget=budget,
             cfg=self.cfg,
         )
@@ -179,13 +169,3 @@ class ConfidencePrefixScheduler:
             total_extra <= budget
         ), f"DSpark verify-len budget violated: extra={total_extra} > budget={budget}"
         return verify_lens
-
-
-def schedule_verify_lens(
-    *,
-    scheduler: Optional[ConfidencePrefixScheduler],
-    survival_probs: Optional[torch.Tensor],
-) -> Optional[torch.Tensor]:
-    if scheduler is None or survival_probs is None:
-        return None
-    return scheduler.compute_verify_lens(survival_probs=survival_probs)

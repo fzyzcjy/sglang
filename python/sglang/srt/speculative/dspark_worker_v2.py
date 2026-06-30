@@ -941,8 +941,8 @@ class DSparkWorkerV2(BaseSpecWorker):
         #     fixes the verify budget K, causally independent of this step's tokens.
         #   - sort source = current live survival (_current_live_sort_survival):
         #     ranks/truncates admission by the actual up-to-date confidence.
-        # update_budget_from_history caches K from the lagged survival, then
-        # compute_verify_lens ranks the current survival under that cached K.
+        # budget is computed from k_survival now; verify_lens is ranked by
+        # sort_survival now — no cross-step cache.
         # Losslessness does NOT depend on either source: it is guaranteed by the
         # accept-cap in _cap_correct_len (a torch.minimum that only shrinks accept),
         # after which the bonus is re-read from the target's true distribution at the
@@ -958,11 +958,8 @@ class DSparkWorkerV2(BaseSpecWorker):
         if k_survival is None or sort_survival is None:
             return None
 
-        self._verify_scheduler.update_budget_from_history(
-            history_survival_probs=k_survival
-        )
         verify_lens = self._verify_scheduler.compute_verify_lens(
-            survival_probs=sort_survival
+            k_survival=k_survival, sort_survival=sort_survival
         ).to(device=device, dtype=torch.int32)
 
         broadcast_group, group_size = self._verify_lens_broadcast_group()
