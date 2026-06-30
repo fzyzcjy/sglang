@@ -1,7 +1,6 @@
 import logging
 from typing import Optional
 
-import msgspec
 import torch
 
 from sglang.srt.distributed import get_tp_group
@@ -34,6 +33,14 @@ from sglang.srt.speculative.draft_worker_common import (
     build_draft_tp_worker,
     make_draft_block_spec_info,
     make_draft_input_v2,
+)
+from sglang.srt.speculative.dspark_info import (
+    DraftBlockResult,
+    DraftForwardResult,
+    DraftProposal,
+    RaggedVerifyWindow,
+    TargetVerifyResult,
+    VerifyWindow,
 )
 from sglang.srt.speculative.dspark_scheduler import (
     ConfidencePrefixScheduler,
@@ -83,53 +90,6 @@ _CONFIDENCE_RELAY_RING_DEPTH: int = _CONFIDENCE_RELAY_LAG_STEPS + 1
 # Sentinel for a ring-slot row that was never written (or written for a different
 # request), used by the per-row identity guard to mask stale rows before forming K.
 _CONFIDENCE_RELAY_UNSET_SEQ_LEN: int = -1
-
-
-class _VerifyWindow(msgspec.Struct, frozen=True):
-    positions_2d: torch.Tensor
-    verify_cache_loc: torch.Tensor
-    verify_cache_loc_2d: torch.Tensor
-
-
-class _RaggedVerifyWindow(msgspec.Struct, frozen=True):
-    positions: torch.Tensor
-    verify_cache_loc: torch.Tensor
-    verify_ids: torch.Tensor
-    seq_lens_cpu: torch.Tensor
-
-
-class _TargetVerifyResult(msgspec.Struct, frozen=True):
-    logits_output: object
-    can_run_cuda_graph: bool
-
-
-class _DraftBlockResult(msgspec.Struct, frozen=True):
-    draft_tokens: torch.Tensor
-    # None on the captured greedy fast path (only _accept_sampling reads it).
-    corrected_logits: Optional[torch.Tensor]
-    greedy_mask: torch.Tensor
-    temperatures: torch.Tensor
-
-
-class _DraftForwardResult(msgspec.Struct, frozen=True):
-    # Output of the unified draft block forward. ``raw_hidden`` is the model's
-    # un-reshaped backbone hidden (dense: 2-D ``[bs*gamma, d]``; dsv4: 3-D
-    # ``[bs*gamma, hc, d]``); it is fed straight to ``compute_base_logits`` (the model
-    # owns the matmul / hc-collapse). ``draft_hidden_3d`` is ``raw_hidden.view(bs,
-    # gamma, -1)``, the dense markov / dense confidence input. dsv4's markov takes no
-    # hidden and its confidence reads the model-stashed ``_x_post_hc``, so dsv4 ignores
-    # ``draft_hidden_3d``.
-    draft_block_ids: torch.Tensor
-    raw_hidden: torch.Tensor
-    draft_hidden_3d: torch.Tensor
-    # True iff the draft forward replayed a cuda graph (in-graph sampler wrote out).
-    can_run_graph: bool
-
-
-class _DraftProposal(msgspec.Struct, frozen=True):
-    draft_block_ids: torch.Tensor
-    draft_block: _DraftBlockResult
-    draft_hidden: Optional[torch.Tensor]
 
 
 def _greedy_step_sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:
@@ -653,7 +613,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         anchor_tokens: torch.Tensor,
         draft_hidden: torch.Tensor,
         sampling_info,
-    ) -> _DraftBlockResult:
+    ) -> DraftBlockResult:
         markov_head = self.draft_model.markov_head
         bs = base_logits.shape[0]
         greedy_mask = self._resolve_greedy_mask(bs=bs, sampling_info=sampling_info)
@@ -698,7 +658,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             hidden_states=draft_hidden,
             sampler=sampler,
         )
-        return _DraftBlockResult(
+        return DraftBlockResult(
             draft_tokens=draft_tokens,
             corrected_logits=corrected_logits,
             greedy_mask=greedy_mask,
@@ -1127,7 +1087,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         *,
         candidates: torch.Tensor,
         target_logits: torch.Tensor,
-        draft_block: _DraftBlockResult,
+        draft_block: DraftBlockResult,
         sampling_info,
         draft_input: DFlashDraftInputV2,
         cutoff_layout: Optional[RaggedVerifyLayout] = None,
@@ -1285,7 +1245,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         batch: ScheduleBatch,
         bs: int,
         device: str,
-    ) -> _VerifyWindow:
+    ) -> VerifyWindow:
         prefix_lens = batch.seq_lens
         verify_w = self.verify_num_draft_tokens
         positions_2d = prefix_lens.unsqueeze(1) + self._block_pos_offsets
@@ -1299,7 +1259,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             device=device,
         )
         verify_cache_loc_2d = verify_cache_loc.view(bs, verify_w)
-        return _VerifyWindow(
+        return VerifyWindow(
             positions_2d=positions_2d,
             verify_cache_loc=verify_cache_loc,
             verify_cache_loc_2d=verify_cache_loc_2d,
@@ -1310,12 +1270,12 @@ class DSparkWorkerV2(BaseSpecWorker):
         *,
         batch: ScheduleBatch,
         draft_input: DFlashDraftInputV2,
-        verify_window: _VerifyWindow,
+        verify_window: VerifyWindow,
         bs: int,
         device: str,
         target_model,
         sampling_info,
-    ) -> _DraftProposal:
+    ) -> DraftProposal:
         # Single orchestration for every draft (dense + V4): run the draft block forward
         # on the real pool, then let the MODEL produce its base logits and the worker
         # reshape to ``[bs, gamma, vocab]`` for the serial Markov block. Base-logit
@@ -1350,7 +1310,7 @@ class DSparkWorkerV2(BaseSpecWorker):
                     .to(torch.float32)
                     .clamp_min(1e-5)
                 )
-            draft_block = _DraftBlockResult(
+            draft_block = DraftBlockResult(
                 draft_tokens=draft_sampler.out[: bs * self.gamma].view(bs, self.gamma),
                 corrected_logits=None,
                 greedy_mask=self._resolve_greedy_mask(
@@ -1368,7 +1328,7 @@ class DSparkWorkerV2(BaseSpecWorker):
                 draft_hidden=fwd.draft_hidden_3d,
                 sampling_info=sampling_info,
             )
-        return _DraftProposal(
+        return DraftProposal(
             draft_block_ids=draft_block_ids,
             draft_block=draft_block,
             draft_hidden=fwd.draft_hidden_3d,
@@ -1418,11 +1378,11 @@ class DSparkWorkerV2(BaseSpecWorker):
         *,
         batch: ScheduleBatch,
         draft_input: DFlashDraftInputV2,
-        verify_window: _VerifyWindow,
+        verify_window: VerifyWindow,
         bs: int,
         device: str,
         embed_module,
-    ) -> _DraftForwardResult:
+    ) -> DraftForwardResult:
         gamma = self.gamma
         prefix_lens = batch.seq_lens
         positions_2d = verify_window.positions_2d
@@ -1481,7 +1441,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         # hc-collapse needs the [N, hc, d] layout, NOT this view). draft_hidden_3d is the
         # dense markov / dense confidence input; dsv4 ignores it.
         draft_hidden_3d = raw_hidden.view(bs, gamma, -1)
-        return _DraftForwardResult(
+        return DraftForwardResult(
             draft_block_ids=draft_block_ids,
             raw_hidden=raw_hidden,
             draft_hidden_3d=draft_hidden_3d,
@@ -1494,9 +1454,9 @@ class DSparkWorkerV2(BaseSpecWorker):
         batch: ScheduleBatch,
         draft_input: DFlashDraftInputV2,
         verify_ids_2d: torch.Tensor,
-        verify_window: _VerifyWindow,
+        verify_window: VerifyWindow,
         sampling_info,
-    ) -> _TargetVerifyResult:
+    ) -> TargetVerifyResult:
         verify_w = self.verify_num_draft_tokens
         positions_2d = verify_window.positions_2d
         verify_cache_loc = verify_window.verify_cache_loc
@@ -1548,7 +1508,7 @@ class DSparkWorkerV2(BaseSpecWorker):
                 draft_token_num=verify_w,
             )
 
-        return _TargetVerifyResult(
+        return TargetVerifyResult(
             logits_output=logits_output,
             can_run_cuda_graph=can_run_cuda_graph,
         )
@@ -1559,7 +1519,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         batch: ScheduleBatch,
         layout: Optional[RaggedVerifyLayout],
         hidden_strided: Optional[torch.Tensor],
-        verify_window: _VerifyWindow,
+        verify_window: VerifyWindow,
         logits_output,
         commit_lens: torch.Tensor,
         bs: int,
@@ -1601,7 +1561,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         draft_tokens: torch.Tensor,
         bs: int,
         device: str,
-    ) -> _RaggedVerifyWindow:
+    ) -> RaggedVerifyWindow:
         # Compact (real-N) verify window. Request r contributes only its scheduled
         # prefix [anchor, s_0..s_{ell_r-1}] = verify_len_r tokens, packed back to
         # back into a `total`-token compact layout keyed by layout.extend_start_loc.
@@ -1641,7 +1601,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             verify_lens_cpu, dtype=batch.seq_lens_cpu.dtype
         )
 
-        return _RaggedVerifyWindow(
+        return RaggedVerifyWindow(
             positions=positions,
             verify_cache_loc=verify_cache_loc,
             verify_ids=verify_ids,
@@ -1675,9 +1635,9 @@ class DSparkWorkerV2(BaseSpecWorker):
         *,
         batch: ScheduleBatch,
         layout: RaggedVerifyLayout,
-        ragged_window: _RaggedVerifyWindow,
+        ragged_window: RaggedVerifyWindow,
         sampling_info,
-    ) -> _TargetVerifyResult:
+    ) -> TargetVerifyResult:
         # Compact verify forward. The merged decode runner reads
         # spec_info.ragged_verify_layout to select the token-keyed graph and the
         # merged attention backend builds ragged metadata from it
@@ -1719,7 +1679,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         logits_output = target_out.logits_output
         can_run_cuda_graph = target_out.can_run_cuda_graph
 
-        return _TargetVerifyResult(
+        return TargetVerifyResult(
             logits_output=logits_output,
             can_run_cuda_graph=can_run_cuda_graph,
         )
@@ -1777,7 +1737,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         bs: int,
         device: str,
         sampling_info,
-    ) -> tuple[_TargetVerifyResult, torch.Tensor]:
+    ) -> tuple[TargetVerifyResult, torch.Tensor]:
         # Real-N (full) verify: run the compact total-token forward, then scatter
         # the compact logits and hidden_states back to the bs*(gamma+1) strided
         # layout the accept path + result processor expect. Padded strided rows
