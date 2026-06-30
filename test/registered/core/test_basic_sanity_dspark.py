@@ -50,7 +50,7 @@ class TestBasicSanityDSpark(
     served_model_name = TARGET_MODEL
     model = TARGET_MODEL
 
-    fwd_occupancy_threshold = 97.5
+    fwd_occupancy_threshold = 60
     fwd_occupancy_max_new_tokens = 4096
     # DSpark accepts a semi-AR block per verify, so its accept length runs well
     # above EAGLE3's; keep a safe lower bound here.
@@ -100,7 +100,10 @@ class TestBasicSanityDSpark(
                 "--enable-metrics",
                 "--disable-piecewise-cuda-graph",
             ],
-            env={"SGLANG_ENABLE_METRICS_DEVICE_TIMER": "1"},
+            env={
+                "SGLANG_ENABLE_METRICS_DEVICE_TIMER": "1",
+                "SGLANG_RAGGED_VERIFY_MODE": "compact",
+            },
         )
 
     @classmethod

@@ -6,11 +6,12 @@
 # This module requires `transformers` (Qwen3 model classes). It is used only
 # by the GPU-tier parity test (test_dspark_model_parity.py) and is not imported
 # by CPU-only tests.
+from test.manual._dspark_reference.markov_head import build_markov_head
+from test.manual._dspark_reference.sampling import sample_tokens
 from typing import Callable, Optional
 
 import torch
 from torch import nn
-
 from transformers.cache_utils import Cache
 from transformers.models.qwen3.modeling_qwen3 import (
     ALL_ATTENTION_FUNCTIONS,
@@ -24,20 +25,6 @@ from transformers.models.qwen3.modeling_qwen3 import (
     rotate_half,
 )
 from typing_extensions import Tuple, Unpack
-
-from test.srt.speculative._dspark_reference.common import (
-    AcceptRatePredictor,
-    DSparkForwardOutput,
-    build_eval_mask,
-    create_dspark_attention_mask,
-    create_noise_embed,
-    create_position_ids,
-    extract_context_feature,
-    log_sampler_stats,
-    sample_anchor_positions,
-)
-from test.srt.speculative._dspark_reference.markov_head import build_markov_head
-from test.srt.speculative._dspark_reference.sampling import sample_tokens
 
 
 def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
@@ -59,9 +46,7 @@ class Qwen3DSparkAttention(nn.Module):
         )
         self.num_attention_heads = config.num_attention_heads
         self.num_key_value_heads = config.num_key_value_heads
-        self.num_key_value_groups = (
-            self.num_attention_heads // self.num_key_value_heads
-        )
+        self.num_key_value_groups = self.num_attention_heads // self.num_key_value_heads
         self.scaling = self.head_dim**-0.5
         self.attention_dropout = config.attention_dropout
         self.is_causal = False
@@ -179,11 +164,11 @@ class Qwen3DSparkDecoderLayer(GradientCheckpointingLayer):
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
         cache_position: Optional[torch.LongTensor] = None,
-        position_embeddings: Optional[
-            Tuple[torch.Tensor, torch.Tensor]
-        ] = None,
+        position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         **kwargs: Unpack[FlashAttentionKwargs],
-    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    ) -> Tuple[
+        torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]
+    ]:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
         hidden_states = self.self_attn(
@@ -238,7 +223,9 @@ class Qwen3DSparkModel(Qwen3PreTrainedModel):
         self.num_anchors = int(config.num_anchors)
 
         self.markov_head = build_markov_head(config)
-        self.enable_confidence_head = bool(getattr(config, "enable_confidence_head", False))
+        self.enable_confidence_head = bool(
+            getattr(config, "enable_confidence_head", False)
+        )
         self.confidence_head = None
         self.post_init()
 

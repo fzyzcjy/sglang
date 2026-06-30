@@ -18,9 +18,9 @@ register_cpu_ci(est_time=30, suite="base-a-test-cpu")
 _ATOL = 1e-5
 _RTOL = 1e-5
 
-_REF_PKG = "test.srt.speculative._dspark_reference"
+_REF_PKG = "test.manual._dspark_reference"
 _REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..")
 )
 
 

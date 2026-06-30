@@ -23,26 +23,14 @@ class RaggedVerifyMode(str, Enum):
     COMPACT = "compact"
 
 
-# Legacy spellings (pre-rename) accepted as aliases.
-_LEGACY_MODE_ALIASES: dict[str, RaggedVerifyMode] = {
-    "": RaggedVerifyMode.STATIC,
-    "off": RaggedVerifyMode.STATIC,
-    "cutoff-only": RaggedVerifyMode.CAP_ACCEPT,
-    "full": RaggedVerifyMode.COMPACT,
-}
-
-
 def read_ragged_verify_mode() -> RaggedVerifyMode:
     value = envs.SGLANG_RAGGED_VERIFY_MODE.get()
-    if value in _LEGACY_MODE_ALIASES:
-        return _LEGACY_MODE_ALIASES[value]
     for mode in RaggedVerifyMode:
         if value == mode.value:
             return mode
     raise ValueError(
         f"invalid SGLANG_RAGGED_VERIFY_MODE={value!r}; expected one of "
-        f"{', '.join(repr(m.value) for m in RaggedVerifyMode)} "
-        "(legacy off/cutoff-only/full accepted)"
+        f"{', '.join(repr(m.value) for m in RaggedVerifyMode)}"
     )
 
 

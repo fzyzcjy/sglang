@@ -238,10 +238,10 @@ class Dsv4BlockForwardHarness:
             )
 
     def _build_inner(self) -> None:
-        from test.srt.speculative._dspark_reference.deepseek_v4.modeling import (
+        from test.manual._dspark_reference.deepseek_v4.modeling import (
             RefTransformer,
         )
-        from test.srt.speculative._dspark_reference.deepseek_v4.parity_fixture import (
+        from test.manual._dspark_reference.deepseek_v4.parity_fixture import (
             attach_shared_modules_from_ref,
             force_native_ops,
             make_ref_args_from_config,

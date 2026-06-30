@@ -1527,7 +1527,10 @@ class ServerArgs:
     ] = None
     speculative_dspark_sps_table_path: A[
         Optional[str],
-        "DSPARK only. Path to a pre-profiled SPS cost table (JSON). Unset = flat constant-SPS table.",
+        "DSPARK only. Path to a pre-profiled SPS cost table (JSON) built offline with "
+        "sglang.benchmark.dspark_sps_profiler; this is the expected scheduler-on "
+        "workflow. Unset = flat constant-SPS table (verify-all, zero throughput gain), "
+        "which logs a loud warning once on TP rank 0.",
     ] = None
     speculative_accept_threshold_single: A[
         float,

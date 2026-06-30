@@ -65,18 +65,18 @@ def _make_yarn_config():
     ``rope_scaling["original_max_position_embeddings"]`` directly, so MQALayer-mode
     construction needs the YARN keys present (and a real compress_ratios table).
     """
-    from test.srt.speculative._dspark_reference.deepseek_v4.parity_fixture import (
-        make_tiny_dsv4_config,
+    from test.manual._dspark_reference.deepseek_v4.parity_fixture import (
+        make_real_dsv4_config,
     )
 
-    config = make_tiny_dsv4_config()
+    config = make_real_dsv4_config()
     config.rope_scaling = {
         "factor": 4.0,
         "beta_fast": 32,
         "beta_slow": 1,
         "original_max_position_embeddings": 128,
     }
-    config.compress_ratios = [0, 0]
+    config.compress_ratios = [0] * int(config.num_hidden_layers)
     config.compress_rope_theta = 10000
     return config
 
@@ -97,8 +97,8 @@ class TestMqaAttentionBaseConstruction(CustomTestCase):
         try:
             _ensure_repo_test_package()
             _setup_cpu_runtime()
-            from test.srt.speculative._dspark_reference.deepseek_v4.parity_fixture import (
-                make_tiny_dsv4_config,
+            from test.manual._dspark_reference.deepseek_v4.parity_fixture import (
+                make_real_dsv4_config,
             )
 
             from sglang.srt.models.deepseek_v4 import MqaAttentionBase
@@ -107,7 +107,7 @@ class TestMqaAttentionBaseConstruction(CustomTestCase):
             return
 
         cls.MqaAttentionBase = MqaAttentionBase
-        cls.dspark_config = make_tiny_dsv4_config()
+        cls.dspark_config = make_real_dsv4_config()
         cls.yarn_config = _make_yarn_config()
 
     def setUp(self) -> None:
@@ -143,19 +143,29 @@ class TestMqaAttentionBaseConstruction(CustomTestCase):
             wo_b_reduce_results=True,
             rope_original_seq_len=0,
         )
+        cfg = self.dspark_config
+        hidden = int(cfg.hidden_size)
+        q_lora = int(cfg.q_lora_rank)
+        head_dim = int(cfg.head_dim)
+        n_heads = int(cfg.num_attention_heads)
+        o_groups = int(cfg.o_groups)
+        o_lora = int(cfg.o_lora_rank)
         self.assertEqual(base.compress_ratio, 0)
         self.assertIsInstance(base.wq_a, ReplicatedLinear)
         self.assertIsInstance(base.wkv, ReplicatedLinear)
         self.assertFalse(hasattr(base, "wqkv_a"))
-        self.assertEqual(tuple(base.wq_a.weight.shape), (16, 32))
-        self.assertEqual(tuple(base.wkv.weight.shape), (16, 32))
-        self.assertEqual(tuple(base.q_norm.weight.shape), (16,))
-        self.assertEqual(tuple(base.wq_b.weight.shape), (64, 16))
-        self.assertEqual(tuple(base.kv_norm.weight.shape), (16,))
-        self.assertEqual(tuple(base.wo_a.weight.shape), (32, 32))
-        self.assertEqual(tuple(base.wo_b.weight.shape), (32, 32))
+        self.assertEqual(tuple(base.wq_a.weight.shape), (q_lora, hidden))
+        self.assertEqual(tuple(base.wkv.weight.shape), (head_dim, hidden))
+        self.assertEqual(tuple(base.q_norm.weight.shape), (q_lora,))
+        self.assertEqual(tuple(base.wq_b.weight.shape), (n_heads * head_dim, q_lora))
+        self.assertEqual(tuple(base.kv_norm.weight.shape), (head_dim,))
+        self.assertEqual(
+            tuple(base.wo_a.weight.shape),
+            (o_groups * o_lora, n_heads * head_dim // o_groups),
+        )
+        self.assertEqual(tuple(base.wo_b.weight.shape), (hidden, o_groups * o_lora))
         self.assertEqual(base.wo_a.weight.dtype, torch.bfloat16)
-        self.assertEqual(tuple(base.attn_sink.shape), (4,))
+        self.assertEqual(tuple(base.attn_sink.shape), (n_heads,))
         self.assertEqual(base.attn_sink.dtype, torch.float32)
         self.assertTrue(hasattr(base, "freqs_cis"))
         self.assertTrue(base.freqs_cis.is_complex())
@@ -238,10 +248,14 @@ class TestMqaAttentionBaseConstruction(CustomTestCase):
             attn_tp_rank=0,
             fuse_wqa_wkv=True,
         )
+        cfg = self.yarn_config
         self.assertIsInstance(base.wqkv_a, ReplicatedLinear)
         self.assertFalse(hasattr(base, "wq_a"))
         self.assertFalse(hasattr(base, "wkv"))
-        self.assertEqual(tuple(base.wqkv_a.weight.shape), (16 + 16, 32))
+        self.assertEqual(
+            tuple(base.wqkv_a.weight.shape),
+            (int(cfg.q_lora_rank) + int(cfg.head_dim), int(cfg.hidden_size)),
+        )
         names = set(dict(base.named_parameters()).keys())
         self.assertIn("wqkv_a.weight", names)
         self.assertNotIn("wq_a.weight", names)
@@ -255,13 +269,20 @@ class TestMqaAttentionBaseConstruction(CustomTestCase):
             attn_tp_rank=0,
             fuse_wqa_wkv=False,
         )
+        cfg = self.yarn_config
+        n_heads = int(cfg.num_attention_heads)
+        head_dim = int(cfg.head_dim)
+        q_lora = int(cfg.q_lora_rank)
+        o_groups = int(cfg.o_groups)
         self.assertEqual(base.attn_tp_size, 2)
-        self.assertEqual(base.n_local_heads, 2)
-        self.assertEqual(base.n_local_groups, 1)
-        # wq_b output (n_heads*head_dim=64) sharded over tp=2 -> 32 rows per partition.
-        self.assertEqual(tuple(base.wq_b.weight.shape), (32, 16))
+        self.assertEqual(base.n_local_heads, n_heads // 2)
+        self.assertEqual(base.n_local_groups, o_groups // 2)
+        # wq_b output (n_heads*head_dim) sharded over tp=2 -> half the rows per partition.
+        self.assertEqual(
+            tuple(base.wq_b.weight.shape), (n_heads * head_dim // 2, q_lora)
+        )
         # attn_sink is replicated over the full n_heads (not sharded).
-        self.assertEqual(tuple(base.attn_sink.shape), (4,))
+        self.assertEqual(tuple(base.attn_sink.shape), (n_heads,))
 
     def test_dspark_attention_subclass_wiring(self) -> None:
         """DSparkAttention extends the base and adds its own RadixAttention (self.attn)."""

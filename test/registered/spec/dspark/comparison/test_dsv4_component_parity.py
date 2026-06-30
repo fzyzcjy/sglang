@@ -18,7 +18,7 @@ _ATOL = 1e-4
 _RTOL = 1e-4
 
 _REPO_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..")
 )
 
 
@@ -104,14 +104,14 @@ class TestDsv4ComponentParity(CustomTestCase):
             return
         try:
             _ensure_repo_test_package()
-            from test.srt.speculative._dspark_reference.deepseek_v4.modeling import (
+            from test.manual._dspark_reference.deepseek_v4.modeling import (
                 RefTransformer,
             )
-            from test.srt.speculative._dspark_reference.deepseek_v4.parity_fixture import (
+            from test.manual._dspark_reference.deepseek_v4.parity_fixture import (
                 attach_shared_modules_from_ref,
                 force_native_ops,
+                make_real_dsv4_config,
                 make_ref_args_from_config,
-                make_tiny_dsv4_config,
                 sync_sot_to_sgl_dsv4,
             )
 
@@ -126,7 +126,7 @@ class TestDsv4ComponentParity(CustomTestCase):
         _setup_sglang_runtime()
         device = torch.device("cuda")
         cls.device = device
-        config = make_tiny_dsv4_config(
+        config = make_real_dsv4_config(
             enable_confidence_head=cls.enable_confidence_head
         )
         cls.config = config

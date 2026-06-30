@@ -6,12 +6,11 @@
 # - `logits_to_probs` imported from local sampling shim
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from test.manual._dspark_reference.sampling import logits_to_probs
 from typing import Optional
 
 import torch
-
-from test.srt.speculative._dspark_reference.sampling import logits_to_probs
 
 
 @dataclass

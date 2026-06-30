@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 
 import torch
 
@@ -23,8 +24,10 @@ def _make_worker(
     worker.verify_num_draft_tokens = gamma + 1
     worker._ragged_verify_mode = mode
     worker._verify_scheduler = scheduler
-    worker._confidence_ready = None
-    worker._confidence_cpu_pinned = None
+    worker._confidence_ring = None
+    worker._confidence_ring_seq_lens = None
+    worker._confidence_step_ct = 0
+    worker.model_runner = SimpleNamespace(decode_cuda_graph_runner=None)
     return worker
 
 
@@ -124,25 +127,33 @@ class TestRaggedGating(CustomTestCase):
         """OFF mode never schedules a ragged layout (uniform path stays byte-identical)."""
         worker = _make_worker(gamma=4, mode=RaggedVerifyMode.STATIC, scheduler=object())
         layout = worker._maybe_schedule_ragged_layout(
-            req_pool_indices=torch.tensor([0, 1]), device=_DEVICE
+            req_pool_indices=torch.tensor([0, 1]),
+            prefix_lens=torch.tensor([8, 8]),
+            device=_DEVICE,
         )
         self.assertIsNone(layout)
 
-    def test_full_mode_without_confidence_returns_none(self):
-        """FULL with no confidence history yet falls back to the uniform block (lossless)."""
-        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.COMPACT, scheduler=object())
-        layout = worker._maybe_schedule_ragged_layout(
-            req_pool_indices=torch.tensor([0, 1]), device=_DEVICE
+    def test_compact_without_confidence_falls_back_to_uniform_layout(self):
+        """COMPACT with no confidence ring yet carries the degenerate uniform layout
+        (verify_lens == gamma+1) so it still hits the token-keyed graph (C3)."""
+        worker = _make_worker(
+            gamma=4, mode=RaggedVerifyMode.COMPACT, scheduler=object()
         )
-        self.assertIsNone(layout)
+        layout = worker._maybe_schedule_ragged_layout(
+            req_pool_indices=torch.tensor([0, 1]),
+            prefix_lens=torch.tensor([8, 8]),
+            device=_DEVICE,
+        )
+        self.assertIsNotNone(layout)
+        self.assertEqual(layout.total_verify_tokens, 2 * (4 + 1))
 
     def test_cutoff_mode_without_scheduler_returns_none(self):
         """cap-accept with no scheduler (no confidence head) falls back to uniform."""
-        worker = _make_worker(
-            gamma=4, mode=RaggedVerifyMode.CAP_ACCEPT, scheduler=None
-        )
+        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.CAP_ACCEPT, scheduler=None)
         layout = worker._maybe_schedule_ragged_layout(
-            req_pool_indices=torch.tensor([0, 1]), device=_DEVICE
+            req_pool_indices=torch.tensor([0, 1]),
+            prefix_lens=torch.tensor([8, 8]),
+            device=_DEVICE,
         )
         self.assertIsNone(layout)
 

@@ -2,12 +2,11 @@
 # Copied verbatim except: `from deepspec.utils.sampling import sample_tokens`
 # replaced with the local shim import so this oracle runs without the
 # DeepSpec package installed.
+from test.manual._dspark_reference.sampling import sample_tokens
 from typing import Optional
 
 import torch
 from torch import nn
-
-from test.srt.speculative._dspark_reference.sampling import sample_tokens
 
 
 class VanillaMarkov(nn.Module):
@@ -16,9 +15,9 @@ class VanillaMarkov(nn.Module):
         self.vocab_size = int(vocab_size)
         self.markov_rank = int(markov_rank)
         self.markov_head_type = "vanilla"
-        assert self.markov_rank > 0, (
-            f"VanillaMarkov requires markov_rank > 0, got {self.markov_rank}."
-        )
+        assert (
+            self.markov_rank > 0
+        ), f"VanillaMarkov requires markov_rank > 0, got {self.markov_rank}."
         self.markov_w1 = nn.Embedding(self.vocab_size, self.markov_rank)
         self.markov_w2 = nn.Linear(self.markov_rank, self.vocab_size, bias=False)
 
@@ -79,7 +78,9 @@ class VanillaMarkov(nn.Module):
         corrected_logits = []
         prev_token_ids = first_prev_token_ids.long()
         for step_idx in range(proposal_len):
-            step_hidden = None if hidden_states is None else hidden_states[:, step_idx, ...]
+            step_hidden = (
+                None if hidden_states is None else hidden_states[:, step_idx, ...]
+            )
             step_logits = self.apply_step_logits(
                 base_logits[:, step_idx, :],
                 token_ids=prev_token_ids,
@@ -123,7 +124,9 @@ class GatedMarkovHead(VanillaMarkov):
         hidden_states: Optional[torch.Tensor],
     ) -> torch.Tensor:
         prev_embeddings = self.get_prev_embeddings(token_ids)
-        gate = self.compute_gate(token_ids, hidden_states).to(dtype=prev_embeddings.dtype)
+        gate = self.compute_gate(token_ids, hidden_states).to(
+            dtype=prev_embeddings.dtype
+        )
         return self.project_bias(gate * prev_embeddings)
 
 
@@ -145,9 +148,7 @@ class RNNHead(VanillaMarkov):
         self.markov_head_type = "rnn"
         self.hidden_size = hidden_size
         self.state_size = markov_rank
-        self.joint_proj = nn.Linear(
-            2 * markov_rank + hidden_size, 3 * markov_rank
-        )
+        self.joint_proj = nn.Linear(2 * markov_rank + hidden_size, 3 * markov_rank)
 
     def _rnn_step(
         self,
