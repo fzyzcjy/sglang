@@ -80,7 +80,7 @@ class RaggedTargetVerifyGeometry(msgspec.Struct):
     max_seq_len_q: int
 
 
-def _resolve_ragged_verify_layout(forward_batch) -> Optional["RaggedVerifyLayout"]:
+def _resolve_ragged_verify_layout(forward_batch) -> Optional[RaggedVerifyLayout]:
     spec_info = getattr(forward_batch, "spec_info", None)
     if spec_info is None:
         return None
@@ -90,7 +90,7 @@ def _resolve_ragged_verify_layout(forward_batch) -> Optional["RaggedVerifyLayout
 def build_ragged_target_verify_geometry(
     *,
     seq_lens: torch.Tensor,
-    layout: "RaggedVerifyLayout",
+    layout: RaggedVerifyLayout,
 ) -> RaggedTargetVerifyGeometry:
     """Build the variable-length verify geometry from the prefix seq_lens + layout.
 
@@ -394,12 +394,12 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
                 "cache_seqlens": torch.zeros(
                     max_bs, dtype=torch.int32, device=self.device
                 ),
-                "cu_seqlens_q": torch.arange(
-                    0,
-                    max_bs * self.speculative_num_draft_tokens + 1,
-                    step=self.speculative_num_draft_tokens,
-                    dtype=torch.int32,
-                    device=self.device,
+                # Refillable qo_indptr buffer (no longer a fixed-stride arange): the
+                # ragged compact-verify replay rewrites it from the padded layout's
+                # variable per-request query starts. For uniform verify it stays
+                # unread (the decode kernel takes a scalar q_len_per_req).
+                "cu_seqlens_q": torch.zeros(
+                    max_bs + 1, dtype=torch.int32, device=self.device
                 ),
                 "cu_seqlens_k": torch.zeros(
                     max_bs + 1, dtype=torch.int32, device=self.device
@@ -500,7 +500,16 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
             metadata.cu_seqlens_k = self.target_verify_metadata["cu_seqlens_k"][
                 : bs + 1
             ]
+            # Frozen capture upper bound: bucket // padded_bs == num_tokens_per_bs
+            # (gamma+1). The ragged replay keeps this max_q_len and refills only the
+            # buffer contents (cu_seqlens_q / cache_seqlens / cu_seqlens_k / page_table).
             metadata.max_seq_len_q = tokens_per_req
+            # Key the geometry on per-batch layout presence (the hard invariant): a
+            # degenerate uniform-at-bucket layout captures ragged geometry; force-uniform
+            # (negative seam) leaves the layout None so the uniform path is captured.
+            metadata.is_ragged_verify = (
+                getattr(spec_info, "ragged_verify_layout", None) is not None
+            )
             metadata.page_table = self.target_verify_metadata["page_table"][:bs, :]
             self._bind_swa_page_table(
                 metadata,
@@ -575,7 +584,26 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
         elif forward_mode.is_target_verify():
             # Here we only support topk = 1 for now.
             metadata = self.target_verify_metadata[bs]
-            metadata.cache_seqlens_int32.copy_(seq_lens + metadata.max_seq_len_q)
+            ragged_layout = getattr(spec_info, "ragged_verify_layout", None)
+            if ragged_layout is not None:
+                # Ragged compact verify: refill the buffer contents from the PADDED
+                # layout. Capture froze batch_size to padded_bs (= cu_seqlens_q.size(0)
+                # - 1) and max_q_len to gamma+1, so replay must feed padded_bs request
+                # slots whose verify_lens sum to the bucket; the decode kernel reads the
+                # refilled cu_seqlens_q while max_seq_len_q stays at the frozen capture
+                # value. cache_seqlens comes from the GPU seq_lens (never host-pre-added)
+                # plus the device verify_lens.
+                padded_layout = ragged_layout.padded_to_bucket(
+                    num_draft_tokens=self.speculative_num_draft_tokens
+                )
+                geometry = build_ragged_target_verify_geometry(
+                    seq_lens=seq_lens, layout=padded_layout
+                )
+                metadata.cache_seqlens_int32.copy_(geometry.cache_seqlens_int32)
+                metadata.cu_seqlens_q.copy_(geometry.cu_seqlens_q)
+            else:
+                # Uniform verify: cu_seqlens_q stays unread (scalar q_len_per_req).
+                metadata.cache_seqlens_int32.copy_(seq_lens + metadata.max_seq_len_q)
             metadata.cu_seqlens_k[1:].copy_(
                 torch.cumsum(metadata.cache_seqlens_int32, dim=0, dtype=torch.int32)
             )
