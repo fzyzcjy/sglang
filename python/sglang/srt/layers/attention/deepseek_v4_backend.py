@@ -135,6 +135,28 @@ def _resolve_ragged_verify_layout(
     return getattr(spec_info, "ragged_verify_layout", None)
 
 
+def compute_target_verify_graph_key(
+    *,
+    bs: int,
+    num_draft_tokens: int,
+    ragged_layout: Optional[RaggedVerifyLayout],
+) -> Tuple[int, int]:
+    num_tokens_full_block = num_draft_tokens * bs
+    if ragged_layout is None:
+        return bs, num_tokens_full_block
+    graph_num_tokens = ragged_layout.graph_num_tokens
+    total_verify_tokens = ragged_layout.total_verify_tokens
+    assert graph_num_tokens <= num_tokens_full_block, (
+        f"ragged verify graph_num_tokens={graph_num_tokens} exceeds full block "
+        f"num_draft*bs={num_tokens_full_block}"
+    )
+    assert total_verify_tokens <= graph_num_tokens, (
+        f"ragged verify total_verify_tokens={total_verify_tokens} exceeds the "
+        f"round-up bucket graph_num_tokens={graph_num_tokens}"
+    )
+    return graph_num_tokens, graph_num_tokens
+
+
 T = TypeVar("T", bound=Optional[torch.Tensor])
 
 
@@ -795,20 +817,11 @@ class DeepseekV4AttnBackend(
         bs: int,
         ragged_layout: Optional[RaggedVerifyLayout],
     ) -> Tuple[int, int]:
-        num_tokens_full_block = self.speculative_num_draft_tokens * bs
-        if ragged_layout is None:
-            return bs, num_tokens_full_block
-        graph_num_tokens = ragged_layout.graph_num_tokens
-        total_verify_tokens = ragged_layout.total_verify_tokens
-        assert graph_num_tokens <= num_tokens_full_block, (
-            f"ragged verify graph_num_tokens={graph_num_tokens} exceeds full block "
-            f"num_draft*bs={num_tokens_full_block}"
+        return compute_target_verify_graph_key(
+            bs=bs,
+            num_draft_tokens=self.speculative_num_draft_tokens,
+            ragged_layout=ragged_layout,
         )
-        assert total_verify_tokens <= graph_num_tokens, (
-            f"ragged verify total_verify_tokens={total_verify_tokens} exceeds the "
-            f"round-up bucket graph_num_tokens={graph_num_tokens}"
-        )
-        return graph_num_tokens, graph_num_tokens
 
     def _make_target_verify_c128_metadata(
         self,
