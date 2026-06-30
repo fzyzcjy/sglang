@@ -38,10 +38,6 @@ def ragged_verify_compact_enabled() -> bool:
     return read_ragged_verify_mode() == RaggedVerifyMode.COMPACT
 
 
-# Backwards-compatible alias for callers written before the rename.
-ragged_verify_full_enabled = ragged_verify_compact_enabled
-
-
 def round_up_grid(total: int, grid: Sequence[int]) -> int:
     if not grid:
         raise ValueError("round_up_grid requires a non-empty grid")
