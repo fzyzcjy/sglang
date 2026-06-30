@@ -1,0 +1,272 @@
+import unittest
+
+import torch
+
+from sglang.srt.layers.attention.deepseek_v4_backend import (
+    PAGE_INDEX_ALIGNED_SIZE,
+    SWA_WINDOW,
+    _compact_dspark_window_then_block,
+    build_dspark_swa_page_indices,
+)
+from sglang.srt.utils import ceil_align
+from sglang.test.ci.ci_register import register_cpu_ci
+from sglang.test.test_utils import CustomTestCase
+
+register_cpu_ci(est_time=30, suite="base-a-test-cpu")
+
+
+def _distinct_window(*, bs: int, base: int = 1) -> torch.Tensor:
+    """Window with every column distinct and >= base, so a wrong gather slice is caught."""
+    return (base + torch.arange(bs * SWA_WINDOW, dtype=torch.int32)).view(bs, SWA_WINDOW)
+
+
+def _front_padded_window(*, context_lens: list[int], base: int = 1) -> torch.Tensor:
+    """Window with the pre-start prefix left-padded -1 and the valid suffix distinct >= base."""
+    bs = len(context_lens)
+    window = torch.full((bs, SWA_WINDOW), -1, dtype=torch.int32)
+    for r, cl in enumerate(context_lens):
+        for j in range(SWA_WINDOW - cl, SWA_WINDOW):
+            window[r, j] = base + r * SWA_WINDOW + j
+    return window
+
+
+def _distinct_block(*, bs: int, block_size: int, base: int = 900000) -> torch.Tensor:
+    """Block slots distinct from the window slots so placement is identifiable."""
+    return (base + torch.arange(bs * block_size, dtype=torch.int32)).view(bs, block_size)
+
+
+def _oracle_build_page_indices(
+    *,
+    window_swa_locs: torch.Tensor,
+    block_swa_locs: torch.Tensor,
+    context_lens: list[int],
+    block_size: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Self-consistent contract rebuild over the INPUT slot arrays (no reference integers).
+
+    Each request row = its last context window slots, then its whole block, then -1; the row
+    is replicated across all block_size non-causal query rows and topk = context + block_size.
+    """
+    bs = window_swa_locs.shape[0]
+    target_width = ceil_align(SWA_WINDOW + block_size, PAGE_INDEX_ALIGNED_SIZE)
+    rows: list[list[int]] = []
+    topks: list[int] = []
+    for r in range(bs):
+        cl = int(context_lens[r])
+        context_slots = window_swa_locs[r, SWA_WINDOW - cl : SWA_WINDOW].tolist()
+        block_slots = block_swa_locs[r].tolist()
+        row = context_slots + block_slots + [-1] * (target_width - cl - block_size)
+        for _ in range(block_size):
+            rows.append(row)
+            topks.append(cl + block_size)
+    return (
+        torch.tensor(rows, dtype=torch.int32),
+        torch.tensor(topks, dtype=torch.int32),
+    )
+
+
+class TestBuildDsparkSwaPageIndicesPlumbing(CustomTestCase):
+    def test_plumbing_oracle_matches_over_block_sizes_and_contexts(self):
+        """build matches the contract rebuild for every block_size and mixed per-request context."""
+        for block_size in (1, 4, 63, 64, 65):
+            context_lens = [0, 1, SWA_WINDOW - 1, SWA_WINDOW]
+            bs = len(context_lens)
+            window = _distinct_window(bs=bs)
+            block = _distinct_block(bs=bs, block_size=block_size)
+            context = torch.tensor(context_lens, dtype=torch.int32)
+            page_indices, topk = build_dspark_swa_page_indices(
+                window_swa_locs=window,
+                block_swa_locs=block,
+                context_lens=context,
+                block_size=block_size,
+            )
+            exp_indices, exp_topk = _oracle_build_page_indices(
+                window_swa_locs=window,
+                block_swa_locs=block,
+                context_lens=context_lens,
+                block_size=block_size,
+            )
+            self.assertTrue(torch.equal(page_indices, exp_indices), msg=f"{block_size=}")
+            self.assertTrue(torch.equal(topk, exp_topk), msg=f"{block_size=}")
+            self.assertEqual(page_indices.dtype, torch.int32)
+            self.assertEqual(topk.dtype, torch.int32)
+            self.assertEqual(page_indices.device, window.device)
+
+    def test_completeness_no_minus_one_holes_in_valid_prefix(self):
+        """The valid topk prefix never contains a -1 hole; only the tail past topk is -1."""
+        block_size = 4
+        context_lens = [0, 2, SWA_WINDOW]
+        window = _front_padded_window(context_lens=context_lens)
+        block = _distinct_block(bs=len(context_lens), block_size=block_size)
+        context = torch.tensor(context_lens, dtype=torch.int32)
+        page_indices, topk = build_dspark_swa_page_indices(
+            window_swa_locs=window,
+            block_swa_locs=block,
+            context_lens=context,
+            block_size=block_size,
+        )
+        for q in range(page_indices.shape[0]):
+            t = int(topk[q])
+            self.assertTrue((page_indices[q, :t] >= 0).all().item(), msg=f"{q=}")
+            self.assertTrue((page_indices[q, t:] == -1).all().item(), msg=f"{q=}")
+
+    def test_block_size_64_context_128_fills_whole_row_no_tail(self):
+        """block_size=64 with full window fills target_width=192 entirely, no -1 tail."""
+        block_size = 64
+        context = torch.tensor([SWA_WINDOW], dtype=torch.int32)
+        window = _distinct_window(bs=1)
+        block = _distinct_block(bs=1, block_size=block_size)
+        page_indices, topk = build_dspark_swa_page_indices(
+            window_swa_locs=window,
+            block_swa_locs=block,
+            context_lens=context,
+            block_size=block_size,
+        )
+        target_width = ceil_align(SWA_WINDOW + block_size, PAGE_INDEX_ALIGNED_SIZE)
+        self.assertEqual(target_width, SWA_WINDOW + block_size)
+        self.assertEqual(int(topk[0]), target_width)
+        self.assertTrue((page_indices[0] >= 0).all().item())
+
+    def test_row_replication_is_non_causal(self):
+        """All block_size query rows of a request are byte-identical and share the same topk."""
+        block_size = 3
+        context_lens = [5, SWA_WINDOW]
+        bs = len(context_lens)
+        window = _distinct_window(bs=bs)
+        block = _distinct_block(bs=bs, block_size=block_size)
+        context = torch.tensor(context_lens, dtype=torch.int32)
+        page_indices, topk = build_dspark_swa_page_indices(
+            window_swa_locs=window,
+            block_swa_locs=block,
+            context_lens=context,
+            block_size=block_size,
+        )
+        for r, cl in enumerate(context_lens):
+            block_rows = page_indices[r * block_size : (r + 1) * block_size]
+            self.assertTrue(torch.equal(block_rows[0], block_rows[-1]))
+            block_topk = topk[r * block_size : (r + 1) * block_size]
+            self.assertTrue((block_topk == cl + block_size).all().item())
+
+    def test_bs_one_single_request(self):
+        """A single-request batch packs context then block with no broadcast leakage."""
+        block_size = 5
+        context_lens = [3]
+        window = _distinct_window(bs=1)
+        block = _distinct_block(bs=1, block_size=block_size)
+        context = torch.tensor(context_lens, dtype=torch.int32)
+        page_indices, topk = build_dspark_swa_page_indices(
+            window_swa_locs=window,
+            block_swa_locs=block,
+            context_lens=context,
+            block_size=block_size,
+        )
+        exp_indices, exp_topk = _oracle_build_page_indices(
+            window_swa_locs=window,
+            block_swa_locs=block,
+            context_lens=context_lens,
+            block_size=block_size,
+        )
+        self.assertEqual(page_indices.shape[0], block_size)
+        self.assertTrue(torch.equal(page_indices, exp_indices))
+        self.assertTrue(torch.equal(topk, exp_topk))
+
+    def test_window_wrong_shape_raises(self):
+        """A window that is not [bs, SWA_WINDOW] is rejected loudly."""
+        block_size = 4
+        with self.assertRaises(ValueError):
+            build_dspark_swa_page_indices(
+                window_swa_locs=torch.zeros((2, SWA_WINDOW - 1), dtype=torch.int32),
+                block_swa_locs=torch.zeros((2, block_size), dtype=torch.int32),
+                context_lens=torch.zeros(2, dtype=torch.int32),
+                block_size=block_size,
+            )
+
+    def test_block_wrong_shape_raises(self):
+        """A block whose width disagrees with block_size is rejected loudly."""
+        block_size = 4
+        with self.assertRaises(ValueError):
+            build_dspark_swa_page_indices(
+                window_swa_locs=torch.zeros((2, SWA_WINDOW), dtype=torch.int32),
+                block_swa_locs=torch.zeros((2, block_size + 1), dtype=torch.int32),
+                context_lens=torch.zeros(2, dtype=torch.int32),
+                block_size=block_size,
+            )
+
+
+class TestCompactWindowThenBlockContract(CustomTestCase):
+    def _compact(
+        self,
+        *,
+        window: torch.Tensor,
+        block: torch.Tensor,
+        context_lens: list[int],
+        block_size: int,
+    ) -> torch.Tensor:
+        target_width = ceil_align(SWA_WINDOW + block_size, PAGE_INDEX_ALIGNED_SIZE)
+        return _compact_dspark_window_then_block(
+            window_swa_locs=window,
+            block_swa_locs=block,
+            context_lens=torch.tensor(context_lens, dtype=torch.int32),
+            target_width=target_width,
+            block_size=block_size,
+        )
+
+    def test_left_pack_gathers_last_context_entries(self):
+        """out[r, :cl] equals the last cl window entries (index oracle, not the boolean mask)."""
+        block_size = 4
+        context_lens = [0, 1, 7, SWA_WINDOW]
+        bs = len(context_lens)
+        window = _distinct_window(bs=bs)
+        block = _distinct_block(bs=bs, block_size=block_size)
+        out = self._compact(
+            window=window, block=block, context_lens=context_lens, block_size=block_size
+        )
+        for r, cl in enumerate(context_lens):
+            expected = window[r, SWA_WINDOW - cl : SWA_WINDOW]
+            self.assertTrue(torch.equal(out[r, :cl], expected), msg=f"{r=}")
+
+    def test_block_slots_placed_after_context(self):
+        """out[r, cl:cl+block_size] equals the request's block slots."""
+        block_size = 3
+        context_lens = [0, 2, SWA_WINDOW]
+        bs = len(context_lens)
+        window = _distinct_window(bs=bs)
+        block = _distinct_block(bs=bs, block_size=block_size)
+        out = self._compact(
+            window=window, block=block, context_lens=context_lens, block_size=block_size
+        )
+        for r, cl in enumerate(context_lens):
+            self.assertTrue(
+                torch.equal(out[r, cl : cl + block_size], block[r]), msg=f"{r=}"
+            )
+
+    def test_tail_after_block_is_minus_one(self):
+        """out[r, cl+block_size:] is all -1 for a mixed-context batch."""
+        block_size = 5
+        context_lens = [0, 2, SWA_WINDOW]
+        bs = len(context_lens)
+        window = _distinct_window(bs=bs)
+        block = _distinct_block(bs=bs, block_size=block_size)
+        out = self._compact(
+            window=window, block=block, context_lens=context_lens, block_size=block_size
+        )
+        for r, cl in enumerate(context_lens):
+            self.assertTrue((out[r, cl + block_size :] == -1).all().item(), msg=f"{r=}")
+
+    def test_bs_one_single_request(self):
+        """A single-request compact packs context then block with no broadcast leakage."""
+        block_size = 6
+        context_lens = [4]
+        window = _distinct_window(bs=1)
+        block = _distinct_block(bs=1, block_size=block_size)
+        out = self._compact(
+            window=window, block=block, context_lens=context_lens, block_size=block_size
+        )
+        cl = context_lens[0]
+        self.assertTrue(torch.equal(out[0, :cl], window[0, SWA_WINDOW - cl : SWA_WINDOW]))
+        self.assertTrue(torch.equal(out[0, cl : cl + block_size], block[0]))
+        self.assertTrue((out[0, cl + block_size :] == -1).all().item())
+
+
+if __name__ == "__main__":
+    unittest.main()
