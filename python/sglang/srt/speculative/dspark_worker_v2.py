@@ -1,5 +1,4 @@
 import logging
-import os
 from typing import Optional
 
 import msgspec
@@ -284,7 +283,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         # and schedule_verify_lens_topk's lower-bound clamp) MUST be in place before
         # any profiled table is supplied, because a non-flat table yields small K
         # and would otherwise drive verify_len to 0.
-        sps_table_path = os.environ.get("SGLANG_DSPARK_SPS_TABLE_PATH")
+        sps_table_path = self.server_args.speculative_dspark_sps_table_path
         if sps_table_path:
             return load_sps_table_from_path(sps_table_path)
         max_batch_tokens = max(
