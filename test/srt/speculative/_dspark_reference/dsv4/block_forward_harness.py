@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Iterator, Sequence
 
 import torch
 
@@ -54,6 +54,15 @@ class Dsv4BlockForwardHarness:
     ``run_sot`` runs the vendored external SoT oracle on the SAME inputs (target
     hidden, anchor, KV, positions, start_pos); the two base_logits must agree within
     the fp8 tolerance.
+
+    Parameters drive the three GPU-tier consumers:
+      * T1 (SoT parity): ``exercise_non_causality`` constructs distinct per-position
+        block KV so a causal regression diverges.
+      * T3 (dynamic batch): ``prefix_lens`` / ``accept_lens`` build a mixed-length
+        batch; ``batch_size`` / ``row_base_logits`` expose per-row slices for the
+        run-alone independence check.
+      * T4 (TP parity): ``num_heads`` / ``tp_size`` build the q-pad-gap config
+        (n_local_heads not in {64,128} at TP=2).
     """
 
     def __init__(
@@ -63,11 +72,20 @@ class Dsv4BlockForwardHarness:
         exercise_non_causality: bool,
         device: torch.device,
         dtype: torch.dtype,
+        prefix_lens: Sequence[int] | None,
+        accept_lens: Sequence[int] | None,
+        num_heads: int | None,
+        tp_size: int,
     ) -> None:
         self.seed = seed
         self.device = device
         self.dtype = dtype
         self._exercise_non_causality = exercise_non_causality
+        self.prefix_lens = tuple(prefix_lens) if prefix_lens is not None else (8,)
+        self.accept_lens = tuple(accept_lens) if accept_lens is not None else (1,)
+        self.batch_size = len(self.prefix_lens)
+        self.num_heads = num_heads
+        self.tp_size = tp_size
         self._build()
 
     @property
@@ -95,6 +113,10 @@ class Dsv4BlockForwardHarness:
         """Run the external SoT oracle on the same inputs; return base_logits."""
         return self._run_sot(oracle)
 
+    def row_base_logits(self, output: _ProductionBlockOutput, row: int) -> torch.Tensor:
+        """Slice the [bs*gamma, vocab] base_logits down to one request's gamma rows."""
+        return self._row_base_logits(output, row)
+
     @contextlib.contextmanager
     def force_causal_indices(self) -> Iterator[None]:
         """Monkeypatch the production builder to the causal triangle (negative test)."""
@@ -120,6 +142,11 @@ class Dsv4BlockForwardHarness:
     def _run_sot(self, oracle) -> torch.Tensor:  # pragma: no cover
         raise HarnessUnavailable("harness not wired")
 
+    def _row_base_logits(
+        self, output: _ProductionBlockOutput, row: int
+    ) -> torch.Tensor:  # pragma: no cover
+        raise HarnessUnavailable("harness not wired")
+
     @contextlib.contextmanager
     def _force_causal_indices(self) -> Iterator[None]:  # pragma: no cover
         raise HarnessUnavailable("harness not wired")
@@ -132,15 +159,23 @@ def build_dsv4_block_forward_harness(
     exercise_non_causality: bool = True,
     device: str = "cuda",
     dtype: torch.dtype = torch.bfloat16,
+    prefix_lens: Sequence[int] | None = None,
+    accept_lens: Sequence[int] | None = None,
+    num_heads: int | None = None,
+    tp_size: int = 1,
 ) -> Dsv4BlockForwardHarness:
-    """Build the T1 production-vs-SoT block-forward harness (GPU).
+    """Build the production-vs-SoT block-forward harness (GPU) for T1/T3/T4.
 
-    Raises HarnessUnavailable until the production contract is wired; the T1 test
-    treats that as a clean skip.
+    Raises HarnessUnavailable until the production contract is wired; the tests treat
+    that as a clean skip.
     """
     return Dsv4BlockForwardHarness(
         seed=seed,
         exercise_non_causality=exercise_non_causality,
         device=torch.device(device),
         dtype=dtype,
+        prefix_lens=prefix_lens,
+        accept_lens=accept_lens,
+        num_heads=num_heads,
+        tp_size=tp_size,
     )
