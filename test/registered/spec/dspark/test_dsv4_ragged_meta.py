@@ -6,13 +6,14 @@ import torch
 from sglang.srt.environ import envs
 from sglang.srt.layers.attention import deepseek_v4_backend as dsv4
 from sglang.srt.layers.attention.deepseek_v4_backend import (
+    RAGGED_VERIFY_CAP_ACCEPT,
     RAGGED_VERIFY_CHOICES,
-    RAGGED_VERIFY_CUTOFF_ONLY,
-    RAGGED_VERIFY_FULL,
-    RAGGED_VERIFY_OFF,
+    RAGGED_VERIFY_COMPACT,
+    RAGGED_VERIFY_STATIC,
     DeepseekV4AttnBackend,
     _ragged_verify_mode,
     _resolve_ragged_verify_layout,
+    compute_target_verify_graph_key,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
@@ -80,13 +81,13 @@ class TestRaggedVerifyMode(CustomTestCase):
 
     def test_cap_accept_mode_parsed(self):
         """cap-accept is an accepted mode value."""
-        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_CUTOFF_ONLY):
-            self.assertEqual(_ragged_verify_mode(), RAGGED_VERIFY_CUTOFF_ONLY)
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_CAP_ACCEPT):
+            self.assertEqual(_ragged_verify_mode(), RAGGED_VERIFY_CAP_ACCEPT)
 
     def test_compact_mode_parsed(self):
         """compact is an accepted mode value."""
-        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_FULL):
-            self.assertEqual(_ragged_verify_mode(), RAGGED_VERIFY_FULL)
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_COMPACT):
+            self.assertEqual(_ragged_verify_mode(), RAGGED_VERIFY_COMPACT)
 
     def test_invalid_mode_fails_loud(self):
         """An unrecognised mode value raises ValueError instead of silently defaulting."""
@@ -98,7 +99,7 @@ class TestRaggedVerifyMode(CustomTestCase):
         """The accepted mode set is exactly static / cap-accept / compact."""
         self.assertEqual(
             set(RAGGED_VERIFY_CHOICES),
-            {RAGGED_VERIFY_OFF, RAGGED_VERIFY_CUTOFF_ONLY, RAGGED_VERIFY_FULL},
+            {RAGGED_VERIFY_STATIC, RAGGED_VERIFY_CAP_ACCEPT, RAGGED_VERIFY_COMPACT},
         )
 
 
@@ -123,56 +124,50 @@ class TestResolveRaggedVerifyLayout(CustomTestCase):
 class TestTargetVerifyGraphKey(CustomTestCase):
     def test_bs_keyed_when_no_layout(self):
         """Without a ragged layout the key stays (bs, num_draft*bs), byte-identical."""
-        backend = _stub_backend(num_draft_tokens=6)
-        key, num_tokens = DeepseekV4AttnBackend._target_verify_graph_key(
-            backend, bs=3, ragged_layout=None
+        key, num_tokens = compute_target_verify_graph_key(
+            bs=3, num_draft_tokens=6, ragged_layout=None
         )
         self.assertEqual(key, 3)
         self.assertEqual(num_tokens, 18)
 
     def test_token_keyed_when_full_layout(self):
         """A compact ragged layout keys the graph by graph_num_tokens."""
-        backend = _stub_backend(num_draft_tokens=6)
         layout = _make_layout([6, 3, 1])
-        key, num_tokens = DeepseekV4AttnBackend._target_verify_graph_key(
-            backend, bs=3, ragged_layout=layout
+        key, num_tokens = compute_target_verify_graph_key(
+            bs=3, num_draft_tokens=6, ragged_layout=layout
         )
         self.assertEqual(key, 10)
         self.assertEqual(num_tokens, 10)
 
     def test_graph_num_tokens_above_full_block_fails_loud(self):
         """graph_num_tokens may never exceed the full-block num_draft*bs budget."""
-        backend = _stub_backend(num_draft_tokens=6)
         layout = _make_layout([6, 3, 1], graph_num_tokens=24)
         with self.assertRaises(AssertionError):
-            DeepseekV4AttnBackend._target_verify_graph_key(
-                backend, bs=3, ragged_layout=layout
+            compute_target_verify_graph_key(
+                bs=3, num_draft_tokens=6, ragged_layout=layout
             )
 
     def test_graph_num_tokens_above_total_keys_by_bucket(self):
         """A round-up bucket graph_num_tokens > total keys the graph by the bucket."""
-        backend = _stub_backend(num_draft_tokens=6)
         layout = _make_layout([6, 3, 1], graph_num_tokens=12)
-        key, num_tokens = DeepseekV4AttnBackend._target_verify_graph_key(
-            backend, bs=3, ragged_layout=layout
+        key, num_tokens = compute_target_verify_graph_key(
+            bs=3, num_draft_tokens=6, ragged_layout=layout
         )
         self.assertEqual((key, num_tokens), (12, 12))
 
     def test_total_above_graph_num_tokens_fails_loud(self):
         """A total_verify_tokens exceeding the round-up bucket fails loud here."""
-        backend = _stub_backend(num_draft_tokens=6)
         layout = _make_layout([6, 3, 1], graph_num_tokens=8)
         with self.assertRaises(AssertionError):
-            DeepseekV4AttnBackend._target_verify_graph_key(
-                backend, bs=3, ragged_layout=layout
+            compute_target_verify_graph_key(
+                bs=3, num_draft_tokens=6, ragged_layout=layout
             )
 
     def test_uniform_full_block_layout_matches_bs_block(self):
         """A uniform full-block layout (all num_draft) yields num_draft*bs tokens."""
-        backend = _stub_backend(num_draft_tokens=6)
         layout = _make_layout([6, 6, 6])
-        key, num_tokens = DeepseekV4AttnBackend._target_verify_graph_key(
-            backend, bs=3, ragged_layout=layout
+        key, num_tokens = compute_target_verify_graph_key(
+            bs=3, num_draft_tokens=6, ragged_layout=layout
         )
         self.assertEqual(key, 18)
         self.assertEqual(num_tokens, 18)
@@ -182,9 +177,8 @@ class TestTargetVerifyGraphKey(CustomTestCase):
         layout = _make_layout([6, 3, 1])
         self.assertEqual(layout.total_verify_tokens, 10)
         self.assertEqual(layout.extend_start_loc.tolist(), [0, 6, 9])
-        backend = _stub_backend(num_draft_tokens=6)
-        key, num_tokens = DeepseekV4AttnBackend._target_verify_graph_key(
-            backend, bs=3, ragged_layout=layout
+        key, num_tokens = compute_target_verify_graph_key(
+            bs=3, num_draft_tokens=6, ragged_layout=layout
         )
         self.assertEqual((key, num_tokens), (10, 10))
 
@@ -194,7 +188,7 @@ class TestResolveVerifyLayoutGating(CustomTestCase):
         """No layout on spec_info means the backend stays on the full-block path."""
         backend = _stub_backend()
         fb = _make_forward_batch(None)
-        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_FULL):
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_COMPACT):
             self.assertIsNone(
                 DeepseekV4AttnBackend._resolve_verify_layout(backend, fb, bs=3)
             )
@@ -204,7 +198,7 @@ class TestResolveVerifyLayoutGating(CustomTestCase):
         backend = _stub_backend()
         layout = _make_layout([6, 3, 1])
         fb = _make_forward_batch(layout)
-        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_CUTOFF_ONLY):
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_CAP_ACCEPT):
             self.assertIsNone(
                 DeepseekV4AttnBackend._resolve_verify_layout(backend, fb, bs=3)
             )
@@ -214,7 +208,7 @@ class TestResolveVerifyLayoutGating(CustomTestCase):
         backend = _stub_backend()
         layout = _make_layout([6, 3, 1])
         fb = _make_forward_batch(layout)
-        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_FULL):
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_COMPACT):
             with _patched_cp_size(1):
                 resolved = DeepseekV4AttnBackend._resolve_verify_layout(
                     backend, fb, bs=3
@@ -226,7 +220,7 @@ class TestResolveVerifyLayoutGating(CustomTestCase):
         backend = _stub_backend()
         layout = _make_layout([6, 3, 1])
         fb = _make_forward_batch(layout)
-        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_FULL):
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_COMPACT):
             with _patched_cp_size(2):
                 with self.assertRaises(NotImplementedError):
                     DeepseekV4AttnBackend._resolve_verify_layout(backend, fb, bs=3)
@@ -236,7 +230,7 @@ class TestResolveVerifyLayoutGating(CustomTestCase):
         backend = _stub_backend(online_c128_enabled=True)
         layout = _make_layout([6, 3, 1])
         fb = _make_forward_batch(layout)
-        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_FULL):
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_COMPACT):
             with _patched_cp_size(1):
                 with self.assertRaises(NotImplementedError):
                     DeepseekV4AttnBackend._resolve_verify_layout(backend, fb, bs=3)
@@ -246,7 +240,7 @@ class TestResolveVerifyLayoutGating(CustomTestCase):
         backend = _stub_backend()
         layout = _make_layout([6, 3, 0])
         fb = _make_forward_batch(layout)
-        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_FULL):
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_COMPACT):
             with _patched_cp_size(1):
                 with self.assertRaises(AssertionError):
                     DeepseekV4AttnBackend._resolve_verify_layout(backend, fb, bs=3)
@@ -256,7 +250,7 @@ class TestResolveVerifyLayoutGating(CustomTestCase):
         backend = _stub_backend()
         layout = _make_layout([6, 3, 1])
         fb = _make_forward_batch(layout)
-        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_FULL):
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_COMPACT):
             with _patched_cp_size(1):
                 with self.assertRaises(AssertionError):
                     DeepseekV4AttnBackend._resolve_verify_layout(backend, fb, bs=2)

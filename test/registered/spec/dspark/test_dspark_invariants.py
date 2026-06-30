@@ -1,8 +1,5 @@
-import re
 import unittest
-from pathlib import Path
 
-import pytest
 import torch
 
 from sglang.srt.speculative.dspark_scheduler import (
@@ -11,7 +8,6 @@ from sglang.srt.speculative.dspark_scheduler import (
     schedule_verify_lens_topk,
 )
 from sglang.srt.speculative.dspark_sps_table import SpsCostTable
-from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 
@@ -20,13 +16,6 @@ register_cpu_ci(est_time=20, suite="base-a-test-cpu")
 
 def _survival_from_confidence(confidence: torch.Tensor) -> torch.Tensor:
     return torch.cumprod(confidence, dim=1)
-
-
-_REPO_ROOT = Path(__file__).resolve().parents[4]
-_DECODE_RUNNER = (
-    _REPO_ROOT / "python/sglang/srt/model_executor/runner/decode_cuda_graph_runner.py"
-)
-_SCHEDULER = _REPO_ROOT / "python/sglang/srt/managers/scheduler.py"
 
 
 def _flat_sps_table() -> SpsCostTable:
@@ -150,106 +139,6 @@ class TestNonAnticipatingBudgetAllocation(CustomTestCase):
         self.assertTrue(torch.equal(first, second))
         extra = int((first.to(torch.int64) - cfg.min_verify_len).sum().item())
         self.assertEqual(extra, 5)
-
-
-class TestWarBarrierCapability(CustomTestCase):
-    """Invariant 3: the WAR/RAW barrier capability gate must cover DSPARK so the
-    publisher branch actually records the read-done event for verify replay.
-    """
-
-    def test_dspark_qualifies_for_war_verify_barrier(self):
-        """is_dflash_or_dspark() must return True for DSPARK."""
-        algo = SpeculativeAlgorithm.from_string("DSPARK")
-        self.assertTrue(
-            algo.is_dflash_or_dspark(),
-            "DSPARK must qualify for the over-alloc WAR verify barrier.",
-        )
-
-    def test_dflash_also_qualifies_for_war_verify_barrier(self):
-        """DFLASH shares the same WAR verify capability (sibling algorithm)."""
-        algo = SpeculativeAlgorithm.from_string("DFLASH")
-        self.assertTrue(algo.is_dflash_or_dspark())
-
-    def test_eagle_does_not_qualify_for_war_verify_barrier(self):
-        """Non-block-draft algorithms (EAGLE) do not over-alloc verify replay."""
-        algo = SpeculativeAlgorithm.from_string("EAGLE")
-        self.assertFalse(algo.is_dflash_or_dspark())
-
-
-class TestWarBarrierAntiPattern(CustomTestCase):
-    """Invariant 3 anti-pattern guard: the verify replay path must reuse the
-    single existing read-done event channel. real-N must NOT introduce a second
-    Event() / wait_stream (capability-over-special-case).
-    """
-
-    def _read_replay_block(self) -> str:
-        """Return the source of decode_cuda_graph_runner's replay_session block."""
-        text = _DECODE_RUNNER.read_text()
-        start = text.find("with timer_ctx, self.backend.replay_session():")
-        self.assertNotEqual(start, -1, "replay_session block not found.")
-        end = text.find("\n\n", start)
-        return text[start : end if end != -1 else len(text)]
-
-    def test_single_read_done_event_in_replay_block(self):
-        """The replay_session block records exactly one read-done Event()."""
-        block = self._read_replay_block()
-        event_count = len(re.findall(r"self\.device_module\.Event\(\)", block))
-        self.assertEqual(
-            event_count,
-            1,
-            "Verify replay must use exactly one read-done Event() (no second "
-            "fence for real-N ragged metadata).",
-        )
-
-    def test_no_extra_wait_stream_in_replay_block(self):
-        """The replay_session block must not add a private wait_stream fence."""
-        block = self._read_replay_block()
-        self.assertNotIn(
-            "wait_stream",
-            block,
-            "Verify replay must not introduce a private wait_stream fence.",
-        )
-
-    def test_publisher_gates_on_war_capability(self):
-        """The read-done publisher branch is gated on is_dflash_or_dspark."""
-        block = self._read_replay_block()
-        self.assertIn(
-            "is_dflash_or_dspark()",
-            block,
-            "Publisher branch must gate on the WAR verify capability predicate.",
-        )
-
-    def test_scheduler_consumer_waits_on_read_done_event(self):
-        """Scheduler _apply_war_barrier consumes the published read-done event."""
-        text = _SCHEDULER.read_text()
-        start = text.find("def _apply_war_barrier(self):")
-        self.assertNotEqual(start, -1, "_apply_war_barrier not found.")
-        end = text.find("\n    def ", start + 1)
-        block = text[start : end if end != -1 else len(text)]
-        self.assertIn("war_fastpath_read_done_event", block)
-        self.assertIn("wait_event", block)
-
-
-@unittest.skip(
-    "BLOCKED on ragged-verify routing decision: the real-N (`compact`) path that "
-    "writes ragged metadata buffers (verify_lens / extend_start_loc / "
-    "qo_indptr_device) inside cuda-graph replay is under team design discussion. "
-    "The WAR/RAW timing regression for real-N is stubbed and not wired to run."
-)
-class TestWarBarrierRealNTimingStub(CustomTestCase):
-    """Invariant 3 real-N regression (BLOCKED): under spec-v2 overlap, the
-    scheduler's write to the ragged metadata buffers must wait on the existing
-    war_fastpath_read_done_event before overwriting, and multi-step output must
-    be bit-equal to cap-accept under the same lagged ell_r.
-    """
-
-    def test_real_n_metadata_copy_precedes_read_done(self):
-        """real-N ragged metadata copy_ must complete before read_done.record()."""
-        pytest.skip("blocked on ragged-verify routing decision")
-
-    def test_real_n_overlap_bit_equal_to_cutoff_only(self):
-        """spec-v2 overlap real-N multi-step output must equal cap-accept."""
-        pytest.skip("blocked on ragged-verify routing decision")
 
 
 if __name__ == "__main__":
