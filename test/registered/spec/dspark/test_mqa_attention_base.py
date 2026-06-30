@@ -272,7 +272,10 @@ class TestMqaAttentionBaseConstruction(CustomTestCase):
 
         with get_parallel().override(attn_tp_size=1, attn_tp_rank=0):
             attn = DSparkAttention(
-                config=self.dspark_config, layer_id=2, quant_config=None, prefix="self_attn"
+                config=self.dspark_config,
+                layer_id=2,
+                quant_config=None,
+                prefix="self_attn",
             )
         self.assertIsInstance(attn, MqaAttentionBase)
         self.assertEqual(attn.compress_ratio, 0)
@@ -284,13 +287,16 @@ class TestMqaAttentionBaseConstruction(CustomTestCase):
     def test_mqalayer_subclass_aliases_tp_attrs(self) -> None:
         """MQALayer aliases tp_rank/tp_size to the canonical attn_tp_* and keeps attn_mqa."""
         from sglang.srt.layers.radix_attention import RadixAttention
-        from sglang.srt.models.deepseek_v4 import MQALayer, MqaAttentionBase
+        from sglang.srt.models.deepseek_v4 import MqaAttentionBase, MQALayer
         from sglang.srt.runtime_context import get_parallel
 
         try:
             with get_parallel().override(attn_tp_size=1, attn_tp_rank=0):
                 layer = MQALayer(
-                    config=self.yarn_config, layer_id=0, quant_config=None, prefix="self_attn"
+                    config=self.yarn_config,
+                    layer_id=0,
+                    quant_config=None,
+                    prefix="self_attn",
                 )
         except Exception as exc:  # noqa: BLE001 - rotary_emb may need a device backend
             self.skipTest(f"MQALayer construction needs a rope backend: {exc!r}")

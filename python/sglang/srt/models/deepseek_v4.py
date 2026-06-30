@@ -609,6 +609,7 @@ class MQALayer(MqaAttentionBase):
         # KV cache write is always fused into the K kernel
         # (`_compute_kv_to_cache`), so the legacy "overlap store cache" flag
         # has no effect here -- the fused path is on by default.
+
     def _compute_q_a(
         self,
         x: torch.Tensor,
