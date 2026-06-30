@@ -1525,6 +1525,10 @@ class ServerArgs:
         Optional[int],
         "DSPARK only. Draft block size gamma (number of proposed draft tokens). The verify window is gamma + 1, so this sets --speculative-num-draft-tokens = gamma + 1.",
     ] = None
+    speculative_dspark_sps_table_path: A[
+        Optional[str],
+        "DSPARK only. Path to a pre-profiled SPS cost table (JSON). Unset = flat constant-SPS table.",
+    ] = None
     speculative_accept_threshold_single: A[
         float,
         "Accept a draft token if its probability in the target model is greater than this threshold.",

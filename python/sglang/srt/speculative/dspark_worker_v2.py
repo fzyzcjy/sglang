@@ -1,5 +1,4 @@
 import logging
-import os
 from typing import Optional
 
 import msgspec
@@ -276,7 +275,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         # table (budget = verify-all-up-to-max). Flat is the inert default for
         # cap-accept, which has zero throughput gain; the GPU profiler hook lands
         # with the compact real-N path.
-        sps_table_path = os.environ.get("SGLANG_DSPARK_SPS_TABLE_PATH")
+        sps_table_path = self.server_args.speculative_dspark_sps_table_path
         if sps_table_path:
             return load_sps_table_from_path(sps_table_path)
         max_batch_tokens = max(
