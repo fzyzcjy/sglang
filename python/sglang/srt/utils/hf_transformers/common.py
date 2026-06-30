@@ -138,6 +138,18 @@ try:
 except ImportError:
     pass
 
+# gemma4_unified reuses the upstream Gemma4 schema under an sglang-specific
+# model_type that transformers does not register.
+try:
+    from transformers import Gemma4Config as _HFGemma4Config
+
+    class _Gemma4UnifiedConfigAlias(_HFGemma4Config):
+        model_type = "gemma4_unified"
+
+    _CONFIG_REGISTRY["gemma4_unified"] = _Gemma4UnifiedConfigAlias
+except ImportError:
+    pass
+
 for name, cls in _CONFIG_REGISTRY.items():
     try:
         AutoConfig.register(name, cls)
