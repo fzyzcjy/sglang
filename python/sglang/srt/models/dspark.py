@@ -13,7 +13,7 @@ from typing import Callable, Iterable, Optional, Tuple
 import torch
 from torch import nn
 
-from sglang.srt.debug_utils.dumper import dumper
+# from sglang.srt.debug_utils.dumper import dumper
 from sglang.srt.distributed.communication_op import tensor_model_parallel_all_gather
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models.dflash import DFlashDraftModel
@@ -417,13 +417,13 @@ class DSparkDraftMixin:
                 "DSpark dense draft requires the target lm_head "
                 "(call attach_shared_modules first)."
             )
-        dumper.dump("draft__base_logits_in_hidden", hidden)
+        # dumper.dump("draft__base_logits_in_hidden", hidden)
         weight = self.lm_head.weight
         if hidden.dtype != weight.dtype:
             hidden = hidden.to(weight.dtype)
         local_logits = torch.matmul(hidden, weight.T)
         base_logits = gather_and_crop_vocab(local_logits, self.lm_head)
-        dumper.dump("draft__base_logits", base_logits)
+        # dumper.dump("draft__base_logits", base_logits)
         return base_logits
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
