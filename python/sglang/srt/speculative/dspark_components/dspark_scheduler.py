@@ -10,6 +10,7 @@ from sglang.srt.speculative.dspark_components.dspark_sps_table import (
     SpsCostTable,
     load_sps_table_from_path,
 )
+from sglang.srt.utils.async_probe import maybe_assert_async
 
 logger = logging.getLogger(__name__)
 
@@ -151,10 +152,10 @@ class ConfidencePrefixScheduler:
         self.cfg = cfg
 
     def compute_verify_lens(
-        self, *, k_survival: torch.Tensor, sort_survival: torch.Tensor
+        self, *, two_steps_prior_k_survival: torch.Tensor, sort_survival: torch.Tensor
     ) -> torch.Tensor:
         budget = compute_verify_token_budget(
-            history_survival_probs=k_survival,
+            history_survival_probs=two_steps_prior_k_survival,
             sps_table=self.sps_table,
             cfg=self.cfg,
         )
@@ -168,10 +169,10 @@ class ConfidencePrefixScheduler:
         # so the anchor padding added by the lower-bound clamp is not miscounted as
         # budget overflow when an explicit min_verify_len=0 is clamped up to 1.
         effective_floor = max(self.cfg.min_verify_len, 1)
-        total_extra = int((verify_lens_64 - effective_floor).sum().item())
-        assert (
-            total_extra <= budget
-        ), f"DSpark verify-len budget violated: extra={total_extra} > budget={budget}"
+        maybe_assert_async(
+            (verify_lens_64 - effective_floor).sum() <= budget,
+            f"DSpark verify-len budget violated (budget={budget})",
+        )
         return verify_lens
 
 

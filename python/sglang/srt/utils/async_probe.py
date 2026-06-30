@@ -76,6 +76,15 @@ def sanitize_nan_logits(logits: torch.Tensor, msg: str = ""):
     torch.nan_to_num_(logits, nan=-1e30, posinf=1e30, neginf=-1e30)
 
 
+def maybe_assert_async(cond: torch.Tensor, msg: str = ""):
+    """Gated raw async assert — fire torch._assert_async(cond) without a
+    GPU-CPU sync when SGLANG_ENABLE_ASYNC_ASSERT is on. ``cond`` is a GPU bool
+    tensor (0-dim scalar, or reduced via .all())."""
+    if not envs.SGLANG_ENABLE_ASYNC_ASSERT.get():
+        return
+    torch._assert_async(cond, msg)
+
+
 def maybe_detect_nan(tensor: Optional[torch.Tensor], msg: str = ""):
     """Async NaN check — no GPU-CPU sync, error surfaces at next sync point."""
     if not envs.SGLANG_ENABLE_ASYNC_ASSERT.get():

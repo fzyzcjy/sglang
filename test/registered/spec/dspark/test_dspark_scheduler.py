@@ -410,7 +410,7 @@ class TestVerifyLenAnchorContract(CustomTestCase):
         )
         self.assertEqual(budget, 0)
         verify_lens = scheduler.compute_verify_lens(
-            k_survival=survival, sort_survival=survival
+            two_steps_prior_k_survival=survival, sort_survival=survival
         )
         self.assertGreaterEqual(int(verify_lens.min().item()), 1)
         verify_lens_cpu = verify_lens.to(torch.int64).tolist()
@@ -528,7 +528,7 @@ class TestVanillaMatchesReference(CustomTestCase):
 
 class TestConfidencePrefixScheduler(CustomTestCase):
     def test_compute_verify_lens_respects_history_budget(self):
-        """Different k_survival tensors yield different budgets and different verify_lens."""
+        """Different two_steps_prior_k_survival tensors yield different budgets and different verify_lens."""
         low_history = torch.tensor([[0.95, 0.30, 0.05]], dtype=torch.float32)
         high_history = torch.tensor([[0.95, 0.90, 0.85]], dtype=torch.float32)
         sort_survival = torch.tensor([[0.95, 0.90, 0.85]], dtype=torch.float32)
@@ -544,14 +544,14 @@ class TestConfidencePrefixScheduler(CustomTestCase):
             low_budget, high_budget, "budgets must differ for this test"
         )
         lens_low = scheduler.compute_verify_lens(
-            k_survival=low_history, sort_survival=sort_survival
+            two_steps_prior_k_survival=low_history, sort_survival=sort_survival
         )
         lens_high = scheduler.compute_verify_lens(
-            k_survival=high_history, sort_survival=sort_survival
+            two_steps_prior_k_survival=high_history, sort_survival=sort_survival
         )
         self.assertFalse(
             torch.equal(lens_low, lens_high),
-            "different k_survival budgets must produce different verify_lens",
+            "different two_steps_prior_k_survival budgets must produce different verify_lens",
         )
 
     def test_compute_verify_lens_is_pure_no_state_mutation(self):
@@ -559,10 +559,13 @@ class TestConfidencePrefixScheduler(CustomTestCase):
         cfg = DSparkScheduleConfig(gamma=3)
         scheduler = ConfidencePrefixScheduler(sps_table=_flat_table(), cfg=cfg)
         attrs_before = set(vars(scheduler).keys())
-        k_survival = torch.tensor([[0.9, 0.8, 0.7]], dtype=torch.float32)
+        two_steps_prior_k_survival = torch.tensor(
+            [[0.9, 0.8, 0.7]], dtype=torch.float32
+        )
         sort_survival = torch.tensor([[0.9, 0.8, 0.7]], dtype=torch.float32)
         scheduler.compute_verify_lens(
-            k_survival=k_survival, sort_survival=sort_survival
+            two_steps_prior_k_survival=two_steps_prior_k_survival,
+            sort_survival=sort_survival,
         )
         attrs_after = set(vars(scheduler).keys())
         self.assertEqual(
