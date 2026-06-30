@@ -3,7 +3,7 @@ import unittest
 
 import torch
 
-from sglang.srt.speculative.dspark_worker_v2 import DSparkWorkerV2
+from sglang.srt.speculative.dspark_components.dspark_worker_v2 import DSparkWorkerV2
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 

@@ -13,7 +13,7 @@ from sglang.srt.layers.dp_attention import (
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.model_executor.forward_batch_info import compute_position
 from sglang.srt.speculative.dflash_utils import apply_dflash_verify_logits_adjustments
-from sglang.srt.speculative.dspark_info import RaggedVerifyWindow, VerifyWindow
+from sglang.srt.speculative.dspark_components.dspark_info import RaggedVerifyWindow, VerifyWindow
 from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout, RaggedVerifyMode
 from sglang.srt.speculative.triton_ops.cache_locs import assign_extend_cache_locs_func
 

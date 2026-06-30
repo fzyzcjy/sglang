@@ -4,7 +4,7 @@ from typing import Any, Dict, Optional
 from unittest import mock
 
 from sglang.srt.arg_groups.speculative_hook import _handle_dspark
-from sglang.srt.speculative.dspark_utils import DEFAULT_DSPARK_GAMMA
+from sglang.srt.speculative.dspark_components.dspark_utils import DEFAULT_DSPARK_GAMMA
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 

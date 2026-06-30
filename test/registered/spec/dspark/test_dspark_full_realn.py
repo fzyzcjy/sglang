@@ -3,7 +3,7 @@ import unittest
 
 import torch
 
-from sglang.srt.speculative.dspark_worker_v2 import (
+from sglang.srt.speculative.dspark_components.dspark_worker_v2 import (
     DSparkWorkerV2,
     _DraftBlockResult,
 )

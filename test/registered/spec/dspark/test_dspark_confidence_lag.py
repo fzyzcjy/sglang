@@ -5,13 +5,13 @@ from types import SimpleNamespace
 
 import torch
 
-from sglang.srt.speculative.dspark_scheduler import (
+from sglang.srt.speculative.dspark_components.dspark_scheduler import (
     ConfidencePrefixScheduler,
     DSparkScheduleConfig,
     compute_verify_token_budget,
 )
-from sglang.srt.speculative.dspark_sps_table import SpsCostTable
-from sglang.srt.speculative.dspark_worker_v2 import (
+from sglang.srt.speculative.dspark_components.dspark_sps_table import SpsCostTable
+from sglang.srt.speculative.dspark_components.dspark_worker_v2 import (
     _CONFIDENCE_RELAY_LAG_STEPS,
     _CONFIDENCE_RELAY_RING_DEPTH,
     _CONFIDENCE_RELAY_UNSET_SEQ_LEN,

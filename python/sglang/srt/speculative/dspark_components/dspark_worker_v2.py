@@ -25,23 +25,23 @@ from sglang.srt.speculative.draft_worker_common import (
     build_draft_tp_worker,
     make_draft_block_spec_info,
 )
-from sglang.srt.speculative.dspark_accept import (
+from sglang.srt.speculative.dspark_components.dspark_accept import (
     accept_draft_tokens,
     build_out_tokens,
 )
-from sglang.srt.speculative.dspark_confidence import (
+from sglang.srt.speculative.dspark_components.dspark_confidence import (
     _CONFIDENCE_RELAY_LAG_STEPS,
     _CONFIDENCE_RELAY_RING_DEPTH,
     ConfidenceRelay,
     compute_confidence,
 )
-from sglang.srt.speculative.dspark_draft import (
+from sglang.srt.speculative.dspark_components.dspark_draft import (
     DsparkDraftSampler,
     make_next_draft_input,
     resolve_greedy_mask,
     sample_draft_block,
 )
-from sglang.srt.speculative.dspark_info import (
+from sglang.srt.speculative.dspark_components.dspark_info import (
     DraftBlockResult,
     DraftForwardResult,
     DraftProposal,
@@ -49,16 +49,16 @@ from sglang.srt.speculative.dspark_info import (
     TargetVerifyResult,
     VerifyWindow,
 )
-from sglang.srt.speculative.dspark_scheduler import (
+from sglang.srt.speculative.dspark_components.dspark_scheduler import (
     ConfidencePrefixScheduler,
     DSparkScheduleConfig,
     build_sps_cost_table,
 )
-from sglang.srt.speculative.dspark_utils import (
+from sglang.srt.speculative.dspark_components.dspark_utils import (
     dspark_gamma_from_num_draft_tokens,
     parse_dspark_draft_config,
 )
-from sglang.srt.speculative.dspark_verify import (
+from sglang.srt.speculative.dspark_components.dspark_verify import (
     alloc_verify_window,
     apply_logits_adjustments_strided,
     build_ragged_verify_window,

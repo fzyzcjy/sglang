@@ -224,7 +224,7 @@ class SpeculativeAlgorithm(Enum):
             return DFlashWorkerV2
 
         if self.is_dspark():
-            from sglang.srt.speculative.dspark_worker_v2 import DSparkWorkerV2
+            from sglang.srt.speculative.dspark_components.dspark_worker_v2 import DSparkWorkerV2
 
             return DSparkWorkerV2
 

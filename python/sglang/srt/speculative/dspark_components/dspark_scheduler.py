@@ -6,7 +6,7 @@ import msgspec
 import torch
 
 from sglang.srt.server_args import ServerArgs
-from sglang.srt.speculative.dspark_sps_table import (
+from sglang.srt.speculative.dspark_components.dspark_sps_table import (
     SpsCostTable,
     load_sps_table_from_path,
 )

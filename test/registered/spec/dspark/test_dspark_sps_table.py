@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from sglang.srt.speculative.dspark_sps_table import (
+from sglang.srt.speculative.dspark_components.dspark_sps_table import (
     SpsCostTable,
     load_sps_table_from_path,
     profile_sps_table,
@@ -14,7 +14,7 @@ from sglang.test.test_utils import CustomTestCase
 
 register_cpu_ci(est_time=10, suite="base-a-test-cpu")
 
-_WORKER_LOGGER = "sglang.srt.speculative.dspark_worker_v2"
+_WORKER_LOGGER = "sglang.srt.speculative.dspark_components.dspark_worker_v2"
 
 
 def _make_table() -> SpsCostTable:
@@ -214,7 +214,7 @@ class TestProfilerConversion(CustomTestCase):
         """Run the profiler against a monkeypatched bench returning fake results."""
         from sglang.benchmark import dspark_sps_profiler
         from sglang.srt.server_args import ServerArgs
-        from sglang.srt.speculative.dspark_sps_table import load_sps_table_from_path
+        from sglang.srt.speculative.dspark_components.dspark_sps_table import load_sps_table_from_path
 
         repeats = iter(batches_per_repeat)
 
@@ -288,7 +288,7 @@ class _CollectingHandler(logging.Handler):
 
 def _build_sps_cost_table_for(*, tp_rank: int, sps_table_path):
     """Invoke the worker's _build_sps_cost_table on a bare stub with no GPU state."""
-    from sglang.srt.speculative.dspark_worker_v2 import DSparkWorkerV2
+    from sglang.srt.speculative.dspark_components.dspark_worker_v2 import DSparkWorkerV2
 
     worker = DSparkWorkerV2.__new__(DSparkWorkerV2)
     worker.tp_rank = tp_rank
