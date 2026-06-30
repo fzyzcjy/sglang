@@ -257,6 +257,48 @@ class TestVerifyLayoutGrid(CustomTestCase):
         grid = worker._verify_layout_grid(verify_lens_cpu=[5, 2, 1])
         self.assertEqual(grid, [8])
 
+    def test_floor_lifts_bucket_when_token_graph_present(self):
+        """The bs-derived floor only applies when a token-keyed graph exists."""
+        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.COMPACT)
+        runner = types.SimpleNamespace(
+            ragged_verify_mode=True,
+            capture_num_tokens=[5, 10, 15],
+        )
+        worker.model_runner = types.SimpleNamespace(decode_cuda_graph_runner=runner)
+        # 3 requests, gamma+1 = 5, so the floor is 15; a tiny total still keys the
+        # 15-token tier (3 capture slots), not the smaller 5-token tier (1 slot).
+        floor = worker._verify_layout_graph_num_tokens_floor(num_reqs=3)
+        self.assertEqual(floor, 15)
+        layout = RaggedVerifyLayout.from_verify_lens(
+            verify_lens_cpu=[1, 1, 1],
+            device=_DEVICE,
+            grid=runner.capture_num_tokens,
+            graph_num_tokens_floor=floor,
+        )
+        self.assertEqual(layout.total_verify_tokens, 3)
+        self.assertEqual(layout.graph_num_tokens, 15)
+
+    def test_floor_is_zero_without_token_graph(self):
+        """No token-keyed graph means no bs-derived floor (eager runs on exact total)."""
+        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.COMPACT)
+        worker.model_runner = types.SimpleNamespace(decode_cuda_graph_runner=None)
+        self.assertEqual(worker._verify_layout_graph_num_tokens_floor(num_reqs=3), 0)
+
+
+class TestLayoutLessCompactCarriesDegenerateLayout(CustomTestCase):
+    def test_uniform_ragged_layout_matches_static_full_block(self):
+        """The C3 fallback layout is a uniform gamma+1 block keyed token-wise."""
+        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.COMPACT)
+        runner = types.SimpleNamespace(
+            ragged_verify_mode=True,
+            capture_num_tokens=[5, 10, 15],
+        )
+        worker.model_runner = types.SimpleNamespace(decode_cuda_graph_runner=runner)
+        layout = worker._uniform_ragged_layout(bs=2, device=_DEVICE)
+        self.assertEqual(layout.verify_lens_cpu, [5, 5])
+        self.assertEqual(layout.total_verify_tokens, 10)
+        self.assertEqual(layout.graph_num_tokens, 10)
+
 
 if __name__ == "__main__":
     unittest.main()

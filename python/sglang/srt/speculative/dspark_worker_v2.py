@@ -677,11 +677,39 @@ class DSparkWorkerV2(BaseSpecWorker):
             req_pool_indices=req_pool_indices, device=device
         )
         if verify_lens is None:
+            # COMPACT token-keys the verify graph and captures it with a ragged
+            # layout, so a layout-less compact verify (confidence not ready at
+            # startup / after reset) must still carry a degenerate uniform layout
+            # to hit the same token-keyed graph (C3); otherwise it would fall
+            # through to a bs-keyed replay key that the token-keyed graph dict
+            # never recorded. CAP_ACCEPT stays bs-keyed, so None is correct there.
+            if self._ragged_verify_mode is RaggedVerifyMode.COMPACT:
+                return self._uniform_ragged_layout(
+                    bs=len(req_pool_indices), device=device
+                )
             return None
         verify_lens_cpu = verify_lens.to("cpu").tolist()
         grid = self._verify_layout_grid(verify_lens_cpu=verify_lens_cpu)
         graph_num_tokens_floor = self._verify_layout_graph_num_tokens_floor(
             num_reqs=len(verify_lens_cpu)
+        )
+        return RaggedVerifyLayout.from_verify_lens(
+            verify_lens_cpu=verify_lens_cpu,
+            device=device,
+            grid=grid,
+            graph_num_tokens_floor=graph_num_tokens_floor,
+        )
+
+    def _uniform_ragged_layout(
+        self, *, bs: int, device: torch.device
+    ) -> RaggedVerifyLayout:
+        # The degenerate uniform layout (verify_lens = [gamma+1] * bs) that a
+        # layout-less compact verify carries so it hits the same token-keyed graph
+        # the real ragged batch does (C3). Geometry matches the static full block.
+        verify_lens_cpu = [self.verify_num_draft_tokens] * bs
+        grid = self._verify_layout_grid(verify_lens_cpu=verify_lens_cpu)
+        graph_num_tokens_floor = self._verify_layout_graph_num_tokens_floor(
+            num_reqs=bs
         )
         return RaggedVerifyLayout.from_verify_lens(
             verify_lens_cpu=verify_lens_cpu,
