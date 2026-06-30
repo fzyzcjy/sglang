@@ -477,16 +477,11 @@ class DSparkDraftMixin:
         }
         missing = confidence_param_names - loaded_names
         if missing:
-            logger.warning(
-                "DSpark confidence head present but checkpoint is missing %s; "
-                "identity-initializing to a constant accept probability of 0.5 "
-                "(advisory-only; does not affect losslessness).",
-                sorted(missing),
+            raise ValueError(
+                f"DSpark confidence head is enabled but the checkpoint is missing "
+                f"{sorted(missing)}. Provide a checkpoint with trained confidence weights, "
+                f"or disable the confidence head (enable_confidence_head=False)."
             )
-            with torch.no_grad():
-                self.confidence_head.proj.weight.zero_()
-                if self.confidence_head.proj.bias is not None:
-                    self.confidence_head.proj.bias.zero_()
 
     def write_target_hidden_kv(
         self,

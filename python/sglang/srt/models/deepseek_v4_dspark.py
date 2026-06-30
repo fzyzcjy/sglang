@@ -941,11 +941,11 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
                     weight_loader(param, loaded_weight)
                     loaded_params.add(mapped)
 
-        self._maybe_identity_init_confidence_head(
+        self._assert_confidence_head_loaded(
             params_dict=params_dict, loaded_params=loaded_params
         )
 
-    def _maybe_identity_init_confidence_head(
+    def _assert_confidence_head_loaded(
         self, *, params_dict: dict, loaded_params: set
     ) -> None:
         if self.confidence_head is None:
@@ -955,16 +955,11 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         }
         missing = confidence_param_names - loaded_params
         if missing:
-            logger.warning(
-                "DSpark V4 confidence head present but checkpoint is missing %s; "
-                "identity-initializing to a constant accept probability of 0.5 "
-                "(advisory-only; does not affect losslessness).",
-                sorted(missing),
+            raise ValueError(
+                f"DSpark V4 confidence head is enabled but the checkpoint is missing "
+                f"{sorted(missing)}. Provide a checkpoint with trained confidence weights, "
+                f"or disable the confidence head (enable_confidence_head=False)."
             )
-            with torch.no_grad():
-                self.confidence_head.proj.weight.zero_()
-                if self.confidence_head.proj.bias is not None:
-                    self.confidence_head.proj.bias.zero_()
 
     def _remap_dspark_weight_name(self, name: str) -> Optional[str]:
         """Map a reference ``mtp.{stage}.*`` checkpoint name to a draft param name."""
