@@ -50,6 +50,7 @@ from sglang.srt.speculative.ragged_verify import (
 from sglang.srt.speculative.reject_sampling import chain_speculative_sampling_triton
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.srt.speculative.triton_ops.cache_locs import assign_extend_cache_locs_func
+from sglang.srt.utils import get_available_gpu_memory, is_cuda
 from sglang.srt.utils.async_probe import maybe_detect_in_closed_range
 
 logger = logging.getLogger(__name__)
@@ -422,6 +423,15 @@ class DSparkWorkerV2(BaseSpecWorker):
         # sampling batches fall back to eager. tp=1 only.
         self._draft_sampler = None
         capture_decode_cuda_graph = not self.server_args.disable_cuda_graph
+        if is_cuda() and capture_decode_cuda_graph:
+            available_mem = get_available_gpu_memory(self.device, self.gpu_id)
+            if available_mem < 1.0:
+                capture_decode_cuda_graph = False
+                logger.warning(
+                    "Disable DSpark draft cuda graph because only %.2f GB GPU "
+                    "memory is available after target backend initialization.",
+                    available_mem,
+                )
         if capture_decode_cuda_graph:
             # Must run before capture so the draft graph folds the sampler in.
             self._draft_sampler = self._maybe_build_draft_sampler()
