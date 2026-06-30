@@ -16,9 +16,7 @@ class DSparkStsCalibration(msgspec.Struct, frozen=True, omit_defaults=True):
 
     def __post_init__(self) -> None:
         if not self.temperatures:
-            raise ValueError(
-                "DSparkStsCalibration requires at least one temperature."
-            )
+            raise ValueError("DSparkStsCalibration requires at least one temperature.")
         for temperature in self.temperatures:
             if temperature <= 0:
                 raise ValueError(
