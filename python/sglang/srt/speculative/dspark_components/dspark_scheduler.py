@@ -217,17 +217,20 @@ class HostConfidenceBudgetPlanner:
         sps_table: SpsCostTable,
         cfg: DSparkScheduleConfig,
         req_pool_size: int,
+        relay_lag_steps: int = 1,
     ) -> None:
         cfg.validate()
         self.sps_table = sps_table
         self.cfg = cfg
         self.req_pool_size = req_pool_size
-        # Total causal lag (relay 1 step + host carry the remainder). >= 1 already
-        # yields the barrier; default 2 reproduces the paper. Tunable via env.
+        # Total causal lag (>= 1 already yields the barrier; default 2 reproduces the
+        # paper, tunable via env). The feed already supplies relay_lag_steps of lag (1
+        # under the async overlap relay, 0 in the synchronous non-overlap fallback);
+        # the host carry supplies the remainder.
         self.lag_steps = max(
             int(envs.SGLANG_DSPARK_CONFIDENCE_RELAY_LAG_STEPS.get()), 1
         )
-        self.carry_steps = self.lag_steps - 1
+        self.carry_steps = max(self.lag_steps - int(relay_lag_steps), 0)
         self._carry_confidence: Optional[torch.Tensor] = None
         self._carry_seq_lens: Optional[torch.Tensor] = None
         self._carry_pos = 0
