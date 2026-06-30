@@ -6,8 +6,8 @@ import torch
 from sglang.srt.environ import envs
 from sglang.srt.layers.attention import deepseek_v4_backend as dsv4
 from sglang.srt.layers.attention.deepseek_v4_backend import (
-    RAGGED_VERIFY_CHOICES,
     RAGGED_VERIFY_CAP_ACCEPT,
+    RAGGED_VERIFY_CHOICES,
     RAGGED_VERIFY_COMPACT,
     RAGGED_VERIFY_STATIC,
     DeepseekV4AttnBackend,
