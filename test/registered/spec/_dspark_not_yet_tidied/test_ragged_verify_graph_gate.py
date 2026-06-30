@@ -14,14 +14,15 @@ register_cpu_ci(est_time=10, suite="base-a-test-cpu")
 
 
 class _RaggedCapableBackend:
-    """A backend stub that advertises the DSV4 ragged verify metadata builder."""
+    """A backend stub that advertises the ragged verify graph capability."""
 
-    def make_forward_metadata_from_raw_verify(self):  # pragma: no cover - marker
-        raise NotImplementedError
+    supports_ragged_verify_graph = True
 
 
 class _RaggedIncapableBackend:
-    """A backend stub (e.g. FlashInfer) with no ragged verify metadata builder."""
+    """A backend stub (e.g. FlashInfer) with no ragged verify graph support."""
+
+    supports_ragged_verify_graph = False
 
 
 def _gate_runner(
@@ -127,7 +128,7 @@ class TestRaggedVerifyGraphAdmission(CustomTestCase):
             _can_run(runner, fb, _gate_layout(5))
 
     def test_rejects_backend_without_ragged_metadata_builder(self):
-        """A backend without make_forward_metadata_from_raw_verify forces eager (H1)."""
+        """A backend with supports_ragged_verify_graph False forces eager (H1)."""
         runner = _gate_runner(
             capture_num_tokens=[4, 8, 16, 32],
             num_tokens_per_bs=4,

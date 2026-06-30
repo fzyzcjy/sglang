@@ -783,6 +783,8 @@ class DeepseekV4AttnBackend(
     AttentionBackend, C4IndexerBackendMixin, CompressorBackendMixin
 ):
     use_captured_forward_metadata_for_breakable_cuda_graph: bool = True
+    # Builds ragged verify metadata via make_forward_metadata_from_raw_verify.
+    supports_ragged_verify_graph: bool = True
 
     def __init__(
         self,

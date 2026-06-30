@@ -599,11 +599,15 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         # a dense FlashInfer backend has no ragged verify metadata builder, so its
         # out-graph TARGET_VERIFY would silently use the uniform prefill wrappers
         # (no per-request geometry, no assert). Force eager here rather than select
-        # a graph with the wrong geometry. The DSV4 family (CUDA + HIP) does carry
-        # make_forward_metadata_from_raw_verify; the HIP out-graph additionally
-        # raises on a ragged layout (its TARGET_VERIFY path is still uniform), so it
-        # fails loud at the backend rather than running the wrong geometry.
-        if not hasattr(self.attn_backend, "make_forward_metadata_from_raw_verify"):
+        # a graph with the wrong geometry. Keyed on the explicit
+        # supports_ragged_verify_graph attribute (True for the DSV4 family and
+        # trtllm_mha): this is orthogonal to the verify-prep host pre-add probe in
+        # dspark_target_verify._verify_backend_self_adds_seq_lens, which keys on the
+        # make_forward_metadata_from_raw_verify method and must stay untouched. The
+        # DSV4 family (CUDA + HIP) and trtllm_mha set the attribute; the HIP out-graph
+        # additionally raises on a ragged layout (its TARGET_VERIFY path is still
+        # uniform), so it fails loud at the backend rather than running wrong geometry.
+        if not self.attn_backend.supports_ragged_verify_graph:
             return False
 
         # The captured token tier is floored to the bs-derived full block

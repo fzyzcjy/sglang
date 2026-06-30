@@ -74,6 +74,13 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
     # seq_lens_cpu D2H sync; opt out of it, matching trtllm_mla / triton.
     needs_cpu_seq_lens: bool = False
 
+    # Builds ragged (DSpark compact / real-N) verify metadata for the token-keyed
+    # cuda-graph path: the trtllm-gen decode kernel takes a variable-length
+    # (max_q_len, cum_seq_lens_q) query, so verify maps each request to its own
+    # verify_lens entry. The xqa impl (sm90 / sm120) rejects cum_seq_lens_q, so
+    # _assert_ragged_verify_supported fails loud there.
+    supports_ragged_verify_graph: bool = True
+
     def __init__(
         self,
         model_runner: ModelRunner,
