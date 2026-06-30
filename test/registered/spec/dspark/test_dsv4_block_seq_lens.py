@@ -20,9 +20,7 @@ class TestBuildBlockSeqLensCasual(CustomTestCase):
         """Each request emits [prefix+1 .. prefix+block_size], flattened row-major."""
         seq_lens = torch.tensor([10, 20, 30], dtype=torch.int32)
         out = build_block_seq_lens_casual(seq_lens=seq_lens, block_size=4, device=_CPU)
-        self.assertEqual(
-            out.tolist(), [11, 12, 13, 14, 21, 22, 23, 24, 31, 32, 33, 34]
-        )
+        self.assertEqual(out.tolist(), [11, 12, 13, 14, 21, 22, 23, 24, 31, 32, 33, 34])
 
     def test_block_size_one_is_seq_lens_plus_one(self):
         """block_size=1 yields exactly seq_lens + 1."""
@@ -51,9 +49,7 @@ class TestBuildBlockSeqLensCasual(CustomTestCase):
 
         gather = compute_dspark_window_gather(
             seq_lens_casual=seq_lens_casual,
-            req_pool_indices_repeated=torch.zeros(
-                bs * block_size, dtype=torch.int32
-            ),
+            req_pool_indices_repeated=torch.zeros(bs * block_size, dtype=torch.int32),
             block_size=block_size,
         )
         self.assertTrue(
