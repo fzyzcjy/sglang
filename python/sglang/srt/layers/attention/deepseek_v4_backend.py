@@ -1054,6 +1054,7 @@ class DeepseekV4AttnBackend(
         seq_lens_cpu: Optional[torch.Tensor],
         out_cache_loc: torch.Tensor,
         block_size: int,
+        use_prefill_cuda_graph: bool = False,
     ) -> DSV4Metadata:
         """DSpark draft block metadata: gamma tokens/request, NON-CAUSAL, no compression.
 
@@ -1084,7 +1085,7 @@ class DeepseekV4AttnBackend(
             extend_seq_lens_cpu=extend_seq_lens_cpu,
             extend_start_loc=None,
             need_compress=False,
-            use_prefill_cuda_graph=False,
+            use_prefill_cuda_graph=use_prefill_cuda_graph,
         )
 
     def make_forward_metadata_from_raw_verify(
@@ -1376,6 +1377,32 @@ class DeepseekV4AttnBackend(
                 req_pool_indices=req_pool_indices,
                 seq_lens=seq_lens,
                 out_cache_loc=out_cache_loc_padded,
+            )
+        elif bucket == _GraphBucket.TARGET_VERIFY and self.is_dspark_draft:
+            # DSpark draft block capture/replay: block_size (gamma) tokens/request,
+            # NON-CAUSAL, no compression, keyed by bs. Distinct from the target's gamma+1
+            # causal verify; mirrors the eager init's dspark branch. The in-graph swa
+            # index is re-derived in init_forward_metadata_in_graph on every replay from
+            # the live out_cache_loc.
+            block_size = int(forward_batch.spec_info.draft_token_num)
+            graph_key = bs
+            num_tokens_v = block_size * bs
+            assert out_cache_loc is not None
+            assert num_tokens_v >= len(out_cache_loc)
+            out_cache_loc_padded = torch.nn.functional.pad(
+                out_cache_loc,
+                pad=(0, num_tokens_v - len(out_cache_loc)),
+                mode="constant",
+                value=0,
+            )
+            temp_metadata = self.init_forward_metadata_dspark_draft_block(
+                max_seq_len=chosen_max_seq_len,
+                req_pool_indices=req_pool_indices,
+                seq_lens=seq_lens,
+                seq_lens_cpu=seq_lens_cpu,
+                out_cache_loc=out_cache_loc_padded,
+                block_size=block_size,
+                use_prefill_cuda_graph=True,
             )
         elif bucket == _GraphBucket.TARGET_VERIFY:
             verify_bs = _get_target_verify_bs(forward_batch)
