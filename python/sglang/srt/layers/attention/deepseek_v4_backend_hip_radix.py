@@ -956,7 +956,7 @@ class DeepseekV4HipRadixBackend(
             ):
                 raise NotImplementedError(
                     "DSV4 ragged verify is not supported on the HIP backend "
-                    "(DeepseekV4HipRadixBackend); disable SGLANG_RAGGED_VERIFY "
+                    "(DeepseekV4HipRadixBackend); disable SGLANG_RAGGED_VERIFY_MODE "
                     "or use a CUDA device."
                 )
             metadata = self.init_forward_metadata_target_verify(

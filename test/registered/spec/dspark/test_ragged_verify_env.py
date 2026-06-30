@@ -13,15 +13,15 @@ register_cpu_ci(est_time=10, suite="base-a-test-cpu")
 
 class TestReadRaggedVerifyMode(CustomTestCase):
     def test_default_unset_is_static(self):
-        """An unset SGLANG_RAGGED_VERIFY reads as STATIC."""
-        was_set = envs.SGLANG_RAGGED_VERIFY.is_set()
-        backup = envs.SGLANG_RAGGED_VERIFY.get() if was_set else None
-        envs.SGLANG_RAGGED_VERIFY.clear()
+        """An unset SGLANG_RAGGED_VERIFY_MODE reads as STATIC."""
+        was_set = envs.SGLANG_RAGGED_VERIFY_MODE.is_set()
+        backup = envs.SGLANG_RAGGED_VERIFY_MODE.get() if was_set else None
+        envs.SGLANG_RAGGED_VERIFY_MODE.clear()
         try:
             self.assertEqual(read_ragged_verify_mode(), RaggedVerifyMode.STATIC)
         finally:
             if was_set:
-                envs.SGLANG_RAGGED_VERIFY.set(backup)
+                envs.SGLANG_RAGGED_VERIFY_MODE.set(backup)
 
     def test_canonical_values(self):
         """The canonical values static / cap-accept / compact round-trip exactly."""
@@ -31,7 +31,7 @@ class TestReadRaggedVerifyMode(CustomTestCase):
             "compact": RaggedVerifyMode.COMPACT,
         }
         for value, expected in cases.items():
-            with envs.SGLANG_RAGGED_VERIFY.override(value):
+            with envs.SGLANG_RAGGED_VERIFY_MODE.override(value):
                 self.assertEqual(read_ragged_verify_mode(), expected)
 
     def test_legacy_aliases(self):
@@ -43,12 +43,12 @@ class TestReadRaggedVerifyMode(CustomTestCase):
             "full": RaggedVerifyMode.COMPACT,
         }
         for value, expected in cases.items():
-            with envs.SGLANG_RAGGED_VERIFY.override(value):
+            with envs.SGLANG_RAGGED_VERIFY_MODE.override(value):
                 self.assertEqual(read_ragged_verify_mode(), expected)
 
     def test_invalid_value_raises_loudly(self):
         """An unrecognized value raises rather than silently falling back to default."""
-        with envs.SGLANG_RAGGED_VERIFY.override("cutoff"):
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override("cutoff"):
             with self.assertRaises(ValueError):
                 read_ragged_verify_mode()
 

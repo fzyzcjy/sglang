@@ -115,7 +115,7 @@ if TYPE_CHECKING:
 
 
 def ragged_verify_full_mode_enabled(spec_algorithm: SpeculativeAlgorithm) -> bool:
-    """Whether DSpark real-N ragged verify (SGLANG_RAGGED_VERIFY=compact) is on.
+    """Whether DSpark real-N ragged verify (SGLANG_RAGGED_VERIFY_MODE=compact) is on.
 
     Gated on the spec algorithm advertising ragged-verify support. The env read
     and the value contract live in the shared ragged-verify infra module; this
@@ -279,7 +279,7 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         # Plan B: keep verify in this decode runner (accept / sampling /
         # KV-commit untouched) but add a token-keyed capture mode that buckets
         # by the total verify-token count instead of by bs. Activated only for
-        # DSpark real-N (SGLANG_RAGGED_VERIFY=compact); every other path (normal
+        # DSpark real-N (SGLANG_RAGGED_VERIFY_MODE=compact); every other path (normal
         # decode, EAGLE/DFlash verify, DSpark cap-accept) keeps the bs-keyed
         # graph and stays byte-identical.
         self.ragged_verify_mode = ragged_verify_full_mode_enabled(
