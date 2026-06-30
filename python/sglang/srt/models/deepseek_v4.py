@@ -1859,6 +1859,9 @@ class DeepseekV4Model(nn.Module):
 
         self.dspark_layers_to_capture: Optional[List[int]] = None
 
+    def get_input_embeddings(self) -> nn.Module:
+        return self.embed_tokens
+
     def hc_head(
         self,
         x: torch.Tensor,
