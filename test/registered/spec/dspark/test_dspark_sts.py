@@ -152,9 +152,7 @@ class TestStsDataRecorder(CustomTestCase):
             recorder.flush()
             shard = torch.load(f"{stem}.0.pt")
         self.assertTrue(torch.equal(shard["prefix_mask"], expected_prefix_mask))
-        self.assertTrue(
-            torch.equal(shard["logits"], confidence_raw.to(torch.float32))
-        )
+        self.assertTrue(torch.equal(shard["logits"], confidence_raw.to(torch.float32)))
 
 
 if __name__ == "__main__":
