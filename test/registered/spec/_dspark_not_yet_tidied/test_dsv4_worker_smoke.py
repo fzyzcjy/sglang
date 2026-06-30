@@ -3,6 +3,9 @@ import unittest
 
 import torch
 
+from sglang.srt.speculative.dspark_components.dspark_target_verify import (
+    TargetVerifyExecutor,
+)
 from sglang.srt.speculative.dspark_components.dspark_worker_v2 import DSparkWorkerV2
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
@@ -27,7 +30,8 @@ def _make_worker() -> DSparkWorkerV2:
     worker.gamma = _GAMMA
     worker.verify_num_draft_tokens = _GAMMA + 1
     worker.device = _DEVICE
-    worker._verify_backend_self_adds_seq_lens_cache = None
+    worker._verify_executor = TargetVerifyExecutor.__new__(TargetVerifyExecutor)
+    worker._verify_executor._verify_backend_self_adds_seq_lens_cache = None
     return worker
 
 
@@ -36,7 +40,7 @@ class TestDsv4VerifyBackendSelfAdd(CustomTestCase):
 
     def _worker_with_backend(self, backend) -> DSparkWorkerV2:
         worker = _make_worker()
-        worker._target_worker = types.SimpleNamespace(
+        worker._verify_executor.target_worker = types.SimpleNamespace(
             model_runner=types.SimpleNamespace(attn_backend=backend)
         )
         return worker
@@ -47,13 +51,13 @@ class TestDsv4VerifyBackendSelfAdd(CustomTestCase):
             make_forward_metadata_from_raw_verify=lambda *a, **k: None
         )
         worker = self._worker_with_backend(backend)
-        self.assertTrue(worker._verify_backend_self_adds_seq_lens())
+        self.assertTrue(worker._verify_executor._verify_backend_self_adds_seq_lens())
 
     def test_dense_verify_backend_does_not_self_add(self) -> None:
         """A dense backend lacks the raw verify builder, so the worker keeps the pre-add."""
         backend = types.SimpleNamespace()
         worker = self._worker_with_backend(backend)
-        self.assertFalse(worker._verify_backend_self_adds_seq_lens())
+        self.assertFalse(worker._verify_executor._verify_backend_self_adds_seq_lens())
 
     def test_self_add_capability_is_cached(self) -> None:
         """The resolved self-add capability is cached after first resolution."""
@@ -61,9 +65,11 @@ class TestDsv4VerifyBackendSelfAdd(CustomTestCase):
             make_forward_metadata_from_raw_verify=lambda *a, **k: None
         )
         worker = self._worker_with_backend(backend)
-        worker._verify_backend_self_adds_seq_lens()
-        worker._target_worker.model_runner.attn_backend = types.SimpleNamespace()
-        self.assertTrue(worker._verify_backend_self_adds_seq_lens())
+        worker._verify_executor._verify_backend_self_adds_seq_lens()
+        worker._verify_executor.target_worker.model_runner.attn_backend = (
+            types.SimpleNamespace()
+        )
+        self.assertTrue(worker._verify_executor._verify_backend_self_adds_seq_lens())
 
 
 if __name__ == "__main__":
