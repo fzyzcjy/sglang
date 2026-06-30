@@ -535,8 +535,11 @@ class ModelConfig:
             is_draft_model
             and self.hf_config.architectures[0] == "DeepseekV4ForCausalLM"
         ):
-            self.hf_config.architectures[0] = "DeepseekV4ForCausalLMNextN"
-            self.hf_config.num_nextn_predict_layers = 1
+            if getattr(self.hf_config, "dspark_block_size", None) is not None:
+                self.hf_config.architectures[0] = "DeepseekV4ForCausalLMDSpark"
+            else:
+                self.hf_config.architectures[0] = "DeepseekV4ForCausalLMNextN"
+                self.hf_config.num_nextn_predict_layers = 1
 
         if is_draft_model and self.hf_config.architectures[0] == "Glm4MoeForCausalLM":
             self.hf_config.architectures[0] = "Glm4MoeForCausalLMNextN"
