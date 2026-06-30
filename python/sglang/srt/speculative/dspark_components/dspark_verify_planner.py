@@ -176,6 +176,11 @@ class DSparkVerifyPlanner:
         draft_input = batch.spec_info
         if self._budget_planner is None or draft_input is None:
             return
+        # Only decode steps feed the carry (the worker routes extend/prefill to
+        # _forward_prefill, which has no verify budget); advancing the carry on a
+        # prefill step would misalign the causal lag for the surrounding decodes.
+        if batch.forward_mode.is_extend() or batch.is_extend_in_batch:
+            return
         resolved = future_map.resolve_confidence_cpu(batch)
         draft_input.verify_token_budget = self._budget_from_resolved(
             resolved=resolved, req_pool_indices_cpu=batch.req_pool_indices_cpu
