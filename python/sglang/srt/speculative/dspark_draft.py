@@ -82,9 +82,7 @@ def sample_draft_block(
     device: torch.device,
 ) -> DraftBlockResult:
     bs = base_logits.shape[0]
-    greedy_mask = resolve_greedy_mask(
-        bs=bs, sampling_info=sampling_info, device=device
-    )
+    greedy_mask = resolve_greedy_mask(bs=bs, sampling_info=sampling_info, device=device)
     # any_sampling == not is_all_greedy, read host-side (is_all_greedy is a
     # Python bool on sampling_info) so this branch draws no GPU sync. No
     # sampling_info -> all-greedy fast path (argmax only, no RNG draw).
