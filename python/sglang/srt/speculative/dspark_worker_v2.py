@@ -5,6 +5,7 @@ import msgspec
 import torch
 
 from sglang.srt.distributed import get_tp_group
+from sglang.srt.environ import envs
 from sglang.srt.layers.dp_attention import (
     get_attention_tp_group,
     get_attention_tp_size,
@@ -38,6 +39,7 @@ from sglang.srt.speculative.draft_worker_common import (
 from sglang.srt.speculative.dspark_scheduler import (
     ConfidencePrefixScheduler,
     DSparkScheduleConfig,
+    compute_verify_token_budget,
 )
 from sglang.srt.speculative.dspark_sps_table import (
     SpsCostTable,
@@ -962,6 +964,15 @@ class DSparkWorkerV2(BaseSpecWorker):
             k_survival=k_survival, sort_survival=sort_survival
         ).to(device=device, dtype=torch.int32)
 
+        if envs.SGLANG_DSPARK_DEBUG_CONFIDENCE_PREFIX_SCHEDULER.get():
+            self._log_verify_lens_decision(
+                req_pool_indices=req_pool_indices,
+                prefix_lens=prefix_lens,
+                k_survival=k_survival,
+                sort_survival=sort_survival,
+                verify_lens=verify_lens,
+            )
+
         broadcast_group, group_size = self._verify_lens_broadcast_group()
         if group_size > 1:
             # GroupCoordinator.broadcast maps the local src rank to a global rank via
@@ -970,6 +981,45 @@ class DSparkWorkerV2(BaseSpecWorker):
             broadcast_group.broadcast(verify_lens, src=0)
 
         return verify_lens
+
+    def _log_verify_lens_decision(
+        self,
+        *,
+        req_pool_indices: torch.Tensor,
+        prefix_lens: torch.Tensor,
+        k_survival: torch.Tensor,
+        sort_survival: torch.Tensor,
+        verify_lens: torch.Tensor,
+    ) -> None:
+        cfg = self._verify_scheduler.cfg
+        budget = compute_verify_token_budget(
+            history_survival_probs=k_survival,
+            sps_table=self._verify_scheduler.sps_table,
+            cfg=cfg,
+        )
+        max_len = cfg.resolved_max_verify_len()
+        req_ids = req_pool_indices.tolist()
+        prefixes = prefix_lens.tolist()
+        lens = verify_lens.tolist()
+        sort_rows = sort_survival.to(torch.float32).tolist()
+        logger.info(
+            "[DSPARK-CPS] step=%d num_reqs=%d budget=%d gamma=%d verify_len_range=[%d,%d]",
+            self._confidence_step_ct,
+            len(req_ids),
+            budget,
+            cfg.gamma,
+            cfg.min_verify_len,
+            max_len,
+        )
+        for row in range(len(req_ids)):
+            survival_str = "[" + ", ".join(f"{p:.3f}" for p in sort_rows[row]) + "]"
+            logger.info(
+                "[DSPARK-CPS]   req=%d prefix=%d verify_len=%d sort_survival=%s",
+                int(req_ids[row]),
+                int(prefixes[row]),
+                int(lens[row]),
+                survival_str,
+            )
 
     def _verify_layout_grid(self, *, verify_lens_cpu: list[int]) -> list[int]:
         # COMPACT aligns the grid to the decode runner's token buckets so
