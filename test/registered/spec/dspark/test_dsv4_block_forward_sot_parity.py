@@ -57,11 +57,13 @@ def _contract_available() -> tuple[bool, str]:
 
     T1 drives the PRODUCTION dsv4 draft through the real ``DeepseekV4AttnBackend``
     with the NON-CAUSAL full-block index builder ``get_dspark_swa_page_indices`` +
-    ``init_forward_metadata_dspark_draft_block`` (gated by ``is_dspark_draft``), and
-    the model ``forward(input_ids, positions, forward_batch, input_embeds=None) ->
-    DSparkV4DraftOutput`` (``.base_logits [bs*gamma, org_vocab]``). Those symbols are
-    landed by the model+backend impl agents; until then this guardrail skips cleanly
-    (it is the un-skipped successor to the old ``test_dsv4_worker_parity`` GPU stub).
+    ``init_forward_metadata_dspark_draft_block`` (gated by ``is_dspark_draft``). The
+    model ``forward(input_ids, positions, forward_batch, input_embeds=None) ->
+    DSparkV4DraftOutput`` returns the raw backbone hidden, and the base logits
+    (``[bs*gamma, org_vocab]``) come from the model's ``compute_base_logits`` hook the
+    harness calls on that hidden. Those symbols are landed by the model+backend impl
+    agents; until then this guardrail skips cleanly (it is the un-skipped successor to
+    the old ``test_dsv4_worker_parity`` GPU stub).
     """
     try:
         from sglang.srt.layers.attention.deepseek_v4_backend import (  # noqa: F401

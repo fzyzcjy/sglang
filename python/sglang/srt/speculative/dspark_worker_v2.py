@@ -5,7 +5,6 @@ import msgspec
 import torch
 
 from sglang.srt.distributed import get_tp_group
-from sglang.srt.distributed.communication_op import tensor_model_parallel_all_gather
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.managers.scheduler import GenerationBatchResult
 from sglang.srt.managers.tp_worker import TpModelWorker
@@ -82,15 +81,16 @@ class _DraftBlockResult(msgspec.Struct, frozen=True):
 
 
 class _DraftForwardResult(msgspec.Struct, frozen=True):
-    # Output of the unified draft block forward. ``draft_hidden`` is the post-norm
-    # backbone hidden that feeds dense base logits + dense confidence. For a V4 draft
-    # the model also returns ``base_logits`` (already hc-collapsed + norm + lm_head +
-    # all_gather + org_vocab-cropped); dense backbones leave it None and the worker
-    # computes base logits from ``draft_hidden`` via ``_compute_base_logits``. (V4's
-    # post-hc_head confidence tap is stashed on the model itself, not relayed here.)
+    # Output of the unified draft block forward. ``raw_hidden`` is the model's
+    # un-reshaped backbone hidden (dense: 2-D ``[bs*gamma, d]``; dsv4: 3-D
+    # ``[bs*gamma, hc, d]``); it is fed straight to ``compute_base_logits`` (the model
+    # owns the matmul / hc-collapse). ``draft_hidden_3d`` is ``raw_hidden.view(bs,
+    # gamma, -1)``, the dense markov / dense confidence input. dsv4's markov takes no
+    # hidden and its confidence reads the model-stashed ``_x_post_hc``, so dsv4 ignores
+    # ``draft_hidden_3d``.
     draft_block_ids: torch.Tensor
-    draft_hidden: torch.Tensor
-    base_logits: Optional[torch.Tensor]
+    raw_hidden: torch.Tensor
+    draft_hidden_3d: torch.Tensor
 
 
 class _DraftProposal(msgspec.Struct, frozen=True):
@@ -223,27 +223,32 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
 
         # Capability-driven draft polymorphism (no model-identity branches). Both
-        # dense (qwen3 / gemma4) and V4 drafts run the single dense-style
-        # orchestration: the worker drives ``draft_model_runner.forward`` on a real
-        # paged / SWA-latent pool, then the shared serial Markov head. The remaining
-        # capability seams are resolved at use site, not by a stored model-identity
-        # flag: base-logit provenance (the forward result's ``base_logits``) and the
-        # confidence tap (the model's ``compute_confidence`` hook).
+        # dense (qwen3 / gemma4) and V4 drafts run the single orchestration: the worker
+        # drives ``draft_model_runner.forward`` on a real paged / SWA-latent pool, calls
+        # the MODEL's ``compute_base_logits`` (the model owns the matmul / hc-collapse),
+        # then the shared serial Markov head. The remaining capability seam is the
+        # confidence tap (the model's ``compute_confidence`` hook), resolved at use site.
         #
         # The target attn backend is constructed after the worker (the scheduler runs
         # init_attention_backends later), so the verify-prep self-add capability is
         # resolved lazily on first verify and cached.
         self._verify_backend_self_adds_seq_lens_cache: Optional[bool] = None
-        # A draft model that needs the target's token embedding / lm_head (V4
-        # computes its own hc-collapsed base logits through the shared lm_head)
-        # exposes ``attach_shared_modules``; dense backbones carry their own and
-        # never expose it, so this is a no-op for them.
-        if hasattr(self.draft_model, "attach_shared_modules"):
-            target_model = self.target_worker.model_runner.model
-            self.draft_model.attach_shared_modules(
-                embed_tokens=self._resolve_target_embed_tokens(target_model),
-                lm_head=target_model.lm_head,
+        # Every DSpark draft owns ``compute_base_logits`` over the target's shared
+        # lm_head, attached here via ``attach_shared_modules`` (the same live target
+        # object per call so the TP local-vocab shard + org_vocab_size stay consistent).
+        # Dense ignores embed_tokens (it carries its own); V4 also hc-expands its own
+        # embedding from it. Validate the head once HERE so a missing / weightless
+        # lm_head fails at worker init, not deep inside the model's compute_base_logits.
+        target_model = self.target_worker.model_runner.model
+        lm_head = getattr(target_model, "lm_head", None)
+        if lm_head is None or not hasattr(lm_head, "weight"):
+            raise RuntimeError(
+                "DSpark requires the target model to expose `lm_head` with `weight`."
             )
+        self.draft_model.attach_shared_modules(
+            embed_tokens=self._resolve_target_embed_tokens(target_model),
+            lm_head=lm_head,
+        )
 
         # Optional confidence relay. The head and its relay are inert (no
         # buffers, no events, no compute) when the draft model lacks a
@@ -494,22 +499,6 @@ class DSparkWorkerV2(BaseSpecWorker):
         # written there by the commit injection), not relayed through the spec input,
         # so the legacy Eagle-shaped ``hidden_states`` slot stays the empty placeholder.
         return make_draft_input_v2(bonus_tokens=bonus_tokens, new_seq_lens=new_seq_lens)
-
-    def _compute_base_logits(
-        self, *, draft_hidden: torch.Tensor, lm_head
-    ) -> torch.Tensor:
-        # ParallelLMHead.forward is intentionally disabled; compute base logits
-        # directly from the head weight (the local vocab shard under TP), then
-        # TP all-gather to full vocab so every rank holds an identical, full-vocab
-        # tensor, mirroring LogitsProcessor._get_logits (logits_processor.py:858).
-        weight = lm_head.weight
-        hidden = draft_hidden
-        if hidden.dtype != weight.dtype:
-            hidden = hidden.to(weight.dtype)
-        local_logits = torch.matmul(hidden, weight.T)
-        full_logits = tensor_model_parallel_all_gather(local_logits, dim=-1)
-        org_vocab_size = int(lm_head.org_vocab_size)
-        return full_logits[..., :org_vocab_size]
 
     def _resolve_greedy_mask(self, *, bs: int, sampling_info) -> torch.Tensor:
         # Per-request greedy mask (review M4). A row is greedy iff top_k <= 1,
@@ -1070,20 +1059,18 @@ class DSparkWorkerV2(BaseSpecWorker):
         bs: int,
         device: str,
         target_model,
-        lm_head,
         sampling_info,
     ) -> _DraftProposal:
-        # Single dense-style orchestration for every draft (dense + V4): run the
-        # draft block forward on the real pool, resolve base logits, then sample the
-        # serial Markov block. The only polymorphism is base-logit provenance, and it
-        # is a capability check on the forward result, not a model-identity branch:
-        # a V4 draft returns its own hc-collapsed ``base_logits`` (the extra hc_head
-        # collapse dense lacks) and the worker uses it directly; dense backbones
-        # return ``base_logits=None`` and the worker computes them from the post-norm
-        # ``draft_hidden`` exactly as before. The Markov bias-then-sample loop runs on
-        # whichever base logits result, so q(s_k) is always taken at the correct tap.
+        # Single orchestration for every draft (dense + V4): run the draft block forward
+        # on the real pool, then let the MODEL produce its base logits and the worker
+        # reshape to ``[bs, gamma, vocab]`` for the serial Markov block. Base-logit
+        # provenance is no longer a worker concern: every draft model owns
+        # ``compute_base_logits(raw_hidden)`` (dense: weight-dtype matmul; dsv4: hc_head
+        # collapse -> norm -> fp32 F.linear), and the worker calls it once. The
+        # ``[bs, gamma, vocab]`` reshape is MANDATORY: markov ``sample_block`` reads
+        # ``shape[:2]`` as ``(bs, proposal_len)`` and indexes ``[:, step, :]``.
         embed_module = target_model.get_input_embeddings()
-        forward_result = self._run_draft_block_forward(
+        fwd = self._run_draft_block_forward(
             batch=batch,
             draft_input=draft_input,
             verify_window=verify_window,
@@ -1091,24 +1078,20 @@ class DSparkWorkerV2(BaseSpecWorker):
             device=device,
             embed_module=embed_module,
         )
-        draft_block_ids = forward_result.draft_block_ids
-        draft_hidden = forward_result.draft_hidden
-        if forward_result.base_logits is not None:
-            base_logits = forward_result.base_logits
-        else:
-            base_logits = self._compute_base_logits(
-                draft_hidden=draft_hidden, lm_head=lm_head
-            )
+        draft_block_ids = fwd.draft_block_ids
+        base_logits = self.draft_model.compute_base_logits(fwd.raw_hidden).view(
+            bs, self.gamma, -1
+        )
         draft_block = self._sample_draft_block(
             base_logits=base_logits,
             anchor_tokens=draft_block_ids[:, 0],
-            draft_hidden=draft_hidden,
+            draft_hidden=fwd.draft_hidden_3d,
             sampling_info=sampling_info,
         )
         return _DraftProposal(
             draft_block_ids=draft_block_ids,
             draft_block=draft_block,
-            draft_hidden=draft_hidden,
+            draft_hidden=fwd.draft_hidden_3d,
         )
 
     def _relay_confidence(
@@ -1208,33 +1191,19 @@ class DSparkWorkerV2(BaseSpecWorker):
         with torch.inference_mode():
             draft_out = self.draft_model_runner.forward(draft_forward_batch)
         logits_output = draft_out.logits_output
-        draft_hidden = logits_output.hidden_states
-        if draft_hidden is None:
+        raw_hidden = logits_output.hidden_states
+        if raw_hidden is None:
             raise RuntimeError("DSpark draft model returned no hidden states.")
-        draft_hidden = draft_hidden.view(bs, gamma, -1)
-
-        base_logits = self._extract_draft_base_logits(
-            logits_output=logits_output, bs=bs, gamma=gamma
-        )
+        # raw_hidden is the model's un-reshaped backbone hidden (dense 2-D [bs*gamma, d];
+        # dsv4 3-D [bs*gamma, hc, d]); compute_base_logits consumes it as-is (the dsv4
+        # hc-collapse needs the [N, hc, d] layout, NOT this view). draft_hidden_3d is the
+        # dense markov / dense confidence input; dsv4 ignores it.
+        draft_hidden_3d = raw_hidden.view(bs, gamma, -1)
         return _DraftForwardResult(
             draft_block_ids=draft_block_ids,
-            draft_hidden=draft_hidden,
-            base_logits=base_logits,
+            raw_hidden=raw_hidden,
+            draft_hidden_3d=draft_hidden_3d,
         )
-
-    def _extract_draft_base_logits(
-        self, *, logits_output, bs: int, gamma: int
-    ) -> Optional[torch.Tensor]:
-        # Capability extraction (no model-identity branch). A V4 draft surfaces its
-        # own hc-collapsed base logits ([bs*gamma, org_vocab]) on the forward result;
-        # dense backbones surface none, so this is None and the caller computes base
-        # logits from draft_hidden via _compute_base_logits. The post-hc_head
-        # confidence tap is stashed on the model (read by its compute_confidence), so
-        # the worker does not relay it here.
-        base_logits = getattr(logits_output, "base_logits", None)
-        if base_logits is not None:
-            base_logits = base_logits.view(bs, gamma, -1)
-        return base_logits
 
     def _run_target_verify_mode_non_compact(
         self,
@@ -1624,11 +1593,6 @@ class DSparkWorkerV2(BaseSpecWorker):
         prefix_lens = batch.seq_lens
 
         target_model = self.target_worker.model_runner.model
-        lm_head = getattr(target_model, "lm_head", None)
-        if lm_head is None or not hasattr(lm_head, "weight"):
-            raise RuntimeError(
-                "DSpark requires the target model to expose `lm_head` with `weight`."
-            )
 
         verify_window = self._alloc_verify_window(batch=batch, bs=bs, device=device)
 
@@ -1640,7 +1604,6 @@ class DSparkWorkerV2(BaseSpecWorker):
             bs=bs,
             device=device,
             target_model=target_model,
-            lm_head=lm_head,
             sampling_info=sampling_info,
         )
         draft_block_ids = proposal.draft_block_ids

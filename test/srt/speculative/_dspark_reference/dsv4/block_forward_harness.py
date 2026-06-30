@@ -433,8 +433,12 @@ class Dsv4BlockForwardHarness:
                 positions=self._positions,
                 forward_batch=forward_batch,
             )
+            # forward now returns ONLY the raw backbone hidden; the base logits are
+            # produced by the model's compute_base_logits hook (the same single producer
+            # the production worker calls post-forward) on that un-reshaped hidden.
+            base_logits = self._sgl.compute_base_logits(draft_out.hidden_states)
         return _ProductionBlockOutput(
-            base_logits=draft_out.base_logits,
+            base_logits=base_logits,
             draft_hidden=draft_out.draft_hidden,
         )
 
