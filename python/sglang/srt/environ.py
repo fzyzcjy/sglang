@@ -700,6 +700,14 @@ class Envs:
     # accept per request (lossless harness); "compact" = real-N, only total tokens
     # computed (throughput gain).
     SGLANG_RAGGED_VERIFY_MODE = EnvStr("static")
+    # DSpark verify-budget causal lag (paper §5.2 two-steps-prior barrier): the
+    # verify budget K is computed from the confidence relayed this many decode
+    # steps earlier so K is causally independent of the current step's just-sampled
+    # drafts. The async FutureMap relay contributes 1 step; the host carry makes up
+    # the remainder (carry = lag - 1). Default 2 reproduces the paper; any value
+    # >= 1 already yields the barrier. Losslessness never depends on it (guaranteed
+    # by the accept-cap in _cap_correct_len).
+    SGLANG_DSPARK_CONFIDENCE_RELAY_LAG_STEPS = EnvInt(2)
     # Test-only negative seam (§4): force the token-keyed verify capture to bake
     # the uniform (non-ragged) geometry even in compact mode, so a graph-vs-eager
     # parity check provably diverges. Off in prod; flipped only by the negative

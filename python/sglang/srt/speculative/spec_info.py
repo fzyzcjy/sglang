@@ -145,10 +145,17 @@ class SpeculativeAlgorithm(Enum):
         device: torch.device,
         req_to_token_pool,
         needs_cpu_seq_lens: bool = True,
+        needs_confidence_relay: bool = False,
     ) -> FutureMap:
         from sglang.srt.managers.overlap_utils import FutureMap
 
-        return FutureMap(device, self, req_to_token_pool, needs_cpu_seq_lens)
+        return FutureMap(
+            device,
+            self,
+            req_to_token_pool,
+            needs_cpu_seq_lens,
+            needs_confidence_relay,
+        )
 
     def build_disagg_draft_input(
         self,

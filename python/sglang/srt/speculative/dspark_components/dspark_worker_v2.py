@@ -474,25 +474,30 @@ class DSparkWorkerV2(BaseSpecWorker):
         draft_block = proposal.draft_block
         draft_tokens = draft_block.draft_tokens
 
-        if self._verify_planner.carries_confidence:
-            self._verify_planner.relay_confidence(
-                req_pool_indices=batch.req_pool_indices,
-                prefix_lens=prefix_lens,
-                draft_hidden=proposal.draft_hidden,
-                anchor_tokens=draft_block_ids[:, 0],
-                draft_tokens=draft_tokens,
-            )
+        # Current-step confidence (lag 0, device): the sort source for verify_lens and
+        # the value published into the relay for a future step's budget. No device ring
+        # is stashed anymore -- the two-steps-prior budget K flows through the host
+        # relay + carry (prepare hook in overlap, compute_budget_sync otherwise).
+        confidence = self._verify_planner.compute_confidence_tensor(
+            draft_hidden=proposal.draft_hidden,
+            anchor_tokens=draft_block_ids[:, 0],
+            draft_tokens=draft_tokens,
+        )
+
+        verify_token_budget = self._resolve_verify_token_budget(
+            batch=batch,
+            draft_input=draft_input,
+            confidence=confidence,
+            prefix_lens=prefix_lens,
+        )
 
         layout = self._verify_planner.schedule_layout(
             req_pool_indices=batch.req_pool_indices,
             prefix_lens=prefix_lens,
             device=device,
+            confidence=confidence,
+            budget=verify_token_budget,
         )
-        if self._verify_planner.carries_confidence:
-            # Advance the relay step counter once per decode step, after this step's
-            # write (in _stash_confidence) and lagged read (in _schedule_verify_lens)
-            # so both used the same step_ct; the next step then writes the next slot.
-            self._verify_planner.advance_step()
         run_compact = self._verify_planner.should_run_compact(layout=layout)
 
         verify_ids_2d = torch.cat(
@@ -542,7 +547,18 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
         new_seq_lens = prefix_lens + commit_lens.to(prefix_lens.dtype)
         if on_publish is not None:
-            on_publish(new_seq_lens)
+            if confidence is not None:
+                # Publish this step's confidence + its prefix_len stamp into the relay
+                # alongside new_seq_lens (B2: the stamp travels with the confidence so a
+                # future step's freshness guard compares against the right seq_len). The
+                # relay no-ops the confidence kwargs unless needs_confidence_relay.
+                on_publish(
+                    new_seq_lens,
+                    confidence=confidence,
+                    confidence_seq_lens=prefix_lens,
+                )
+            else:
+                on_publish(new_seq_lens)
 
         self._verify_executor.commit_hidden(
             batch=batch,
@@ -609,3 +625,35 @@ class DSparkWorkerV2(BaseSpecWorker):
             confidence_raw=confidence_raw,
             num_correct_drafts=num_correct_drafts,
         )
+
+    def _resolve_verify_token_budget(
+        self,
+        *,
+        batch: ScheduleBatch,
+        draft_input: DFlashDraftInputV2,
+        confidence: Optional[torch.Tensor],
+        prefix_lens: torch.Tensor,
+    ) -> Optional[int]:
+        # The verify budget K source. Overlap: already computed off-critical-path by
+        # the scheduler prepare hook (get_confidence_budget_prepare) from the
+        # two-steps-prior relayed confidence and attached to the draft input. Non-
+        # overlap: no relay, so compute it synchronously from this step's confidence
+        # (the host carry was sized with relay_lag_steps=0 to supply the full lag).
+        if not self._verify_planner.schedules_verify_budget or confidence is None:
+            return None
+        if not self.server_args.disable_overlap_schedule:
+            return draft_input.verify_token_budget
+        return self._verify_planner.compute_budget_sync(
+            confidence=confidence,
+            prefix_lens=prefix_lens,
+            req_pool_indices=batch.req_pool_indices,
+        )
+
+    def get_confidence_budget_prepare(self):
+        # Injected into the scheduler's overlap prepare window when this worker
+        # schedules a ragged verify budget; None disables the hook (static mode / no
+        # head). Bound to the planner so all DSpark budget logic stays out of the
+        # shared scheduler code.
+        if not self._verify_planner.schedules_verify_budget:
+            return None
+        return self._verify_planner.prepare_verify_budget
