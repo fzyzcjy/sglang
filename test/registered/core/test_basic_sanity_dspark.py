@@ -100,7 +100,10 @@ class TestBasicSanityDSpark(
                 "--enable-metrics",
                 "--disable-piecewise-cuda-graph",
             ],
-            env={"SGLANG_ENABLE_METRICS_DEVICE_TIMER": "1"},
+            env={
+                "SGLANG_ENABLE_METRICS_DEVICE_TIMER": "1",
+                "SGLANG_RAGGED_VERIFY_MODE": "compact",
+            },
         )
 
     @classmethod

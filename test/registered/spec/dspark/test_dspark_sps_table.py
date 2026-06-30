@@ -1,6 +1,8 @@
+import logging
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from sglang.srt.speculative.dspark_sps_table import (
     SpsCostTable,
@@ -11,6 +13,8 @@ from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 
 register_cpu_ci(est_time=10, suite="base-a-test-cpu")
+
+_WORKER_LOGGER = "sglang.srt.speculative.dspark_worker_v2"
 
 
 def _make_table() -> SpsCostTable:
@@ -269,6 +273,77 @@ class TestProfilerConversion(CustomTestCase):
         table = self._profile_with_fake_results([[(4, 0.0), (8, 2400.0)]])
         self.assertEqual(table.sample_batch_tokens, [8])
         self.assertAlmostEqual(table.sample_steps_per_sec[0], 300.0, places=6)
+
+
+class _CollectingHandler(logging.Handler):
+    """A logging handler that records emitted records for assertion."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+def _build_sps_cost_table_for(*, tp_rank: int, sps_table_path):
+    """Invoke the worker's _build_sps_cost_table on a bare stub with no GPU state."""
+    from sglang.srt.speculative.dspark_worker_v2 import DSparkWorkerV2
+
+    worker = DSparkWorkerV2.__new__(DSparkWorkerV2)
+    worker.tp_rank = tp_rank
+    worker.verify_num_draft_tokens = 5
+    worker.server_args = SimpleNamespace(
+        speculative_dspark_sps_table_path=sps_table_path,
+        max_running_requests=4,
+    )
+    return worker._build_sps_cost_table()
+
+
+class TestSchedulerOnWithoutTableWarns(CustomTestCase):
+    """Step 1: the scheduler-on-but-no-table case must warn loudly once on TP rank 0
+    instead of silently degenerating to a flat verify-all budget."""
+
+    def test_rank_0_warns_and_returns_flat_table(self):
+        """No table path on rank 0 -> a loud warning and a flat constant-SPS table."""
+        with self.assertLogs(_WORKER_LOGGER, level="WARNING") as captured:
+            table = _build_sps_cost_table_for(tp_rank=0, sps_table_path=None)
+        self.assertEqual(table.sample_steps_per_sec, [1.0])
+        self.assertTrue(
+            any("speculative-dspark-sps-table-path" in line for line in captured.output)
+        )
+
+    def test_non_zero_rank_does_not_warn(self):
+        """The loud warning fires only on TP rank 0 (no per-rank log spam)."""
+        logger_obj = logging.getLogger(_WORKER_LOGGER)
+        handler = _CollectingHandler()
+        logger_obj.addHandler(handler)
+        try:
+            table = _build_sps_cost_table_for(tp_rank=1, sps_table_path=None)
+        finally:
+            logger_obj.removeHandler(handler)
+        self.assertEqual(table.sample_steps_per_sec, [1.0])
+        self.assertFalse(
+            any(record.levelno >= logging.WARNING for record in handler.records)
+        )
+
+    def test_table_path_given_does_not_warn(self):
+        """Supplying a table path loads it without the no-table warning."""
+        table = _make_table()
+        logger_obj = logging.getLogger(_WORKER_LOGGER)
+        handler = _CollectingHandler()
+        logger_obj.addHandler(handler)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "sps.json"
+                path.write_text(table.to_json(), encoding="utf-8")
+                loaded = _build_sps_cost_table_for(tp_rank=0, sps_table_path=str(path))
+        finally:
+            logger_obj.removeHandler(handler)
+        self.assertEqual(loaded.sample_batch_tokens, table.sample_batch_tokens)
+        self.assertFalse(
+            any(record.levelno >= logging.WARNING for record in handler.records)
+        )
 
 
 if __name__ == "__main__":

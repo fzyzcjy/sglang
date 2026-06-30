@@ -12,7 +12,9 @@ import torch
 from torch import nn
 
 try:
-    from torch.nn.attention.flex_attention import create_block_mask as _create_block_mask
+    from torch.nn.attention.flex_attention import (
+        create_block_mask as _create_block_mask,
+    )
 
     _FLEX_ATTN_AVAILABLE = True
 except ImportError:
@@ -50,7 +52,10 @@ class AcceptRatePredictor(nn.Module):
 
 def extract_context_feature(hidden_states, layer_ids):
     return torch.cat(
-        [hidden_states[0 if layer_id == -1 else layer_id + 1] for layer_id in layer_ids],
+        [
+            hidden_states[0 if layer_id == -1 else layer_id + 1]
+            for layer_id in layer_ids
+        ],
         dim=-1,
     )
 
@@ -67,9 +72,9 @@ def validate_target_layer_ids(layer_ids, num_target_layers: int):
             f"for num_target_layers={num_target_layers}. "
             "-1 denotes the embedding output."
         )
-        assert previous is None or layer_id > previous, (
-            "target_layer_ids must be strictly increasing."
-        )
+        assert (
+            previous is None or layer_id > previous
+        ), "target_layer_ids must be strictly increasing."
         previous = layer_id
     return layer_ids
 
@@ -144,9 +149,13 @@ def sample_anchor_positions(
         keep_mask = torch.zeros(bsz, max_n, dtype=torch.bool, device=device)
         return anchors, keep_mask
 
-    indices = torch.arange(num_candidates, device=device).unsqueeze(0).expand(
-        bsz,
-        -1,
+    indices = (
+        torch.arange(num_candidates, device=device)
+        .unsqueeze(0)
+        .expand(
+            bsz,
+            -1,
+        )
     )
     masked_indices = torch.where(
         valid,
@@ -239,9 +248,13 @@ def create_noise_embed(
     block_starts = torch.arange(num_blocks, device=device) * block_size
     block_starts = block_starts.unsqueeze(0).expand(bsz, -1)
     anchor_tokens = torch.gather(input_ids, 1, anchor_positions)
-    flat_batch_idx = torch.arange(bsz, device=device).unsqueeze(1).expand(
-        bsz,
-        num_blocks,
+    flat_batch_idx = (
+        torch.arange(bsz, device=device)
+        .unsqueeze(1)
+        .expand(
+            bsz,
+            num_blocks,
+        )
     )
     noise_ids[flat_batch_idx, block_starts] = torch.where(
         block_keep_mask,

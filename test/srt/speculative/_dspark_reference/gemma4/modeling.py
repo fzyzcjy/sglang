@@ -6,13 +6,14 @@
 # This module requires `transformers` (Gemma4 model classes). It is used only
 # by the GPU-tier parity test (test_dspark_model_parity.py) and is not imported
 # by CPU-only tests.
+from test.srt.speculative._dspark_reference.markov_head import build_markov_head
+from test.srt.speculative._dspark_reference.sampling import sample_tokens
 from typing import Optional
 
 import torch
 import torch.nn.functional as F
 from torch import nn
 from torch.nn.attention.flex_attention import flex_attention
-
 from transformers.cache_utils import Cache
 from transformers.modeling_layers import GradientCheckpointingLayer
 from transformers.models.gemma4.configuration_gemma4 import Gemma4TextConfig
@@ -22,22 +23,10 @@ from transformers.models.gemma4.modeling_gemma4 import (
     Gemma4TextMLP,
     Gemma4TextRotaryEmbedding,
     Gemma4TextScaledWordEmbedding,
+)
+from transformers.models.gemma4.modeling_gemma4 import (
     apply_rotary_pos_emb as apply_gemma4_rotary_pos_emb,
 )
-
-from test.srt.speculative._dspark_reference.common import (
-    AcceptRatePredictor,
-    DSparkForwardOutput,
-    build_eval_mask,
-    create_dspark_attention_mask,
-    create_noise_embed,
-    create_position_ids,
-    extract_context_feature,
-    log_sampler_stats,
-    sample_anchor_positions,
-)
-from test.srt.speculative._dspark_reference.markov_head import build_markov_head
-from test.srt.speculative._dspark_reference.sampling import sample_tokens
 
 
 class Gemma4DSparkAttention(nn.Module):
@@ -280,7 +269,9 @@ class Gemma4DSparkModel(Gemma4PreTrainedModel):
         self.num_anchors = int(config.num_anchors)
 
         self.markov_head = build_markov_head(config)
-        self.enable_confidence_head = bool(getattr(config, "enable_confidence_head", False))
+        self.enable_confidence_head = bool(
+            getattr(config, "enable_confidence_head", False)
+        )
         self.confidence_head = None
         self.post_init()
 

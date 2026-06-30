@@ -1000,10 +1000,8 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
                     forward_batch,
                     **kwargs,
                 )
-                dflash_sampler = getattr(
-                    self.model_runner, "dflash_draft_sampler", None
-                )
-                if dflash_sampler is not None:
+                draft_sampler = getattr(self.model_runner, "draft_sampler", None)
+                if draft_sampler is not None:
                     # Must be captured here, or replay leaves a stale output buffer
                     # the worker would read as valid tokens -- fail loudly instead.
                     if (
@@ -1011,10 +1009,12 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
                         or out.hidden_states is None
                     ):
                         raise RuntimeError(
-                            "DFLASH draft sampler set but the draft forward has no "
+                            "draft sampler set but the draft forward has no "
                             "hidden_states to capture into the graph."
                         )
-                    dflash_sampler(out.hidden_states)
+                    # input_ids carries the per-block anchor (bonus token at pos 0) the
+                    # DSpark Markov sampler needs; DFlash ignores it.
+                    draft_sampler(out.hidden_states, forward_batch.input_ids)
                 return out
 
             self.deepep_adapter.capture(is_extend_in_batch=False)

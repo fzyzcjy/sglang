@@ -1,7 +1,5 @@
 import unittest
 
-import pytest
-
 from sglang.srt.speculative.dspark_utils import (
     DEFAULT_DSPARK_GAMMA,
     SUPPORTED_DSPARK_MARKOV_HEAD_TYPES,

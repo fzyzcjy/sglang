@@ -79,7 +79,8 @@ class _DflashDraftSampler:
             device=weight.device,
         )
 
-    def __call__(self, hidden_states):
+    def __call__(self, hidden_states, input_ids=None):
+        # input_ids unused: DFLASH argmaxes hidden directly (no Markov anchor).
         # draft tokens are block positions 1: (pos 0 is the seeded bonus token)
         bs = hidden_states.shape[0] // self.block_size
         hs = hidden_states.view(bs, self.block_size, -1)[:, 1:, :].reshape(
@@ -294,7 +295,7 @@ class DFlashWorkerV2(BaseSpecWorker):
         if capture_decode_cuda_graph:
             # Must run before capture so the draft graph folds the head in.
             self._draft_sampler = self._maybe_build_draft_sampler()
-            self.draft_model_runner.dflash_draft_sampler = self._draft_sampler
+            self.draft_model_runner.draft_sampler = self._draft_sampler
         self._draft_worker.init_cuda_graphs(
             capture_decode_cuda_graph=capture_decode_cuda_graph
         )
@@ -1193,9 +1194,7 @@ class DFlashWorkerV2(BaseSpecWorker):
         bonus_tokens: torch.Tensor,
         new_seq_lens: torch.Tensor,
     ) -> DFlashDraftInputV2:
-        return make_draft_input_v2(
-            bonus_tokens=bonus_tokens, new_seq_lens=new_seq_lens
-        )
+        return make_draft_input_v2(bonus_tokens=bonus_tokens, new_seq_lens=new_seq_lens)
 
     def forward_batch_generation(
         self,

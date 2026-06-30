@@ -5,6 +5,11 @@ import msgspec
 import torch
 
 from sglang.srt.distributed import get_tp_group
+from sglang.srt.layers.dp_attention import (
+    get_attention_tp_group,
+    get_attention_tp_size,
+    is_dp_attention_enabled,
+)
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.managers.scheduler import GenerationBatchResult
 from sglang.srt.managers.tp_worker import TpModelWorker
@@ -50,9 +55,34 @@ from sglang.srt.speculative.ragged_verify import (
 from sglang.srt.speculative.reject_sampling import chain_speculative_sampling_triton
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.srt.speculative.triton_ops.cache_locs import assign_extend_cache_locs_func
+from sglang.srt.utils import get_available_gpu_memory, is_cuda
 from sglang.srt.utils.async_probe import maybe_detect_in_closed_range
 
 logger = logging.getLogger(__name__)
+
+# Confidence relay ring (paper §5.2 two-steps-prior causal barrier). The K-source
+# reads the confidence stashed _CONFIDENCE_RELAY_LAG_STEPS decode steps earlier so
+# the verify budget K is causally independent of the current step's just-sampled
+# draft tokens. The ring depth must exceed the lag so the slot being read this step
+# is never the one just overwritten (slot s is rewritten at step s + depth).
+#
+# Lag-depth basis (honest, see report): this worker computes verify_lens INLINE
+# within each decode step (_forward_decode: propose -> _stash_confidence ->
+# _schedule_verify_lens, all stream-ordered on the forward stream), so there is no
+# multi-step ZOS/overlap pipeline in THIS path forcing a natural lag -- without the
+# ring the K-source would read the confidence stashed THIS step (lag 0). The ring's
+# lag is therefore a DELIBERATELY imposed causal barrier reproducing the paper's
+# two-steps-prior design, NOT an alignment to an emergent pipeline depth. Any lag
+# >= 1 already yields the barrier (K independent of the current step's tokens);
+# 2 reproduces the paper literally. The optimal value depends on the deployed ZOS /
+# overlap configuration, which cannot be measured on CPU -- it is a single tunable
+# constant and should be validated on GPU. Losslessness never depends on the lag:
+# it is guaranteed by the accept-cap in _cap_correct_len.
+_CONFIDENCE_RELAY_LAG_STEPS: int = 2
+_CONFIDENCE_RELAY_RING_DEPTH: int = _CONFIDENCE_RELAY_LAG_STEPS + 1
+# Sentinel for a ring-slot row that was never written (or written for a different
+# request), used by the per-row identity guard to mask stale rows before forming K.
+_CONFIDENCE_RELAY_UNSET_SEQ_LEN: int = -1
 
 
 class _VerifyWindow(msgspec.Struct, frozen=True):
@@ -75,7 +105,8 @@ class _TargetVerifyResult(msgspec.Struct, frozen=True):
 
 class _DraftBlockResult(msgspec.Struct, frozen=True):
     draft_tokens: torch.Tensor
-    corrected_logits: torch.Tensor
+    # None on the captured greedy fast path (only _accept_sampling reads it).
+    corrected_logits: Optional[torch.Tensor]
     greedy_mask: torch.Tensor
     temperatures: torch.Tensor
 
@@ -91,12 +122,51 @@ class _DraftForwardResult(msgspec.Struct, frozen=True):
     draft_block_ids: torch.Tensor
     raw_hidden: torch.Tensor
     draft_hidden_3d: torch.Tensor
+    # True iff the draft forward replayed a cuda graph (in-graph sampler wrote out).
+    can_run_graph: bool
 
 
 class _DraftProposal(msgspec.Struct, frozen=True):
     draft_block_ids: torch.Tensor
     draft_block: _DraftBlockResult
     draft_hidden: Optional[torch.Tensor]
+
+
+def _greedy_step_sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:
+    del step_idx
+    return torch.argmax(step_logits, dim=-1)
+
+
+class _DsparkDraftSampler:
+    """Capture-safe greedy proposal (model.compute_base_logits + Markov argmax) folded
+    into the draft cuda graph, like DFlash #29395. Greedy-only/no-RNG: the worker reads
+    ``out`` only for all-greedy batches, else eager. tp=1 only (compute_base_logits'
+    vocab all-gather is a no-op at tp=1 but an uncapturable collective above it).
+    """
+
+    def __init__(self, *, model, gamma, max_bs, device):
+        self.model = model
+        self.markov_head = model.markov_head
+        self.gamma = int(gamma)
+        # Proposed draft tokens [bs*gamma]: written in-graph, read after replay.
+        self.out = torch.empty(
+            (int(max_bs) * self.gamma,), dtype=torch.int64, device=device
+        )
+
+    def __call__(self, hidden_states, input_ids):
+        bs = hidden_states.shape[0] // self.gamma
+        # Same path the worker runs eagerly: model base logits -> serial Markov argmax.
+        base_logits = self.model.compute_base_logits(hidden_states).view(
+            bs, self.gamma, -1
+        )
+        anchor = input_ids.view(bs, self.gamma)[:, 0]
+        draft_tokens, _ = self.markov_head.sample_block(
+            base_logits,
+            first_prev_tokens=anchor,
+            hidden_states=hidden_states.view(bs, self.gamma, -1),
+            sampler=_greedy_step_sampler,
+        )
+        self.out[: draft_tokens.numel()].copy_(draft_tokens.reshape(-1))
 
 
 class DSparkWorkerV2(BaseSpecWorker):
@@ -155,6 +225,8 @@ class DSparkWorkerV2(BaseSpecWorker):
         self._draft_worker = bundle.draft_worker
         self.draft_model_runner = bundle.draft_model_runner
         self.draft_model = bundle.draft_model
+        # Built in init_cuda_graphs when the greedy proposal folds into the graph.
+        self._draft_sampler = None
 
         dspark_config = parse_dspark_draft_config(
             draft_hf_config=self.draft_model_runner.model_config.hf_config
@@ -254,15 +326,17 @@ class DSparkWorkerV2(BaseSpecWorker):
         # buffers, no events, no compute) when the draft model lacks a
         # confidence head, so the a+b lossless decode path is unchanged.
         self._confidence_head = getattr(self.draft_model, "confidence_head", None)
-        self._confidence_buf: Optional[torch.Tensor] = None
-        self._confidence_cpu_pinned: Optional[torch.Tensor] = None
-        self._confidence_ready = None
-        self._confidence_d2h_stream = None
+        self._confidence_ring: Optional[torch.Tensor] = None
+        self._confidence_ring_seq_lens: Optional[torch.Tensor] = None
+        self._confidence_step_ct: int = 0
         if self._confidence_head is not None and self.tp_rank == 0:
             logger.info(
                 "DSpark confidence head enabled (with_markov=%s); confidence is "
-                "relayed on an independent stream/event and is advisory only.",
+                "relayed through a step-indexed ring (depth=%d, lag=%d) on the "
+                "forward stream and is advisory only.",
                 getattr(self._confidence_head, "with_markov", True),
+                _CONFIDENCE_RELAY_RING_DEPTH,
+                _CONFIDENCE_RELAY_LAG_STEPS,
             )
 
         # Ragged-verify mode and the confidence prefix scheduler. The scheduler is
@@ -288,9 +362,11 @@ class DSparkWorkerV2(BaseSpecWorker):
 
     def _build_sps_cost_table(self) -> SpsCostTable:
         # Load a pre-profiled table when a path is given, else a flat constant-SPS
-        # table (budget = verify-all-up-to-max). Flat is the inert default for
-        # cap-accept, which has zero throughput gain; the GPU profiler hook lands
-        # with the compact real-N path.
+        # table (budget = verify-all-up-to-max). The expected scheduler-on workflow
+        # is to build the table offline with sglang.benchmark.dspark_sps_profiler
+        # and pass it via --speculative-dspark-sps-table-path (see
+        # docs/advanced_features/dspark_sps_table.md); flat is the inert fallback
+        # for cap-accept, which has zero throughput gain.
         #
         # Until a profiled (non-flat) table ships the hardware-aware scheduler is a
         # no-op: lookup() returns a constant, so the verify-token budget degenerates
@@ -305,6 +381,22 @@ class DSparkWorkerV2(BaseSpecWorker):
         sps_table_path = self.server_args.speculative_dspark_sps_table_path
         if sps_table_path:
             return load_sps_table_from_path(sps_table_path)
+        if self.tp_rank == 0:
+            # Loud, once (per worker init on rank 0): the scheduler is enabled but
+            # the verify budget silently degenerates to verify-all without a
+            # profiled table. Warn rather than no-op silently so a misconfigured
+            # scheduler-on run is visible. Pass --speculative-dspark-sps-table-path
+            # to opt into the hardware-aware schedule.
+            logger.warning(
+                "DSpark ragged-verify scheduler is enabled but no "
+                "--speculative-dspark-sps-table-path was supplied. Falling back to a "
+                "flat constant-SPS table: the hardware-aware verify budget "
+                "degenerates to verify-all-up-to-gamma and yields zero throughput "
+                "gain. Profile a table offline with "
+                "`python -m sglang.benchmark.dspark_sps_profiler` and pass it via "
+                "--speculative-dspark-sps-table-path (see "
+                "docs/advanced_features/dspark_sps_table.md)."
+            )
         max_batch_tokens = max(
             1,
             int(self.server_args.max_running_requests or 1)
@@ -378,11 +470,52 @@ class DSparkWorkerV2(BaseSpecWorker):
         self._draft_worker.init_attention_backends()
 
     def init_cuda_graphs(self):
-        # The serial Markov loop is eager (it cannot be captured); only the draft
-        # backbone forward may be graph-captured. No in-graph draft sampler.
+        # Greedy proposal folds into the draft cuda graph via the draft_sampler hook;
+        # sampling batches fall back to eager. tp=1 only.
         capture_decode_cuda_graph = not self.server_args.disable_cuda_graph
+        if is_cuda() and capture_decode_cuda_graph:
+            available_mem = get_available_gpu_memory(self.device, self.gpu_id)
+            if available_mem < 1.0:
+                capture_decode_cuda_graph = False
+                logger.warning(
+                    "Disable DSpark draft cuda graph because only %.2f GB GPU "
+                    "memory is available after target backend initialization.",
+                    available_mem,
+                )
+        if capture_decode_cuda_graph:
+            # Must run before capture so the draft graph folds the sampler in.
+            self._draft_sampler = self._maybe_build_draft_sampler()
+            self.draft_model_runner.draft_sampler = self._draft_sampler
         self._draft_worker.init_cuda_graphs(
             capture_decode_cuda_graph=capture_decode_cuda_graph
+        )
+
+    def _maybe_build_draft_sampler(self):
+        def _eager(reason):
+            if self.tp_rank == 0:
+                logger.info(
+                    "DSpark draft greedy proposal kept eager (reason=%s).", reason
+                )
+            return None
+
+        if get_tp_group().world_size != 1:
+            # compute_base_logits' vocab all-gather is uncapturable above tp=1.
+            return _eager("tp>1")
+        if self.gamma <= 0:
+            return _eager("gamma<=0")
+        if not hasattr(self.draft_model, "compute_base_logits"):
+            return _eager("no compute_base_logits")
+        if getattr(self.draft_model, "markov_head", None) is None:
+            return _eager("no markov head")
+        if self.tp_rank == 0:
+            logger.info(
+                "DSpark draft greedy proposal folded into the draft cuda graph."
+            )
+        return _DsparkDraftSampler(
+            model=self.draft_model,
+            gamma=self.gamma,
+            max_bs=max(self.server_args.cuda_graph_config.decode.bs),
+            device=self.device,
         )
 
     def clear_cache_pool(self):
@@ -618,66 +751,67 @@ class DSparkWorkerV2(BaseSpecWorker):
         return confidence
 
     def _ensure_confidence_relay_buffers(self, *, confidence: torch.Tensor) -> None:
-        if self._confidence_buf is not None:
+        if self._confidence_ring is not None:
             return
-        device_module = torch.get_device_module(self.device)
         req_pool_size = int(self.model_runner.req_to_token_pool.req_to_token.shape[0])
-        self._confidence_buf = torch.empty(
-            (req_pool_size, self.gamma),
+        # Step-indexed ring (paper §5.2): depth slots, each [req_pool_size, gamma],
+        # scatter-written by req_pool_indices on the forward stream. Reads of a slot
+        # written _CONFIDENCE_RELAY_LAG_STEPS steps ago are stream-ordered after that
+        # write, so the relay stays no-synchronize on the critical path (no event /
+        # D2H stream needed -- the prior single-buffer relay's gated host copy is
+        # folded away with pull_confidence_history).
+        self._confidence_ring = torch.empty(
+            (_CONFIDENCE_RELAY_RING_DEPTH, req_pool_size, self.gamma),
             dtype=confidence.dtype,
             device=self.device,
         )
-        self._confidence_cpu_pinned = torch.empty(
-            (req_pool_size, self.gamma),
-            dtype=confidence.dtype,
-            pin_memory=True,
+        # Per-slot per-row request identity (H1): the prefix_len stamped when the
+        # row was written, used to mask ring rows whose lag-steps-prior occupant was
+        # a different request before they enter K. Init to the unset sentinel.
+        self._confidence_ring_seq_lens = torch.full(
+            (_CONFIDENCE_RELAY_RING_DEPTH, req_pool_size),
+            _CONFIDENCE_RELAY_UNSET_SEQ_LEN,
+            dtype=torch.int64,
+            device=self.device,
         )
-        self._confidence_ready = device_module.Event()
-        self._confidence_d2h_stream = device_module.Stream()
 
     def _stash_confidence(
         self,
         *,
         req_pool_indices: torch.Tensor,
         confidence: torch.Tensor,
+        prefix_lens: torch.Tensor,
     ) -> None:
-        # Write confidence into the relay buffer on the forward stream, then
-        # record the independent confidence_ready event AFTER the write. The
-        # D2H copy is gated on this event (not on publish_ready, which is
-        # recorded earlier mid-worker), and runs on its own stream so the
-        # critical path issues no synchronize().
+        # Write this step's confidence into the current ring slot
+        # (step_ct % depth) on the forward stream and stamp the per-row prefix_len
+        # so a later two-steps-prior read can tell whether the slot's occupant is
+        # still the same request (H1). step_ct is advanced once per decode step in
+        # _forward_decode, after both the write and the lagged read.
         self._ensure_confidence_relay_buffers(confidence=confidence)
-        self._confidence_buf[req_pool_indices] = confidence
-        self._confidence_ready.record()
-
-    def pull_confidence_history(self) -> Optional[torch.Tensor]:
-        # Non-blocking: only kick the D2H copy when the forward-stream write has
-        # already completed (event.query()); otherwise reuse the stale CPU copy.
-        # Never synchronize on the critical path.
-        if self._confidence_ready is None or self._confidence_cpu_pinned is None:
-            return None
-        if self._confidence_ready.query():
-            device_module = torch.get_device_module(self.device)
-            with device_module.stream(self._confidence_d2h_stream):
-                self._confidence_cpu_pinned.copy_(
-                    self._confidence_buf, non_blocking=True
-                )
-        return self._confidence_cpu_pinned
+        write_slot = self._confidence_step_ct % _CONFIDENCE_RELAY_RING_DEPTH
+        self._confidence_ring[write_slot, req_pool_indices] = confidence
+        self._confidence_ring_seq_lens[write_slot].fill_(
+            _CONFIDENCE_RELAY_UNSET_SEQ_LEN
+        )
+        self._confidence_ring_seq_lens[write_slot, req_pool_indices] = prefix_lens.to(
+            torch.int64
+        )
 
     def _maybe_schedule_ragged_layout(
         self,
         *,
         req_pool_indices: torch.Tensor,
+        prefix_lens: torch.Tensor,
         device: torch.device,
     ) -> Optional[RaggedVerifyLayout]:
         # Gate: STATIC -> None (uniform path). CAP_ACCEPT/COMPACT build a ragged
-        # layout from the lagged-confidence verify_lens (see _schedule_verify_lens
-        # for the >= 1-step lag); COMPACT additionally token-keys the graph and
-        # scatter-packs the verify window.
+        # layout from the two-steps-prior-confidence verify_lens (see
+        # _schedule_verify_lens for the ring lag); COMPACT additionally token-keys
+        # the graph and scatter-packs the verify window.
         if self._ragged_verify_mode is RaggedVerifyMode.STATIC:
             return None
         verify_lens = self._schedule_verify_lens(
-            req_pool_indices=req_pool_indices, device=device
+            req_pool_indices=req_pool_indices, prefix_lens=prefix_lens, device=device
         )
         if verify_lens is None:
             # COMPACT token-keys the verify graph and captures it with a ragged
@@ -725,61 +859,118 @@ class DSparkWorkerV2(BaseSpecWorker):
             graph_num_tokens_floor=graph_num_tokens_floor,
         )
 
+    def _two_steps_prior_k_survival(
+        self,
+        *,
+        req_pool_indices: torch.Tensor,
+        prefix_lens: torch.Tensor,
+    ) -> Optional[torch.Tensor]:
+        # K-source survival for the verify budget: cumprod of the confidence stashed
+        # _CONFIDENCE_RELAY_LAG_STEPS decode steps ago (paper §5.2 two-steps-prior
+        # causal barrier). Reads the lagged ring slot device->device on the forward
+        # stream (stream-ordered after that slot's write, so no synchronize), so the
+        # budget K cannot depend on the current step's just-sampled draft tokens.
+        #
+        # H1 identity guard + cold-start fallback (paper-unspecified engineering
+        # choice): a ring slot is indexed by req-pool row only, and the row's
+        # occupant lag steps ago may be a DIFFERENT request (or none, at cold
+        # start). A row is the SAME request iff its stamped prefix_len is a valid
+        # ancestor of the current prefix_len -- present (>= 0), strictly smaller (a
+        # live request commits >= 1 token/step), and within lag steps of growth
+        # (<= lag * (gamma + 1)). Stale / new / just-switched rows fall back to
+        # verify-all (survival = 1.0 at every position) so they are admitted into
+        # the full window rather than carrying a stranger's confidence into K.
+        if self._confidence_ring is None or self._confidence_ring_seq_lens is None:
+            return None
+        read_slot = (
+            self._confidence_step_ct - _CONFIDENCE_RELAY_LAG_STEPS
+        ) % _CONFIDENCE_RELAY_RING_DEPTH
+        lagged_confidence = self._confidence_ring[read_slot, req_pool_indices]
+        k_survival = torch.cumprod(lagged_confidence.to(torch.float32), dim=1)
+
+        stamped_seq_lens = self._confidence_ring_seq_lens[read_slot, req_pool_indices]
+        growth = prefix_lens.to(torch.int64) - stamped_seq_lens
+        max_growth = _CONFIDENCE_RELAY_LAG_STEPS * (self.gamma + 1)
+        fresh = ((stamped_seq_lens >= 0) & (growth >= 1) & (growth <= max_growth)).view(
+            -1, 1
+        )
+        return torch.where(fresh, k_survival, torch.ones_like(k_survival))
+
+    def _current_live_sort_survival(
+        self, *, req_pool_indices: torch.Tensor
+    ) -> Optional[torch.Tensor]:
+        # Sort-source survival for the rank/truncate (paper §5.2: "sorted by the
+        # actual up-to-date confidence"): cumprod of THIS step's just-stashed
+        # confidence, read from the current ring slot (step_ct % depth) device->device
+        # on the forward stream. Always present for the current batch (it was stashed
+        # this step), so no identity guard / fallback is needed here. Distinct from
+        # the K-source, which is the two-steps-prior survival; admission is ordered by
+        # the current confidence while the budget K is set by the lagged confidence.
+        if self._confidence_ring is None:
+            return None
+        write_slot = self._confidence_step_ct % _CONFIDENCE_RELAY_RING_DEPTH
+        current_confidence = self._confidence_ring[write_slot, req_pool_indices]
+        return torch.cumprod(current_confidence.to(torch.float32), dim=1)
+
+    def _verify_lens_broadcast_group(self):
+        # Cross-rank shape consistency: rank 0's verify_lens is broadcast to its
+        # peers. Under DP-attention each attention-TP group owns a different request
+        # shard, so the broadcast MUST stay inside get_attention_tp_group() (mirror
+        # sampler.py) -- broadcasting across the full TP group would overwrite peer
+        # shards' verify_lens and desync the now layout-/token-count-affecting
+        # schedule (H2). Without DP-attention the TP group is correct. Returns the
+        # group and its world size; size <= 1 means no broadcast is needed.
+        if is_dp_attention_enabled():
+            return get_attention_tp_group(), get_attention_tp_size()
+        return get_tp_group(), self.server_args.tp_size
+
     def _schedule_verify_lens(
         self,
         *,
         req_pool_indices: torch.Tensor,
+        prefix_lens: torch.Tensor,
         device: torch.device,
     ) -> Optional[torch.Tensor]:
         # Shared cutoff/full schedule: derive per-request verify_lens (= 1 + ell_r)
-        # from the confidence relay buffer, broadcast from rank 0 across the TP
-        # group for cross-rank shape consistency. Returns None (-> uniform full
-        # block) whenever the relay buffer has not been written yet.
+        # from the confidence relay ring, broadcast from rank 0 across the (attention)
+        # TP group for cross-rank shape consistency. Returns None (-> uniform full
+        # block) whenever the ring has not been written yet.
         #
-        # Gather source: the per-request confidence is gathered directly off the
-        # device relay buffer (_confidence_buf[req_pool_indices], device->device),
-        # so the critical path keeps the no-synchronize design (no req_pool_indices
-        # D2H to index a pinned host buffer). This reads the LIVE device buffer
-        # written on the forward stream this step rather than the >= 1-step lagged
-        # pinned snapshot that pull_confidence_history exposes; the lag for THIS
-        # path therefore collapses toward 0. Losslessness does NOT depend on the lag
-        # size: it is guaranteed by the accept-cap in _cap_correct_len (a
-        # torch.minimum that only shrinks accept), after which the bonus is re-read
-        # from the target's true distribution at the cap index. The lag change
-        # affects only scheduling quality (which budget K / ranking is used), never
-        # correctness. pull_confidence_history's lagged-snapshot relay is retained
-        # for callers that want the gated host copy.
-        #
-        # Sort source (deviation from paper §5.2's "sort by current confidence"):
-        # the same survival snapshot feeds BOTH the budget K
-        # (update_budget_from_history) AND the rank/truncate (compute_verify_lens),
-        # so admission is ordered by one snapshot. This is intentional -- the
-        # accept-cap makes the result lossless regardless of the sort source; the
-        # deviation only affects throughput quality, never correctness.
+        # Two distinct survival sources (paper §5.2):
+        #   - K source = two-steps-prior survival (_two_steps_prior_k_survival):
+        #     fixes the verify budget K, causally independent of this step's tokens.
+        #   - sort source = current live survival (_current_live_sort_survival):
+        #     ranks/truncates admission by the actual up-to-date confidence.
+        # update_budget_from_history caches K from the lagged survival, then
+        # compute_verify_lens ranks the current survival under that cached K.
+        # Losslessness does NOT depend on either source: it is guaranteed by the
+        # accept-cap in _cap_correct_len (a torch.minimum that only shrinks accept),
+        # after which the bonus is re-read from the target's true distribution at the
+        # cap index. The split affects only scheduling quality, never correctness.
         if self._verify_scheduler is None:
             return None
-        if self._confidence_buf is None:
+        k_survival = self._two_steps_prior_k_survival(
+            req_pool_indices=req_pool_indices, prefix_lens=prefix_lens
+        )
+        sort_survival = self._current_live_sort_survival(
+            req_pool_indices=req_pool_indices
+        )
+        if k_survival is None or sort_survival is None:
             return None
 
-        confidence = self._confidence_buf[req_pool_indices]
-        survival_probs = torch.cumprod(confidence.to(torch.float32), dim=1)
-
         self._verify_scheduler.update_budget_from_history(
-            history_survival_probs=survival_probs
+            history_survival_probs=k_survival
         )
         verify_lens = self._verify_scheduler.compute_verify_lens(
-            survival_probs=survival_probs
+            survival_probs=sort_survival
         ).to(device=device, dtype=torch.int32)
 
-        if self.server_args.tp_size > 1:
-            # GroupCoordinator.broadcast maps the local src rank to a global rank
-            # via self.ranks[src]; passing src=0 to dist.broadcast directly would
-            # use a GLOBAL rank and broadcast from the wrong source when the TP
-            # group's ranks[0] != 0 (review A6). Use the group wrapper so rank 0 is
-            # the TP-local source. DP-attention follow-up must switch to
-            # get_attention_tp_group().broadcast (mirror sampler.py); c-v1 is
-            # TP-only.
-            get_tp_group().broadcast(verify_lens, src=0)
+        broadcast_group, group_size = self._verify_lens_broadcast_group()
+        if group_size > 1:
+            # GroupCoordinator.broadcast maps the local src rank to a global rank via
+            # self.ranks[src], so passing src=0 broadcasts from the group-local rank 0
+            # (not a global rank) even when the group's ranks[0] != 0 (review A6).
+            broadcast_group.broadcast(verify_lens, src=0)
 
         return verify_lens
 
@@ -1146,15 +1337,40 @@ class DSparkWorkerV2(BaseSpecWorker):
             embed_module=embed_module,
         )
         draft_block_ids = fwd.draft_block_ids
-        base_logits = self.draft_model.compute_base_logits(fwd.raw_hidden).view(
-            bs, self.gamma, -1
-        )
-        draft_block = self._sample_draft_block(
-            base_logits=base_logits,
-            anchor_tokens=draft_block_ids[:, 0],
-            draft_hidden=fwd.draft_hidden_3d,
-            sampling_info=sampling_info,
-        )
+
+        draft_sampler = self._draft_sampler
+        all_greedy = sampling_info is None or sampling_info.is_all_greedy
+        if draft_sampler is not None and fwd.can_run_graph and all_greedy:
+            # Captured greedy proposal: compute_base_logits + Markov argmax already ran
+            # in the draft cuda graph and wrote draft_sampler.out. Read it instead of
+            # the eager matmul + serial loop. corrected_logits unused on the greedy
+            # accept path, so None; greedy_mask/temperatures are cheap.
+            if sampling_info is None:
+                temperatures = torch.ones(bs, dtype=torch.float32, device=device)
+            else:
+                temperatures = (
+                    sampling_info.temperatures.view(-1)
+                    .to(torch.float32)
+                    .clamp_min(1e-5)
+                )
+            draft_block = _DraftBlockResult(
+                draft_tokens=draft_sampler.out[: bs * self.gamma].view(bs, self.gamma),
+                corrected_logits=None,
+                greedy_mask=self._resolve_greedy_mask(
+                    bs=bs, sampling_info=sampling_info
+                ),
+                temperatures=temperatures,
+            )
+        else:
+            base_logits = self.draft_model.compute_base_logits(fwd.raw_hidden).view(
+                bs, self.gamma, -1
+            )
+            draft_block = self._sample_draft_block(
+                base_logits=base_logits,
+                anchor_tokens=draft_block_ids[:, 0],
+                draft_hidden=fwd.draft_hidden_3d,
+                sampling_info=sampling_info,
+            )
         return _DraftProposal(
             draft_block_ids=draft_block_ids,
             draft_block=draft_block,
@@ -1165,6 +1381,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         self,
         *,
         req_pool_indices: torch.Tensor,
+        prefix_lens: torch.Tensor,
         draft_hidden: Optional[torch.Tensor],
         anchor_tokens: torch.Tensor,
         draft_tokens: torch.Tensor,
@@ -1196,6 +1413,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         self._stash_confidence(
             req_pool_indices=req_pool_indices,
             confidence=confidence,
+            prefix_lens=prefix_lens,
         )
 
     def _run_draft_block_forward(
@@ -1270,6 +1488,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             draft_block_ids=draft_block_ids,
             raw_hidden=raw_hidden,
             draft_hidden_3d=draft_hidden_3d,
+            can_run_graph=draft_out.can_run_graph,
         )
 
     def _run_target_verify_mode_non_compact(
@@ -1680,14 +1899,22 @@ class DSparkWorkerV2(BaseSpecWorker):
         if self._confidence_head is not None:
             self._relay_confidence(
                 req_pool_indices=batch.req_pool_indices,
+                prefix_lens=prefix_lens,
                 draft_hidden=proposal.draft_hidden,
                 anchor_tokens=draft_block_ids[:, 0],
                 draft_tokens=draft_tokens,
             )
 
         layout = self._maybe_schedule_ragged_layout(
-            req_pool_indices=batch.req_pool_indices, device=device
+            req_pool_indices=batch.req_pool_indices,
+            prefix_lens=prefix_lens,
+            device=device,
         )
+        if self._confidence_head is not None:
+            # Advance the relay step counter once per decode step, after this step's
+            # write (in _stash_confidence) and lagged read (in _schedule_verify_lens)
+            # so both used the same step_ct; the next step then writes the next slot.
+            self._confidence_step_ct += 1
         run_compact = (
             self._ragged_verify_mode is RaggedVerifyMode.COMPACT and layout is not None
         )

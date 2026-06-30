@@ -223,11 +223,10 @@ class TestScheduleVerifyLensTopk(CustomTestCase):
     def test_survival_helper_matches_manual_cumprod(self):
         """_survival_from_confidence equals torch.cumprod along the time axis.
 
-        NOTE: this guards the test helper only. The worker's production
-        survival = torch.cumprod(confidence) in DSparkWorkerV2._schedule_verify_lens
-        is NOT yet covered by a production-path UT (it is not extracted into a
-        testable pure function); the scheduler here consumes pre-computed
-        survival. A cumprod->cumsum mutation in the worker would still pass.
+        NOTE: this guards the test helper only; the scheduler here consumes
+        pre-computed survival. The worker's production cumprod is now extracted into
+        DSparkWorkerV2._two_steps_prior_k_survival / _current_live_sort_survival and
+        covered directly in test_dspark_confidence_lag.py.
         """
         confidence = torch.tensor(
             [[0.9, 0.8, 0.5], [0.7, 0.6, 0.4]], dtype=torch.float32

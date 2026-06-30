@@ -72,10 +72,11 @@ class _patched_cp_size:
 
 
 class TestRaggedVerifyMode(CustomTestCase):
-    def test_unset_mode_returns_static(self):
-        """Unset SGLANG_RAGGED_VERIFY_MODE resolves to the static sentinel."""
+    def test_empty_string_mode_raises(self):
+        """An empty SGLANG_RAGGED_VERIFY_MODE raises; the default env value is 'static', not ''."""
         with envs.SGLANG_RAGGED_VERIFY_MODE.override(""):
-            self.assertEqual(_ragged_verify_mode(), RAGGED_VERIFY_OFF)
+            with self.assertRaises(ValueError):
+                _ragged_verify_mode()
 
     def test_cap_accept_mode_parsed(self):
         """cap-accept is an accepted mode value."""
@@ -88,9 +89,9 @@ class TestRaggedVerifyMode(CustomTestCase):
             self.assertEqual(_ragged_verify_mode(), RAGGED_VERIFY_FULL)
 
     def test_invalid_mode_fails_loud(self):
-        """An unrecognised mode value raises instead of silently defaulting."""
+        """An unrecognised mode value raises ValueError instead of silently defaulting."""
         with envs.SGLANG_RAGGED_VERIFY_MODE.override("bogus"):
-            with self.assertRaises(AssertionError):
+            with self.assertRaises(ValueError):
                 _ragged_verify_mode()
 
     def test_choices_are_static_cap_accept_compact(self):

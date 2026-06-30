@@ -326,13 +326,17 @@ class TestRaggedLayoutSkippedWhenBatchExceedsCapturedGrid(CustomTestCase):
     def test_confidence_ready_layout_skipped_when_num_reqs_exceeds_max_capture_bs(self):
         """A confidence-ready compact batch with num_reqs > max_capture_bs returns None, not a raise."""
         worker = self._compact_worker(gamma=4, capture_num_tokens=[5, 10, 15])
-        worker._schedule_verify_lens = lambda *, req_pool_indices, device: torch.tensor(
-            [5, 4, 5, 3], dtype=torch.int32, device=device
+        worker._schedule_verify_lens = (
+            lambda *, req_pool_indices, prefix_lens, device: torch.tensor(
+                [5, 4, 5, 3], dtype=torch.int32, device=device
+            )
         )
         req_pool_indices = torch.arange(4, device=_DEVICE)
         self.assertIsNone(
             worker._maybe_schedule_ragged_layout(
-                req_pool_indices=req_pool_indices, device=_DEVICE
+                req_pool_indices=req_pool_indices,
+                prefix_lens=torch.full((4,), 8, device=_DEVICE),
+                device=_DEVICE,
             )
         )
 
