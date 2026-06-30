@@ -92,7 +92,6 @@ class DSparkVerifyPlanner:
                 sps_table=build_sps_cost_table(
                     server_args=self.server_args,
                     verify_num_draft_tokens=self.verify_num_draft_tokens,
-                    tp_rank=tp_rank,
                 ),
                 cfg=DSparkScheduleConfig(gamma=self.gamma),
             )

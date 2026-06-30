@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import logging
-
 import msgspec
 import torch
 
@@ -11,8 +9,6 @@ from sglang.srt.speculative.dspark_components.dspark_sps_table import (
     load_sps_table_from_path,
 )
 from sglang.srt.utils.async_probe import maybe_assert_async
-
-logger = logging.getLogger(__name__)
 
 
 class DSparkScheduleConfig(msgspec.Struct):
@@ -180,18 +176,19 @@ def build_sps_cost_table(
     *,
     server_args: ServerArgs,
     verify_num_draft_tokens: int,
-    tp_rank: int,
 ) -> SpsCostTable:
-    # Load a pre-profiled table when a path is given, else a flat constant-SPS
-    # table (budget = verify-all-up-to-max). The expected scheduler-on workflow
-    # is to build the table offline with sglang.benchmark.dspark_sps_profiler
-    # and pass it via --speculative-dspark-sps-table-path (see
-    # docs/advanced_features/dspark_sps_table.md); flat is the inert fallback
-    # for cap-accept, which has zero throughput gain.
+    # A real --speculative-dspark-sps-table-path loads the pre-profiled,
+    # hardware-aware table; the literal "const" sentinel deliberately opts into
+    # a flat constant-SPS table (budget = verify-all-up-to-gamma, zero
+    # throughput gain); anything else unset raises. The expected scheduler-on
+    # workflow is to build the table offline with
+    # sglang.benchmark.dspark_sps_profiler and pass it via
+    # --speculative-dspark-sps-table-path (see
+    # docs/advanced_features/dspark_sps_table.md).
     #
-    # Until a profiled (non-flat) table ships the hardware-aware scheduler is a
-    # no-op: lookup() returns a constant, so the verify-token budget degenerates
-    # to verify-all and every request keeps verify_len == gamma (the scheduler's
+    # The flat "const" table makes the hardware-aware scheduler a no-op:
+    # lookup() returns a constant, so the verify-token budget degenerates to
+    # verify-all and every request keeps verify_len == gamma (the scheduler's
     # resolved_max_verify_len caps at gamma, so compact verifies the anchor plus
     # up to gamma-1 drafts; this is lossless -- _cap_correct_len caps accept and
     # the bonus is re-read from the target distribution). The
@@ -200,24 +197,19 @@ def build_sps_cost_table(
     # any profiled table is supplied, because a non-flat table yields small K
     # and would otherwise drive verify_len to 0.
     sps_table_path = server_args.speculative_dspark_sps_table_path
-    if sps_table_path:
-        return load_sps_table_from_path(sps_table_path)
-    if tp_rank == 0:
-        # Loud, once (per worker init on rank 0): the scheduler is enabled but
-        # the verify budget silently degenerates to verify-all without a
-        # profiled table. Warn rather than no-op silently so a misconfigured
-        # scheduler-on run is visible. Pass --speculative-dspark-sps-table-path
-        # to opt into the hardware-aware schedule.
-        logger.warning(
-            "DSpark ragged-verify scheduler is enabled but no "
-            "--speculative-dspark-sps-table-path was supplied. Falling back to a "
-            "flat constant-SPS table: the hardware-aware verify budget "
-            "degenerates to verify-all-up-to-gamma and yields zero throughput "
-            "gain. Profile a table offline with "
-            "`python -m sglang.benchmark.dspark_sps_profiler` and pass it via "
-            "--speculative-dspark-sps-table-path (see "
-            "docs/advanced_features/dspark_sps_table.md)."
+    if not sps_table_path:
+        raise ValueError(
+            "DSpark ragged-verify scheduler is enabled (mode != static) but "
+            "--speculative-dspark-sps-table-path was not supplied. Build a "
+            "hardware-aware SPS cost table offline against a plain (non-speculative) "
+            "server with `python -m sglang.benchmark.dspark_sps_profiler` and pass "
+            "its JSON path (see docs/advanced_features/dspark_sps_table.md). To "
+            "deliberately run with a flat constant-SPS table instead "
+            "(verify-all-up-to-gamma, zero throughput gain), pass "
+            "--speculative-dspark-sps-table-path=const."
         )
+    if sps_table_path != "const":
+        return load_sps_table_from_path(sps_table_path)
     max_batch_tokens = max(
         1,
         int(server_args.max_running_requests or 1) * verify_num_draft_tokens,

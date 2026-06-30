@@ -9,11 +9,12 @@ as a lightweight lookup table the scheduler queries in O(1) at runtime.
 
 ## Expected scheduler-on workflow
 
-The hardware-aware schedule is a **no-op until a profiled table is supplied**. Without
-`--speculative-dspark-sps-table-path`, the scheduler loads a flat constant-SPS table:
-`Theta` becomes proportional to `tau`, the budget degenerates to verify-all, and every
-request keeps `verify_len == gamma`. In that case the worker emits a loud warning once
-on TP rank 0.
+A profiled table path is **required when the scheduler is enabled** (cap-accept /
+compact). Without `--speculative-dspark-sps-table-path` the scheduler **raises at
+startup** rather than silently degrading. To deliberately run with a flat constant-SPS
+table instead, pass `--speculative-dspark-sps-table-path=const`: `Theta` becomes
+proportional to `tau`, the budget degenerates to verify-all, and every request keeps
+`verify_len == gamma` (zero throughput gain).
 
 The expected workflow has two steps:
 
@@ -34,11 +35,17 @@ The expected workflow has two steps:
    conditioned on the swept context regime. The profiler self-checks the result for
    monotonicity and cliff preservation.
 
-2. **Pass the table to the DSpark server** so the scheduler loads it instead of the flat
-   default:
+2. **Pass the table to the DSpark server** so the scheduler loads it:
 
    ```bash
    --speculative-dspark-sps-table-path ~/sglang_artifacts/dspark_sps_table.json
+   ```
+
+   To deliberately run with the flat constant-SPS table instead (verify-all, zero
+   throughput gain), pass the literal `const`:
+
+   ```bash
+   --speculative-dspark-sps-table-path=const
    ```
 
 Offline profiling is a deliberate engineering choice over the paper's literal

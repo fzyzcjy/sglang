@@ -1,4 +1,3 @@
-import logging
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,8 +12,6 @@ from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 
 register_cpu_ci(est_time=10, suite="base-a-test-cpu")
-
-_WORKER_LOGGER = "sglang.srt.speculative.dspark_components.dspark_worker_v2"
 
 
 def _make_table() -> SpsCostTable:
@@ -277,75 +274,43 @@ class TestProfilerConversion(CustomTestCase):
         self.assertAlmostEqual(table.sample_steps_per_sec[0], 300.0, places=6)
 
 
-class _CollectingHandler(logging.Handler):
-    """A logging handler that records emitted records for assertion."""
+def _build_sps_cost_table_for(*, sps_table_path):
+    from sglang.srt.speculative.dspark_components.dspark_scheduler import (
+        build_sps_cost_table,
+    )
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.records: list[logging.LogRecord] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.records.append(record)
-
-
-def _build_sps_cost_table_for(*, tp_rank: int, sps_table_path):
-    """Invoke the worker's _build_sps_cost_table on a bare stub with no GPU state."""
-    from sglang.srt.speculative.dspark_components.dspark_worker_v2 import DSparkWorkerV2
-
-    worker = DSparkWorkerV2.__new__(DSparkWorkerV2)
-    worker.tp_rank = tp_rank
-    worker.verify_num_draft_tokens = 5
-    worker.server_args = SimpleNamespace(
+    server_args = SimpleNamespace(
         speculative_dspark_sps_table_path=sps_table_path,
         max_running_requests=4,
     )
-    return worker._build_sps_cost_table()
+    return build_sps_cost_table(server_args=server_args, verify_num_draft_tokens=5)
 
 
-class TestSchedulerOnWithoutTableWarns(CustomTestCase):
-    """Step 1: the scheduler-on-but-no-table case must warn loudly once on TP rank 0
-    instead of silently degenerating to a flat verify-all budget."""
+class TestBuildSpsCostTableContract(CustomTestCase):
+    def test_no_table_path_raises(self):
+        """An enabled scheduler with no table path (None or "") raises ValueError naming the profiler and 'const'."""
+        for sps_table_path in (None, ""):
+            with self.assertRaises(ValueError) as cm:
+                _build_sps_cost_table_for(sps_table_path=sps_table_path)
+            message = str(cm.exception)
+            self.assertIn("dspark_sps_profiler", message)
+            self.assertIn("const", message)
 
-    def test_rank_0_warns_and_returns_flat_table(self):
-        """No table path on rank 0 -> a loud warning and a flat constant-SPS table."""
-        with self.assertLogs(_WORKER_LOGGER, level="WARNING") as captured:
-            table = _build_sps_cost_table_for(tp_rank=0, sps_table_path=None)
+    def test_const_sentinel_returns_flat_table(self):
+        """The literal 'const' sentinel opts into a flat constant-SPS table (SPS=1.0)."""
+        table = _build_sps_cost_table_for(sps_table_path="const")
         self.assertEqual(table.sample_steps_per_sec, [1.0])
-        self.assertTrue(
-            any("speculative-dspark-sps-table-path" in line for line in captured.output)
-        )
 
-    def test_non_zero_rank_does_not_warn(self):
-        """The loud warning fires only on TP rank 0 (no per-rank log spam)."""
-        logger_obj = logging.getLogger(_WORKER_LOGGER)
-        handler = _CollectingHandler()
-        logger_obj.addHandler(handler)
-        try:
-            table = _build_sps_cost_table_for(tp_rank=1, sps_table_path=None)
-        finally:
-            logger_obj.removeHandler(handler)
-        self.assertEqual(table.sample_steps_per_sec, [1.0])
-        self.assertFalse(
-            any(record.levelno >= logging.WARNING for record in handler.records)
-        )
-
-    def test_table_path_given_does_not_warn(self):
-        """Supplying a table path loads it without the no-table warning."""
+    def test_real_path_loads_table(self):
+        """A real table path loads the pre-profiled table back from its JSON file."""
         table = _make_table()
-        logger_obj = logging.getLogger(_WORKER_LOGGER)
-        handler = _CollectingHandler()
-        logger_obj.addHandler(handler)
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                path = Path(tmp) / "sps.json"
-                path.write_text(table.to_json(), encoding="utf-8")
-                loaded = _build_sps_cost_table_for(tp_rank=0, sps_table_path=str(path))
-        finally:
-            logger_obj.removeHandler(handler)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sps.json"
+            path.write_text(table.to_json(), encoding="utf-8")
+            loaded = _build_sps_cost_table_for(sps_table_path=str(path))
         self.assertEqual(loaded.sample_batch_tokens, table.sample_batch_tokens)
-        self.assertFalse(
-            any(record.levelno >= logging.WARNING for record in handler.records)
-        )
+        self.assertEqual(loaded.sample_steps_per_sec, table.sample_steps_per_sec)
+        self.assertEqual(loaded.max_batch_tokens, table.max_batch_tokens)
 
 
 if __name__ == "__main__":
