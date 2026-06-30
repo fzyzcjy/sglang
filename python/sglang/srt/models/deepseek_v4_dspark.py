@@ -134,7 +134,6 @@ class DSparkAttention(nn.Module):
         self.qk_rope_head_dim = config.qk_rope_head_dim
         self.qk_nope_head_dim = config.head_dim - config.qk_rope_head_dim
         self.head_dim = self.qk_rope_head_dim + self.qk_nope_head_dim
-        assert self.head_dim == config.head_dim
         self.rope_head_dim = config.qk_rope_head_dim
         self.n_heads = config.num_attention_heads
         self.n_local_heads = self.n_heads // self.attn_tp_size
@@ -670,6 +669,7 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         self.embed_tokens: Optional[nn.Module] = None
         self.lm_head: Optional[nn.Module] = None
         self._last_confidence: Optional[torch.Tensor] = None
+        self._x_post_hc: Optional[torch.Tensor] = None
 
     @property
     def enable_confidence_head(self) -> bool:
@@ -696,9 +696,40 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         projected, _ = stage0.main_proj(main_hidden)
         return stage0.main_norm(projected)
 
-    def kv_proj_only(self, layer_idx: int, ctx_hidden: torch.Tensor) -> torch.Tensor:
-        """Project a (already main_proj'd) draft hidden into one stage's KV latent."""
-        return self.stages[layer_idx].self_attn.kv_proj_only(ctx_hidden)
+    def write_target_hidden_kv(
+        self,
+        *,
+        main_hidden: torch.Tensor,
+        swa_loc: torch.Tensor,
+        positions: torch.Tensor,
+        pool: DeepSeekV4TokenToKVPool,
+    ) -> None:
+        """Inject the target hidden as MLA latent KV into every stage's SWA ring slot.
+
+        The dsv4 draft KV is a single MLA latent (kv_lora_rank + qk_rope_head_dim), not the
+        MHA k/v pair the dense path writes. For each stage: project the (main_proj'd) target
+        hidden through ``wkv``, then ``set_swa_key_buffer_radix_fused_norm_rope`` (the writer
+        consumes the RAW latent and applies kv_norm + rope + fp8 pack internally, so do NOT
+        pre-norm/rope here) at the already-translated SWA slots ``swa_loc`` with the absolute
+        per-row ``positions``. The worker owns full->SWA translation (after allocation) and
+        the per-row commit positions; this method owns the projection + pool API. There is
+        no MLA ``set_kv_buffer_prefix_valid`` equivalent, so commit-length masking is done by
+        the caller gathering only the committed flat slots (one per request).
+        """
+        main_x = self.project_target_hidden(main_hidden)
+        swa_loc = swa_loc.to(torch.int32)
+        for stage in self.stages:
+            attn = stage.self_attn
+            kv = attn.kv_proj_only(main_x)
+            pool.set_swa_key_buffer_radix_fused_norm_rope(
+                layer_id=attn.layer_id,
+                swa_loc=swa_loc,
+                kv=kv,
+                kv_weight=attn.kv_norm.weight.data,
+                eps=attn.eps,
+                freqs_cis=attn.freqs_cis,
+                positions=positions,
+            )
 
     def forward_embed(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Build the draft block input embeddings, hc-expanded.
@@ -798,24 +829,32 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
     def compute_confidence(
         self,
         *,
-        x_post_hc: torch.Tensor,
         anchor_tokens: torch.Tensor,
         sampled_tokens: torch.Tensor,
     ) -> Optional[torch.Tensor]:
-        """Confidence on the post-hc_head PRE-norm tap; stashed for the worker relay.
+        """Confidence on the post-hc_head PRE-norm tap (R9 seam), called by the worker.
 
-        Returns ``None`` when the confidence head is disabled (keeping a+b unaffected).
-        Otherwise feeds ``x_post_hc`` (the same tap the LM head's ``norm`` consumes, but
-        BEFORE the norm) and, for with_markov heads, the per-step markov_embed stack built
-        from the prev-token sequence ``[anchor, s_0, ..., s_{gamma-2}]`` (the off-by-one
-        shared with the worker). STS calibration is identity in the MVP, so the raw logit
-        is mapped to ``(0, 1)`` by sigmoid; losslessness does not depend on the value.
-        ``x_post_hc`` / ``sampled_tokens`` are ``[bs, gamma, ...]`` (worker-reshaped).
+        Returns ``None`` when the confidence head is disabled (keeping the a+b path
+        unaffected). Otherwise it reads the post-hc_head PRE-norm tap stashed by the most
+        recent ``compute_base_logits`` (the same tap the LM head's ``norm`` consumes, but
+        BEFORE the norm, reference model.py:873) and, for with_markov heads, the per-step
+        markov_embed stack built from the prev-token sequence ``[anchor, s_0, ...,
+        s_{gamma-2}]`` (the off-by-one shared with the worker). STS calibration is identity
+        in the MVP, so the raw logit is mapped to ``(0, 1)`` by sigmoid; losslessness does
+        not depend on the value. ``anchor_tokens`` is ``[bs]``; ``sampled_tokens`` is
+        ``[bs, gamma]``. Returns ``[bs, gamma]``.
         """
         confidence_head = self.confidence_head
         if confidence_head is None:
             self._last_confidence = None
             return None
+        if self._x_post_hc is None:
+            raise RuntimeError(
+                "compute_confidence requires compute_base_logits to run first "
+                "(the post-hc_head tap is stashed there)."
+            )
+        bs = int(anchor_tokens.shape[0])
+        x_post_hc = self._x_post_hc.view(bs, self.gamma, -1)
         if confidence_head.with_markov:
             prev_seq = torch.cat(
                 [anchor_tokens.view(-1, 1), sampled_tokens[:, : self.gamma - 1]], dim=1
