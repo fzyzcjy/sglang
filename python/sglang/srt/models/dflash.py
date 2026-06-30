@@ -274,9 +274,6 @@ class DFlashMLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate_up, _ = self.gate_up_proj(x)
-        gate, up = gate_up.chunk(2, dim=-1)
-        # dumper.dump("mlp__gate_proj_out", gate)
-        # dumper.dump("mlp__up_proj_out", up)
         x = self.act_fn(gate_up)
         # dumper.dump("mlp__act_out", x)
         x, _ = self.down_proj(x)
