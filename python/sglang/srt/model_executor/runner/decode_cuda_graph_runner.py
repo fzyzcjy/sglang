@@ -1008,21 +1008,19 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             if self.ragged_verify_mode
             else None
         )
-        if ragged_layout is not None:
-            self._load_batch_ragged_verify(
-                forward_batch, ragged_layout, pp_proxy_tensors=pp_proxy_tensors
-            )
-            return
+        is_ragged = ragged_layout is not None
 
         self.deepep_adapter.replay()
 
         if not forward_batch.needs_forward_metadata_init():
             # Pre-planned (plan-stream load_batch already ran).
             # In speculative decoding, these two fields are still needed.
+            graph_size_key = self._ragged_graph_size if is_ragged else self.bs
             self.buffers.input_ids[: self.raw_num_token].copy_(forward_batch.input_ids)
             self.buffers.positions[: self.raw_num_token].copy_(forward_batch.positions)
             if (
-                self.model_runner.spec_algorithm.is_dflash_or_dspark()
+                not is_ragged
+                and self.model_runner.spec_algorithm.is_dflash_or_dspark()
                 and self.model_runner.is_draft_worker
                 and forward_batch.input_embeds is not None
             ):
@@ -1032,7 +1030,7 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             variant_label = self._resolve_lora_variant(forward_batch)
             stream_idx = get_current_stream_idx() if self.enable_pdmux else None
             self._replay_graph_key = self._make_graph_key(
-                self.bs, stream_idx, variant_label
+                graph_size_key, stream_idx, variant_label
             )
             return
 
@@ -1040,32 +1038,51 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         self.recapture_if_needed(forward_batch)
 
         raw_bs = forward_batch.batch_size
-        raw_num_token = raw_bs * self.num_tokens_per_bs
 
-        if self.require_mlp_tp_gather:
-            max_num_tokens = max(forward_batch.global_num_tokens_cpu)
-            max_batch_size = (
-                max_num_tokens / self.num_tokens_per_bs
-                if self.model_runner.spec_algorithm.is_eagle()
-                or self.model_runner.spec_algorithm.is_standalone()
-                or self.model_runner.spec_algorithm.is_dflash_or_dspark()
-                else max_num_tokens
-            )
-            bs = self._pad_to_bucket(int(max_batch_size), self.capture_bs)
-        else:
+        if is_ragged:
+            # Token-keyed replay for DSpark real-N ragged verify (Plan B).
+            # Selects the captured graph by total verify-token count rather than
+            # bs, slices the token-axis buffers to the chosen graph_num_tokens
+            # tier, and leaves the verify accept / sampling / KV-commit path
+            # untouched. The dense-operator graph is selected by token total, but
+            # the attention metadata wrappers stay bs-keyed (flashinfer
+            # prefill_cuda_graph_metadata is created per capture_bs). Pad bs to a
+            # captured bucket so the wrapper lookup at
+            # init_forward_metadata_out_graph resolves; padded rows reference
+            # reserved req-pool slot 0 and their output is discarded.
+            raw_num_token = ragged_layout.total_verify_tokens
+            graph_size_key = self._ragged_graph_num_tokens(raw_num_token)
             bs = self._pad_to_bucket(raw_bs, self.capture_bs)
+            padded_num_tokens = graph_size_key
+        else:
+            raw_num_token = raw_bs * self.num_tokens_per_bs
+            if self.require_mlp_tp_gather:
+                max_num_tokens = max(forward_batch.global_num_tokens_cpu)
+                max_batch_size = (
+                    max_num_tokens / self.num_tokens_per_bs
+                    if self.model_runner.spec_algorithm.is_eagle()
+                    or self.model_runner.spec_algorithm.is_standalone()
+                    or self.model_runner.spec_algorithm.is_dflash_or_dspark()
+                    else max_num_tokens
+                )
+                bs = self._pad_to_bucket(int(max_batch_size), self.capture_bs)
+            else:
+                bs = self._pad_to_bucket(raw_bs, self.capture_bs)
+            padded_num_tokens = bs * self.num_tokens_per_bs
+            graph_size_key = bs
 
         self.buffer_registry.fill_from(
             forward_batch,
             raw_bs=raw_bs,
             padded_bs=bs,
             raw_num_tokens=raw_num_token,
-            padded_num_tokens=bs * self.num_tokens_per_bs,
+            padded_num_tokens=padded_num_tokens,
             pp_proxy_tensors=pp_proxy_tensors,
         )
 
         if (
-            self.model_runner.spec_algorithm.is_dflash_or_dspark()
+            not is_ragged
+            and self.model_runner.spec_algorithm.is_dflash_or_dspark()
             and self.model_runner.is_draft_worker
             and forward_batch.input_embeds is not None
         ):
@@ -1078,7 +1095,11 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
                 num_token_non_padded=len(forward_batch.input_ids),
                 spec_info=forward_batch.spec_info,
             )
-        if forward_batch.forward_mode.is_idle() and forward_batch.spec_info is not None:
+        if (
+            not is_ragged
+            and forward_batch.forward_mode.is_idle()
+            and forward_batch.spec_info is not None
+        ):
             forward_batch.spec_info.custom_mask = buffers.custom_mask
         if self.enable_pdmux:
             stream_idx = get_current_stream_idx()
@@ -1090,17 +1111,21 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             buffers=buffers,
             bs=bs,
             raw_bs=raw_bs,
-            num_tokens=bs * self.num_tokens_per_bs,
+            num_tokens=padded_num_tokens,
             seq_len_fill_value=self.seq_len_fill_value,
             capture_forward_mode=self.capture_forward_mode,
             is_encoder_decoder=self.is_encoder_decoder,
         )
         attn_backend.init_forward_metadata_out_graph(fb_view)
 
-        # Store fields
+        # Store fields. For ragged, graph_size_key (= graph_num_tokens) identifies
+        # the captured graph via the token-keyed ShapeKey; bs is the padded
+        # attention-wrapper key.
         self.raw_bs = raw_bs
         self.raw_num_token = raw_num_token
         self.bs = bs
+        if is_ragged:
+            self._ragged_graph_size = graph_size_key
 
         if self.model_runner.hisparse_coordinator is not None:
             self.model_runner.hisparse_coordinator.num_real_reqs.fill_(raw_bs)
@@ -1108,105 +1133,13 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         variant_label = self._resolve_lora_variant(forward_batch)
         stream_idx = get_current_stream_idx() if self.enable_pdmux else None
         self._replay_graph_key = self._make_graph_key(
-            self.bs, stream_idx, variant_label
+            graph_size_key, stream_idx, variant_label
         )
 
     def _ragged_graph_num_tokens(self, total_verify_tokens: int) -> int:
         from sglang.srt.speculative.ragged_verify import round_up_grid
 
         return round_up_grid(total_verify_tokens, self.capture_num_tokens)
-
-    def _load_batch_ragged_verify(
-        self,
-        forward_batch: ForwardBatch,
-        ragged_layout,
-        pp_proxy_tensors: Optional[PPProxyTensors] = None,
-    ):
-        """Token-keyed replay for DSpark real-N ragged verify (Plan B).
-
-        Selects the captured graph by total verify-token count rather than bs,
-        slices the token-axis buffers to the chosen graph_num_tokens tier, and
-        leaves the verify accept / sampling / KV-commit path untouched. The
-        captured graph runs `graph_num_tokens` dense-operator tokens (~= total,
-        zero/minimal padding) and reads bs-shaped attention metadata rebuilt at
-        replay from the ragged geometry via init_forward_metadata_out_graph.
-        """
-        self.deepep_adapter.replay()
-
-        raw_num_token = ragged_layout.total_verify_tokens
-
-        if not forward_batch.needs_forward_metadata_init():
-            # Pre-planned (plan-stream load_batch already ran this step).
-            self.buffers.input_ids[:raw_num_token].copy_(forward_batch.input_ids)
-            self.buffers.positions[:raw_num_token].copy_(forward_batch.positions)
-            variant_label = self._resolve_lora_variant(forward_batch)
-            stream_idx = get_current_stream_idx() if self.enable_pdmux else None
-            self._replay_graph_key = self._make_graph_key(
-                self._ragged_graph_size, stream_idx, variant_label
-            )
-            return
-
-        buffers = self.buffers
-        self.recapture_if_needed(forward_batch)
-
-        raw_bs = forward_batch.batch_size
-        graph_num_tokens = self._ragged_graph_num_tokens(raw_num_token)
-        # The dense-operator graph is selected by token total, but the attention
-        # metadata wrappers stay bs-keyed (flashinfer prefill_cuda_graph_metadata
-        # is created per capture_bs). Pad bs to a captured bucket so the wrapper
-        # lookup at init_forward_metadata_out_graph resolves; padded rows
-        # reference reserved req-pool slot 0 and their output is discarded.
-        bs = self._pad_to_bucket(raw_bs, self.capture_bs)
-
-        self.buffer_registry.fill_from(
-            forward_batch,
-            raw_bs=raw_bs,
-            padded_bs=bs,
-            raw_num_tokens=raw_num_token,
-            padded_num_tokens=graph_num_tokens,
-            pp_proxy_tensors=pp_proxy_tensors,
-        )
-
-        if self.enable_two_batch_overlap:
-            self.tbo_plugin.replay_prepare(
-                forward_mode=self.capture_forward_mode,
-                bs=bs,
-                num_token_non_padded=len(forward_batch.input_ids),
-                spec_info=forward_batch.spec_info,
-            )
-        if self.enable_pdmux:
-            stream_idx = get_current_stream_idx()
-            attn_backend = self.model_runner.decode_attn_backend_group[stream_idx]
-        else:
-            attn_backend = self.attn_backend
-        fb_view = build_replay_fb_view(
-            forward_batch=forward_batch,
-            buffers=buffers,
-            bs=bs,
-            raw_bs=raw_bs,
-            num_tokens=graph_num_tokens,
-            seq_len_fill_value=self.seq_len_fill_value,
-            capture_forward_mode=self.capture_forward_mode,
-            is_encoder_decoder=self.is_encoder_decoder,
-        )
-        attn_backend.init_forward_metadata_out_graph(fb_view)
-
-        # Store fields. graph_num_tokens identifies the captured graph (the
-        # token-keyed ShapeKey replaces the bs-keyed one); bs is the padded
-        # attention-wrapper key.
-        self.raw_bs = raw_bs
-        self.raw_num_token = raw_num_token
-        self.bs = bs
-        self._ragged_graph_size = graph_num_tokens
-
-        if self.model_runner.hisparse_coordinator is not None:
-            self.model_runner.hisparse_coordinator.num_real_reqs.fill_(raw_bs)
-
-        variant_label = self._resolve_lora_variant(forward_batch)
-        stream_idx = get_current_stream_idx() if self.enable_pdmux else None
-        self._replay_graph_key = self._make_graph_key(
-            graph_num_tokens, stream_idx, variant_label
-        )
 
     def execute(
         self,
