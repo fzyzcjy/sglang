@@ -1,3 +1,4 @@
+import types
 import unittest
 
 import torch
@@ -27,10 +28,15 @@ def _planner(*, gamma: int, req_pool_size: int) -> HostConfidenceBudgetPlanner:
     # relay_lag_steps=0 -> the host carry supplies the full causal lag, so the test
     # can drive one confidence per step and read the lag-prior budget directly
     # (the overlap relay's natural lag-1 is exercised on GPU by the lossless harness).
+    model_runner = types.SimpleNamespace(
+        req_to_token_pool=types.SimpleNamespace(
+            req_to_token=torch.zeros((req_pool_size, 1), dtype=torch.int64)
+        )
+    )
     return HostConfidenceBudgetPlanner(
         sps_table=_flat_table(),
         cfg=DSparkScheduleConfig(gamma=gamma),
-        req_pool_size=req_pool_size,
+        model_runner=model_runner,
         relay_lag_steps=0,
     )
 

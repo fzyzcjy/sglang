@@ -119,9 +119,7 @@ class DSparkVerifyPlanner:
             self._budget_planner = HostConfidenceBudgetPlanner(
                 sps_table=sps_table,
                 cfg=self._schedule_cfg,
-                req_pool_size=int(
-                    self.model_runner.req_to_token_pool.req_to_token.shape[0]
-                ),
+                model_runner=self.model_runner,
                 relay_lag_steps=relay_lag_steps,
             )
             if tp_rank == 0:

@@ -216,13 +216,17 @@ class HostConfidenceBudgetPlanner:
         *,
         sps_table: SpsCostTable,
         cfg: DSparkScheduleConfig,
-        req_pool_size: int,
+        model_runner,
         relay_lag_steps: int = 1,
     ) -> None:
         cfg.validate()
         self.sps_table = sps_table
         self.cfg = cfg
-        self.req_pool_size = req_pool_size
+        # The carry buffer is sized from the req-pool, but req_to_token_pool is not
+        # populated until after model-runner init (this planner is built during
+        # scheduler/worker __init__), so the size is read lazily in _ensure_carry
+        # (mirrors the former ConfidenceRelay.ensure_buffers).
+        self._model_runner = model_runner
         # Total causal lag (>= 1 already yields the barrier; default 2 reproduces the
         # paper, tunable via env). The feed already supplies relay_lag_steps of lag (1
         # under the async overlap relay, 0 in the synchronous non-overlap fallback);
@@ -309,11 +313,12 @@ class HostConfidenceBudgetPlanner:
     def _ensure_carry(self, *, gamma: int) -> None:
         if self._carry_confidence is not None:
             return
+        req_pool_size = int(self._model_runner.req_to_token_pool.req_to_token.shape[0])
         self._carry_confidence = torch.zeros(
-            (self.carry_steps, self.req_pool_size, gamma), dtype=torch.float32
+            (self.carry_steps, req_pool_size, gamma), dtype=torch.float32
         )
         self._carry_seq_lens = torch.full(
-            (self.carry_steps, self.req_pool_size),
+            (self.carry_steps, req_pool_size),
             _CONFIDENCE_RELAY_UNSET_SEQ_LEN,
             dtype=torch.int64,
         )
