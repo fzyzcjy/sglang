@@ -152,10 +152,10 @@ class ConfidencePrefixScheduler:
         self.cfg = cfg
 
     def compute_verify_lens(
-        self, *, k_survival: torch.Tensor, sort_survival: torch.Tensor
+        self, *, two_steps_prior_k_survival: torch.Tensor, sort_survival: torch.Tensor
     ) -> torch.Tensor:
         budget = compute_verify_token_budget(
-            history_survival_probs=k_survival,
+            history_survival_probs=two_steps_prior_k_survival,
             sps_table=self.sps_table,
             cfg=self.cfg,
         )

@@ -226,11 +226,11 @@ class DSparkVerifyPlanner:
         # block) whenever the ring has not been written yet.
         #
         # Two distinct survival sources (paper §5.2):
-        #   - K source = two-steps-prior survival (_two_steps_prior_k_survival):
+        #   - K source = two-steps-prior survival (two_steps_prior_k_survival):
         #     fixes the verify budget K, causally independent of this step's tokens.
         #   - sort source = current live survival (_current_live_sort_survival):
         #     ranks/truncates admission by the actual up-to-date confidence.
-        # budget is computed from k_survival now; verify_lens is ranked by
+        # budget is computed from two_steps_prior_k_survival now; verify_lens is ranked by
         # sort_survival now — no cross-step cache.
         # Losslessness does NOT depend on either source: it is guaranteed by the
         # accept-cap in _cap_correct_len (a torch.minimum that only shrinks accept),
@@ -238,24 +238,25 @@ class DSparkVerifyPlanner:
         # cap index. The split affects only scheduling quality, never correctness.
         if self._verify_scheduler is None:
             return None
-        k_survival = self._confidence_relay.two_steps_prior_k_survival(
+        two_steps_prior_k_survival = self._confidence_relay.two_steps_prior_k_survival(
             req_pool_indices=req_pool_indices, prefix_lens=prefix_lens
         )
         sort_survival = self._confidence_relay.current_live_sort_survival(
             req_pool_indices=req_pool_indices
         )
-        if k_survival is None or sort_survival is None:
+        if two_steps_prior_k_survival is None or sort_survival is None:
             return None
 
         verify_lens = self._verify_scheduler.compute_verify_lens(
-            k_survival=k_survival, sort_survival=sort_survival
+            two_steps_prior_k_survival=two_steps_prior_k_survival,
+            sort_survival=sort_survival,
         ).to(device=device, dtype=torch.int32)
 
         if envs.SGLANG_DSPARK_DEBUG_CONFIDENCE_PREFIX_SCHEDULER.get():
             self._log_verify_lens_decision(
                 req_pool_indices=req_pool_indices,
                 prefix_lens=prefix_lens,
-                k_survival=k_survival,
+                two_steps_prior_k_survival=two_steps_prior_k_survival,
                 sort_survival=sort_survival,
                 verify_lens=verify_lens,
             )
@@ -276,13 +277,13 @@ class DSparkVerifyPlanner:
         *,
         req_pool_indices: torch.Tensor,
         prefix_lens: torch.Tensor,
-        k_survival: torch.Tensor,
+        two_steps_prior_k_survival: torch.Tensor,
         sort_survival: torch.Tensor,
         verify_lens: torch.Tensor,
     ) -> None:
         cfg = self._verify_scheduler.cfg
         budget = compute_verify_token_budget(
-            history_survival_probs=k_survival,
+            history_survival_probs=two_steps_prior_k_survival,
             sps_table=self._verify_scheduler.sps_table,
             cfg=cfg,
         )
