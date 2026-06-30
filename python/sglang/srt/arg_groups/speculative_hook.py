@@ -324,11 +324,47 @@ def _handle_dspark(server_args: ServerArgs) -> None:
                 gamma,
             )
 
+    elif gamma is None and server_args.speculative_num_draft_tokens is not None:
+        from sglang.srt.speculative.dspark_utils import parse_dspark_draft_config
+
+        model_override_args = json.loads(server_args.json_model_override_args)
+        config_gamma: Optional[int] = None
+        try:
+            from sglang.srt.utils.hf_transformers_utils import get_config
+
+            draft_hf_config = get_config(
+                server_args.speculative_draft_model_path,
+                trust_remote_code=server_args.trust_remote_code,
+                revision=server_args.speculative_draft_model_revision,
+                model_override_args=model_override_args,
+            )
+            config_gamma = parse_dspark_draft_config(
+                draft_hf_config=draft_hf_config
+            ).resolve_gamma(default=None)
+        except Exception as e:
+            logger.warning(
+                "Failed to read DSpark gamma from draft model config; "
+                "skipping speculative_num_draft_tokens consistency check. Error: %s",
+                e,
+            )
+
+        if config_gamma is not None:
+            config_verify_window = int(config_gamma) + 1
+            if int(server_args.speculative_num_draft_tokens) != config_verify_window:
+                raise ValueError(
+                    "DSpark speculative_num_draft_tokens must equal the draft "
+                    "checkpoint block_size + 1 "
+                    f"(= {config_verify_window} for block_size={config_gamma}), "
+                    "but got speculative_num_draft_tokens="
+                    f"{server_args.speculative_num_draft_tokens}."
+                )
+
     if gamma is not None:
         verify_window = int(gamma) + 1
-        if server_args.speculative_num_draft_tokens is not None and int(
-            server_args.speculative_num_draft_tokens
-        ) != verify_window:
+        if (
+            server_args.speculative_num_draft_tokens is not None
+            and int(server_args.speculative_num_draft_tokens) != verify_window
+        ):
             raise ValueError(
                 "DSpark speculative_num_draft_tokens must equal gamma + 1 "
                 f"(= {verify_window} for gamma={gamma}), but got "

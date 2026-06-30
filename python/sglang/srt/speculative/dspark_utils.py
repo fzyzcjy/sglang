@@ -127,9 +127,13 @@ def parse_dspark_draft_config(*, draft_hf_config: Any) -> DSparkDraftConfig:
 
     prefixed_block_size = _cfg_get(draft_hf_config, "dspark_block_size", None)
     prefixed_markov_rank = _cfg_get(draft_hf_config, "dspark_markov_rank", None)
-    prefixed_markov_head_type = _cfg_get(draft_hf_config, "dspark_markov_head_type", None)
+    prefixed_markov_head_type = _cfg_get(
+        draft_hf_config, "dspark_markov_head_type", None
+    )
     prefixed_noise_token_id = _cfg_get(draft_hf_config, "dspark_noise_token_id", None)
-    prefixed_target_layer_ids = _cfg_get(draft_hf_config, "dspark_target_layer_ids", None)
+    prefixed_target_layer_ids = _cfg_get(
+        draft_hf_config, "dspark_target_layer_ids", None
+    )
     uses_prefixed = any(
         value is not None
         for value in (
@@ -197,9 +201,7 @@ def parse_dspark_draft_config(*, draft_hf_config: Any) -> DSparkDraftConfig:
         )
 
     gamma = (
-        int(prefixed_block_size)
-        if prefixed_block_size is not None
-        else base.block_size
+        int(prefixed_block_size) if prefixed_block_size is not None else base.block_size
     )
 
     if prefixed_target_layer_ids is not None:

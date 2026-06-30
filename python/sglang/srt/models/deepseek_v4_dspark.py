@@ -166,7 +166,7 @@ class DSparkAttention(nn.Module):
         )
 
         from sglang.srt.layers.deepseek_v4_rope import precompute_freqs_cis
-        from sglang.srt.utils.hf_transformers.common import get_rope_config
+        from sglang.srt.utils.hf_transformers_utils import get_rope_config
 
         rope_theta, rope_scaling = get_rope_config(config)
         rope_scaling = rope_scaling or {}
@@ -607,7 +607,10 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
             dspark_config.resolve_gamma(default=int(config.num_hidden_layers))
         )
         self.block_size = self.gamma
-        self.num_stages = int(getattr(config, "num_nextn_predict_layers", 1) or 1)
+        if dspark_config.target_layer_ids is not None:
+            self.num_stages = len(dspark_config.target_layer_ids)
+        else:
+            self.num_stages = int(getattr(config, "num_nextn_predict_layers", 1) or 1)
 
         target_num_layers = (
             int(dspark_config.num_target_layers)
@@ -968,7 +971,9 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         mapped_rest = mapped_rest.replace(".w1.", ".gate_proj.")
         mapped_rest = mapped_rest.replace(".w2.", ".down_proj.")
         mapped_rest = mapped_rest.replace(".w3.", ".up_proj.")
+        mapped_rest = mapped_rest.replace(".gate.tid2eid", ".topk.tid2eid")
         mapped_rest = mapped_rest.replace(".gate.bias", ".gate.e_score_correction_bias")
+        mapped_rest = mapped_rest.replace(".scale", ".weight_scale_inv")
         return f"stages.{stage_id}.{mapped_rest}"
 
 

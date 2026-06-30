@@ -110,9 +110,8 @@ def _get_target_verify_bs(forward_batch: ForwardBatch) -> int:
     return draft_count // draft_token_num
 
 
-# Verify-schedule mode string constants, mirroring RaggedVerifyMode so this
-# backend compares against the canonical values without importing the enum (it
-# is read before the speculative module is guaranteed importable here).
+# Verify-schedule mode string constants, mirroring RaggedVerifyMode values
+# (single source of truth). Legacy aliases (off/cutoff-only/full) resolved at read.
 RAGGED_VERIFY_OFF = RaggedVerifyMode.STATIC.value
 RAGGED_VERIFY_CUTOFF_ONLY = RaggedVerifyMode.CAP_ACCEPT.value
 RAGGED_VERIFY_FULL = RaggedVerifyMode.COMPACT.value
@@ -120,17 +119,15 @@ RAGGED_VERIFY_CHOICES = tuple(m.value for m in RaggedVerifyMode)
 
 
 def _ragged_verify_mode() -> str:
-    # Read the raw env value and resolve it through the alias map so legacy
-    # spellings (off / cutoff-only / full) are accepted identically to the new
-    # canonical values (static / cap-accept / compact).
+    # Resolve through the alias map so legacy spellings are accepted.
     from sglang.srt.speculative.ragged_verify import _LEGACY_MODE_ALIASES
 
-    raw = envs.SGLANG_RAGGED_VERIFY.get()
+    raw = envs.SGLANG_RAGGED_VERIFY_MODE.get()
     if raw in _LEGACY_MODE_ALIASES:
         return _LEGACY_MODE_ALIASES[raw].value
     assert (
         raw in RAGGED_VERIFY_CHOICES
-    ), f"invalid SGLANG_RAGGED_VERIFY={raw!r}, expected one of {RAGGED_VERIFY_CHOICES}"
+    ), f"invalid SGLANG_RAGGED_VERIFY_MODE={raw!r}, expected one of {RAGGED_VERIFY_CHOICES}"
     return raw
 
 
@@ -577,12 +574,12 @@ class DeepseekV4AttnBackend(
         if get_parallel().attn_cp_size > 1:
             raise NotImplementedError(
                 "DSV4 ragged verify does not support context parallel (CP); "
-                "set SGLANG_RAGGED_VERIFY off for CP runs."
+                "set SGLANG_RAGGED_VERIFY_MODE off for CP runs."
             )
         if self.online_c128_mtp.enabled():
             raise NotImplementedError(
                 "DSV4 ragged verify does not support online c128 MTP; "
-                "set SGLANG_RAGGED_VERIFY off or disable online compress."
+                "set SGLANG_RAGGED_VERIFY_MODE off or disable online compress."
             )
         assert int(layout.verify_lens.min()) >= 1
         assert layout.total_verify_tokens == int(layout.verify_lens.sum())
@@ -925,7 +922,10 @@ class DeepseekV4AttnBackend(
             num_q_tokens = num_draft_tokens * bs
             seq_lens_casual, req_pool_indices_repeated = (
                 self.expand_extend_with_same_length(
-                    bs, num_draft_tokens, seq_lens, req_pool_indices
+                    bs=bs,
+                    qo_len=num_draft_tokens,
+                    seq_lens=seq_lens,
+                    req_pool_indices=req_pool_indices,
                 )
             )
         core_attn_metadata = self.make_core_attn_metadata(
@@ -1820,6 +1820,7 @@ class DeepseekV4AttnBackend(
 
     def expand_extend_with_same_length(
         self,
+        *,
         bs: int,
         qo_len: int,
         seq_lens: torch.Tensor,

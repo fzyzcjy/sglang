@@ -14,10 +14,9 @@ logger = logging.getLogger(__name__)
 
 
 class RaggedVerifyMode(str, Enum):
-    # Named by what the verify forward actually computes:
+    # Named by what the verify forward computes:
     #   STATIC     — uniform gamma+1 block per request (default).
-    #   CAP_ACCEPT — full block, but caps accept at per-request ell_r (lossless
-    #                harness, no throughput gain).
+    #   CAP_ACCEPT — full block, caps accept at per-request ell_r (lossless harness).
     #   COMPACT    — only total = sum(1+ell_r) tokens (real-N, throughput gain).
     STATIC = "static"
     CAP_ACCEPT = "cap-accept"
@@ -34,14 +33,14 @@ _LEGACY_MODE_ALIASES: dict[str, RaggedVerifyMode] = {
 
 
 def read_ragged_verify_mode() -> RaggedVerifyMode:
-    value = envs.SGLANG_RAGGED_VERIFY.get()
+    value = envs.SGLANG_RAGGED_VERIFY_MODE.get()
     if value in _LEGACY_MODE_ALIASES:
         return _LEGACY_MODE_ALIASES[value]
     for mode in RaggedVerifyMode:
         if value == mode.value:
             return mode
     raise ValueError(
-        f"invalid SGLANG_RAGGED_VERIFY={value!r}; expected one of "
+        f"invalid SGLANG_RAGGED_VERIFY_MODE={value!r}; expected one of "
         f"{', '.join(repr(m.value) for m in RaggedVerifyMode)} "
         "(legacy off/cutoff-only/full accepted)"
     )

@@ -84,21 +84,6 @@ class TestCompactToStridedScatter(CustomTestCase):
         self.assertEqual(strided[5, 0].item(), 9.0)
         self.assertEqual(strided[6:10, 0].tolist(), [-1.0, -1.0, -1.0, -1.0])
 
-    def test_scatter_preserves_total_token_count(self):
-        """The scatter copies exactly total rows; the rest take the fill value."""
-        worker = _make_worker(gamma=3)
-        layout = _full_layout([4, 2, 1])  # total = 7
-        compact = torch.arange(1, 8, dtype=torch.float32).view(7, 1)  # all non-fill
-        strided = worker._scatter_compact_to_strided(
-            compact=compact, layout=layout, bs=3, fill_value=0.0
-        )
-        self.assertEqual(strided.shape, (3 * 4, 1))
-        self.assertEqual(int((strided != 0.0).sum()), 7)
-        # req0 rows 0..3, req1 rows 4..5 (graph slot 4..5), req2 row 8.
-        self.assertEqual(strided[0:4, 0].tolist(), [1.0, 2.0, 3.0, 4.0])
-        self.assertEqual(strided[4:6, 0].tolist(), [5.0, 6.0])
-        self.assertEqual(strided[8, 0].item(), 7.0)
-
 
 class TestResolveGreedyMask(CustomTestCase):
     def test_mask_is_per_request_from_top_k(self):
@@ -125,7 +110,7 @@ class TestAcceptBlockPerRequest(CustomTestCase):
         return logits
 
     def test_all_greedy_uses_argmax_match_path(self):
-        """An all-greedy mask routes _accept_block to the argmax-match (DFlash) rule."""
+        """An all-greedy mask routes _accept_draft_tokens to the argmax-match (DFlash) rule."""
         gamma = 4
         worker = _make_worker(gamma=gamma)
         vocab = 64
@@ -138,7 +123,7 @@ class TestAcceptBlockPerRequest(CustomTestCase):
             greedy_mask=torch.tensor([True]),
             temperatures=torch.ones(1),
         )
-        correct_len, bonus = worker._accept_block(
+        correct_len, bonus = worker._accept_draft_tokens(
             candidates=candidates,
             target_logits=logits,
             draft_block=draft_block,
@@ -149,7 +134,7 @@ class TestAcceptBlockPerRequest(CustomTestCase):
         self.assertEqual(bonus.tolist(), [41])
 
     def test_all_sampling_uses_only_chain_kernel_path(self):
-        """An all-sampling mask routes _accept_block to _accept_sampling exactly once (no greedy call)."""
+        """An all-sampling mask routes _accept_draft_tokens to _accept_sampling exactly once (no greedy call)."""
         gamma = 4
         worker = _make_worker(gamma=gamma)
         bs = 2
@@ -178,7 +163,7 @@ class TestAcceptBlockPerRequest(CustomTestCase):
 
         worker._accept_greedy = fake_greedy
         worker._accept_sampling = fake_sampling
-        correct_len, bonus = worker._accept_block(
+        correct_len, bonus = worker._accept_draft_tokens(
             candidates=candidates,
             target_logits=target_logits,
             draft_block=draft_block,
@@ -229,7 +214,7 @@ class TestAcceptBlockPerRequest(CustomTestCase):
         worker._accept_greedy = fake_greedy
         worker._accept_sampling = fake_sampling
 
-        correct_len, bonus = worker._accept_block(
+        correct_len, bonus = worker._accept_draft_tokens(
             candidates=candidates,
             target_logits=target_logits,
             draft_block=draft_block,

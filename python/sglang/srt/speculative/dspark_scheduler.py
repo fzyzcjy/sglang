@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class DSparkScheduleConfig(msgspec.Struct):
     gamma: int
-    min_verify_len: int = 0
+    min_verify_len: int = 1
     max_verify_len: int = 0
     survival_eps: float = 1e-6
 
@@ -115,7 +115,12 @@ def schedule_verify_lens_topk(
         (num_requests,), cfg.min_verify_len, dtype=torch.int64, device=device
     )
     verify_lens = min_len + selected_extra
-    verify_lens = torch.clamp(verify_lens, min=cfg.min_verify_len, max=max_len)
+    # verify_lens counts tokens including the anchor (= 1 + ell_r), so it must be
+    # >= 1 for every request: RaggedVerifyLayout rejects < 1 and _cap_correct_len
+    # reads ell_r = verify_lens - 1. The lower bound is max(min_verify_len, 1) so
+    # an explicit min_verify_len=0 still cannot produce an anchor-less request.
+    lower_bound = max(cfg.min_verify_len, 1)
+    verify_lens = torch.clamp(verify_lens, min=lower_bound, max=max_len)
     return verify_lens.to(torch.int32)
 
 
@@ -134,50 +139,6 @@ def _value_independent_descending_order(
     ]
     keys.sort()
     return torch.tensor([k[3] for k in keys], dtype=torch.int64, device=probs.device)
-
-
-def schedule_verify_lens_greedy(
-    *,
-    survival_probs: torch.Tensor,
-    sps_table: SpsCostTable,
-    cfg: DSparkScheduleConfig,
-) -> torch.Tensor:
-    cfg.validate()
-    num_requests, _gamma = survival_probs.shape
-    max_len = cfg.resolved_max_verify_len()
-
-    candidate_window = survival_probs[:, cfg.min_verify_len : max_len].to(torch.float64)
-    entries: list[tuple[float, int, int]] = []
-    for request in range(num_requests):
-        for offset in range(candidate_window.shape[1]):
-            prob = float(candidate_window[request, offset])
-            if prob >= cfg.survival_eps:
-                entries.append((prob, cfg.min_verify_len + offset, request))
-
-    entries.sort(key=lambda e: (-e[0], e[1], e[2]))
-
-    selected_extra = [0] * num_requests
-    tau_star = float(num_requests)
-    best_theta = tau_star * sps_table.lookup(num_requests)
-    for index, (prob, _position, request) in enumerate(entries, start=1):
-        candidate_tau_star = tau_star + prob
-        candidate_theta = candidate_tau_star * sps_table.lookup(num_requests + index)
-        if candidate_theta >= best_theta:
-            best_theta = candidate_theta
-            tau_star = candidate_tau_star
-            selected_extra[request] += 1
-        else:
-            break
-
-    verify_lens = torch.tensor(
-        [
-            min(max(cfg.min_verify_len + extra, cfg.min_verify_len), max_len)
-            for extra in selected_extra
-        ],
-        dtype=torch.int32,
-        device=survival_probs.device,
-    )
-    return verify_lens
 
 
 class ConfidencePrefixScheduler:
@@ -209,7 +170,11 @@ class ConfidencePrefixScheduler:
             cfg=self.cfg,
         )
         verify_lens_64 = verify_lens.to(torch.int64)
-        total_extra = int((verify_lens_64 - self.cfg.min_verify_len).sum().item())
+        # Measure admitted extra against the effective floor max(min_verify_len, 1)
+        # so the anchor padding added by the lower-bound clamp is not miscounted as
+        # budget overflow when an explicit min_verify_len=0 is clamped up to 1.
+        effective_floor = max(self.cfg.min_verify_len, 1)
+        total_extra = int((verify_lens_64 - effective_floor).sum().item())
         assert (
             total_extra <= budget
         ), f"DSpark verify-len budget violated: extra={total_extra} > budget={budget}"

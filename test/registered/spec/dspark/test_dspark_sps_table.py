@@ -1,6 +1,12 @@
+import tempfile
 import unittest
+from pathlib import Path
 
-from sglang.srt.speculative.dspark_sps_table import SpsCostTable, profile_sps_table
+from sglang.srt.speculative.dspark_sps_table import (
+    SpsCostTable,
+    load_sps_table_from_path,
+    profile_sps_table,
+)
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 
@@ -112,6 +118,34 @@ class TestSpsCostTableJsonRoundTrip(CustomTestCase):
         restored = SpsCostTable.from_json(table.to_json())
         for batch_tokens in (1, 8, 31, 64, 200):
             self.assertEqual(restored.lookup(batch_tokens), table.lookup(batch_tokens))
+
+
+class TestLoadSpsTableFromPath(CustomTestCase):
+    def test_load_from_path_round_trips_table_and_lookup(self):
+        """load_sps_table_from_path reads back a table written to a JSON file."""
+        table = _make_table()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sps.json"
+            path.write_text(table.to_json(), encoding="utf-8")
+            loaded = load_sps_table_from_path(str(path))
+        self.assertEqual(loaded.sample_batch_tokens, table.sample_batch_tokens)
+        self.assertEqual(loaded.sample_steps_per_sec, table.sample_steps_per_sec)
+        self.assertEqual(loaded.max_batch_tokens, table.max_batch_tokens)
+        for batch_tokens in (1, 8, 31, 64, 200):
+            self.assertEqual(loaded.lookup(batch_tokens), table.lookup(batch_tokens))
+
+
+class TestFlatTableLookupIsConstant(CustomTestCase):
+    def test_flat_table_lookup_is_one_for_any_batch(self):
+        """The inert flat default (SPS=1.0) returns 1.0 for any B, so Theta = tau
+        and the budget degenerates to verify-all-up-to-max."""
+        flat = SpsCostTable(
+            sample_batch_tokens=[1],
+            sample_steps_per_sec=[1.0],
+            max_batch_tokens=4096,
+        )
+        for batch_tokens in (0, 1, 2, 17, 256, 100_000):
+            self.assertEqual(flat.lookup(batch_tokens), 1.0)
 
 
 class TestProfileSpsTable(CustomTestCase):

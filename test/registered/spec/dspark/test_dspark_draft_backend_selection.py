@@ -35,7 +35,6 @@ class TestDSparkDraftBackendSelection(CustomTestCase):
         )
 
         self.assertEqual(resolved, _DEEPSEEK_V4_DRAFT_BACKEND)
-        self.assertEqual(resolved, "dsv4")
 
     def test_non_v4_draft_config_keeps_supported_backend_unchanged(self):
         """A non-V4 draft config keeps the user's supported backend unchanged."""

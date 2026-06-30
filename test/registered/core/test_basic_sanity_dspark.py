@@ -60,7 +60,14 @@ class TestBasicSanityDSpark(
     gsm8k_accuracy_thres = 0.80
     gsm8k_accept_length_thres = 2.0
 
-    attention_backend = "flashinfer"
+    # Set explicitly: the B200 auto-default falls back to flashinfer for DSpark
+    # (the trtllm_mha gate checks speculative_eagle_topk, which DSpark only forces
+    # to 1 after the backend is resolved). Note: trtllm_mha bumps page_size to 64,
+    # and the per-step seq_lens_cpu sync is NOT yet removed -- the draft runner
+    # still uses flashinfer, and needs_cpu_seq_lens is OR-ed over all spec-v2
+    # backends.
+    attention_backend = "trtllm_mha"
+    draft_attention_backend = "fa4"
 
     @classmethod
     def setUpClass(cls):
@@ -78,11 +85,13 @@ class TestBasicSanityDSpark(
                 "--trust-remote-code",
                 "--attention-backend",
                 cls.attention_backend,
+                "--speculative-draft-attention-backend",
+                cls.draft_attention_backend,
                 "--speculative-algorithm",
                 "DSPARK",
                 "--speculative-draft-model-path",
                 DRAFT_MODEL,
-                "--cuda-graph-max-bs",
+                "--cuda-graph-max-bs-decode",
                 "4",
                 "--mem-fraction-static",
                 "0.7",

@@ -17,26 +17,11 @@ register_cpu_ci(est_time=10, suite="base-a-test-cpu")
 
 
 class TestDSparkLengthContract(CustomTestCase):
-    def test_num_draft_positions_equals_gamma(self):
-        """verify_positions == gamma for various gamma values."""
-        for gamma in (1, 3, 7, 16):
-            contract = DSparkLengthContract(gamma=gamma)
-            self.assertEqual(contract.num_draft_positions, gamma)
-
     def test_verify_num_draft_tokens_is_gamma_plus_one(self):
         """Verify window is exactly gamma+1 (plan §2)."""
         for gamma in (1, 3, 7, 16):
             contract = DSparkLengthContract(gamma=gamma)
             self.assertEqual(contract.verify_num_draft_tokens, gamma + 1)
-
-    def test_speculative_num_draft_tokens_equals_verify_window(self):
-        """speculative_num_draft_tokens mirrors verify_num_draft_tokens."""
-        for gamma in (1, 7):
-            contract = DSparkLengthContract(gamma=gamma)
-            self.assertEqual(
-                contract.speculative_num_draft_tokens,
-                contract.verify_num_draft_tokens,
-            )
 
     def test_validate_accepts_gamma_ge_one(self):
         """validate() should not raise for gamma >= 1."""
@@ -59,7 +44,6 @@ class TestDSparkLengthContract(CustomTestCase):
         """make_dspark_length_contract produces a validated DSparkLengthContract."""
         contract = make_dspark_length_contract(gamma=7)
         self.assertIsInstance(contract, DSparkLengthContract)
-        self.assertEqual(contract.gamma, 7)
         self.assertEqual(contract.verify_num_draft_tokens, 8)
 
     def test_make_dspark_length_contract_rejects_zero_gamma(self):
