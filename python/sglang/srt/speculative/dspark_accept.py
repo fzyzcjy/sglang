@@ -24,9 +24,7 @@ def cap_correct_len(
     # request. Capping accept is lossless -- fewer correctly-verified drafts are
     # committed and the bonus (recomputed by callers at the capped index) is
     # still the target's true next token at the cap.
-    ell_r = (layout.verify_lens.to(device=correct_len.device) - 1).to(
-        correct_len.dtype
-    )
+    ell_r = (layout.verify_lens.to(device=correct_len.device) - 1).to(correct_len.dtype)
     return torch.minimum(correct_len, ell_r)
 
 
@@ -137,8 +135,7 @@ def accept_draft_tokens(
             cutoff_layout=cutoff_layout,
         )
     draft_probs = torch.softmax(
-        draft_block.corrected_logits.float()
-        / draft_block.temperatures[:, None, None],
+        draft_block.corrected_logits.float() / draft_block.temperatures[:, None, None],
         dim=-1,
     )
     # All-sampling fast path: no greedy rows -> only the chain kernel (host-side, sync-free).
