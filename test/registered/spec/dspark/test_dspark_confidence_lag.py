@@ -1,7 +1,7 @@
-import contextlib
 import re
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 
@@ -10,7 +10,12 @@ from sglang.srt.speculative.dspark_scheduler import (
     DSparkScheduleConfig,
 )
 from sglang.srt.speculative.dspark_sps_table import SpsCostTable
-from sglang.srt.speculative.dspark_worker_v2 import DSparkWorkerV2
+from sglang.srt.speculative.dspark_worker_v2 import (
+    _CONFIDENCE_RELAY_LAG_STEPS,
+    _CONFIDENCE_RELAY_RING_DEPTH,
+    _CONFIDENCE_RELAY_UNSET_SEQ_LEN,
+    DSparkWorkerV2,
+)
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 
@@ -20,146 +25,251 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 _WORKER = _REPO_ROOT / "python/sglang/srt/speculative/dspark_worker_v2.py"
 
 
-class _FakeEvent:
-    """A CUDA-event stub whose query() result the test controls; record() bumps
-    a counter so we can assert it was (not) called."""
-
-    def __init__(self, *, ready: bool) -> None:
-        self.ready = ready
-        self.record_count = 0
-
-    def record(self) -> None:
-        self.record_count += 1
-
-    def query(self) -> bool:
-        return self.ready
-
-
-class _NoopStreamModule:
-    """A device-module stub so pull_confidence_history's copy branch runs on CPU
-    without a real CUDA stream."""
-
-    @staticmethod
-    def stream(_stream):
-        return contextlib.nullcontext()
-
-
 def _flat_table() -> SpsCostTable:
     return SpsCostTable(
         sample_batch_tokens=[1], sample_steps_per_sec=[1.0], max_batch_tokens=4096
     )
 
 
-def _make_relay_worker(
-    *,
-    gamma: int,
-    ready: bool,
-    buf: torch.Tensor,
-    pinned: torch.Tensor,
-) -> DSparkWorkerV2:
+def _make_ring_worker(*, gamma: int, req_pool_size: int) -> DSparkWorkerV2:
+    """A worker stub with a pre-allocated confidence ring (bypasses model_runner)."""
     worker = DSparkWorkerV2.__new__(DSparkWorkerV2)
     worker.gamma = gamma
     worker.device = torch.device("cpu")
-    worker._confidence_buf = buf
-    worker._confidence_cpu_pinned = pinned
-    worker._confidence_ready = _FakeEvent(ready=ready)
-    worker._confidence_d2h_stream = object()
+    worker._confidence_step_ct = 0
+    worker._confidence_ring = torch.zeros(
+        (_CONFIDENCE_RELAY_RING_DEPTH, req_pool_size, gamma), dtype=torch.float32
+    )
+    worker._confidence_ring_seq_lens = torch.full(
+        (_CONFIDENCE_RELAY_RING_DEPTH, req_pool_size),
+        _CONFIDENCE_RELAY_UNSET_SEQ_LEN,
+        dtype=torch.int64,
+    )
+    worker._verify_scheduler = ConfidencePrefixScheduler(
+        sps_table=_flat_table(), cfg=DSparkScheduleConfig(gamma=gamma)
+    )
+    worker.server_args = SimpleNamespace(tp_size=1)
     return worker
 
 
-class TestPullConfidenceHistoryGating(CustomTestCase):
-    """The confidence relay is non-blocking: the host reuses a stale CPU snapshot
-    whenever the forward-stream write has not yet completed (event.query() is
-    False), and only refreshes it once the write is visible. This is the source
-    of the emergent (>= 1) GPU-completion lag -- there is no structured n-2 ring,
-    just one buffer behind one event.
+def _drive_steps(worker, *, req_pool_indices, confidences, prefix_lens) -> None:
+    """Stash one confidence/prefix per decode step, advancing step_ct between steps
+    exactly as _forward_decode does (stash this step, advance, stash next step)."""
+    last = len(confidences) - 1
+    for step, (confidence, prefix) in enumerate(zip(confidences, prefix_lens)):
+        worker._stash_confidence(
+            req_pool_indices=req_pool_indices,
+            confidence=confidence,
+            prefix_lens=prefix,
+        )
+        if step < last:
+            worker._confidence_step_ct += 1
+
+
+class TestCrossStepLagBarrier(CustomTestCase):
+    """The §5.2 causal barrier: step n's budget K is fixed by the confidence stashed
+    _CONFIDENCE_RELAY_LAG_STEPS decode steps earlier, never by step n's own (current)
+    confidence. This is the lossless-critical mechanism that had no test before.
     """
 
-    def test_not_ready_returns_stale_snapshot_without_copy(self):
-        """query()=False -> pull returns the existing pinned snapshot, no D2H copy."""
-        gamma = 3
-        buf = torch.full((4, gamma), 0.9, dtype=torch.float32)
-        stale = torch.full((4, gamma), 0.1, dtype=torch.float32)
-        worker = _make_relay_worker(gamma=gamma, ready=False, buf=buf, pinned=stale)
-
-        result = worker.pull_confidence_history()
-
-        self.assertIs(result, stale)
-        # The fresh device buffer (0.9) must NOT have been copied into the snapshot.
-        self.assertTrue(torch.equal(result, torch.full((4, gamma), 0.1)))
-
-    def test_ready_refreshes_snapshot_from_device_buffer(self):
-        """query()=True -> pull copies the device buffer into the pinned snapshot."""
-        gamma = 3
-        buf = torch.full((4, gamma), 0.9, dtype=torch.float32)
-        stale = torch.full((4, gamma), 0.1, dtype=torch.float32)
-        worker = _make_relay_worker(gamma=gamma, ready=True, buf=buf, pinned=stale)
-
-        orig_get_device_module = torch.get_device_module
-        torch.get_device_module = lambda *_args, **_kwargs: _NoopStreamModule()
-        try:
-            result = worker.pull_confidence_history()
-        finally:
-            torch.get_device_module = orig_get_device_module
-
-        self.assertTrue(torch.equal(result, torch.full((4, gamma), 0.9)))
-
-    def test_returns_none_when_relay_uninitialized(self):
-        """No event / no pinned buffer -> pull returns None (uniform fallback)."""
-        worker = DSparkWorkerV2.__new__(DSparkWorkerV2)
-        worker.device = torch.device("cpu")
-        worker._confidence_ready = None
-        worker._confidence_cpu_pinned = None
-        self.assertIsNone(worker.pull_confidence_history())
-
-
-class TestStepBudgetUsesPriorSnapshot(CustomTestCase):
-    """Step n's verify budget K must be derived from the lagged snapshot, never
-    from step n's own confidence: while event.query() stays False, stashing
-    step-n confidence cannot change the K computed from the prior snapshot.
-    """
-
-    def test_step_n_confidence_does_not_change_budget_while_event_pending(self):
-        """Stashing step-n confidence with a pending event leaves K at step n-1's."""
+    def test_k_source_equals_lag_steps_prior_confidence(self):
+        """The K-source survival equals cumprod of the confidence stashed lag steps ago."""
         gamma = 4
-        # Prior snapshot (step n-1): confidence decays so survival = cumprod falls
-        # below survival_eps at the tail, dropping those candidates -> smaller K.
-        # (0.005 -> cumprod [5e-3, 2.5e-5, 1.25e-7, ...]; positions >= 2 are gated.)
-        prior = torch.full((2, gamma), 0.005, dtype=torch.float32)
-        # Device buffer is overwritten with step-n high confidence (every position
-        # survives -> larger K), but the event stays pending so the host must not
-        # see it.
-        buf = torch.full((2, gamma), 0.99, dtype=torch.float32)
-        worker = _make_relay_worker(gamma=gamma, ready=False, buf=buf, pinned=prior)
-
-        cfg = DSparkScheduleConfig(gamma=gamma)
-        scheduler = ConfidencePrefixScheduler(sps_table=_flat_table(), cfg=cfg)
-
-        snapshot = worker.pull_confidence_history()
-        survival_prior = torch.cumprod(snapshot.to(torch.float32), dim=1)
-        budget_from_prior = scheduler.update_budget_from_history(
-            history_survival_probs=survival_prior
+        worker = _make_ring_worker(gamma=gamma, req_pool_size=2)
+        idx = torch.tensor([0, 1])
+        # One confidence per step for lag + 1 steps; the lag-steps-prior step is 0.
+        confidences = [
+            torch.full((2, gamma), 0.30, dtype=torch.float32),  # step 0 (lag prior)
+            torch.full((2, gamma), 0.50, dtype=torch.float32),  # step 1
+            torch.full((2, gamma), 0.99, dtype=torch.float32),  # step 2 (current)
+        ][: _CONFIDENCE_RELAY_LAG_STEPS + 1]
+        prefix_lens = [
+            torch.tensor([10 + step, 20 + step]) for step in range(len(confidences))
+        ]
+        _drive_steps(
+            worker,
+            req_pool_indices=idx,
+            confidences=confidences,
+            prefix_lens=prefix_lens,
         )
 
-        # What K *would* be if step-n confidence (the device buffer) leaked in.
-        survival_now = torch.cumprod(buf.to(torch.float32), dim=1)
-        budget_if_leaked = scheduler.update_budget_from_history(
-            history_survival_probs=survival_now
+        k_survival = worker._two_steps_prior_k_survival(
+            req_pool_indices=idx, prefix_lens=prefix_lens[-1]
+        )
+        expected = torch.cumprod(confidences[0].to(torch.float32), dim=1)
+        self.assertTrue(torch.allclose(k_survival, expected))
+
+    def test_current_confidence_does_not_change_k_only_sort(self):
+        """Re-stashing step n's confidence leaves the K-source unchanged (barrier) but
+        moves the sort-source (which tracks the current live confidence)."""
+        gamma = 4
+        worker = _make_ring_worker(gamma=gamma, req_pool_size=2)
+        idx = torch.tensor([0, 1])
+        confidences = [
+            torch.full((2, gamma), 0.30, dtype=torch.float32),
+            torch.full((2, gamma), 0.50, dtype=torch.float32),
+            torch.full((2, gamma), 0.70, dtype=torch.float32),
+        ][: _CONFIDENCE_RELAY_LAG_STEPS + 1]
+        prefix_lens = [
+            torch.tensor([10 + step, 20 + step]) for step in range(len(confidences))
+        ]
+        _drive_steps(
+            worker,
+            req_pool_indices=idx,
+            confidences=confidences,
+            prefix_lens=prefix_lens,
         )
 
+        k_before = worker._two_steps_prior_k_survival(
+            req_pool_indices=idx, prefix_lens=prefix_lens[-1]
+        )
+        sort_before = worker._current_live_sort_survival(req_pool_indices=idx)
+
+        # Overwrite the CURRENT step's confidence (no step_ct advance: same step n).
+        worker._stash_confidence(
+            req_pool_indices=idx,
+            confidence=torch.full((2, gamma), 0.10, dtype=torch.float32),
+            prefix_lens=prefix_lens[-1],
+        )
+        k_after = worker._two_steps_prior_k_survival(
+            req_pool_indices=idx, prefix_lens=prefix_lens[-1]
+        )
+        sort_after = worker._current_live_sort_survival(req_pool_indices=idx)
+
+        self.assertTrue(torch.equal(k_before, k_after))
+        self.assertFalse(torch.equal(sort_before, sort_after))
+
+    def test_budget_k_is_set_by_prior_not_current_confidence(self):
+        """Through the real scheduler: the budget K from the lagged K-source matches
+        the lag-prior confidence's budget and differs from the current's."""
+        gamma = 4
+        worker = _make_ring_worker(gamma=gamma, req_pool_size=2)
+        idx = torch.tensor([0, 1])
+        # Low lag-prior confidence decays below survival_eps fast -> small budget;
+        # high current confidence would yield a larger budget if it leaked into K.
+        low = torch.full((2, gamma), 0.005, dtype=torch.float32)
+        high = torch.full((2, gamma), 0.99, dtype=torch.float32)
+        confidences = ([low] + [high] * _CONFIDENCE_RELAY_LAG_STEPS)[
+            : _CONFIDENCE_RELAY_LAG_STEPS + 1
+        ]
+        prefix_lens = [
+            torch.tensor([10 + step, 20 + step]) for step in range(len(confidences))
+        ]
+        _drive_steps(
+            worker,
+            req_pool_indices=idx,
+            confidences=confidences,
+            prefix_lens=prefix_lens,
+        )
+
+        k_survival = worker._two_steps_prior_k_survival(
+            req_pool_indices=idx, prefix_lens=prefix_lens[-1]
+        )
+        budget_k = worker._verify_scheduler.update_budget_from_history(
+            history_survival_probs=k_survival
+        )
+        budget_from_low = worker._verify_scheduler.update_budget_from_history(
+            history_survival_probs=torch.cumprod(low.to(torch.float32), dim=1)
+        )
+        budget_from_high = worker._verify_scheduler.update_budget_from_history(
+            history_survival_probs=torch.cumprod(high.to(torch.float32), dim=1)
+        )
         self.assertNotEqual(
-            budget_from_prior,
-            budget_if_leaked,
-            "test scenario is degenerate: prior and current would yield the same K",
+            budget_from_low,
+            budget_from_high,
+            "degenerate scenario: low and current confidence yield the same budget",
         )
-        # The pull returned the prior snapshot, so the scheduled K is the prior's.
-        self.assertTrue(torch.equal(snapshot, prior))
+        self.assertEqual(budget_k, budget_from_low)
 
 
-class TestConfidenceRelayTopologyAntiPattern(CustomTestCase):
-    """Anti-pattern guard mirroring test_dspark_invariants' source-string style:
-    the relay must stay single-buffered (one _confidence_buf, one event), so the
-    lag is emergent and >= 1, never a structured step-indexed n-2 double buffer.
+class TestRingIdentityGuard(CustomTestCase):
+    """H1: a ring slot is keyed by req-pool row, so the lag-prior occupant of a row may
+    be a different request. The prefix_len identity stamp masks such rows (and cold
+    starts) to a verify-all fallback rather than carrying a stranger's confidence into K.
+    """
+
+    def test_same_request_row_uses_its_lag_prior_confidence(self):
+        """A row continuously owned by one request keeps its lag-prior survival."""
+        gamma = 4
+        worker = _make_ring_worker(gamma=gamma, req_pool_size=2)
+        idx = torch.tensor([0, 1])
+        confidences = [
+            torch.full((2, gamma), 0.30, dtype=torch.float32),
+            torch.full((2, gamma), 0.50, dtype=torch.float32),
+            torch.full((2, gamma), 0.80, dtype=torch.float32),
+        ][: _CONFIDENCE_RELAY_LAG_STEPS + 1]
+        # prefix grows by one token per step -> valid ancestor.
+        prefix_lens = [
+            torch.tensor([100 + step, 200 + step]) for step in range(len(confidences))
+        ]
+        _drive_steps(
+            worker,
+            req_pool_indices=idx,
+            confidences=confidences,
+            prefix_lens=prefix_lens,
+        )
+        k_survival = worker._two_steps_prior_k_survival(
+            req_pool_indices=idx, prefix_lens=prefix_lens[-1]
+        )
+        expected = torch.cumprod(confidences[0].to(torch.float32), dim=1)
+        self.assertTrue(torch.allclose(k_survival, expected))
+
+    def test_reused_row_for_new_request_falls_back_to_verify_all(self):
+        """A row whose lag-prior prefix_len is not an ancestor of the current prefix
+        (a different request took the row) falls back to survival = 1.0 (verify-all)."""
+        gamma = 4
+        worker = _make_ring_worker(gamma=gamma, req_pool_size=2)
+        idx = torch.tensor([0, 1])
+        confidences = [
+            torch.full((2, gamma), 0.30, dtype=torch.float32),
+            torch.full((2, gamma), 0.50, dtype=torch.float32),
+            torch.full((2, gamma), 0.80, dtype=torch.float32),
+        ][: _CONFIDENCE_RELAY_LAG_STEPS + 1]
+        # Row 0: lag-prior prefix 5000, current prefix 5 -> growth negative -> stale.
+        # Row 1: a valid same-request ancestor (grows by one per step).
+        prefix_lens = [
+            torch.tensor([5000, 200 + step]) for step in range(len(confidences))
+        ]
+        prefix_lens[-1] = torch.tensor([5, 200 + len(confidences) - 1])
+        _drive_steps(
+            worker,
+            req_pool_indices=idx,
+            confidences=confidences,
+            prefix_lens=prefix_lens,
+        )
+        k_survival = worker._two_steps_prior_k_survival(
+            req_pool_indices=idx, prefix_lens=prefix_lens[-1]
+        )
+        # Row 0 masked to verify-all; row 1 keeps its lag-prior survival.
+        self.assertTrue(torch.allclose(k_survival[0], torch.ones(gamma)))
+        self.assertTrue(
+            torch.allclose(
+                k_survival[1], torch.cumprod(confidences[0][1].to(torch.float32), dim=0)
+            )
+        )
+
+    def test_cold_start_first_steps_fall_back_to_verify_all(self):
+        """Before lag steps of history exist, the lag-prior slot is unwritten so K
+        falls back to verify-all for every request."""
+        gamma = 4
+        worker = _make_ring_worker(gamma=gamma, req_pool_size=2)
+        idx = torch.tensor([0, 1])
+        worker._stash_confidence(
+            req_pool_indices=idx,
+            confidence=torch.full((2, gamma), 0.30, dtype=torch.float32),
+            prefix_lens=torch.tensor([10, 20]),
+        )
+        # Step 0: read slot (0 - lag) % depth is still all-sentinel -> verify-all.
+        k_survival = worker._two_steps_prior_k_survival(
+            req_pool_indices=idx, prefix_lens=torch.tensor([10, 20])
+        )
+        self.assertTrue(torch.allclose(k_survival, torch.ones((2, gamma))))
+
+
+class TestConfidenceRelayRingTopology(CustomTestCase):
+    """Topology guard: the relay is a step-indexed ring (depth >= 2), NOT the legacy
+    single _confidence_buf. This deliberately reverses the prior anti-pattern test that
+    enshrined a single buffer / "never a structured step-indexed n-2 double buffer".
     """
 
     def _relay_init_source(self) -> str:
@@ -169,32 +279,27 @@ class TestConfidenceRelayTopologyAntiPattern(CustomTestCase):
         end = text.find("\n    def ", start + 1)
         return text[start : end if end != -1 else len(text)]
 
-    def test_single_confidence_buffer_no_ring(self):
-        """Exactly one _confidence_buf is allocated (no step-indexed ring)."""
+    def test_ring_depth_is_at_least_two(self):
+        """The ring depth exceeds the lag and is >= 2 (a structured n-step buffer)."""
+        self.assertGreaterEqual(_CONFIDENCE_RELAY_RING_DEPTH, 2)
+        self.assertGreater(_CONFIDENCE_RELAY_RING_DEPTH, _CONFIDENCE_RELAY_LAG_STEPS)
+
+    def test_relay_allocates_a_depth_indexed_ring(self):
+        """_ensure_confidence_relay_buffers allocates a [depth, ...] ring, not a single
+        2D buffer."""
         block = self._relay_init_source()
-        assigns = re.findall(r"self\._confidence_buf\s*=\s*torch\.empty", block)
+        self.assertIn("_CONFIDENCE_RELAY_RING_DEPTH", block)
         self.assertEqual(
-            len(assigns),
+            len(re.findall(r"self\._confidence_ring\s*=\s*torch\.empty", block)),
             1,
-            "relay must allocate exactly one _confidence_buf (no double buffer).",
-        )
-        self.assertNotIn(
-            "_confidence_buf_prev",
-            _WORKER.read_text(),
-            "no step n-2 / previous-step confidence buffer may exist.",
+            "relay must allocate exactly one step-indexed ring.",
         )
 
-    def test_single_confidence_ready_event(self):
-        """Exactly one confidence-ready Event() backs the relay (no parity ring)."""
-        block = self._relay_init_source()
-        events = re.findall(
-            r"self\._confidence_ready\s*=\s*device_module\.Event\(\)", block
-        )
-        self.assertEqual(
-            len(events),
-            1,
-            "relay must use exactly one confidence-ready Event() (no ring).",
-        )
+    def test_legacy_single_buffer_relay_is_gone(self):
+        """The legacy single-buffer relay (and its dead host-copy method) are removed."""
+        text = _WORKER.read_text()
+        self.assertNotIn("self._confidence_buf =", text)
+        self.assertNotIn("def pull_confidence_history", text)
 
 
 if __name__ == "__main__":
