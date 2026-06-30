@@ -218,7 +218,9 @@ class TestDeviceSortEquivalence(CustomTestCase):
         survival = torch.cumprod(
             torch.full((3, gamma), 0.5, dtype=torch.float32), dim=1
         )
-        verify_lens = schedule_verify_lens_topk(survival_probs=survival, budget=0, cfg=cfg)
+        verify_lens = schedule_verify_lens_topk(
+            survival_probs=survival, budget=0, cfg=cfg
+        )
         self.assertTrue(bool((verify_lens >= 1).all()))
 
     def test_budget_bounds_admitted_extra(self):
