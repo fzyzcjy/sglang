@@ -165,14 +165,16 @@ class DSparkAttention(nn.Module):
         )
 
         from sglang.srt.layers.deepseek_v4_rope import precompute_freqs_cis
+        from sglang.srt.utils.hf_transformers.common import get_rope_config
 
-        rope_scaling = config.rope_scaling or {}
+        rope_theta, rope_scaling = get_rope_config(config)
+        rope_scaling = rope_scaling or {}
         original_seq_len = rope_scaling.get("original_max_position_embeddings", 0)
         freqs_cis = precompute_freqs_cis(
             dim=self.qk_rope_head_dim,
             seqlen=config.max_position_embeddings,
             original_seq_len=0 if self.compress_ratio == 0 else original_seq_len,
-            base=config.rope_theta,
+            base=rope_theta,
             factor=rope_scaling.get("factor", 1.0),
             beta_fast=rope_scaling.get("beta_fast", 32),
             beta_slow=rope_scaling.get("beta_slow", 1),
