@@ -1523,7 +1523,7 @@ class ServerArgs:
     ] = None
     speculative_dspark_block_size: A[
         Optional[int],
-        "DSPARK only. Draft block size gamma (number of proposed draft tokens). The verify window is gamma + 1, so this sets --speculative-num-draft-tokens = gamma + 1.",
+        "DSPARK only. Draft block size gamma (number of proposed draft tokens). The verify window is gamma + 1, so this sets --speculative-num-draft-tokens = gamma + 1. Omit to auto-infer gamma from the draft checkpoint block_size.",
     ] = None
     speculative_accept_threshold_single: A[
         float,
