@@ -1061,6 +1061,8 @@ class DSparkWorkerV2(BaseSpecWorker):
             ragged_verify_layout=layout,
         )
         batch.out_cache_loc = ragged_window.verify_cache_loc
+        # prepare_for_verify reads seq_lens off `batch` in place (no param), so
+        # snapshot it, overwrite with the verify length for the forward, restore after.
         seq_lens_cpu_backup = batch.seq_lens_cpu
         seq_lens_sum_backup = batch.seq_lens_sum
         # Sync-free verify, keyed on host-mirror availability (not a self-add flag:
