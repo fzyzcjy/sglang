@@ -382,11 +382,6 @@ class DSparkV4MarkovHead(nn.Module):
         return torch.stack(sampled_tokens, dim=1), torch.cat(corrected_logits, dim=1)
 
 
-def _greedy_step_sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:
-    del step_idx
-    return step_logits.argmax(dim=-1)
-
-
 def build_dspark_v4_confidence_head(
     *, config: DeepSeekV4Config, markov_rank: int
 ) -> Optional[DSparkConfidenceHead]:
@@ -607,8 +602,6 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
             self.num_target_features = len(dspark_config.target_layer_ids)
         else:
             self.num_target_features = target_num_layers
-        self.noise_token_id = int(getattr(config, "dspark_noise_token_id", 0))
-        self.temperature = float(getattr(config, "temperature", 1.0))
 
         self.start_layer = 0
         self.end_layer = self.num_stages
