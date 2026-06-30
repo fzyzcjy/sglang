@@ -155,17 +155,85 @@ class TestScheduleVerifyLensTopk(CustomTestCase):
         self.assertEqual(actual_total, expected_total)
 
     def test_admission_is_contiguous_prefix(self):
-        """Each request's admitted positions form a contiguous prefix (l_r = count)."""
+        """Under a budget-limited scenario each request's admitted positions form
+        the contiguous prefix [min, min+l_r) -- not a scattered subset (C9)."""
+        # Survival is strictly monotone non-increasing per request (the cumprod
+        # invariant), so the highest-survival positions are always the leftmost.
         survival = torch.tensor(
             [[0.99, 0.98, 0.50, 0.10], [0.97, 0.20, 0.05, 0.01]],
             dtype=torch.float32,
         )
         cfg = DSparkScheduleConfig(gamma=4)
+        budget = 3
         verify_lens = schedule_verify_lens_topk(
-            survival_probs=survival, budget=3, cfg=cfg
+            survival_probs=survival, budget=budget, cfg=cfg
         )
-        self.assertTrue(torch.all(verify_lens >= 0))
-        self.assertTrue(torch.all(verify_lens <= 4))
+        # Independently reproduce the global top-budget selection and group the
+        # admitted positions by request.
+        num_requests, max_len = survival.shape[0], cfg.resolved_max_verify_len()
+        flat = [
+            (float(survival[r, p]), p, r)
+            for r in range(num_requests)
+            for p in range(cfg.min_verify_len, max_len)
+            if float(survival[r, p]) >= cfg.survival_eps
+        ]
+        flat.sort(key=lambda e: (-e[0], e[1], e[2]))
+        admitted_positions: dict[int, list[int]] = {r: [] for r in range(num_requests)}
+        for _prob, position, request in flat[:budget]:
+            admitted_positions[request].append(position)
+        for request in range(num_requests):
+            positions = sorted(admitted_positions[request])
+            count = int(verify_lens[request].item()) - cfg.min_verify_len
+            self.assertEqual(
+                len(positions),
+                count,
+                f"request {request}: verify_len count mismatch",
+            )
+            expected_prefix = list(
+                range(cfg.min_verify_len, cfg.min_verify_len + count)
+            )
+            self.assertEqual(
+                positions,
+                expected_prefix,
+                f"request {request} admitted {positions}, not the prefix "
+                f"{expected_prefix}",
+            )
+
+    def test_higher_confidence_admitted_first(self):
+        """A budget too small for both requests favors the higher-survival
+        request's prefix (rank-preserving, most-confident-first) (C14)."""
+        # Request 0 dominates request 1 at every position; with budget=2 both
+        # extra slots must land on request 0.
+        survival = torch.tensor(
+            [[0.99, 0.98, 0.97, 0.96], [0.40, 0.30, 0.20, 0.10]],
+            dtype=torch.float32,
+        )
+        cfg = DSparkScheduleConfig(gamma=4)
+        verify_lens = schedule_verify_lens_topk(
+            survival_probs=survival, budget=2, cfg=cfg
+        )
+        extra = verify_lens.to(torch.int64) - cfg.min_verify_len
+        self.assertEqual(int(extra[0].item()), 2)
+        self.assertEqual(int(extra[1].item()), 0)
+
+    def test_survival_helper_matches_manual_cumprod(self):
+        """_survival_from_confidence equals torch.cumprod along the time axis.
+
+        NOTE: this guards the test helper only. The worker's production
+        survival = torch.cumprod(confidence) in DSparkWorkerV2._schedule_verify_lens
+        is NOT yet covered by a production-path UT (it is not extracted into a
+        testable pure function); the scheduler here consumes pre-computed
+        survival. A cumprod->cumsum mutation in the worker would still pass.
+        """
+        confidence = torch.tensor(
+            [[0.9, 0.8, 0.5], [0.7, 0.6, 0.4]], dtype=torch.float32
+        )
+        survival = _survival_from_confidence(confidence)
+        expected = torch.tensor(
+            [[0.9, 0.9 * 0.8, 0.9 * 0.8 * 0.5], [0.7, 0.7 * 0.6, 0.7 * 0.6 * 0.4]],
+            dtype=torch.float32,
+        )
+        self.assertTrue(torch.allclose(survival, expected, atol=1e-6))
 
     def test_min_and_max_enter_the_budget(self):
         """min_verify_len floors and max_verify_len caps every per-request length."""
