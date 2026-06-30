@@ -7,6 +7,7 @@ full ``comparator/`` package: ``python -m sglang.srt.debug_utils.comparator``.
 
 import argparse
 import functools
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,8 @@ def main(args):
 
     from sglang.srt.debug_utils.dump_loader import find_row, read_meta
 
+    reporter = ComparisonReporter()
+
     df_target = read_meta(args.target_path)
     df_target = df_target.filter(
         (pl.col("step") >= args.start_step) & (pl.col("step") <= args.end_step)
@@ -31,8 +34,8 @@ def main(args):
     assert all(c in df_target.columns for c in ["rank", "step", "dump_index", "name"])
 
     df_baseline = read_meta(args.baseline_path)
-    print("df_target", df_target)
-    print("df_baseline", df_baseline)
+    reporter.emit("df_baseline", df_baseline)
+    reporter.emit("df_target", df_target)
 
     tensor_dim_descs: List[TensorDimDesc] = _get_tensor_dim_descs()
 
@@ -61,27 +64,46 @@ def main(args):
             ),
         )
 
+        record: dict = {"name": row["name"]}
+
         if row_baseline is None:
-            print(f"Skip: target={str(path_target)} since no baseline")
-            x_target = _load_object(path_target)
+            reporter.emit(f"Skip: target={str(path_target)} since no baseline")
+            x_target = _load_object(path_target, reporter=reporter)
             if x_target is not None:
-                print(f"x_target(sample)={get_truncated_value(x_target)}")
+                reporter.emit(f"x_target(sample)={get_truncated_value(x_target)}")
+            record["target_path"] = str(path_target)
+            record["skipped"] = "no_baseline"
+            reporter.add_record(record)
             continue
 
         path_baseline = Path(args.baseline_path) / row_baseline["filename"]
-        print(
+        record["baseline_path"] = str(path_baseline)
+        record["target_path"] = str(path_target)
+        record["baseline_duplicate_index"] = row_baseline["duplicate_index"]
+        record["target_duplicate_index"] = row["duplicate_index"]
+        reporter.emit(
             f"Check:\n"
-            f"target={str(path_target)} (duplicate_index={row['duplicate_index']})\n"
-            f"baseline={str(path_baseline)} (duplicate_index={row_baseline['duplicate_index']})"
+            f"baseline={str(path_baseline)} (duplicate_index={row_baseline['duplicate_index']})\n"
+            f"target={str(path_target)} (duplicate_index={row['duplicate_index']})"
         )
-        check_tensor_pair(
-            path_baseline=path_baseline,
-            path_target=path_target,
-            diff_threshold=args.diff_threshold,
-            name=row["name"],
-            tensor_dim_desc=tensor_dim_desc,
+        record.update(
+            check_tensor_pair(
+                path_baseline=path_baseline,
+                path_target=path_target,
+                diff_threshold=args.diff_threshold,
+                name=row["name"],
+                tensor_dim_desc=tensor_dim_desc,
+                reporter=reporter,
+            )
         )
-        print()
+        reporter.add_record(record)
+        reporter.emit()
+
+    log_path = Path(args.output_log_path)
+    json_path = Path(args.output_json_path)
+    reporter.write(log_path=log_path, json_path=json_path)
+    print(f"log_path={log_path}")
+    print(f"json_path={json_path}")
 
 
 def check_tensor_pair(
@@ -90,21 +112,32 @@ def check_tensor_pair(
     diff_threshold: float = 1e-3,
     name="",
     tensor_dim_desc: Optional["TensorDimDesc"] = None,
-):
-    x_baseline = _load_object(path_baseline)
-    x_target = _load_object(path_target)
+    *,
+    reporter: "ComparisonReporter",
+) -> dict:
+    record: dict = {}
+
+    x_baseline = _load_object(path_baseline, reporter=reporter)
+    x_target = _load_object(path_target, reporter=reporter)
 
     if x_baseline is None or x_target is None:
-        print(
+        reporter.emit(
             f"Skip comparison because of None: x_baseline={x_baseline}, x_target={x_target}"
         )
-        return
+        record["skipped"] = "none_tensor"
+        return record
 
-    print(
+    reporter.emit(
         f"Raw "
         f"[shape] {x_baseline.shape} vs {x_target.shape}\t"
         f"[{'' if x_baseline.dtype == x_target.dtype else '🟠'}dtype] {x_baseline.dtype} vs {x_target.dtype}"
     )
+    record["raw"] = {
+        "shape_baseline": list(x_baseline.shape),
+        "shape_target": list(x_target.shape),
+        "dtype_baseline": str(x_baseline.dtype),
+        "dtype_target": str(x_target.dtype),
+    }
 
     if tensor_dim_desc is not None:
         import einops
@@ -114,17 +147,25 @@ def check_tensor_pair(
             tensor_dim_desc.baseline_desc + " -> " + tensor_dim_desc.target_desc,
         )
         if tensor_dim_desc.baseline_cropper is not None:
-            print("Apply baseline_cropper")
+            reporter.emit("Apply baseline_cropper")
             x_baseline = tensor_dim_desc.baseline_cropper(x_baseline)
 
     x_baseline, x_target = _comparison_preprocessor(x_baseline, x_target, name=name)
-    x_baseline = _try_unify_shape(x_baseline, target_shape=x_target.shape)
+    x_baseline = _try_unify_shape(
+        x_baseline, target_shape=x_target.shape, reporter=reporter
+    )
 
-    print(
+    reporter.emit(
         f"After preprocessor "
         f"[shape] {x_baseline.shape} vs {x_target.shape}\t"
         f"[dtype] {x_baseline.dtype} vs {x_target.dtype}"
     )
+    record["after_preprocessor"] = {
+        "shape_baseline": list(x_baseline.shape),
+        "shape_target": list(x_target.shape),
+        "dtype_baseline": str(x_baseline.dtype),
+        "dtype_target": str(x_target.dtype),
+    }
 
     x_baseline_original_dtype = x_baseline.dtype
     x_target_original_dtype = x_target.dtype
@@ -132,7 +173,8 @@ def check_tensor_pair(
     x_target = x_target.float()
     x_baseline = x_baseline.float()
 
-    for name, fn in [
+    stats: dict = {}
+    for stat_name, fn in [
         ("mean", torch.mean),
         ("std", torch.std),
         ("min", torch.min),
@@ -150,19 +192,28 @@ def check_tensor_pair(
     ]:
         value_baseline = fn(x_baseline).item()
         value_target = fn(x_target).item()
-        print(
-            f"[{name}] {value_baseline :.4f} vs {value_target:.4f} (diff: {value_target - value_baseline:.4f})"
+        reporter.emit(
+            f"[{stat_name}] {value_baseline :.4f} vs {value_target:.4f} (diff: {value_target - value_baseline:.4f})"
         )
+        stats[stat_name] = {
+            "baseline": value_baseline,
+            "target": value_target,
+            "diff": value_target - value_baseline,
+        }
+    record["stats"] = stats
 
     if x_baseline.shape != x_target.shape:
-        print(f"⚠️ Shape mismatch")
-        return
+        reporter.emit(f"⚠️ Shape mismatch")
+        record["skipped"] = "shape_mismatch"
+        return record
 
     diff_info = _compute_and_print_diff(
         x_baseline=x_baseline,
         x_target=x_target,
         diff_threshold=diff_threshold,
+        reporter=reporter,
     )
+    record["diff"] = diff_info
     needs_print = diff_info["max_abs_diff"] > 1e-3
 
     if (x_baseline_original_dtype != x_target_original_dtype) and (
@@ -173,29 +224,38 @@ def check_tensor_pair(
         )
         is not None
     ):
-        _compute_and_print_diff(
+        record["diff_downcast"] = _compute_and_print_diff(
             x_baseline=x_baseline.to(downcast_dtype),
             x_target=x_target.to(downcast_dtype),
             diff_threshold=diff_threshold,
             prefix_text=f"When downcast to {downcast_dtype}: ",
+            reporter=reporter,
         )
 
     if needs_print:
-        print(f"x_baseline(sample)={get_truncated_value(x_baseline)}")
-        print(f"x_target(sample)={get_truncated_value(x_target)}")
+        reporter.emit(f"x_baseline(sample)={get_truncated_value(x_baseline)}")
+        reporter.emit(f"x_target(sample)={get_truncated_value(x_target)}")
+
+    return record
 
 
 def _compute_and_print_diff(
-    x_baseline, x_target, diff_threshold: float, prefix_text=""
-):
+    x_baseline,
+    x_target,
+    diff_threshold: float,
+    prefix_text="",
+    *,
+    reporter: "ComparisonReporter",
+) -> dict:
     raw_abs_diff = (x_target - x_baseline).abs()
 
     max_abs_diff = raw_abs_diff.max().item()
     mean_abs_diff = raw_abs_diff.mean().item()
-    rel_diff = _calc_rel_diff(x_target, x_baseline)
+    rel_diff = _calc_rel_diff(x_baseline, x_target)
+    rel_diff_value = float(rel_diff)
 
     rel_diff_marker: str = "❌" if rel_diff > diff_threshold else "✅"
-    print(
+    reporter.emit(
         prefix_text
         + f"{rel_diff_marker} rel_diff={rel_diff}\t"
         + f"max_abs_diff={max_abs_diff}\t"
@@ -203,13 +263,39 @@ def _compute_and_print_diff(
     )
 
     max_diff_coord = _argmax_coord(raw_abs_diff)
-    print(
+    baseline_value = x_baseline[max_diff_coord].item()
+    target_value = x_target[max_diff_coord].item()
+    reporter.emit(
         f"max_abs_diff happens at coord={max_diff_coord} with "
-        f"baseline={x_baseline[max_diff_coord].item()} "
-        f"target={x_target[max_diff_coord].item()}"
+        f"baseline={baseline_value} "
+        f"target={target_value}"
     )
 
-    return dict(max_abs_diff=max_abs_diff)
+    return dict(
+        rel_diff=rel_diff_value,
+        rel_diff_pass=rel_diff_value <= diff_threshold,
+        max_abs_diff=max_abs_diff,
+        mean_abs_diff=mean_abs_diff,
+        max_diff_coord=list(max_diff_coord),
+        max_diff_baseline_value=baseline_value,
+        max_diff_target_value=target_value,
+    )
+
+
+class ComparisonReporter:
+    def __init__(self) -> None:
+        self.lines: List[str] = []
+        self.records: List[dict] = []
+
+    def emit(self, *args) -> None:
+        self.lines.append(" ".join(str(a) for a in args))
+
+    def add_record(self, record: dict) -> None:
+        self.records.append(record)
+
+    def write(self, *, log_path: Path, json_path: Path) -> None:
+        log_path.write_text("\n".join(self.lines) + "\n")
+        json_path.write_text(json.dumps(self.records, indent=2, default=str))
 
 
 def _argmax_coord(x: torch.Tensor) -> tuple:
@@ -225,14 +311,21 @@ def _compute_smaller_dtype(dtype_a, dtype_b):
     return info_dict.get((dtype_a, dtype_b)) or info_dict.get((dtype_b, dtype_a))
 
 
-def _try_unify_shape(x: torch.Tensor, target_shape):
+def _try_unify_shape(
+    x: torch.Tensor,
+    target_shape,
+    reporter: Optional["ComparisonReporter"] = None,
+):
     x_shape = x.shape
     num_dim_to_remove = len(x_shape) - len(target_shape)
     if (x_shape[num_dim_to_remove:] == target_shape) and all(
         val == 1 for val in x_shape[:num_dim_to_remove]
     ):
         out = functools.reduce(lambda a, _: a.squeeze(0), range(num_dim_to_remove), x)
-        print(f"Unify shape: {x_shape} -> {out.shape} (to match {target_shape})")
+        if reporter is not None:
+            reporter.emit(
+                f"Unify shape: {x_shape} -> {out.shape} (to match {target_shape})"
+            )
         return out
 
     return x
@@ -246,18 +339,18 @@ def _calc_rel_diff(x: torch.Tensor, y: torch.Tensor):
     return 1 - sim
 
 
-def _load_object(path):
+def _load_object(path, *, reporter: "ComparisonReporter"):
     try:
         x = torch.load(path, weights_only=False)
     except Exception as e:
-        print(f"Skip load {path} since error {e}")
+        reporter.emit(f"Skip load {path} since error {e}")
         return None
 
     if isinstance(x, dict) and "value" in x:
         x = x["value"]
 
     if not isinstance(x, torch.Tensor):
-        print(f"Skip load {path} since {type(x)=} is not a Tensor ({x=})")
+        reporter.emit(f"Skip load {path} since {type(x)=} is not a Tensor ({x=})")
         return None
     return x.cuda()
 
@@ -292,5 +385,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--filter", type=str, default=None, help="Regex to filter filenames"
     )
+    parser.add_argument("--output-log-path", type=str, default="dump_comparison.log")
+    parser.add_argument("--output-json-path", type=str, default="dump_comparison.json")
     args = parser.parse_args()
     main(args)

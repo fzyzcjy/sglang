@@ -997,7 +997,12 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
                     self.model_runner.spec_algorithm.is_dflash_or_dspark()
                     and self.model_runner.is_draft_worker
                     and "input_embeds" in inspect.signature(forward).parameters
+                    and not hasattr(self.model_runner.model, "forward_embed")
                 ):
+                    # Drafts that own their embedding (dsv4 hc-expands input_ids via
+                    # forward_embed) must capture from input_ids, not the flat
+                    # input_embeds buffer; the worker leaves that buffer unpopulated for
+                    # them, so feeding it would record the wrong (un-hc-expanded) geometry.
                     kwargs["input_embeds"] = self.buffers.input_embeds[:num_tokens]
 
                 out = forward(
@@ -1096,7 +1101,17 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         if not forward_batch.needs_forward_metadata_init():
             # Pre-planned (plan-stream load_batch already ran).
             # In speculative decoding, these two fields are still needed.
-            graph_size_key = self._ragged_graph_size if is_ragged else self.bs
+            # A layout-less forward (e.g. the uniform DSpark draft block) is still
+            # captured token-keyed when ragged_verify_mode is on, so mirror
+            # _capture_graph_size instead of forcing the bs key (else the draft's
+            # token-keyed graph is looked up with a stale bs key -> KeyError).
+            graph_size_key = (
+                self._ragged_graph_size
+                if is_ragged
+                else self._capture_graph_size(
+                    bs=self.bs, num_tokens=self.bs * self.num_tokens_per_bs
+                )
+            )
             if is_ragged:
                 # Stored raw_num_token comes from this step's plan-stream
                 # full-load. Real-N ragged token totals vary per step, so guard
@@ -1175,7 +1190,12 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             else:
                 bs = self._pad_to_bucket(raw_bs, self.capture_bs)
             padded_num_tokens = bs * self.num_tokens_per_bs
-            graph_size_key = bs
+            # Mirror _capture_graph_size: a layout-less forward is captured
+            # token-keyed under ragged_verify_mode (e.g. the uniform DSpark draft
+            # block), so it must replay with the same token key, not the bs key.
+            graph_size_key = self._capture_graph_size(
+                bs=bs, num_tokens=padded_num_tokens
+            )
 
         self.buffer_registry.fill_from(
             forward_batch,

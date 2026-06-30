@@ -24,6 +24,7 @@ from torch import nn
 
 from sglang.srt.configs.deepseek_v4 import DeepSeekV4Config
 from sglang.srt.layers.layernorm import RMSNorm
+from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
 from sglang.srt.layers.radix_attention import RadixAttention
 from sglang.srt.layers.vocab_parallel_embedding import VocabParallelEmbedding
@@ -48,6 +49,10 @@ logger = logging.getLogger(__name__)
 
 # A per-step sampler: (step_logits [bs, vocab], step_idx) -> sampled tokens [bs].
 StepSampler = Callable[[torch.Tensor, int], torch.Tensor]
+
+# FlashMLA's fp8 sparse decode kernel only specializes h_q for {64, 128}; the draft pads
+# its per-rank query heads up to this when tp shards them below 64.
+_PAD_NUM_HEADS = 64
 
 
 class DSparkV4DraftOutput(msgspec.Struct, frozen=True):
@@ -96,7 +101,7 @@ def apply_rotary_emb(
     if inverse:
         freqs_cis = freqs_cis.conj()
     if x.ndim == 3:
-        freqs_cis = freqs_cis.view(1, x.size(1), x.size(-1))
+        freqs_cis = freqs_cis.view(x.size(0), 1, x.size(-1))
     else:
         freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
     x = torch.view_as_real(x * freqs_cis).flatten(-2)
@@ -238,6 +243,17 @@ class DSparkAttention(MqaAttentionBase):
             pool=pool,
         )
         q = self._compute_q(hidden_states, positions)
+        attn_sink = self._local_attn_sink()
+
+        # Pad the per-rank query heads (and attn_sink) up to the kernel's supported h_q
+        # like MQALayer and slice the output heads back afterward.
+        if self.n_local_heads < _PAD_NUM_HEADS:
+            q_padded = q.new_zeros(q.shape[0], _PAD_NUM_HEADS, self.head_dim)
+            q_padded[:, : self.n_local_heads, :] = q
+            q = q_padded
+            sink_padded = attn_sink.new_zeros(_PAD_NUM_HEADS)
+            sink_padded[: self.n_local_heads] = attn_sink
+            attn_sink = sink_padded
 
         # Drive the production sparse backend: it reads the NON-CAUSAL full-block SWA
         # metadata built in make_core_attn_metadata (is_dspark_draft branch) and runs
@@ -251,9 +267,11 @@ class DSparkAttention(MqaAttentionBase):
             layer=self.attn,
             forward_batch=forward_batch,
             compress_ratio=0,
-            attn_sink=self._local_attn_sink(),
+            attn_sink=attn_sink,
             save_kv_cache=False,
         )
+        if o.shape[1] != self.n_local_heads:
+            o = o[:, : self.n_local_heads, :]
 
         freqs_cis = self.freqs_cis[positions]
         apply_rotary_emb(o[..., -rd:], freqs_cis, inverse=True)
@@ -408,11 +426,17 @@ class DSparkV4Stage(DeepseekV4DecoderLayer):
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
     ) -> None:
+        # is_nextn disables the MoE hash topk (config.num_hash_layers gates it on the
+        # target's first layers by layer_id). The draft uses draft-local layer ids
+        # (0..num_stages-1), which would otherwise be misread as those hash layers; the
+        # draft gate is the normal noaux_tc gate (its checkpoint carries gate.bias), so
+        # force the non-hash path like NextN. It only affects this MoE construction.
         super().__init__(
             config=config,
             layer_id=layer_id,
             quant_config=quant_config,
             prefix=prefix,
+            is_nextn=True,
         )
         self.stage_id = stage_id
         self.dim = config.hidden_size
@@ -565,14 +589,13 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         self.noise_token_id = int(getattr(config, "dspark_noise_token_id", 0))
         self.temperature = float(getattr(config, "temperature", 1.0))
 
-        base_layer_id = int(config.num_hidden_layers)
-        self.start_layer = base_layer_id
-        self.end_layer = base_layer_id + self.num_stages
+        self.start_layer = 0
+        self.end_layer = self.num_stages
         self.stages = nn.ModuleList(
             [
                 DSparkV4Stage(
                     config=config,
-                    layer_id=base_layer_id + stage_id,
+                    layer_id=stage_id,
                     stage_id=stage_id,
                     num_stages=self.num_stages,
                     num_target_layers=self.num_target_features,
@@ -681,7 +704,7 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         input_embeds: Optional[torch.Tensor] = None,
         get_embedding: bool = False,
         pp_proxy_tensors=None,
-    ) -> DSparkV4DraftOutput:
+    ) -> LogitsProcessorOutput:
         """Standard SGLang draft forward: embed -> DSpark stages -> raw backbone hidden.
 
         The worker builds the draft block ForwardBatch (TARGET_VERIFY mode, the gamma block
@@ -701,7 +724,11 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         for stage in self.stages:
             x = stage(positions, x, forward_batch)
 
-        return DSparkV4DraftOutput(draft_hidden=x)
+        # Return the raw [bs*gamma, hc, d] backbone hidden as a plain LogitsProcessorOutput
+        # (next_token_logits stays None; the worker calls compute_base_logits on
+        # hidden_states post-forward). LogitsProcessorOutput is the only struct the cuda
+        # graph runner's execute accepts, so this is what lets the draft be captured.
+        return LogitsProcessorOutput(next_token_logits=None, hidden_states=x)
 
     def collapse_hc_head(self, x: torch.Tensor) -> torch.Tensor:
         """Collapse the draft mHC tensor through the last stage's hc_head (PRE-norm).

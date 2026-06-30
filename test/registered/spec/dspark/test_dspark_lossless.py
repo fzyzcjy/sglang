@@ -32,13 +32,12 @@ GSM8K accuracy threshold set just below the measured non-spec baseline plus a
 speculative accept-length floor well above 1 (``GSM8KMixin``).
 """
 
-import os
 import unittest
 
 import openai
 import requests
 
-from sglang.srt.utils import find_local_repo_dir, kill_process_tree
+from sglang.srt.utils import kill_process_tree
 from sglang.test.ci.ci_register import register_cuda_ci
 from sglang.test.kits.dspark_lossless_kit import (
     capture_reference,
@@ -125,26 +124,6 @@ def _temperature_request(
     return resp.json()["text"]
 
 
-def _checkpoints_available(*model_paths: str) -> bool:
-    """True only if every model has a local HF snapshot (cached and launchable).
-
-    A repo existing on the Hub is not enough -- a gated or simply un-cached model
-    cannot be launched on the CI runner, which would surface as a setUpClass
-    server-launch ERROR rather than a clean skip. Requiring a local snapshot
-    skips such models cleanly.
-    """
-    for path in model_paths:
-        if os.path.isdir(path):
-            continue
-        try:
-            snapshot_dir = find_local_repo_dir(path, revision=None)
-        except Exception:
-            return False
-        if not snapshot_dir or not os.path.isdir(snapshot_dir):
-            return False
-    return True
-
-
 class _DSparkLosslessBase(CustomTestCase, GSM8KMixin):
     """Base: sequential eager + cuda-graph reference/spec servers, then resident spec.
 
@@ -170,6 +149,8 @@ class _DSparkLosslessBase(CustomTestCase, GSM8KMixin):
     attention_backend: str = "flashinfer"
     disable_overlap: bool = False
     mem_fraction_static: float = 0.7
+    # Extra env for the SPEC launches only (e.g. SGLANG_RAGGED_VERIFY_MODE=compact).
+    spec_env = None
 
     # GSM8KMixin knobs. Lossless greedy keeps spec accuracy at the non-spec
     # baseline's level (measured baseline ~0.875, spec ~0.865-0.88 at 200q). 0.84
@@ -214,21 +195,21 @@ class _DSparkLosslessBase(CustomTestCase, GSM8KMixin):
         return args
 
     @classmethod
-    def _launch(cls, other_args: list):
+    def _launch(cls, other_args: list, env=None):
         return popen_launch_server(
             cls.target_model,
             DEFAULT_URL_FOR_TEST,
             timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
             other_args=other_args,
+            env=env,
         )
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.checkpoints_available = True
+        # No local-snapshot pre-check: launch directly and let HF download on the
+        # spot. A gated/offline/unreachable model fails the launch loudly rather
+        # than silently skipping (which would give a false green for a lossless run).
         if not cls.target_model or not cls.draft_model:
-            return
-        if not _checkpoints_available(cls.target_model, cls.draft_model):
-            cls.checkpoints_available = False
             return
         url = DEFAULT_URL_FOR_TEST
         cls.base_url = url
@@ -242,7 +223,7 @@ class _DSparkLosslessBase(CustomTestCase, GSM8KMixin):
         finally:
             kill_process_tree(eager_ref.pid)
 
-        eager_spec = cls._launch(cls._spec_args(cuda_graph=False))
+        eager_spec = cls._launch(cls._spec_args(cuda_graph=False), env=cls.spec_env)
         try:
             cls.eager_spec_exact = {
                 p: greedy_request(url, p, _EAGER_EXACT_MAX_NEW_TOKENS)
@@ -260,7 +241,7 @@ class _DSparkLosslessBase(CustomTestCase, GSM8KMixin):
         finally:
             kill_process_tree(cg_ref.pid)
 
-        cls.process = cls._launch(cls._spec_args(cuda_graph=True))
+        cls.process = cls._launch(cls._spec_args(cuda_graph=True), env=cls.spec_env)
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -271,11 +252,6 @@ class _DSparkLosslessBase(CustomTestCase, GSM8KMixin):
         if not self.target_model or not self.draft_model:
             self.skipTest(
                 "Model paths not configured. Set target_model and draft_model."
-            )
-        if not getattr(self, "checkpoints_available", True):
-            self.skipTest(
-                f"Checkpoint(s) unavailable (gated/missing/offline): "
-                f"{self.target_model}, {self.draft_model}."
             )
         if not hasattr(self, "process"):
             self.skipTest("Server not launched (setUpClass failed or skipped).")
@@ -424,6 +400,24 @@ class TestDSparkLosslessGemma4(
     target_model = DEFAULT_TARGET_MODEL_DSPARK_GEMMA4
     draft_model = DEFAULT_DRAFT_MODEL_DSPARK_GEMMA4
     disable_overlap = True
+
+
+class TestDSparkLosslessQwen3Compact(
+    _DSparkLosslessBase,
+):
+    """DSpark COMPACT (real-N ragged verify) lossless parity for Qwen3.
+
+    Lossless by construction (shares _accept_greedy; the ell_r cutoff only accepts a
+    shorter correct prefix), so spec greedy output still equals the non-spec ref.
+    Exercises the compact verify path the static subclasses never hit.
+    """
+
+    __test__ = True
+    # 14B checkpoint (same as test_basic_sanity_dspark); HF downloads on the spot.
+    target_model = "Qwen/Qwen3-14B"
+    draft_model = "deepseek-ai/dspark_qwen3_14b_block7"
+    disable_overlap = False
+    spec_env = {"SGLANG_RAGGED_VERIFY_MODE": "compact"}
 
 
 if __name__ == "__main__":

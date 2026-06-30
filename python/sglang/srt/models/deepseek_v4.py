@@ -2143,6 +2143,9 @@ class DeepseekV4ForCausalLM(nn.Module):
     def routed_experts_weights_of_layer(self):
         return self._routed_experts_weights_of_layer.value
 
+    def get_input_embeddings(self) -> nn.Module:
+        return self.model.get_input_embeddings()
+
     def set_dspark_layers_to_capture(self, layer_ids: List[int]) -> None:
         if not self.pp_group.is_last_rank:
             return
