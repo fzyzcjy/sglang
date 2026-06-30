@@ -1262,13 +1262,15 @@ class DeepseekV4AttnBackend(
         if is_ragged:
             seq_lens = seq_lens + extend_seq_lens
             num_q_tokens = raw_metadata.total_verify_tokens
-            seq_lens_casual, req_pool_indices_repeated = self._expand_verify_ragged(
-                num_tokens=num_q_tokens,
-                seq_lens=seq_lens,
-                extend_seq_lens=extend_seq_lens,
-                extend_start_loc=raw_metadata.extend_start_loc,
-                req_pool_indices=req_pool_indices,
-                padded_num_tokens=out_cache_loc.shape[0],
+            seq_lens_casual, req_pool_indices_repeated = (
+                self._expand_prefill_casually_vectorized(
+                    num_tokens=num_q_tokens,
+                    seq_lens=seq_lens,
+                    extend_seq_lens=extend_seq_lens,
+                    extend_start_loc=raw_metadata.extend_start_loc,
+                    req_pool_indices=req_pool_indices,
+                    padded_num_tokens=out_cache_loc.shape[0],
+                )
             )
         else:
             seq_lens = seq_lens + self.speculative_num_draft_tokens
@@ -2137,24 +2139,6 @@ class DeepseekV4AttnBackend(
             topk_length=combined_lens,
         )
         return o
-
-    def _expand_verify_ragged(
-        self,
-        num_tokens: int,
-        seq_lens: torch.Tensor,
-        extend_seq_lens: torch.Tensor,
-        extend_start_loc: torch.Tensor,
-        req_pool_indices: torch.Tensor,
-        padded_num_tokens: Optional[int],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        return self._expand_prefill_casually_vectorized(
-            num_tokens=num_tokens,
-            seq_lens=seq_lens,
-            extend_seq_lens=extend_seq_lens,
-            extend_start_loc=extend_start_loc,
-            req_pool_indices=req_pool_indices,
-            padded_num_tokens=padded_num_tokens,
-        )
 
     def expand_prefill_casually(
         self,
