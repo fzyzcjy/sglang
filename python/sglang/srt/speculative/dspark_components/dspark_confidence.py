@@ -72,10 +72,10 @@ def compute_confidence(
     else:
         markov_embed_stack = None
     confidence_raw = confidence_head(draft_hidden, markov_embed_stack)
-    # STS calibration is identity in the MVP (no reference); the head logit
-    # is mapped to (0, 1) by sigmoid. Losslessness does not depend on the
-    # calibration quality, only on the scheduler being non-anticipating.
-    confidence = torch.sigmoid(confidence_raw.float())
+    # apply_sts applies the per-position STS temperature (identity when no table
+    # is loaded) then sigmoid, mapping the head logit to (0, 1). Losslessness does
+    # not depend on the calibration, only on the scheduler being non-anticipating.
+    confidence = confidence_head.apply_sts(confidence_raw)
     # Closed interval: sigmoid saturates to exactly 0.0/1.0 at fp32 for large
     # logits. Advisory only; async + gated, no per-step sync.
     maybe_detect_in_closed_range(confidence, 0.0, 1.0, "DSpark confidence")

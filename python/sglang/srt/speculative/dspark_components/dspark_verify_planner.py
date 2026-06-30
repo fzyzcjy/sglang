@@ -17,6 +17,9 @@ from sglang.srt.speculative.dspark_components.dspark_scheduler import (
     build_sps_cost_table,
     compute_verify_token_budget,
 )
+from sglang.srt.speculative.dspark_components.dspark_sts_table import (
+    load_sts_calibration_from_path,
+)
 from sglang.srt.speculative.dspark_components.dspark_verify import (
     ragged_layout_exceeds_captured_grid,
     uniform_ragged_layout,
@@ -70,6 +73,35 @@ class DSparkVerifyPlanner:
                 _CONFIDENCE_RELAY_LAG_STEPS,
             )
 
+        sts_path = server_args.speculative_dspark_confidence_sts_path
+        if sts_path and self._confidence_head is not None:
+            calibration = load_sts_calibration_from_path(sts_path)
+            sts_temperatures = torch.tensor(
+                calibration.temperatures, dtype=torch.float32, device=device
+            )
+            if sts_temperatures.numel() != self.gamma:
+                raise ValueError(
+                    "DSpark STS calibration was fit for gamma="
+                    f"{sts_temperatures.numel()} but the runtime gamma is "
+                    f"{self.gamma}; refit the table for gamma={self.gamma} or omit "
+                    "--speculative-dspark-confidence-sts-path."
+                )
+            self._confidence_head.sts_temperatures = sts_temperatures
+            if tp_rank == 0:
+                logger.info(
+                    "DSpark STS calibration loaded from %s (gamma=%d); per-position "
+                    "temperatures applied to confidence-head survival.",
+                    sts_path,
+                    self.gamma,
+                )
+        elif sts_path and self._confidence_head is None:
+            if tp_rank == 0:
+                logger.warning(
+                    "DSpark STS calibration path given but no confidence head present "
+                    "(static mode / head-less checkpoint); ignoring %s.",
+                    sts_path,
+                )
+
         # Ragged-verify mode and the confidence prefix scheduler. The scheduler is
         # inert (None) unless the mode is cap-accept/compact AND a confidence head is
         # present, so the static-mode / no-head path is byte-identical to the static
@@ -104,6 +136,22 @@ class DSparkVerifyPlanner:
     @property
     def carries_confidence(self) -> bool:
         return self._confidence_head is not None
+
+    @property
+    def last_confidence_raw(self) -> Optional[torch.Tensor]:
+        if self._confidence_head is None:
+            return None
+        return self._confidence_head._last_confidence_raw
+
+    def assert_sts_identity_for_collect(self) -> None:
+        if self._confidence_head is None:
+            return
+        if not bool(torch.all(self._confidence_head.sts_temperatures == 1.0)):
+            raise ValueError(
+                "DSpark STS data collection requires identity temperatures; collect "
+                "with no calibration loaded (omit "
+                "--speculative-dspark-confidence-sts-path)."
+            )
 
     def advance_step(self) -> None:
         self._confidence_relay.advance_step()

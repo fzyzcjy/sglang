@@ -299,8 +299,8 @@ class DSparkConfidenceHead(nn.Module):
     whose forward is ``proj(features).squeeze(-1)``). When ``with_markov`` the
     input is ``cat([hidden, markov_embed], -1)`` with feature dim
     ``hidden_size + markov_rank``; otherwise just ``hidden`` (dim ``hidden_size``).
-    The head emits a raw logit; sigmoid / STS calibration is applied by the
-    worker before the value is relayed to the scheduler.
+    The head emits a raw logit; ``apply_sts`` applies the per-position STS
+    temperature then sigmoid before the value is relayed to the scheduler.
     """
 
     def __init__(
@@ -316,6 +316,10 @@ class DSparkConfidenceHead(nn.Module):
         self.with_markov = bool(with_markov)
         input_dim = int(hidden_size) + (int(markov_rank) if self.with_markov else 0)
         self.proj = nn.Linear(input_dim, 1, bias=bias, dtype=dtype)
+        self.register_buffer(
+            "sts_temperatures", torch.ones((), dtype=torch.float32), persistent=False
+        )
+        self._last_confidence_raw: Optional[torch.Tensor] = None
 
     def forward(
         self,
@@ -335,6 +339,10 @@ class DSparkConfidenceHead(nn.Module):
             features = hidden_states
         features = features.to(dtype=self.proj.weight.dtype)
         return self.proj(features).squeeze(-1)
+
+    def apply_sts(self, confidence_raw: torch.Tensor) -> torch.Tensor:
+        self._last_confidence_raw = confidence_raw
+        return torch.sigmoid(confidence_raw.float() / self.sts_temperatures)
 
 
 def build_confidence_head(config) -> Optional[nn.Module]:

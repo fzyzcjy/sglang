@@ -4,6 +4,7 @@ from typing import Optional
 import torch
 
 from sglang.srt.distributed import get_tp_group
+from sglang.srt.environ import envs
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.managers.scheduler import GenerationBatchResult
 from sglang.srt.managers.tp_worker import TpModelWorker
@@ -14,6 +15,9 @@ from sglang.srt.model_executor.forward_batch_info import (
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
 from sglang.srt.speculative.dflash_info_v2 import DFlashDraftInputV2
+from sglang.srt.speculative.dflash_utils import (
+    compute_dflash_correct_drafts_and_bonus,
+)
 from sglang.srt.speculative.draft_worker_common import (
     build_block_pos_offsets,
     build_draft_tp_worker,
@@ -33,6 +37,9 @@ from sglang.srt.speculative.dspark_components.dspark_draft_proposer import (
 from sglang.srt.speculative.dspark_components.dspark_kv_inject import (
     TargetHiddenKvInjector,
 )
+from sglang.srt.speculative.dspark_components.dspark_sts_recorder import (
+    StsDataRecorder,
+)
 from sglang.srt.speculative.dspark_components.dspark_target_verify import (
     TargetVerifyExecutor,
 )
@@ -49,6 +56,8 @@ from sglang.srt.speculative.dspark_components.dspark_verify_planner import (
 from sglang.srt.utils import get_available_gpu_memory, is_cuda
 
 logger = logging.getLogger(__name__)
+
+_STS_COLLECT_FLUSH_EVERY: int = 256
 
 
 class DSparkWorkerV2(BaseSpecWorker):
@@ -229,6 +238,10 @@ class DSparkWorkerV2(BaseSpecWorker):
             model_runner=self.model_runner,
             kv_injector=self._kv_injector,
         )
+
+        # Offline STS data-collection tap (read-only, off unless
+        # SGLANG_DSPARK_STS_COLLECT_PATH is set). Built lazily on first record.
+        self._sts_recorder: Optional[StsDataRecorder] = None
 
     def _resolve_target_embed_tokens(self, target_model):
         # The V4 draft forward reuses the target's input embedding module. Some
@@ -543,6 +556,12 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
         logits_output.hidden_states = None
 
+        self._maybe_record_sts_collect(
+            verify_ids_2d=verify_ids_2d,
+            target_logits=logits_output.next_token_logits,
+            bs=bs,
+        )
+
         next_draft_input = make_next_draft_input(
             bonus_tokens=bonus,
             new_seq_lens=new_seq_lens,
@@ -555,4 +574,38 @@ class DSparkWorkerV2(BaseSpecWorker):
             next_draft_input=next_draft_input,
             speculative_num_draft_tokens=int(self.verify_num_draft_tokens),
             new_seq_lens=new_seq_lens,
+        )
+
+    def _maybe_record_sts_collect(
+        self,
+        *,
+        verify_ids_2d: torch.Tensor,
+        target_logits: torch.Tensor,
+        bs: int,
+    ) -> None:
+        collect_path = envs.SGLANG_DSPARK_STS_COLLECT_PATH.get()
+        if not collect_path:
+            return
+        if not self._verify_planner.carries_confidence:
+            return
+        confidence_raw = self._verify_planner.last_confidence_raw
+        if confidence_raw is None:
+            return
+        if self._sts_recorder is None:
+            self._verify_planner.assert_sts_identity_for_collect()
+            self._sts_recorder = StsDataRecorder(
+                path_stem=collect_path,
+                gamma=self.gamma,
+                flush_every=_STS_COLLECT_FLUSH_EVERY,
+            )
+        target_predict = torch.argmax(target_logits, dim=-1).view(
+            bs, self.verify_num_draft_tokens
+        )
+        num_correct_drafts, _ = compute_dflash_correct_drafts_and_bonus(
+            candidates=verify_ids_2d,
+            target_predict=target_predict,
+        )
+        self._sts_recorder.record(
+            confidence_raw=confidence_raw,
+            num_correct_drafts=num_correct_drafts,
         )
