@@ -91,7 +91,7 @@ class TestBasicSanityDSpark(
                 "DSPARK",
                 "--speculative-draft-model-path",
                 DRAFT_MODEL,
-                "--cuda-graph-max-bs",
+                "--cuda-graph-max-bs-decode",
                 "4",
                 "--mem-fraction-static",
                 "0.7",
