@@ -18,11 +18,11 @@ from sglang.test.test_utils import CustomTestCase
 
 register_cpu_ci(est_time=30, suite="base-a-test-cpu")
 
-_HIDDEN = 16
-_HC_MULT = 2
-_MARKOV_RANK = 4
-_VOCAB = 32
-_GAMMA = 3
+_HIDDEN = 4096
+_HC_MULT = 4
+_MARKOV_RANK = 256
+_VOCAB = 129280
+_GAMMA = 5
 _NORM_EPS = 1e-6
 _HC_EPS = 1e-3
 

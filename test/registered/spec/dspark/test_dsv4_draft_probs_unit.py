@@ -13,9 +13,9 @@ from sglang.test.test_utils import CustomTestCase
 register_cpu_ci(est_time=20, suite="base-a-test-cpu")
 
 _DEVICE = torch.device("cpu")
-_GAMMA = 3
-_VOCAB = 17
-_MARKOV_RANK = 8
+_GAMMA = 5
+_VOCAB = 129280
+_MARKOV_RANK = 256
 
 
 def _ensure_dist_initialized() -> None:
