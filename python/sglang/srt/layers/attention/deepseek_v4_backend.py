@@ -839,6 +839,7 @@ class DeepseekV4AttnBackend(
         need_compress: bool = True,
         use_prefill_cuda_graph: bool = False,
         online_c128_state_slot_offset: int = 0,
+        dspark_block_size: Optional[int] = None,
     ) -> DSV4Metadata:
         seq_lens_casual, req_pool_indices_repeated = self.expand_prefill_casually(
             num_tokens=num_tokens,
@@ -858,6 +859,7 @@ class DeepseekV4AttnBackend(
             out_loc=out_cache_loc,
             need_compress=need_compress,
             is_prefill=True,
+            dspark_block_size=dspark_block_size,
         )
         indexer_metadata = (
             self.init_forward_metadata_indexer(core_attn_metadata)
@@ -1085,6 +1087,7 @@ class DeepseekV4AttnBackend(
             extend_start_loc=None,
             need_compress=False,
             use_prefill_cuda_graph=False,
+            dspark_block_size=block_size,
         )
 
     def make_forward_metadata_from_raw_verify(
@@ -2088,24 +2091,38 @@ class DeepseekV4AttnBackend(
         out_loc: torch.Tensor,
         need_compress: bool = True,
         is_prefill: bool = False,
+        dspark_block_size: Optional[int] = None,
     ) -> DSV4AttnMetadata:
         assert self.swa_page_size == SWA_WINDOW
 
         seq_lens_casual = seq_lens_casual.to(torch.int32)
 
         raw_positions = seq_lens_casual - 1
-        if self.is_dspark_draft:
+        if dspark_block_size is not None:
             # NON-CAUSAL full-block draft index (R1 / Step 1b): every gamma block query of
             # a request shares the whole committed window + the whole draft block, no
-            # causal mask. Replaces the causal get_swa_page_indices for the draft backend
-            # only (gated by the draft-worker DSpark capability flag, never per-call model
-            # identity). speculative_num_draft_tokens is the verify window gamma+1; the
-            # draft block forward writes gamma slots.
+            # causal mask. Gated on the explicit dspark_block_size geometry, NOT on
+            # self.is_dspark_draft: only the uniform-gamma draft-block builder passes it
+            # (num_q = bs*gamma), while the draft worker's own decode / idle / raw-verify /
+            # plain-prefill paths leave it None and stay on the causal get_swa_page_indices.
+            # Flag-only gating fed those non-gamma geometries into the uniform-gamma assert
+            # in get_dspark_swa_page_indices and crashed cuda-graph capture (capture's
+            # gamma+1 verify geometry is not a gamma multiple). speculative_num_draft_tokens
+            # is the verify window gamma+1; the draft block forward writes gamma slots.
+            assert (
+                self.is_dspark_draft
+                and dspark_block_size == self.speculative_num_draft_tokens - 1
+            ), (
+                f"dspark_block_size={dspark_block_size} must equal gamma = "
+                f"speculative_num_draft_tokens-1={self.speculative_num_draft_tokens - 1} "
+                f"and is only valid on the DSpark draft backend "
+                f"(is_dspark_draft={self.is_dspark_draft})."
+            )
             swa_page_indices, swa_topk_lengths = self.get_dspark_swa_page_indices(
                 seq_lens_casual=seq_lens_casual,
                 req_pool_indices_repeated=req_pool_indices_repeated,
                 out_loc=out_loc,
-                block_size=self.speculative_num_draft_tokens - 1,
+                block_size=dspark_block_size,
             )
         else:
             swa_page_indices = self.get_swa_page_indices(
