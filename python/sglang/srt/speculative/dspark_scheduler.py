@@ -5,7 +5,11 @@ import logging
 import msgspec
 import torch
 
-from sglang.srt.speculative.dspark_sps_table import SpsCostTable
+from sglang.srt.server_args import ServerArgs
+from sglang.srt.speculative.dspark_sps_table import (
+    SpsCostTable,
+    load_sps_table_from_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -169,3 +173,56 @@ class ConfidencePrefixScheduler:
             total_extra <= budget
         ), f"DSpark verify-len budget violated: extra={total_extra} > budget={budget}"
         return verify_lens
+
+
+def build_sps_cost_table(
+    *,
+    server_args: ServerArgs,
+    verify_num_draft_tokens: int,
+    tp_rank: int,
+) -> SpsCostTable:
+    # Load a pre-profiled table when a path is given, else a flat constant-SPS
+    # table (budget = verify-all-up-to-max). The expected scheduler-on workflow
+    # is to build the table offline with sglang.benchmark.dspark_sps_profiler
+    # and pass it via --speculative-dspark-sps-table-path (see
+    # docs/advanced_features/dspark_sps_table.md); flat is the inert fallback
+    # for cap-accept, which has zero throughput gain.
+    #
+    # Until a profiled (non-flat) table ships the hardware-aware scheduler is a
+    # no-op: lookup() returns a constant, so the verify-token budget degenerates
+    # to verify-all and every request keeps verify_len == gamma (the scheduler's
+    # resolved_max_verify_len caps at gamma, so compact verifies the anchor plus
+    # up to gamma-1 drafts; this is lossless -- _cap_correct_len caps accept and
+    # the bonus is re-read from the target distribution). The
+    # verify_lens >= 1 anchor contract (see DSparkScheduleConfig.min_verify_len
+    # and schedule_verify_lens_topk's lower-bound clamp) MUST be in place before
+    # any profiled table is supplied, because a non-flat table yields small K
+    # and would otherwise drive verify_len to 0.
+    sps_table_path = server_args.speculative_dspark_sps_table_path
+    if sps_table_path:
+        return load_sps_table_from_path(sps_table_path)
+    if tp_rank == 0:
+        # Loud, once (per worker init on rank 0): the scheduler is enabled but
+        # the verify budget silently degenerates to verify-all without a
+        # profiled table. Warn rather than no-op silently so a misconfigured
+        # scheduler-on run is visible. Pass --speculative-dspark-sps-table-path
+        # to opt into the hardware-aware schedule.
+        logger.warning(
+            "DSpark ragged-verify scheduler is enabled but no "
+            "--speculative-dspark-sps-table-path was supplied. Falling back to a "
+            "flat constant-SPS table: the hardware-aware verify budget "
+            "degenerates to verify-all-up-to-gamma and yields zero throughput "
+            "gain. Profile a table offline with "
+            "`python -m sglang.benchmark.dspark_sps_profiler` and pass it via "
+            "--speculative-dspark-sps-table-path (see "
+            "docs/advanced_features/dspark_sps_table.md)."
+        )
+    max_batch_tokens = max(
+        1,
+        int(server_args.max_running_requests or 1) * verify_num_draft_tokens,
+    )
+    return SpsCostTable(
+        sample_batch_tokens=[1],
+        sample_steps_per_sec=[1.0],
+        max_batch_tokens=max_batch_tokens,
+    )

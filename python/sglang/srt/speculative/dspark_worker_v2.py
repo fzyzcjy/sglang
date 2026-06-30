@@ -57,10 +57,7 @@ from sglang.srt.speculative.dspark_info import (
 from sglang.srt.speculative.dspark_scheduler import (
     ConfidencePrefixScheduler,
     DSparkScheduleConfig,
-)
-from sglang.srt.speculative.dspark_sps_table import (
-    SpsCostTable,
-    load_sps_table_from_path,
+    build_sps_cost_table,
 )
 from sglang.srt.speculative.dspark_utils import (
     dspark_gamma_from_num_draft_tokens,
@@ -262,7 +259,11 @@ class DSparkWorkerV2(BaseSpecWorker):
             and self._confidence_head is not None
         ):
             self._verify_scheduler = ConfidencePrefixScheduler(
-                sps_table=self._build_sps_cost_table(),
+                sps_table=build_sps_cost_table(
+                    server_args=self.server_args,
+                    verify_num_draft_tokens=self.verify_num_draft_tokens,
+                    tp_rank=self.tp_rank,
+                ),
                 cfg=DSparkScheduleConfig(gamma=self.gamma),
             )
             if self.tp_rank == 0:
@@ -270,54 +271,6 @@ class DSparkWorkerV2(BaseSpecWorker):
                     "DSpark ragged-verify scheduler enabled (mode=%s).",
                     self._ragged_verify_mode.value,
                 )
-
-    def _build_sps_cost_table(self) -> SpsCostTable:
-        # Load a pre-profiled table when a path is given, else a flat constant-SPS
-        # table (budget = verify-all-up-to-max). The expected scheduler-on workflow
-        # is to build the table offline with sglang.benchmark.dspark_sps_profiler
-        # and pass it via --speculative-dspark-sps-table-path (see
-        # docs/advanced_features/dspark_sps_table.md); flat is the inert fallback
-        # for cap-accept, which has zero throughput gain.
-        #
-        # Until a profiled (non-flat) table ships the hardware-aware scheduler is a
-        # no-op: lookup() returns a constant, so the verify-token budget degenerates
-        # to verify-all and every request keeps verify_len == gamma (the scheduler's
-        # resolved_max_verify_len caps at gamma, so compact verifies the anchor plus
-        # up to gamma-1 drafts; this is lossless -- _cap_correct_len caps accept and
-        # the bonus is re-read from the target distribution). The
-        # verify_lens >= 1 anchor contract (see DSparkScheduleConfig.min_verify_len
-        # and schedule_verify_lens_topk's lower-bound clamp) MUST be in place before
-        # any profiled table is supplied, because a non-flat table yields small K
-        # and would otherwise drive verify_len to 0.
-        sps_table_path = self.server_args.speculative_dspark_sps_table_path
-        if sps_table_path:
-            return load_sps_table_from_path(sps_table_path)
-        if self.tp_rank == 0:
-            # Loud, once (per worker init on rank 0): the scheduler is enabled but
-            # the verify budget silently degenerates to verify-all without a
-            # profiled table. Warn rather than no-op silently so a misconfigured
-            # scheduler-on run is visible. Pass --speculative-dspark-sps-table-path
-            # to opt into the hardware-aware schedule.
-            logger.warning(
-                "DSpark ragged-verify scheduler is enabled but no "
-                "--speculative-dspark-sps-table-path was supplied. Falling back to a "
-                "flat constant-SPS table: the hardware-aware verify budget "
-                "degenerates to verify-all-up-to-gamma and yields zero throughput "
-                "gain. Profile a table offline with "
-                "`python -m sglang.benchmark.dspark_sps_profiler` and pass it via "
-                "--speculative-dspark-sps-table-path (see "
-                "docs/advanced_features/dspark_sps_table.md)."
-            )
-        max_batch_tokens = max(
-            1,
-            int(self.server_args.max_running_requests or 1)
-            * self.verify_num_draft_tokens,
-        )
-        return SpsCostTable(
-            sample_batch_tokens=[1],
-            sample_steps_per_sec=[1.0],
-            max_batch_tokens=max_batch_tokens,
-        )
 
     def _verify_backend_self_adds_seq_lens(self) -> bool:
         # True when the target attn backend self-adds the verify window to both
