@@ -1240,6 +1240,41 @@ class DeepseekV4AttnBackend(
                 )
             )
 
+            if self.is_dspark_draft and forward_batch.forward_mode.is_target_verify():
+                # Re-derive the NON-CAUSAL full-block index from the live out_cache_loc +
+                # seq_lens inside the recorded graph so cuda-graph replay (which rebinds
+                # out_cache_loc) attends the correct block + window slots (R7). The eager
+                # build in make_core_attn_metadata is overwritten here on every replay.
+                block_size = int(forward_batch.spec_info.draft_token_num)
+                seq_lens_casual = self._dspark_seq_lens_casual(
+                    seq_lens=forward_batch.seq_lens, block_size=block_size
+                )
+                req_pool_indices_repeated = (
+                    forward_batch.req_pool_indices.repeat_interleave(block_size)
+                )
+                (
+                    swa_page_indices,
+                    swa_topk_lengths,
+                ) = self.get_dspark_swa_page_indices(
+                    seq_lens_casual=seq_lens_casual,
+                    req_pool_indices_repeated=req_pool_indices_repeated,
+                    out_loc=out_cache_loc,
+                    block_size=block_size,
+                )
+                metadata.core_attn_metadata.swa_page_indices = swa_page_indices
+                metadata.core_attn_metadata.swa_topk_lengths = swa_topk_lengths
+
+    def _dspark_seq_lens_casual(
+        self, *, seq_lens: torch.Tensor, block_size: int
+    ) -> torch.Tensor:
+        # The per-token causal length for a uniform-gamma draft block: request r's gamma
+        # tokens have causal lengths prefix_r + 1 .. prefix_r + gamma (the non-causal index
+        # builder only reads the first-token prefix per request, but the layout must match
+        # expand_prefill_casually's [prefix+1 .. prefix+gamma] ordering).
+        prefix = seq_lens.to(torch.int32)
+        steps = torch.arange(1, block_size + 1, **self.cuda_int32_kwargs)
+        return (prefix[:, None] + steps[None, :]).reshape(-1)
+
     def init_forward_metadata_out_graph(
         self,
         forward_batch: ForwardBatch,

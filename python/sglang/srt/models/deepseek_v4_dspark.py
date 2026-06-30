@@ -700,8 +700,8 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         """Project a (already main_proj'd) draft hidden into one stage's KV latent."""
         return self.stages[layer_idx].self_attn.kv_proj_only(ctx_hidden)
 
-    def forward_embed(self, input_ids: torch.Tensor, batch_size: int) -> torch.Tensor:
-        """Build the draft block input embeddings: [anchor, noise, ..., noise] per row.
+    def forward_embed(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """Build the draft block input embeddings, hc-expanded.
 
         ``input_ids`` is the flat ``[bs * gamma]`` draft block ids the worker built (anchor
         at column 0, noise elsewhere). Returns the hc-expanded embedding ``[N, hc, d]``.
@@ -738,9 +738,7 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         """
         del get_embedding, pp_proxy_tensors
         if input_embeds is None:
-            input_embeds = self.forward_embed(
-                input_ids, batch_size=int(forward_batch.batch_size)
-            )
+            input_embeds = self.forward_embed(input_ids)
         x = input_embeds
         for stage in self.stages:
             x = stage(positions, x, forward_batch)
