@@ -5,6 +5,7 @@ import torch
 from sglang.srt.speculative.dspark_scheduler import (
     ConfidencePrefixScheduler,
     DSparkScheduleConfig,
+    compute_verify_token_budget,
     schedule_verify_lens_topk,
 )
 from sglang.srt.speculative.dspark_sps_table import SpsCostTable
@@ -35,11 +36,9 @@ class TestNonAnticipatingScheduler(CustomTestCase):
     range, determinism, eps gating) that make that safe.
     """
 
-    def _scheduler(self, gamma=4, budget=3) -> ConfidencePrefixScheduler:
+    def _scheduler(self, gamma: int = 4) -> ConfidencePrefixScheduler:
         cfg = DSparkScheduleConfig(gamma=gamma)
-        sched = ConfidencePrefixScheduler(sps_table=_flat_sps_table(), cfg=cfg)
-        sched.cached_budget = budget
-        return sched
+        return ConfidencePrefixScheduler(sps_table=_flat_sps_table(), cfg=cfg)
 
     def test_output_depends_only_on_survival_probs(self):
         """The scheduler sees only survival_probs (never tokens), so the same
@@ -48,25 +47,40 @@ class TestNonAnticipatingScheduler(CustomTestCase):
         survival = torch.tensor(
             [[0.9, 0.8, 0.4, 0.1], [0.7, 0.6, 0.3, 0.05]], dtype=torch.float32
         )
-        sched = self._scheduler(gamma=4, budget=3)
-        out1 = sched.compute_verify_lens(survival_probs=survival)
-        out2 = sched.compute_verify_lens(survival_probs=survival.clone())
+        k_survival = torch.full((2, 4), 0.8, dtype=torch.float32)
+        sched = self._scheduler(gamma=4)
+        out1 = sched.compute_verify_lens(k_survival=k_survival, sort_survival=survival)
+        out2 = sched.compute_verify_lens(
+            k_survival=k_survival, sort_survival=survival.clone()
+        )
         self.assertTrue(torch.equal(out1, out2))
 
     def test_extra_budget_never_exceeds_frozen_budget(self):
-        """sum(verify_lens - min_verify_len) <= frozen budget K (real invariant)."""
+        """sum(verify_lens - min_verify_len) <= K budget from k_survival (real invariant)."""
+        torch.manual_seed(42)
         survival = torch.rand(8, 6, dtype=torch.float32) * 0.9 + 0.05
-        budget = 5
-        sched = self._scheduler(gamma=6, budget=budget)
-        verify_lens = sched.compute_verify_lens(survival_probs=survival)
+        k_survival = torch.full((8, 6), 0.5, dtype=torch.float32)
+        sched = self._scheduler(gamma=6)
+        budget = compute_verify_token_budget(
+            history_survival_probs=k_survival,
+            sps_table=sched.sps_table,
+            cfg=sched.cfg,
+        )
+        verify_lens = sched.compute_verify_lens(
+            k_survival=k_survival, sort_survival=survival
+        )
         extra = int((verify_lens - sched.cfg.min_verify_len).sum().item())
         self.assertLessEqual(extra, budget)
 
     def test_verify_lens_clamped_to_min_max(self):
         """Every verify_len lies in [min_verify_len, max_verify_len]."""
+        torch.manual_seed(43)
         survival = torch.rand(5, 4, dtype=torch.float32)
-        sched = self._scheduler(gamma=4, budget=10)
-        verify_lens = sched.compute_verify_lens(survival_probs=survival)
+        k_survival = torch.full((5, 4), 0.5, dtype=torch.float32)
+        sched = self._scheduler(gamma=4)
+        verify_lens = sched.compute_verify_lens(
+            k_survival=k_survival, sort_survival=survival
+        )
         self.assertTrue(bool((verify_lens >= sched.cfg.min_verify_len).all()))
         self.assertTrue(
             bool((verify_lens <= sched.cfg.resolved_max_verify_len()).all())
@@ -74,17 +88,33 @@ class TestNonAnticipatingScheduler(CustomTestCase):
 
     def test_below_eps_positions_do_not_drive_selection(self):
         """A position below survival_eps is a non-candidate: swapping its value
-        (while keeping valid positions fixed) must not change verify_lens."""
-        survival = torch.tensor(
+        (while keeping valid positions fixed) must not change verify_lens.
+
+        k_survival is chosen so that compute_verify_token_budget returns 2,
+        matching the 2 valid candidates in the base sort_survival.  With that
+        budget the top-2 slot count per request stays [1, 1] even after
+        positions 2-3 are boosted to 0.999, because only 2 extras can be
+        admitted regardless."""
+        sort_survival = torch.tensor(
             [[0.9, 0.8, 1e-7, 1e-7], [0.7, 0.6, 1e-7, 1e-7]], dtype=torch.float32
         )
-        sched = self._scheduler(gamma=4, budget=2)
-        base = sched.compute_verify_lens(survival_probs=survival)
+        # Two valid candidates in the window (position 1 for each request);
+        # flat table -> budget = 2 (= total valid count).
+        k_survival = torch.tensor(
+            [[0.8, 1e-7, 1e-7, 1e-7], [0.6, 1e-7, 1e-7, 1e-7]], dtype=torch.float32
+        )
+        sched = self._scheduler(gamma=4)
+        base = sched.compute_verify_lens(
+            k_survival=k_survival, sort_survival=sort_survival
+        )
         # Perturb only the below-eps positions (future, invalid).
-        perturbed = survival.clone()
+        perturbed = sort_survival.clone()
         perturbed[:, 2:] = 0.999
-        changed = sched.compute_verify_lens(survival_probs=perturbed)
-        # Valid positions unchanged -> selection must not change.
+        changed = sched.compute_verify_lens(
+            k_survival=k_survival, sort_survival=perturbed
+        )
+        # Budget-capped at 2; top-2 global selection picks 1 extra per request
+        # in both base and perturbed -> verify_lens must be equal.
         self.assertTrue(torch.equal(base, changed))
 
 
