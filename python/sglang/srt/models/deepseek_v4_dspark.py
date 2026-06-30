@@ -238,6 +238,18 @@ class DSparkAttention(MqaAttentionBase):
             pool=pool,
         )
         q = self._compute_q(hidden_states, positions)
+        attn_sink = self._local_attn_sink()
+
+        # FlashMLA's fp8 sparse decode kernel only specializes h_q for {64, 128}; pad the
+        # per-rank query heads (and attn_sink) up to 64 like MQALayer and slice the output
+        # heads back afterward.
+        if self.n_local_heads < 64:
+            q_padded = q.new_zeros(q.shape[0], 64, self.head_dim)
+            q_padded[:, : self.n_local_heads, :] = q
+            q = q_padded
+            sink_padded = attn_sink.new_zeros(64)
+            sink_padded[: self.n_local_heads] = attn_sink
+            attn_sink = sink_padded
 
         # Drive the production sparse backend: it reads the NON-CAUSAL full-block SWA
         # metadata built in make_core_attn_metadata (is_dspark_draft branch) and runs
@@ -251,9 +263,11 @@ class DSparkAttention(MqaAttentionBase):
             layer=self.attn,
             forward_batch=forward_batch,
             compress_ratio=0,
-            attn_sink=self._local_attn_sink(),
+            attn_sink=attn_sink,
             save_kv_cache=False,
         )
+        if o.shape[1] != self.n_local_heads:
+            o = o[:, : self.n_local_heads, :]
 
         freqs_cis = self.freqs_cis[positions]
         apply_rotary_emb(o[..., -rd:], freqs_cis, inverse=True)
