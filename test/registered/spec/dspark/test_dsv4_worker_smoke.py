@@ -14,91 +14,29 @@ _GAMMA = 3
 _HIDDEN = 8
 
 
-def _make_dense_draft_model() -> types.SimpleNamespace:
-    """A dense draft model exposes none of the V4 capabilities."""
-    return types.SimpleNamespace(confidence_head=None)
+def _make_worker() -> DSparkWorkerV2:
+    """A worker stub holding only the fields the smoke-tested helpers read.
 
-
-class _FakeV4DraftModel:
-    """A draft model that exposes the V4 capability surface (forward_spec etc.)."""
-
-    def __init__(self, *, confidence: torch.Tensor) -> None:
-        self.confidence_head = object()
-        self._confidence = confidence
-        self.forward_spec_calls: list[dict] = []
-        self.inject_calls: list[dict] = []
-        self.attached: dict = {}
-
-    def forward_spec(self, input_ids, main_hidden, start_pos=0, sampler=None):
-        self.forward_spec_calls.append(
-            {
-                "input_ids": input_ids,
-                "main_hidden": main_hidden,
-                "start_pos": start_pos,
-                "sampler": sampler,
-            }
-        )
-        bs = input_ids.shape[0]
-        sampled = torch.zeros((bs, _GAMMA), dtype=torch.long)
-        for step in range(_GAMMA):
-            step_logits = torch.zeros((bs, 16), dtype=torch.float32)
-            step_logits[:, step + 1] = 1.0
-            sampled[:, step] = sampler(step_logits, step)
-        output_ids = torch.cat([input_ids.view(-1, 1), sampled], dim=1)
-        corrected_logits = torch.zeros((bs, _GAMMA, 16), dtype=torch.float32)
-        return output_ids, corrected_logits
-
-    def inject_target_hidden(self, *, main_hidden, start_pos, is_prefill):
-        self.inject_calls.append(
-            {
-                "main_hidden": main_hidden,
-                "start_pos": start_pos,
-                "is_prefill": is_prefill,
-            }
-        )
-        return main_hidden
-
-    def last_confidence(self):
-        return self._confidence
-
-    def attach_shared_modules(self, *, embed_tokens, lm_head):
-        self.attached = {"embed_tokens": embed_tokens, "lm_head": lm_head}
-
-
-def _make_worker(*, draft_model) -> DSparkWorkerV2:
+    The dsv4 draft now flows through the SAME unified path as dense
+    (``_run_draft_block_forward`` + ``_sample_draft_block``); the old capability
+    flags (``_draft_owns_block_forward`` / ``_draft_owns_kv_injection`` /
+    ``_draft_owns_confidence``), the ``_propose_draft_block_via_model`` route, the
+    ``inject_target_hidden`` delegation, and the dense-vs-model confidence relay were
+    deleted in the worker unification, so this stub no longer sets them.
+    """
     worker = DSparkWorkerV2.__new__(DSparkWorkerV2)
     worker.gamma = _GAMMA
     worker.verify_num_draft_tokens = _GAMMA + 1
     worker.device = _DEVICE
-    worker.draft_model = draft_model
-    worker._draft_owns_block_forward = hasattr(draft_model, "forward_spec")
-    worker._draft_owns_kv_injection = hasattr(draft_model, "inject_target_hidden")
-    worker._draft_owns_confidence = hasattr(draft_model, "last_confidence")
     worker._verify_backend_self_adds_seq_lens_cache = None
     return worker
 
 
-class TestDsv4CapabilityDetection(CustomTestCase):
-    def test_v4_draft_model_sets_all_capability_flags(self) -> None:
-        """A draft model exposing the V4 surface flips every capability flag True."""
-        worker = _make_worker(
-            draft_model=_FakeV4DraftModel(confidence=torch.full((2, _GAMMA), 0.5))
-        )
-        self.assertTrue(worker._draft_owns_block_forward)
-        self.assertTrue(worker._draft_owns_kv_injection)
-        self.assertTrue(worker._draft_owns_confidence)
-
-    def test_dense_draft_model_leaves_all_capability_flags_false(self) -> None:
-        """A dense draft model exposes no V4 capabilities, so all flags stay False."""
-        worker = _make_worker(draft_model=_make_dense_draft_model())
-        self.assertFalse(worker._draft_owns_block_forward)
-        self.assertFalse(worker._draft_owns_kv_injection)
-        self.assertFalse(worker._draft_owns_confidence)
-
-
 class TestDsv4VerifyBackendSelfAdd(CustomTestCase):
+    """The verify-backend self-add capability is resolved from the backend, not a flag."""
+
     def _worker_with_backend(self, backend) -> DSparkWorkerV2:
-        worker = _make_worker(draft_model=_make_dense_draft_model())
+        worker = _make_worker()
         worker._target_worker = types.SimpleNamespace(
             model_runner=types.SimpleNamespace(attn_backend=backend)
         )
@@ -129,156 +67,12 @@ class TestDsv4VerifyBackendSelfAdd(CustomTestCase):
         self.assertTrue(worker._verify_backend_self_adds_seq_lens())
 
 
-class TestDsv4DraftForwardDispatch(CustomTestCase):
-    def test_propose_routes_to_forward_spec_for_v4(self) -> None:
-        """The worker delegates the draft block to forward_spec when the model owns it."""
-        draft_model = _FakeV4DraftModel(confidence=torch.full((2, _GAMMA), 0.5))
-        worker = _make_worker(draft_model=draft_model)
-        bs = 2
-        anchor = torch.tensor([4, 5], dtype=torch.int64)
-        main_hidden = torch.randn(bs, _HIDDEN)
-        draft_input = types.SimpleNamespace(
-            bonus_tokens=anchor, hidden_states=main_hidden
-        )
-        batch = types.SimpleNamespace(seq_lens=torch.tensor([10, 10]))
-        sampling_info = types.SimpleNamespace(
-            top_ks=torch.tensor([1, 1]), temperatures=torch.tensor([[1.0], [1.0]])
-        )
-
-        proposal = worker._propose_draft_block_via_model(
-            batch=batch,
-            draft_input=draft_input,
-            bs=bs,
-            device=_DEVICE,
-            sampling_info=sampling_info,
-        )
-
-        self.assertEqual(len(draft_model.forward_spec_calls), 1)
-        call = draft_model.forward_spec_calls[0]
-        self.assertEqual(call["start_pos"], 10)
-        self.assertTrue(torch.equal(call["input_ids"], anchor))
-        self.assertEqual(proposal.draft_block_ids.shape, (bs, _GAMMA))
-        self.assertEqual(proposal.draft_block.draft_tokens.shape, (bs, _GAMMA))
-        # anchor at column 0, greedy sampler picks token (step + 1) at each step.
-        self.assertEqual(proposal.draft_block_ids[:, 0].tolist(), anchor.tolist())
-        self.assertEqual(proposal.draft_block.draft_tokens[0].tolist(), [1, 2, 3])
-
-    def test_forward_spec_none_during_decode_raises(self) -> None:
-        """forward_spec returning None during decode is an error (block must run)."""
-        draft_model = _FakeV4DraftModel(confidence=torch.full((1, _GAMMA), 0.5))
-        draft_model.forward_spec = lambda *a, **k: None
-        worker = _make_worker(draft_model=draft_model)
-        draft_input = types.SimpleNamespace(
-            bonus_tokens=torch.tensor([4], dtype=torch.int64),
-            hidden_states=torch.randn(1, _HIDDEN),
-        )
-        batch = types.SimpleNamespace(seq_lens=torch.tensor([10]))
-        sampling_info = types.SimpleNamespace(
-            top_ks=torch.tensor([1]), temperatures=torch.tensor([[1.0]])
-        )
-        with self.assertRaises(RuntimeError):
-            worker._propose_draft_block_via_model(
-                batch=batch,
-                draft_input=draft_input,
-                bs=1,
-                device=_DEVICE,
-                sampling_info=sampling_info,
-            )
-
-
-class TestDsv4InjectDispatch(CustomTestCase):
-    def test_inject_delegates_to_model_for_v4(self) -> None:
-        """The worker delegates the whole KV injection to inject_target_hidden for V4."""
-        draft_model = _FakeV4DraftModel(confidence=torch.full((2, _GAMMA), 0.5))
-        worker = _make_worker(draft_model=draft_model)
-        worker.model_runner = types.SimpleNamespace(device=_DEVICE)
-        target_hidden = torch.randn(2, _HIDDEN)
-        worker._inject_target_hidden_to_draft_kv(
-            target_hidden=target_hidden,
-            cache_loc=torch.tensor([0, 1]),
-            positions=torch.tensor([10, 10]),
-            start_pos=9,
-            is_prefill=False,
-        )
-        self.assertEqual(len(draft_model.inject_calls), 1)
-        call = draft_model.inject_calls[0]
-        self.assertEqual(call["start_pos"], 9)
-        self.assertFalse(call["is_prefill"])
-        self.assertTrue(torch.equal(call["main_hidden"], target_hidden))
-
-    def test_inject_skips_empty_hidden_for_v4(self) -> None:
-        """An empty target hidden is a no-op (no delegation call)."""
-        draft_model = _FakeV4DraftModel(confidence=torch.full((2, _GAMMA), 0.5))
-        worker = _make_worker(draft_model=draft_model)
-        worker.model_runner = types.SimpleNamespace(device=_DEVICE)
-        worker._inject_target_hidden_to_draft_kv(
-            target_hidden=torch.empty((0, _HIDDEN)),
-            cache_loc=torch.empty((0,), dtype=torch.int64),
-            positions=torch.empty((0,), dtype=torch.int64),
-            start_pos=0,
-            is_prefill=True,
-        )
-        self.assertEqual(len(draft_model.inject_calls), 0)
-
-
-class TestDsv4ConfidenceRelay(CustomTestCase):
-    def test_relays_model_confidence_for_v4(self) -> None:
-        """The relay forwards last_confidence() and never computes the dense tap."""
-        confidence = torch.full((2, _GAMMA), 0.4)
-        draft_model = _FakeV4DraftModel(confidence=confidence)
-        worker = _make_worker(draft_model=draft_model)
-        stashed = {}
-
-        def _capture(*, req_pool_indices, confidence):
-            stashed["req"] = req_pool_indices
-            stashed["confidence"] = confidence
-
-        worker._stash_confidence = _capture
-
-        def _fail(**kwargs):
-            raise AssertionError("dense _compute_confidence must not run for V4")
-
-        worker._compute_confidence = _fail
-
-        worker._relay_confidence(
-            req_pool_indices=torch.tensor([0, 1]),
-            draft_hidden=None,
-            anchor_tokens=torch.tensor([4, 5]),
-            draft_tokens=torch.zeros((2, _GAMMA), dtype=torch.long),
-        )
-        self.assertTrue(torch.equal(stashed["confidence"], confidence))
-
-    def test_falls_back_to_dense_compute_when_model_confidence_none(self) -> None:
-        """When last_confidence() is None the relay uses the dense _compute_confidence."""
-        draft_model = _FakeV4DraftModel(confidence=None)
-        worker = _make_worker(draft_model=draft_model)
-        stashed = {}
-        computed = torch.full((2, _GAMMA), 0.9)
-
-        worker._stash_confidence = (
-            lambda *, req_pool_indices, confidence: stashed.update(
-                confidence=confidence
-            )
-        )
-        worker._compute_confidence = (
-            lambda *, draft_hidden, anchor_tokens, draft_tokens: computed
-        )
-
-        worker._relay_confidence(
-            req_pool_indices=torch.tensor([0, 1]),
-            draft_hidden=torch.randn(2, _GAMMA, _HIDDEN),
-            anchor_tokens=torch.tensor([4, 5]),
-            draft_tokens=torch.zeros((2, _GAMMA), dtype=torch.long),
-        )
-        self.assertTrue(torch.equal(stashed["confidence"], computed))
-
-
 class TestDsv4HiddenGeometry(CustomTestCase):
+    """Per-request committed / prefill-anchor hidden gather geometry (unified path)."""
+
     def test_select_committed_hidden_picks_bonus_position(self) -> None:
         """The committed hidden per request is gathered at the correct_len index."""
-        worker = _make_worker(
-            draft_model=_FakeV4DraftModel(confidence=torch.full((2, _GAMMA), 0.5))
-        )
+        worker = _make_worker()
         bs = 2
         window = _GAMMA + 1
         hidden = torch.arange(bs * window * _HIDDEN, dtype=torch.float32).view(
@@ -294,9 +88,7 @@ class TestDsv4HiddenGeometry(CustomTestCase):
 
     def test_select_prefill_last_hidden_picks_extend_boundaries(self) -> None:
         """The first-decode anchor hidden is gathered at each request's extend boundary."""
-        worker = _make_worker(
-            draft_model=_FakeV4DraftModel(confidence=torch.full((2, _GAMMA), 0.5))
-        )
+        worker = _make_worker()
         total = 7
         hidden = torch.arange(total * _HIDDEN, dtype=torch.float32).view(total, _HIDDEN)
         last = worker._select_prefill_last_hidden(hidden=hidden, extend_lens=[3, 4])
