@@ -1386,6 +1386,39 @@ class DeepseekV4AttnBackend(
                 seq_lens=seq_lens,
                 out_cache_loc=out_cache_loc_padded,
             )
+        elif bucket == _GraphBucket.TARGET_VERIFY and self.is_dspark_draft:
+            # DSpark draft block capture: build the gamma-token, NON-CAUSAL, no-compression
+            # geometry directly (symmetric to eager _build_forward_metadata), NOT the
+            # target's gamma+1 causal verify with c4/c128. The draft runner captures
+            # TARGET_VERIFY with num_tokens_per_bs = gamma, so out_cache_loc / positions
+            # carry bs*gamma slots; init_forward_metadata_target_verify would have produced
+            # gamma+1 page_table / seq_lens / compression rows that the gamma swa index
+            # rebuilt in init_forward_metadata_in_graph cannot match. The draft is not
+            # ragged (uniform gamma) and SWA-only, so it skips the ragged-layout / verify_bs
+            # / online-c128 path entirely.
+            block_size = self.speculative_num_draft_tokens - 1
+            num_tokens_block = block_size * bs
+            graph_key = bs
+            assert out_cache_loc is not None
+            out_cache_loc_padded = torch.nn.functional.pad(
+                out_cache_loc,
+                pad=(0, num_tokens_block - len(out_cache_loc)),
+                mode="constant",
+                value=0,
+            )
+            self.online_c128_mtp.prepare_forward(
+                actual_forward_mode,
+                req_pool_indices,
+                seq_lens,
+            )
+            temp_metadata = self.init_forward_metadata_dspark_draft_block(
+                max_seq_len=chosen_max_seq_len,
+                req_pool_indices=req_pool_indices,
+                seq_lens=seq_lens,
+                seq_lens_cpu=seq_lens_cpu,
+                out_cache_loc=out_cache_loc_padded,
+                block_size=block_size,
+            )
         elif bucket == _GraphBucket.TARGET_VERIFY:
             verify_bs = _get_target_verify_bs(forward_batch)
             ragged_layout = self._resolve_verify_layout(forward_batch, bs=bs)
