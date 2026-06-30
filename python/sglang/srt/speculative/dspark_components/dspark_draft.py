@@ -4,7 +4,7 @@ import torch
 
 from sglang.srt.speculative.dflash_info_v2 import DFlashDraftInputV2
 from sglang.srt.speculative.draft_worker_common import make_draft_input_v2
-from sglang.srt.speculative.dspark_info import DraftBlockResult
+from sglang.srt.speculative.dspark_components.dspark_info import DraftBlockResult
 
 
 def greedy_step_sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:

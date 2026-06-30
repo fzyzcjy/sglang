@@ -1,6 +1,6 @@
 import unittest
 
-from sglang.srt.speculative.dspark_utils import (
+from sglang.srt.speculative.dspark_components.dspark_utils import (
     DEFAULT_DSPARK_GAMMA,
     SUPPORTED_DSPARK_MARKOV_HEAD_TYPES,
     DSparkLengthContract,

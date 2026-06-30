@@ -10,7 +10,7 @@ from sglang.srt.speculative.dflash_utils import (
     build_dflash_verify_target_probs,
     compute_dflash_correct_drafts_and_bonus,
 )
-from sglang.srt.speculative.dspark_info import DraftBlockResult
+from sglang.srt.speculative.dspark_components.dspark_info import DraftBlockResult
 from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 from sglang.srt.speculative.reject_sampling import chain_speculative_sampling_triton
 

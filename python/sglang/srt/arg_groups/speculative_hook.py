@@ -298,7 +298,7 @@ def _handle_dspark(server_args: ServerArgs) -> None:
         gamma = int(server_args.speculative_dspark_block_size)
 
     if gamma is None and server_args.speculative_num_draft_tokens is None:
-        from sglang.srt.speculative.dspark_utils import (
+        from sglang.srt.speculative.dspark_components.dspark_utils import (
             DEFAULT_DSPARK_GAMMA,
             parse_dspark_draft_config,
         )
@@ -331,7 +331,9 @@ def _handle_dspark(server_args: ServerArgs) -> None:
             )
 
     elif gamma is None and server_args.speculative_num_draft_tokens is not None:
-        from sglang.srt.speculative.dspark_utils import parse_dspark_draft_config
+        from sglang.srt.speculative.dspark_components.dspark_utils import (
+            parse_dspark_draft_config,
+        )
 
         model_override_args = json.loads(server_args.json_model_override_args)
         config_gamma: Optional[int] = None
