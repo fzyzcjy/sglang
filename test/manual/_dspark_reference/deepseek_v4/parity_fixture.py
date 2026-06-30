@@ -69,7 +69,7 @@ def make_tiny_dsv4_config(
     config.dspark_target_layer_ids = [0]
     config.temperature = 0.0
     config.enable_confidence_head = enable_confidence_head
-    config.confidence_head_with_markov = enable_confidence_head
+    config.confidence_head_with_markov = True
     return config
 
 
@@ -108,7 +108,7 @@ def make_real_dsv4_config(
     config.dspark_target_layer_ids = list(range(n_stages))
     config.temperature = 0.0
     config.enable_confidence_head = enable_confidence_head
-    config.confidence_head_with_markov = enable_confidence_head
+    config.confidence_head_with_markov = True
     return config
 
 
