@@ -79,23 +79,33 @@ subfolders once the suite stabilizes (mirroring `attention/unittests/dsv4/`).
 | `test_dspark_rejection_harness.py` | 4 backend/kernel UT (no server) |
 | `test_dsv4_ragged_meta.py` | 4 backend metadata + graph key |
 | `test_dsv4_aux_capture_cp_guard.py` | 4 backend capture guard |
-| `test_dsv4_worker_parity.py` | 4 backend (skip stub, BLOCKED) |
+| `test_dsv4_worker_parity.py` | 1 parity (un-skipped; delegates to T1 harness) |
+| `test_dsv4_block_forward_sot_parity.py` | 1 parity (T1 guardrail + negative causal test) |
+| `test_dsv4_draft_probs_unit.py` | 2 protocol/unit (T2 draft_probs losslessness) |
+| `test_dsv4_dynamic_batch.py` | 1 parity (T3 per-row independence) |
+| `test_dsv4_tp_parity.py` | 1 parity (T4 TP=2 vs TP=1) |
+| `test_dsv4_injection.py` | 2 + 1 (T5 translate unit + GPU round-trip) |
 
 ## Not run by CI (reference fixtures)
 
 `test/srt/speculative/_dspark_reference/` — a vendored copy of the DeepSpec
 qwen3/gemma4 modeling (`markov_head.py`, `draft_ops.py`, `sampling.py`,
-`qwen3/`, `gemma4/`). Imported by the parity tests (category 1) as the numerical
-"standard answer". Not collected as tests itself; lives under `test/srt/` (CI
-only globs `test/registered/**`).
+`qwen3/`, `gemma4/`) plus the DSpark V4 source-of-truth oracle
+(`dsv4/sot_dspark_attention.py` from the DeepSeek-V4-Flash-DSpark reference
+model.py/kernel.py) and the T1/T3/T4 production block-forward fixture
+(`dsv4/block_forward_harness.py`). Imported by the parity tests (category 1) as
+the numerical "standard answer" / production driver. Not collected as tests
+itself; lives under `test/srt/` (CI only globs `test/registered/**`).
 
 ## Open gaps
 
-- **Category 4 (attention backend/graph) is the biggest gap** — the dsv4 GPU
-  verify path is unvalidated. `test_dsv4_worker_parity.py` is a `@skip` stub
-  (the `[P0-V3]` spike: does `DeepseekV4AttnBackend` TARGET_VERIFY survive
-  `num_draft_tokens=gamma+1`?). Compare with `attention/unittests/dsv4/`, which
-  has a full coverage matrix for the non-spec path.
+- **dsv4 block-forward parity is now guarded (T1).**
+  `test_dsv4_block_forward_sot_parity.py` drives the production
+  `DeepseekV4AttnBackend` non-causal full-block builder vs the external SoT oracle
+  and includes a negative causal-flip test; `test_dsv4_worker_parity.py` is
+  un-skipped and delegates to the same harness. Both skip cleanly until the
+  model+backend agents land the contract (`DSparkV4DraftOutput` +
+  `get_dspark_swa_page_indices`), then run on GPU.
 - **`compact` (real-N) e2e** in `test_dspark_flag_matrix.py` is `@skip` BLOCKED
   on the ragged-verify routing decision (the backend `graph_num_tokens == total`
   contract mismatch).
