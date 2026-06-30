@@ -846,8 +846,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         # Per-request accept (greedy argmax-match vs rejection sampling), dispatched
         # by batch composition. Both rules are lossless.
         greedy_mask = draft_block.greedy_mask
-        # Read is_all_greedy (host-side) not bool(greedy_mask.all()): the latter is a
-        # GPU .item() that syncs the critical path.
+        # All-greedy fast path. is_all_greedy is host-side, so the branch is sync-free.
         all_greedy = sampling_info is None or sampling_info.is_all_greedy
         if all_greedy:
             return self._accept_greedy(
@@ -855,19 +854,22 @@ class DSparkWorkerV2(BaseSpecWorker):
                 target_logits=target_logits,
                 cutoff_layout=cutoff_layout,
             )
-        # Not all-greedy: run BOTH the chain kernel (sampling rows) and argmax-match
-        # (greedy rows) and select per row via greedy_mask below. This also covers the
-        # all-sampling case correctly -- greedy_mask is all-False there, so torch.where
-        # picks the sampling result for every row -- so we deliberately do NOT branch on
-        # bool(greedy_mask.any()): that was another per-step host sync (is_nonzero ->
-        # item -> cudaStreamSynchronize), and "all sampling" is just as host-knowable as
-        # "all greedy". The extra argmax-match pass is cheap and draws no RNG, so the
-        # sampling RNG stream is unchanged.
         draft_probs = torch.softmax(
             draft_block.corrected_logits.float()
             / draft_block.temperatures[:, None, None],
             dim=-1,
         )
+        # All-sampling fast path: no greedy rows -> only the chain kernel (host-side, sync-free).
+        if not sampling_info.is_any_greedy:
+            return self._accept_sampling(
+                candidates=candidates,
+                target_logits=target_logits,
+                draft_probs=draft_probs,
+                sampling_info=sampling_info,
+                draft_input=draft_input,
+                cutoff_layout=cutoff_layout,
+            )
+        # Mixed: run both rules and select per row by greedy_mask.
         greedy_len, greedy_bonus = self._accept_greedy(
             candidates=candidates,
             target_logits=target_logits,
