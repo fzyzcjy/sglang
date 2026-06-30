@@ -2,15 +2,11 @@ from __future__ import annotations
 
 import bisect
 import logging
-import statistics
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import Optional
 
 import msgspec
 
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
 
 
 class SpsCostTable(msgspec.Struct, frozen=True):
@@ -52,49 +48,30 @@ class SpsCostTable(msgspec.Struct, frozen=True):
 
 def profile_sps_table(
     *,
-    target_worker: BaseSpecWorker,
-    probe_request_counts: list[int],
-    gamma: int,
-    iters: int,
-    time_uniform_verify_step: Callable[[BaseSpecWorker, int, int], float],
+    probes: list[tuple[int, float]],
     max_batch_tokens: Optional[int] = None,
 ) -> SpsCostTable:
-    if gamma < 1:
-        raise ValueError(f"profile_sps_table requires gamma >= 1, got {gamma}.")
-    if iters < 1:
-        raise ValueError(f"profile_sps_table requires iters >= 1, got {iters}.")
+    if not probes:
+        raise ValueError("profile_sps_table requires at least one probe.")
 
-    probe_request_counts = sorted(set(int(r) for r in probe_request_counts))
-    if not probe_request_counts or probe_request_counts[0] < 1:
-        raise ValueError(
-            "probe_request_counts must contain positive request counts, "
-            f"got {probe_request_counts}."
-        )
+    sorted_probes = sorted(probes, key=lambda probe: probe[0])
 
-    verify_window = 1 + gamma
     sample_batch_tokens: list[int] = []
     sample_steps_per_sec: list[float] = []
-
-    for num_requests in probe_request_counts:
-        batch_tokens = num_requests * verify_window
-        durations: list[float] = []
-        for _ in range(iters):
-            durations.append(
-                time_uniform_verify_step(target_worker, num_requests, gamma)
+    for batch_tokens, steps_per_sec in sorted_probes:
+        batch_tokens = int(batch_tokens)
+        if batch_tokens < 1:
+            raise ValueError(
+                f"profile_sps_table requires batch_tokens >= 1, got {batch_tokens}."
             )
-        median_duration = statistics.median(durations)
-        steps_per_sec = (1.0 / median_duration) if median_duration > 0 else float("inf")
-
+        if sample_batch_tokens and batch_tokens == sample_batch_tokens[-1]:
+            raise ValueError(
+                "profile_sps_table requires unique batch_tokens per probe; "
+                f"batch_tokens={batch_tokens} appears more than once. Median the "
+                "repeated samples per batch_tokens before calling the assembler."
+            )
         sample_batch_tokens.append(batch_tokens)
-        sample_steps_per_sec.append(steps_per_sec)
-        logger.info(
-            "Profiled SPS probe: num_requests=%s, batch_tokens=%s, "
-            "median_duration=%.6fs, steps_per_sec=%.3f",
-            num_requests,
-            batch_tokens,
-            median_duration,
-            steps_per_sec,
-        )
+        sample_steps_per_sec.append(float(steps_per_sec))
 
     resolved_max = (
         int(max_batch_tokens)
