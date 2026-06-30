@@ -191,7 +191,6 @@ def build_ragged_verify_window(
     # the compact window writes only the first verify_len_r reserved slots.
     prefix_lens = batch.seq_lens
     verify_lens = layout.verify_lens.to(device=device, dtype=torch.int32)
-    verify_lens_cpu = layout.verify_lens_cpu
 
     positions, _ = compute_position(
         model_runner.server_args.attention_backend,
@@ -216,17 +215,12 @@ def build_ragged_verify_window(
         device=device,
     )
 
-    if batch.seq_lens_cpu is None:
-        raise RuntimeError("DSpark decode expected batch.seq_lens_cpu, got None")
-    seq_lens_cpu = batch.seq_lens_cpu + torch.tensor(
-        verify_lens_cpu, dtype=batch.seq_lens_cpu.dtype
-    )
-
+    # Host verify seq_lens is NOT built here (keeps the window sync-free); the
+    # dense-backend host pre-add lives in the worker's _run_ragged_target_verify.
     return RaggedVerifyWindow(
         positions=positions,
         verify_cache_loc=verify_cache_loc,
         verify_ids=verify_ids,
-        seq_lens_cpu=seq_lens_cpu,
     )
 
 

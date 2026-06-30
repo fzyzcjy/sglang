@@ -1063,8 +1063,16 @@ class DSparkWorkerV2(BaseSpecWorker):
         batch.out_cache_loc = ragged_window.verify_cache_loc
         seq_lens_cpu_backup = batch.seq_lens_cpu
         seq_lens_sum_backup = batch.seq_lens_sum
-        batch.seq_lens_cpu = ragged_window.seq_lens_cpu
-        batch.seq_lens_sum = int(ragged_window.seq_lens_cpu.sum())
+        # Sync-free verify, keyed on host-mirror availability (not a self-add flag:
+        # trtllm_mha is GPU-only yet not self-adding). GPU-only backends
+        # (needs_cpu_seq_lens=False) leave seq_lens_cpu None and build kv metadata
+        # from GPU seq_lens + device layout.verify_lens; dense backends publish it,
+        # so add the real per-req compact window on the host.
+        if seq_lens_cpu_backup is not None:
+            batch.seq_lens_cpu = seq_lens_cpu_backup + torch.tensor(
+                layout.verify_lens_cpu, dtype=seq_lens_cpu_backup.dtype
+            )
+            batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
 
         verify_forward_batch, _ = verify_input.prepare_for_verify(
             batch, self.target_worker

@@ -40,14 +40,6 @@ def decide_needs_cpu_seq_lens(
         # ngram's USE_FULL_MASK verify path reads seq_lens_cpu per req to size
         # the tree mask, regardless of the attn backend (e.g. Triton opts out).
         return True
-    if algo.is_dspark():
-        # DSpark COMPACT verify builds the ragged window on the host
-        # (_build_ragged_verify_window reads seq_lens_cpu per req), so the host
-        # mirror must be published regardless of backend (like ngram).
-        from sglang.srt.speculative.ragged_verify import ragged_verify_compact_enabled
-
-        if ragged_verify_compact_enabled():
-            return True
     # Skip unset slots (e.g. draft_extend_attn_backend on some spec configs);
     # missing flag -> True so undeclared backends stay on the legacy path.
     return any(
