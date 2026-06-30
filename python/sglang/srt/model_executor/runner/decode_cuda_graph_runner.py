@@ -502,6 +502,10 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             return None
         from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 
+        assert num_tokens % self.num_tokens_per_bs == 0, (
+            f"ragged-verify capture bucket {num_tokens=} must be an exact multiple of "
+            f"{self.num_tokens_per_bs=} to recover bs"
+        )
         bs = num_tokens // self.num_tokens_per_bs
         return RaggedVerifyLayout.uniform(
             bs=bs,
