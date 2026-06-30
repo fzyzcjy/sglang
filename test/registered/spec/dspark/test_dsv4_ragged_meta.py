@@ -73,23 +73,23 @@ class _patched_cp_size:
 
 class TestRaggedVerifyMode(CustomTestCase):
     def test_unset_mode_returns_static(self):
-        """Unset SGLANG_RAGGED_VERIFY resolves to the static sentinel."""
-        with envs.SGLANG_RAGGED_VERIFY.override(""):
+        """Unset SGLANG_RAGGED_VERIFY_MODE resolves to the static sentinel."""
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(""):
             self.assertEqual(_ragged_verify_mode(), RAGGED_VERIFY_OFF)
 
     def test_cap_accept_mode_parsed(self):
         """cap-accept is an accepted mode value."""
-        with envs.SGLANG_RAGGED_VERIFY.override(RAGGED_VERIFY_CUTOFF_ONLY):
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_CUTOFF_ONLY):
             self.assertEqual(_ragged_verify_mode(), RAGGED_VERIFY_CUTOFF_ONLY)
 
     def test_compact_mode_parsed(self):
         """compact is an accepted mode value."""
-        with envs.SGLANG_RAGGED_VERIFY.override(RAGGED_VERIFY_FULL):
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_FULL):
             self.assertEqual(_ragged_verify_mode(), RAGGED_VERIFY_FULL)
 
     def test_invalid_mode_fails_loud(self):
         """An unrecognised mode value raises instead of silently defaulting."""
-        with envs.SGLANG_RAGGED_VERIFY.override("bogus"):
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override("bogus"):
             with self.assertRaises(AssertionError):
                 _ragged_verify_mode()
 
@@ -184,7 +184,7 @@ class TestResolveVerifyLayoutGating(CustomTestCase):
         """No layout on spec_info means the backend stays on the full-block path."""
         backend = _stub_backend()
         fb = _make_forward_batch(None)
-        with envs.SGLANG_RAGGED_VERIFY.override(RAGGED_VERIFY_FULL):
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_FULL):
             self.assertIsNone(
                 DeepseekV4AttnBackend._resolve_verify_layout(backend, fb, bs=3)
             )
@@ -194,7 +194,7 @@ class TestResolveVerifyLayoutGating(CustomTestCase):
         backend = _stub_backend()
         layout = _make_layout([6, 3, 1])
         fb = _make_forward_batch(layout)
-        with envs.SGLANG_RAGGED_VERIFY.override(RAGGED_VERIFY_CUTOFF_ONLY):
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_CUTOFF_ONLY):
             self.assertIsNone(
                 DeepseekV4AttnBackend._resolve_verify_layout(backend, fb, bs=3)
             )
@@ -204,7 +204,7 @@ class TestResolveVerifyLayoutGating(CustomTestCase):
         backend = _stub_backend()
         layout = _make_layout([6, 3, 1])
         fb = _make_forward_batch(layout)
-        with envs.SGLANG_RAGGED_VERIFY.override(RAGGED_VERIFY_FULL):
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_FULL):
             with _patched_cp_size(1):
                 resolved = DeepseekV4AttnBackend._resolve_verify_layout(
                     backend, fb, bs=3
@@ -216,7 +216,7 @@ class TestResolveVerifyLayoutGating(CustomTestCase):
         backend = _stub_backend()
         layout = _make_layout([6, 3, 1])
         fb = _make_forward_batch(layout)
-        with envs.SGLANG_RAGGED_VERIFY.override(RAGGED_VERIFY_FULL):
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_FULL):
             with _patched_cp_size(2):
                 with self.assertRaises(NotImplementedError):
                     DeepseekV4AttnBackend._resolve_verify_layout(backend, fb, bs=3)
@@ -226,7 +226,7 @@ class TestResolveVerifyLayoutGating(CustomTestCase):
         backend = _stub_backend(online_c128_enabled=True)
         layout = _make_layout([6, 3, 1])
         fb = _make_forward_batch(layout)
-        with envs.SGLANG_RAGGED_VERIFY.override(RAGGED_VERIFY_FULL):
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_FULL):
             with _patched_cp_size(1):
                 with self.assertRaises(NotImplementedError):
                     DeepseekV4AttnBackend._resolve_verify_layout(backend, fb, bs=3)
@@ -236,7 +236,7 @@ class TestResolveVerifyLayoutGating(CustomTestCase):
         backend = _stub_backend()
         layout = _make_layout([6, 3, 0])
         fb = _make_forward_batch(layout)
-        with envs.SGLANG_RAGGED_VERIFY.override(RAGGED_VERIFY_FULL):
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_FULL):
             with _patched_cp_size(1):
                 with self.assertRaises(AssertionError):
                     DeepseekV4AttnBackend._resolve_verify_layout(backend, fb, bs=3)
@@ -246,7 +246,7 @@ class TestResolveVerifyLayoutGating(CustomTestCase):
         backend = _stub_backend()
         layout = _make_layout([6, 3, 1])
         fb = _make_forward_batch(layout)
-        with envs.SGLANG_RAGGED_VERIFY.override(RAGGED_VERIFY_FULL):
+        with envs.SGLANG_RAGGED_VERIFY_MODE.override(RAGGED_VERIFY_FULL):
             with _patched_cp_size(1):
                 with self.assertRaises(AssertionError):
                     DeepseekV4AttnBackend._resolve_verify_layout(backend, fb, bs=2)

@@ -95,23 +95,23 @@ class TestWarBarrierCapability(CustomTestCase):
     publisher branch actually records the read-done event for verify replay.
     """
 
-    def test_dspark_supports_overalloc_war_verify(self):
-        """supports_overalloc_war_verify() must return True for DSPARK."""
+    def test_dspark_qualifies_for_war_verify_barrier(self):
+        """is_dflash_or_dspark() must return True for DSPARK."""
         algo = SpeculativeAlgorithm.from_string("DSPARK")
         self.assertTrue(
-            algo.supports_overalloc_war_verify(),
+            algo.is_dflash_or_dspark(),
             "DSPARK must qualify for the over-alloc WAR verify barrier.",
         )
 
-    def test_dflash_also_supports_overalloc_war_verify(self):
+    def test_dflash_also_qualifies_for_war_verify_barrier(self):
         """DFLASH shares the same WAR verify capability (sibling algorithm)."""
         algo = SpeculativeAlgorithm.from_string("DFLASH")
-        self.assertTrue(algo.supports_overalloc_war_verify())
+        self.assertTrue(algo.is_dflash_or_dspark())
 
-    def test_eagle_does_not_support_overalloc_war_verify(self):
+    def test_eagle_does_not_qualify_for_war_verify_barrier(self):
         """Non-block-draft algorithms (EAGLE) do not over-alloc verify replay."""
         algo = SpeculativeAlgorithm.from_string("EAGLE")
-        self.assertFalse(algo.supports_overalloc_war_verify())
+        self.assertFalse(algo.is_dflash_or_dspark())
 
 
 class TestWarBarrierAntiPattern(CustomTestCase):
@@ -149,10 +149,10 @@ class TestWarBarrierAntiPattern(CustomTestCase):
         )
 
     def test_publisher_gates_on_war_capability(self):
-        """The read-done publisher branch is gated on supports_overalloc_war_verify."""
+        """The read-done publisher branch is gated on is_dflash_or_dspark."""
         block = self._read_replay_block()
         self.assertIn(
-            "supports_overalloc_war_verify()",
+            "is_dflash_or_dspark()",
             block,
             "Publisher branch must gate on the WAR verify capability predicate.",
         )

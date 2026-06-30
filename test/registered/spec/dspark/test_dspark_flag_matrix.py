@@ -21,7 +21,7 @@ DEFAULT_DRAFT_MODEL_DSPARK_QWEN3 = "deepseek-ai/dspark_qwen3_8b_block7"
 DEFAULT_TARGET_MODEL_DSPARK_GEMMA4 = "google/gemma-4-12B-it"
 DEFAULT_DRAFT_MODEL_DSPARK_GEMMA4 = "deepseek-ai/dspark_gemma4_12b_block7"
 
-# The ragged-verify flag (SGLANG_RAGGED_VERIFY) and RaggedVerifyLayout are owned
+# The ragged-verify flag (SGLANG_RAGGED_VERIFY_MODE) and RaggedVerifyLayout are owned
 # by the ragged-verify-infra chapter and are not yet landed in any speculative
 # tree. cap-accept and compact matrix entries depend on them, so they are gated.
 _RAGGED_VERIFY_AVAILABLE = (
@@ -127,13 +127,13 @@ class _DSparkFlagMatrixBase(CustomTestCase):
         if not _RAGGED_VERIFY_AVAILABLE:
             self.skipTest(
                 "RAGGED_VERIFY not yet implemented (cap-accept flag fixture "
-                "blocked on ragged-verify-infra: SGLANG_RAGGED_VERIFY / "
+                "blocked on ragged-verify-infra: SGLANG_RAGGED_VERIFY_MODE / "
                 "RaggedVerifyLayout)."
             )
         off_outputs = self._launch_and_capture()
         # cap-accept with full gamma == static (no suffix truncated). The exact env
         # wiring is owned by ragged-verify-infra; this asserts the contract.
-        cap_env = {"SGLANG_RAGGED_VERIFY": "cap-accept"}
+        cap_env = {"SGLANG_RAGGED_VERIFY_MODE": "cap-accept"}
         cap_outputs = self._launch_and_capture(extra_env=cap_env)
         for prompt in _MATRIX_PROMPTS:
             self.assertEqual(
@@ -151,9 +151,9 @@ class _DSparkFlagMatrixBase(CustomTestCase):
         """`compact` (real-N ragged) must equal `cap-accept` under same frozen ell_r."""
         self._maybe_skip_models()
         off_outputs = self._launch_and_capture()
-        cap_env = {"SGLANG_RAGGED_VERIFY": "cap-accept"}
+        cap_env = {"SGLANG_RAGGED_VERIFY_MODE": "cap-accept"}
         cap_outputs = self._launch_and_capture(extra_env=cap_env)
-        compact_env = {"SGLANG_RAGGED_VERIFY": "compact"}
+        compact_env = {"SGLANG_RAGGED_VERIFY_MODE": "compact"}
         compact_outputs = self._launch_and_capture(extra_env=compact_env)
         for prompt in _MATRIX_PROMPTS:
             self.assertEqual(

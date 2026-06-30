@@ -656,7 +656,7 @@ def spec_prepare_for_decode(batch: ScheduleBatch) -> None:
     """eagle/ngram share a stateless free function; dflash/dspark keep stateful
     prep on their draft input -- the dispatcher routes.
     """
-    if batch.spec_algorithm.is_block_draft_with_target_kv():
+    if batch.spec_algorithm.is_dflash_or_dspark():
         batch.spec_info.prepare_for_decode(batch)
     else:
         from sglang.srt.speculative.eagle_utils import eagle_prepare_for_decode

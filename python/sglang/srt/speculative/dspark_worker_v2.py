@@ -1506,7 +1506,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         # WAR/RAW (invariant 3): the layout's device buffers are built on the
         # forward stream before this prepare_for_verify, so the runner snapshots
         # them inside load_batch ahead of read_done.record(); the generic overlap
-        # barrier (supports_overalloc_war_verify(), already DSPARK-gated) then
+        # barrier (is_dflash_or_dspark(), already DSPARK-gated) then
         # serializes the next schedule-stream write against this read. No new
         # event is introduced.
         verify_input = DFlashVerifyInput(
