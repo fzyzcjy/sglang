@@ -11,7 +11,6 @@ from sglang.srt.layers.attention.deepseek_v4_backend import (
     SWA_WINDOW,
     DeepseekV4AttnBackend,
     _compact_dspark_window_then_block,
-    build_dspark_swa_page_indices,
 )
 from sglang.srt.utils import ceil_align
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -146,8 +145,8 @@ def _fake_backend(*, gamma: int, is_dspark_draft: bool) -> DeepseekV4AttnBackend
     backend.cuda_int32_kwargs = {"device": torch.device("cpu"), "dtype": torch.int32}
     backend.c4_topk = 1
     num_reqs, max_cols = 8, 512
-    backend.req_to_token = (
-        torch.arange(num_reqs * max_cols, dtype=torch.int64).view(num_reqs, max_cols)
+    backend.req_to_token = torch.arange(num_reqs * max_cols, dtype=torch.int64).view(
+        num_reqs, max_cols
     )
     backend.token_to_kv_pool = SimpleNamespace(
         translate_loc_from_full_to_swa=lambda x: x
