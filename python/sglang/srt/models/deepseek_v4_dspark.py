@@ -102,8 +102,9 @@ class DSparkAttention(nn.Module):
         self.layer_id = layer_id
         self.dim = config.hidden_size
         self.qk_rope_head_dim = config.qk_rope_head_dim
-        self.qk_nope_head_dim = config.qk_nope_head_dim
+        self.qk_nope_head_dim = config.head_dim - config.qk_rope_head_dim
         self.head_dim = self.qk_rope_head_dim + self.qk_nope_head_dim
+        assert self.head_dim == config.head_dim
         self.rope_head_dim = config.qk_rope_head_dim
         self.n_heads = config.num_attention_heads
         self.n_local_heads = self.n_heads
