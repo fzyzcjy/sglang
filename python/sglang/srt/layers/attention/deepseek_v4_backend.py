@@ -719,9 +719,9 @@ class DeepseekV4AttnBackend(
         layout = layout.padded_to_bucket(
             num_draft_tokens=self.speculative_num_draft_tokens
         )
-        assert len(layout.verify_lens_cpu) == bs, (
-            f"padded ragged layout bs {len(layout.verify_lens_cpu)} != batch bs {bs}"
-        )
+        assert (
+            len(layout.verify_lens_cpu) == bs
+        ), f"padded ragged layout bs {len(layout.verify_lens_cpu)} != batch bs {bs}"
         return layout
 
     def _target_verify_graph_key(
@@ -928,9 +928,7 @@ class DeepseekV4AttnBackend(
             self.speculative_num_draft_tokens,
             **self.cuda_int32_kwargs,
         )
-        self.extend_start_loc_buffer = torch.zeros(
-            num_reqs, **self.cuda_int32_kwargs
-        )
+        self.extend_start_loc_buffer = torch.zeros(num_reqs, **self.cuda_int32_kwargs)
 
     def init_forward_metadata_target_verify(
         self,
