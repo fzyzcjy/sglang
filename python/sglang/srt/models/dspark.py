@@ -13,6 +13,7 @@ from typing import Callable, Iterable, Optional, Tuple
 import torch
 from torch import nn
 
+from sglang.srt.distributed.communication_op import tensor_model_parallel_all_gather
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models.dflash import DFlashDraftModel
 from sglang.srt.speculative.dspark_utils import parse_dspark_draft_config
@@ -21,6 +22,13 @@ logger = logging.getLogger(__name__)
 
 # A per-step sampler: (step_logits [bs, vocab], step_idx) -> sampled tokens [bs].
 StepSampler = Callable[[torch.Tensor, int], torch.Tensor]
+
+
+def gather_and_crop_vocab(
+    local_logits: torch.Tensor, lm_head: nn.Module
+) -> torch.Tensor:
+    full_logits = tensor_model_parallel_all_gather(local_logits, dim=-1)
+    return full_logits[..., : int(lm_head.org_vocab_size)]
 
 
 class VanillaMarkov(nn.Module):
@@ -376,6 +384,40 @@ class DSparkDraftMixin:
         self.gamma = int(dspark_config.resolve_gamma(default=self.block_size))
         self.markov_head = build_markov_head(config)
         self.confidence_head = build_confidence_head(config)
+        self.lm_head: Optional[nn.Module] = None
+
+    def attach_shared_modules(
+        self, *, embed_tokens: nn.Module, lm_head: nn.Module
+    ) -> None:
+        """Attach the target model's shared lm_head (worker wiring).
+
+        The dense draft already carries its own token embedding through the backbone, so
+        ``embed_tokens`` is ignored here; only the target's local-vocab ``lm_head`` shard
+        is stored (the same live object the worker passes), preserving the TP vocab shard
+        + ``org_vocab_size`` for ``compute_base_logits``.
+        """
+        del embed_tokens
+        self.lm_head = lm_head
+
+    def compute_base_logits(self, hidden: torch.Tensor) -> torch.Tensor:
+        """Base logits from the post-norm draft hidden: target lm_head matmul + gather.
+
+        Mirrors the former worker-side ``_compute_base_logits``: matmul the post-norm draft
+        hidden against the target's local-vocab head weight (casting only when the dtype
+        differs, bit-identical no-op copy otherwise), TP all-gather to the full vocab, and
+        crop the TP vocab padding. The dense path keeps the weight-dtype ``matmul`` operator
+        (NOT the dsv4 fp32 ``F.linear``) so the base logits are byte-identical to before.
+        """
+        if self.lm_head is None:
+            raise ValueError(
+                "DSpark dense draft requires the target lm_head "
+                "(call attach_shared_modules first)."
+            )
+        weight = self.lm_head.weight
+        if hidden.dtype != weight.dtype:
+            hidden = hidden.to(weight.dtype)
+        local_logits = torch.matmul(hidden, weight.T)
+        return gather_and_crop_vocab(local_logits, self.lm_head)
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         markov_weights = []
