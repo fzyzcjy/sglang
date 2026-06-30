@@ -254,14 +254,20 @@ def _compact_dspark_window_then_block(
     device = window_swa_locs.device
     out = torch.full((bs, target_width), -1, dtype=torch.int32, device=device)
 
-    col = torch.arange(SWA_WINDOW, device=device, dtype=torch.int32).view(1, -1)
-    valid_window = col >= (SWA_WINDOW - context_lens.view(-1, 1))
-    packed_window_col = col - (SWA_WINDOW - context_lens.view(-1, 1))
-    rows = torch.arange(bs, device=device).view(-1, 1).expand(-1, SWA_WINDOW)
-    out[rows[valid_window], packed_window_col[valid_window]] = window_swa_locs[
-        valid_window
-    ]
+    # Left-pack the valid window suffix via gather + where, NOT boolean-mask advanced
+    # indexing: out[bool_mask] = src first calls nonzero(), a D2H host sync with a
+    # data-dependent shape, which is illegal inside cuda-graph capture (this builder runs
+    # in the recorded graph on the draft worker). gather/where are elementwise, static
+    # shape, no sync. Semantics: out[r, j] = window_swa_locs[r, (W - context_len[r]) + j]
+    # for j < context_len[r], else -1 (the valid window suffix shifted left to [0, cl)).
+    j = torch.arange(SWA_WINDOW, device=device, dtype=torch.int32).view(1, -1)
+    shift = (SWA_WINDOW - context_lens.view(-1, 1)).to(torch.int32)
+    src_col = (shift + j).clamp_(min=0, max=SWA_WINDOW - 1).to(torch.int64)
+    gathered = torch.gather(window_swa_locs, dim=1, index=src_col)
+    valid = j < context_lens.view(-1, 1)
+    out[:, :SWA_WINDOW] = torch.where(valid, gathered, -1)
 
+    # Block slots: static-shape integer advanced indexing (no nonzero) is capture-safe.
     block_col = context_lens.view(-1, 1) + torch.arange(
         block_size, device=device, dtype=torch.int32
     ).view(1, -1)
