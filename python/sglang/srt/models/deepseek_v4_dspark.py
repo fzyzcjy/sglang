@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Callable, Iterable, List, Optional, Tuple
 
+import msgspec
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -48,6 +49,44 @@ logger = logging.getLogger(__name__)
 
 # A per-step sampler: (step_logits [bs, vocab], step_idx) -> sampled tokens [bs].
 StepSampler = Callable[[torch.Tensor, int], torch.Tensor]
+
+
+class DSparkV4DraftOutput(msgspec.Struct, frozen=True):
+    """Structured output of ``DeepseekV4ForCausalLMDSpark.forward`` (worker contract).
+
+    The dsv4 draft model computes its base logits internally (the hc_head collapse the
+    dense path lacks), so the worker reads them off this struct instead of calling a
+    separate hook. This struct is returned as the model-runner ``logits_output``, so the
+    worker reads ``draft_out.logits_output.{draft_hidden,base_logits,x_post_hc}``.
+
+    Fields:
+        draft_hidden: ``[bs * gamma, hc, d]`` post-stage hc-expanded backbone hidden (the
+            raw tensor the stages produced; retained for callers that want the pre-collapse
+            hidden, e.g. debugging / parity).
+        base_logits: ``[bs * gamma, org_vocab_size]`` the hc_head-collapsed + normed +
+            lm_head + TP-all-gathered + org-vocab-cropped logits the serial Markov head
+            consumes (the markov bias-then-sample loop runs on THESE, not raw backbone
+            logits). The worker reshapes to ``[bs, gamma, vocab]``.
+        x_post_hc: ``[bs * gamma, d]`` the post-hc_head PRE-norm tap (c-scope confidence
+            input), or ``None`` when the confidence head is disabled. The model also stashes
+            it on ``self._x_post_hc`` for ``compute_confidence``.
+    """
+
+    draft_hidden: torch.Tensor
+    base_logits: torch.Tensor
+    x_post_hc: Optional[torch.Tensor]
+
+    @property
+    def hidden_states(self) -> torch.Tensor:
+        # Back-compat accessor: the model-runner / generic logits-output consumers read
+        # ``.hidden_states``; the DSpark draft backbone hidden is ``draft_hidden``.
+        return self.draft_hidden
+
+    @property
+    def next_token_logits(self) -> torch.Tensor:
+        # The DSpark draft base logits occupy the next-token-logits slot for any generic
+        # consumer; the worker reads ``base_logits`` explicitly.
+        return self.base_logits
 
 
 def apply_rotary_emb(
@@ -684,17 +723,19 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         input_embeds: Optional[torch.Tensor] = None,
         get_embedding: bool = False,
         pp_proxy_tensors=None,
-    ):
-        """Standard SGLang draft forward: embed -> DSpark stages -> backbone hidden.
+    ) -> DSparkV4DraftOutput:
+        """Standard SGLang draft forward: embed -> DSpark stages -> base logits.
 
-        The worker builds the draft block ForwardBatch (TARGET_VERIFY mode, the gamma
-        block slots in ``out_cache_loc``, per-row positions, ``spec_info.draft_token_num``
-        = gamma) and passes the noise-block ``input_embeds`` (anchor at column 0). Returns
-        a ``LogitsProcessorOutput`` carrying the post-stage hc-expanded draft hidden
-        ``[N, hc, d]``; the head finish (hc_head + Markov) is driven by the worker.
+        The worker builds the draft block ForwardBatch (TARGET_VERIFY mode, the gamma block
+        slots in ``out_cache_loc``, per-row positions, ``spec_info.draft_token_num`` =
+        gamma). The worker passes only ``input_ids`` (the dsv4 model hc-expands the
+        embedding itself via ``forward_embed``); ``input_embeds`` is accepted for parity
+        callers. Runs the DSpark stages on the production paged SWA pool, then computes the
+        base logits internally (hc_head collapse -> norm -> lm_head -> TP all-gather ->
+        org-vocab crop). Returns a ``DSparkV4DraftOutput`` carrying the backbone hidden, the
+        base logits the serial Markov head consumes, and the post-hc_head confidence tap.
+        The head finish (serial Markov sampling) is driven by the worker.
         """
-        from sglang.srt.layers.logits_processor import LogitsProcessorOutput
-
         del get_embedding, pp_proxy_tensors
         if input_embeds is None:
             input_embeds = self.forward_embed(
@@ -703,7 +744,15 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         x = input_embeds
         for stage in self.stages:
             x = stage(positions, x, forward_batch)
-        return LogitsProcessorOutput(next_token_logits=None, hidden_states=x)
+
+        x_post_hc = self.collapse_hc_head(x)
+        self._x_post_hc = x_post_hc
+        base_logits = self._logits_from_x_post_hc(x_post_hc)
+        return DSparkV4DraftOutput(
+            draft_hidden=x,
+            base_logits=base_logits,
+            x_post_hc=x_post_hc if self.confidence_head is not None else None,
+        )
 
     def collapse_hc_head(self, x: torch.Tensor) -> torch.Tensor:
         """Collapse the draft mHC tensor through the last stage's hc_head (PRE-norm).
