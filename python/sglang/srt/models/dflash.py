@@ -414,15 +414,15 @@ class DFlashDraftModel(nn.Module):
             # The backbone carries residual out-of-band (fused add-norm), so the
             # comparable per-layer activation is the folded hidden = hidden + residual.
             # dumper.dump(
-                # "layer_start__hidden_states",
-                # hidden_states if residual is None else hidden_states + residual,
+            # "layer_start__hidden_states",
+            # hidden_states if residual is None else hidden_states + residual,
             # )
             hidden_states, residual = layer(
                 positions, hidden_states, forward_batch, residual
             )
             # dumper.dump(
-                # "layer_end__hidden_states",
-                # hidden_states if residual is None else hidden_states + residual,
+            # "layer_end__hidden_states",
+            # hidden_states if residual is None else hidden_states + residual,
             # )
             # dumper.set_ctx(layer_id=None)
 
