@@ -2165,7 +2165,12 @@ class DeepseekV4ForCausalLM(nn.Module):
             self.lm_head,
             forward_batch,
             aux_hidden_states,
-            hidden_states_before_norm=pre_hc_head,
+            # LogitsProcessor stores before_norm in preference to aux when both are
+            # given; the DSpark draft consumes the concatenated aux features, so suppress
+            # before_norm whenever an aux capture was requested.
+            hidden_states_before_norm=(
+                None if aux_hidden_states is not None else pre_hc_head
+            ),
         )
 
     def _setup_fp8_wo_a_scales(self, is_nextn: bool) -> None:
