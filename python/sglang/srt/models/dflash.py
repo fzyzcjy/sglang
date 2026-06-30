@@ -12,6 +12,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from sglang.srt.debug_utils.dumper import dumper
 from sglang.srt.layers.activation import SiluAndMul
 from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.layers.linear import (
@@ -369,7 +370,10 @@ class DFlashDraftModel(nn.Module):
                 "This usually means the target model is capturing a different number of layer features than "
                 "the draft checkpoint/config expects."
             )
-        return self.hidden_norm(self.fc(target_hidden))
+        dumper.dump("draft__target_hidden_in", target_hidden)
+        out = self.hidden_norm(self.fc(target_hidden))
+        dumper.dump("draft__target_hidden_proj", out)
+        return out
 
     @torch.no_grad()
     def forward(
@@ -388,10 +392,23 @@ class DFlashDraftModel(nn.Module):
         hidden_states = input_embeds
         residual: Optional[torch.Tensor] = None
 
-        for layer in self.layers:
+        dumper.dump("draft__input_embeds", hidden_states)
+        for layer_id, layer in enumerate(self.layers):
+            dumper.set_ctx(layer_id=layer_id)
+            # The backbone carries residual out-of-band (fused add-norm), so the
+            # comparable per-layer activation is the folded hidden = hidden + residual.
+            dumper.dump(
+                "layer_start__hidden_states",
+                hidden_states if residual is None else hidden_states + residual,
+            )
             hidden_states, residual = layer(
                 positions, hidden_states, forward_batch, residual
             )
+            dumper.dump(
+                "layer_end__hidden_states",
+                hidden_states if residual is None else hidden_states + residual,
+            )
+            dumper.set_ctx(layer_id=None)
 
         if hidden_states.numel() != 0:
             if residual is None:
@@ -399,6 +416,7 @@ class DFlashDraftModel(nn.Module):
             else:
                 hidden_states, _ = self.norm(hidden_states, residual)
 
+        dumper.dump("draft__norm_out", hidden_states)
         return LogitsProcessorOutput(
             next_token_logits=None,
             hidden_states=hidden_states,
