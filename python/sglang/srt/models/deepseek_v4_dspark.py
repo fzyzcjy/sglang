@@ -639,6 +639,8 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         self.temperature = float(getattr(config, "temperature", 1.0))
 
         base_layer_id = int(config.num_hidden_layers)
+        self.start_layer = base_layer_id
+        self.end_layer = base_layer_id + self.num_stages
         self.stages = nn.ModuleList(
             [
                 DSparkV4Stage(
