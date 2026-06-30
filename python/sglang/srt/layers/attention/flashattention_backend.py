@@ -249,11 +249,12 @@ class FlashAttentionBackend(AttentionBackend):
         self.max_num_pages = (
             self.max_context_len + self.page_size - 1
         ) // self.page_size
-        # Opt out of the seq_lens_cpu D2H only for dflash (the worker adapted to
-        # the GPU-only relay); EAGLE/MTP/standalone/non-spec keep the CPU mirror.
+        # Opt out of the seq_lens_cpu D2H for dflash/dspark (both workers adapt to
+        # the GPU-only relay via the host-precomputed reserved_seq_lens_cpu);
+        # EAGLE/MTP/standalone/non-spec keep the CPU mirror.
         self.needs_cpu_seq_lens = not SpeculativeAlgorithm.from_string(
             model_runner.server_args.speculative_algorithm
-        ).is_dflash()
+        ).is_dflash_or_dspark()
         self.use_mla = model_runner.model_config.attention_arch == AttentionArch.MLA
         self.skip_prefill = skip_prefill
         self.attn_cp_size = model_runner.attn_cp_size
