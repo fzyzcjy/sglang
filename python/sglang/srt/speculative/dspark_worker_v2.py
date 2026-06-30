@@ -421,35 +421,17 @@ class DSparkWorkerV2(BaseSpecWorker):
             )
             return
 
+        # Dense MHA: the model owns the per-layer kv_proj + pool write (mirrors the
+        # MLA branch delegating to write_target_hidden_kv).
         with torch.inference_mode():
-            ctx_hidden = self.draft_model.project_target_hidden(target_hidden)
-            for layer in self.draft_model.layers:
-                attn = layer.self_attn
-                k, v = attn.kv_proj_only(ctx_hidden)
-                k = attn.apply_k_norm(k)
-                k = attn.apply_k_rope(positions, k)
-                v = attn.apply_v_norm(v)
-                k = k.view(-1, attn.num_kv_heads, attn.head_dim)
-                v = v.view(-1, attn.num_kv_heads, attn.head_dim)
-                if cache_loc_2d is not None and commit_lens is not None:
-                    pool.set_kv_buffer_prefix_valid(
-                        attn.attn,
-                        cache_loc_2d,
-                        commit_lens,
-                        k,
-                        v,
-                        attn.attn.k_scale,
-                        attn.attn.v_scale,
-                    )
-                else:
-                    pool.set_kv_buffer(
-                        attn.attn,
-                        cache_loc,
-                        k,
-                        v,
-                        attn.attn.k_scale,
-                        attn.attn.v_scale,
-                    )
+            self.draft_model.write_target_hidden_kv(
+                target_hidden=target_hidden,
+                pool=pool,
+                positions=positions,
+                cache_loc=cache_loc,
+                cache_loc_2d=cache_loc_2d,
+                commit_lens=commit_lens,
+            )
 
     def _inject_target_hidden_to_draft_kv_mla(
         self,
