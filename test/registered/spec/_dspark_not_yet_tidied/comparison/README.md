@@ -17,7 +17,7 @@ The SoT is a vendored, independently-derived reference under
   draft modeling + DSpark heads + mHC math (`modeling.py`), and the shared
   config + weight-sync fixture (`parity_fixture.py`).
 - dense (Qwen3 / Gemma4 DSpark): `qwen3/modeling.py`, `gemma4/modeling.py`,
-  `markov_head.py`, `draft_ops.py`, `sampling.py`.
+  `markov_head.py`, `sampling.py`.
 
 Each test builds the production module **and** the SoT with the **same real
 DeepSeek-V4-Flash / DeepSpec dimensions**, syncs the **same random weights** into

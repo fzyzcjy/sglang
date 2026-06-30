@@ -94,7 +94,7 @@ subfolders once the suite stabilizes (mirroring `attention/unittests/dsv4/`).
 ## Not run by CI (reference fixtures)
 
 `test/manual/_dspark_reference/` — a vendored copy of the DeepSpec
-qwen3/gemma4 modeling (`markov_head.py`, `draft_ops.py`, `sampling.py`,
+qwen3/gemma4 modeling (`markov_head.py`, `sampling.py`,
 `qwen3/`, `gemma4/`) plus the DSpark V4 source-of-truth oracle: the
 `deepseek_v4/` package (`sot_attention.py` = the pure-torch non-causal sparse
 attention oracle, `modeling.py` = the fuller DSpark draft modeling —
