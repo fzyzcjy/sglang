@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+from typing import Optional
+
 import msgspec
 import torch
 
+from sglang.srt.environ import envs
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.speculative.dspark_components.dspark_sps_table import (
     SpsCostTable,
     load_sps_table_from_path,
 )
 from sglang.srt.utils.async_probe import maybe_assert_async
+
+# Sentinel for a host-carry row that was never written (or written for a different
+# request); the budget planner's freshness guard rejects rows still stamped with it.
+_CONFIDENCE_RELAY_UNSET_SEQ_LEN: int = -1
 
 
 class DSparkScheduleConfig(msgspec.Struct):
@@ -67,6 +74,10 @@ def schedule_verify_lens_topk(
     budget: int,
     cfg: DSparkScheduleConfig,
 ) -> torch.Tensor:
+    # GPU-native sort (no per-element D2H). survival_probs is the CURRENT step's
+    # confidence cumprod (lag 0, on the forward stream); budget is a host int (the
+    # relay-fed K). Everything below runs device-side so the captured graph can
+    # consume verify_lens with zero compute-stream sync.
     cfg.validate()
     num_requests, _gamma = survival_probs.shape
     max_len = cfg.resolved_max_verify_len()
@@ -89,10 +100,10 @@ def schedule_verify_lens_topk(
             )
             valid = candidate_window >= cfg.survival_eps
 
-            flat_prob = candidate_window.flatten().to(torch.float64)
-            flat_request = request_index.flatten()
-            flat_position = position_index.flatten()
-            flat_valid = valid.flatten()
+            flat_prob = candidate_window.reshape(-1).to(torch.float64)
+            flat_request = request_index.reshape(-1)
+            flat_position = position_index.reshape(-1)
+            flat_valid = valid.reshape(-1)
 
             order = _value_independent_descending_order(
                 probs=flat_prob,
@@ -101,15 +112,17 @@ def schedule_verify_lens_topk(
                 valid=flat_valid,
             )
 
-            num_valid = int(flat_valid.sum().item())
-            take = min(int(budget), num_valid)
+            # take = min(budget, num_candidates) -- both host ints, no D2H (the old
+            # min(budget, num_valid) needed a .item() sync). Invalid candidates sort
+            # to the tail of `order`, so scatter-adding their valid flag (0) rather
+            # than a 1 reproduces "skip invalid" exactly: when budget <= num_valid
+            # every chosen row is valid; when budget > num_valid the surplus rows are
+            # invalid and contribute 0, leaving selected_extra == num_valid as before.
+            take = min(int(budget), num_candidates)
             chosen = order[:take]
             chosen_requests = flat_request[chosen]
-            selected_extra.scatter_add_(
-                0,
-                chosen_requests,
-                torch.ones_like(chosen_requests),
-            )
+            chosen_valid = flat_valid[chosen].to(torch.int64)
+            selected_extra.scatter_add_(0, chosen_requests, chosen_valid)
 
     min_len = torch.full(
         (num_requests,), cfg.min_verify_len, dtype=torch.int64, device=device
@@ -131,14 +144,22 @@ def _value_independent_descending_order(
     requests: torch.Tensor,
     valid: torch.Tensor,
 ) -> torch.Tensor:
+    # Device-native value-independent ordering: primary survival descending, with a
+    # deterministic tie-break of position ascending then request ascending. Each
+    # (position, request) pair is unique across the flattened candidate window, so
+    # those two keys fully determine the order (the old host implementation's
+    # original-index 4th key never activated). Implemented as an LSD radix of stable
+    # argsorts (least-significant key first) so the result is identical to the old
+    # `keys.sort()` order, but without the O(bs*gamma) per-element float()/int() D2H.
+    # Invalid candidates get -inf survival -> +inf sort key -> ordered last; the
+    # caller masks their selection via the valid flag.
     masked_prob = torch.where(valid, probs, torch.full_like(probs, float("-inf")))
     num_candidates = masked_prob.numel()
-    keys = [
-        (-float(masked_prob[i]), int(positions[i]), int(requests[i]), i)
-        for i in range(num_candidates)
-    ]
-    keys.sort()
-    return torch.tensor([k[3] for k in keys], dtype=torch.int64, device=probs.device)
+    order = torch.arange(num_candidates, device=probs.device)
+    order = order[torch.argsort(requests[order], stable=True)]
+    order = order[torch.argsort(positions[order], stable=True)]
+    order = order[torch.argsort(-masked_prob[order], stable=True)]
+    return order
 
 
 class ConfidencePrefixScheduler:
@@ -170,6 +191,129 @@ class ConfidencePrefixScheduler:
             f"DSpark verify-len budget violated (budget={budget})",
         )
         return verify_lens
+
+
+class HostConfidenceBudgetPlanner:
+    """Host-side verify-budget source (paper §5.2 two-steps-prior barrier).
+
+    Owns a per-request-row host carry that shifts the FutureMap relay's natural
+    lag-1 confidence to the configured causal lag (default 2), applies the H1
+    freshness guard, and runs the pure-CPU greedy. Everything is a host tensor, so
+    the budget K is produced with zero D2H sync. Two feed paths share the carry +
+    guard + greedy:
+
+    - overlap: ``prepare_budget(resolved, req_pool_indices_cpu)`` consumes
+      ``FutureMap.resolve_confidence_cpu`` in the scheduler prepare window.
+    - non-overlap: ``compute_budget(...)`` is fed from a synchronous worker-side
+      ``.cpu()`` (the async relay is absent without overlap).
+
+    Losslessness never depends on the budget (guaranteed by the accept-cap in
+    _cap_correct_len); the carry only affects scheduling quality and the lag.
+    """
+
+    def __init__(
+        self,
+        *,
+        sps_table: SpsCostTable,
+        cfg: DSparkScheduleConfig,
+        req_pool_size: int,
+    ) -> None:
+        cfg.validate()
+        self.sps_table = sps_table
+        self.cfg = cfg
+        self.req_pool_size = req_pool_size
+        # Total causal lag (relay 1 step + host carry the remainder). >= 1 already
+        # yields the barrier; default 2 reproduces the paper. Tunable via env.
+        self.lag_steps = max(
+            int(envs.SGLANG_DSPARK_CONFIDENCE_RELAY_LAG_STEPS.get()), 1
+        )
+        self.carry_steps = self.lag_steps - 1
+        self._carry_confidence: Optional[torch.Tensor] = None
+        self._carry_seq_lens: Optional[torch.Tensor] = None
+        self._carry_pos = 0
+
+    def compute_budget(
+        self,
+        *,
+        confidence: torch.Tensor,
+        seq_lens_stamp: torch.Tensor,
+        prefix_lens: torch.Tensor,
+        req_pool_indices_cpu: torch.Tensor,
+    ) -> int:
+        # confidence [bs, gamma], seq_lens_stamp [bs], prefix_lens [bs] -- all host,
+        # the relay's lag-1 snapshot for this batch's rows. Shift to lag, guard,
+        # greedy. req_pool_indices_cpu scatters/gathers the per-row carry.
+        lagged_confidence, lagged_stamp = self._shift_to_lag(
+            confidence=confidence,
+            seq_lens_stamp=seq_lens_stamp,
+            req_pool_indices_cpu=req_pool_indices_cpu,
+        )
+        survival = self._two_steps_prior_survival(
+            lagged_confidence=lagged_confidence,
+            lagged_stamp=lagged_stamp,
+            prefix_lens=prefix_lens,
+        )
+        return compute_verify_token_budget(
+            history_survival_probs=survival,
+            sps_table=self.sps_table,
+            cfg=self.cfg,
+        )
+
+    def _shift_to_lag(
+        self,
+        *,
+        confidence: torch.Tensor,
+        seq_lens_stamp: torch.Tensor,
+        req_pool_indices_cpu: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # carry_steps == 0 (lag == 1): the relay's lag-1 value is used directly.
+        # Otherwise read the carry slot written carry_steps steps ago for these
+        # rows (= the lag-steps-prior confidence + its seq_len stamp, B2), then write
+        # this step's relay value back. Rows idle for a cycle keep a stale carry whose
+        # stamp the freshness guard rejects.
+        if self.carry_steps == 0:
+            return confidence, seq_lens_stamp
+        self._ensure_carry(gamma=confidence.shape[-1])
+        slot = self._carry_pos % self.carry_steps
+        rows = req_pool_indices_cpu.to(torch.int64)
+        lagged_confidence = self._carry_confidence[slot, rows].clone()
+        lagged_stamp = self._carry_seq_lens[slot, rows].clone()
+        self._carry_confidence[slot, rows] = confidence.to(torch.float32)
+        self._carry_seq_lens[slot, rows] = seq_lens_stamp.to(torch.int64)
+        self._carry_pos += 1
+        return lagged_confidence, lagged_stamp
+
+    def _two_steps_prior_survival(
+        self,
+        *,
+        lagged_confidence: torch.Tensor,
+        lagged_stamp: torch.Tensor,
+        prefix_lens: torch.Tensor,
+    ) -> torch.Tensor:
+        # cumprod of the lag-steps-prior confidence, with the H1 identity guard: a
+        # row is the SAME request iff its carried stamp is present (>= 0), strictly
+        # smaller than the current prefix (a live request commits >= 1 token/step),
+        # and within lag_steps of growth (<= lag_steps * (gamma + 1)). Stale / new /
+        # just-switched rows fall back to verify-all (survival = 1.0 everywhere).
+        k_survival = torch.cumprod(lagged_confidence.to(torch.float32), dim=1)
+        growth = prefix_lens.to(torch.int64) - lagged_stamp.to(torch.int64)
+        max_growth = self.lag_steps * (self.cfg.gamma + 1)
+        fresh = (
+            (lagged_stamp.to(torch.int64) >= 0) & (growth >= 1) & (growth <= max_growth)
+        ).view(-1, 1)
+        return torch.where(fresh, k_survival, torch.ones_like(k_survival))
+
+    def _ensure_carry(self, *, gamma: int) -> None:
+        if self._carry_confidence is not None:
+            return
+        self._carry_confidence = torch.zeros(
+            (self.carry_steps, self.req_pool_size, gamma), dtype=torch.float32
+        )
+        self._carry_seq_lens = torch.full(
+            (self.carry_steps, self.req_pool_size),
+            _CONFIDENCE_RELAY_UNSET_SEQ_LEN,
+            dtype=torch.int64,
+        )
 
 
 def build_sps_cost_table(
