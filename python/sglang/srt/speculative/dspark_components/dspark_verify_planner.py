@@ -137,6 +137,22 @@ class DSparkVerifyPlanner:
     def carries_confidence(self) -> bool:
         return self._confidence_head is not None
 
+    @property
+    def last_confidence_raw(self) -> Optional[torch.Tensor]:
+        if self._confidence_head is None:
+            return None
+        return self._confidence_head._last_confidence_raw
+
+    def assert_sts_identity_for_collect(self) -> None:
+        if self._confidence_head is None:
+            return
+        if not bool(torch.all(self._confidence_head.sts_temperatures == 1.0)):
+            raise ValueError(
+                "DSpark STS data collection requires identity temperatures; collect "
+                "with no calibration loaded (omit "
+                "--speculative-dspark-confidence-sts-path)."
+            )
+
     def advance_step(self) -> None:
         self._confidence_relay.advance_step()
 
