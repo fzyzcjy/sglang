@@ -1206,8 +1206,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             draft_seq_lens_cpu = draft_input.reserved_seq_lens_cpu
             draft_seq_lens_sum = int(draft_input.reserved_seq_lens_sum)
         else:
-            draft_seq_lens_cpu = prefix_lens.to("cpu", dtype=torch.int32)
-            draft_seq_lens_sum = int(prefix_lens.sum().item())
+            raise RuntimeError("DSpark decode expected batch.seq_lens_cpu, got None")
 
         draft_forward_batch = ForwardBatch(
             forward_mode=ForwardMode.TARGET_VERIFY,
