@@ -59,7 +59,7 @@ from sglang.srt.layers.attention.dsv4.sparse_prefill_utils import (
 from sglang.srt.mem_cache.deepseek_v4_memory_pool import DeepSeekV4TokenToKVPool
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
 from sglang.srt.speculative.eagle_utils import per_step_draft_out_cache_loc
-from sglang.srt.speculative.ragged_verify import RaggedVerifyMode
+from sglang.srt.speculative.ragged_verify import RaggedVerifyMode, read_ragged_verify_mode
 from sglang.srt.utils import ceil_align
 from sglang.srt.utils.common import is_sm120_supported
 
@@ -111,7 +111,7 @@ def _get_target_verify_bs(forward_batch: ForwardBatch) -> int:
 
 
 # Verify-schedule mode string constants, mirroring RaggedVerifyMode values
-# (single source of truth). Legacy aliases (off/cutoff-only/full) resolved at read.
+# (single source of truth).
 RAGGED_VERIFY_OFF = RaggedVerifyMode.STATIC.value
 RAGGED_VERIFY_CUTOFF_ONLY = RaggedVerifyMode.CAP_ACCEPT.value
 RAGGED_VERIFY_FULL = RaggedVerifyMode.COMPACT.value
@@ -119,16 +119,7 @@ RAGGED_VERIFY_CHOICES = tuple(m.value for m in RaggedVerifyMode)
 
 
 def _ragged_verify_mode() -> str:
-    # Resolve through the alias map so legacy spellings are accepted.
-    from sglang.srt.speculative.ragged_verify import _LEGACY_MODE_ALIASES
-
-    raw = envs.SGLANG_RAGGED_VERIFY_MODE.get()
-    if raw in _LEGACY_MODE_ALIASES:
-        return _LEGACY_MODE_ALIASES[raw].value
-    assert (
-        raw in RAGGED_VERIFY_CHOICES
-    ), f"invalid SGLANG_RAGGED_VERIFY_MODE={raw!r}, expected one of {RAGGED_VERIFY_CHOICES}"
-    return raw
+    return read_ragged_verify_mode().value
 
 
 def _resolve_ragged_verify_layout(

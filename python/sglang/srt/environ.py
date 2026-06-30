@@ -696,7 +696,7 @@ class Envs:
     # Verify-schedule mode (per-request verify_len instead of uniform gamma+1).
     # "static" = uniform full block (default); "cap-accept" = full block but caps
     # accept per request (lossless harness); "compact" = real-N, only total tokens
-    # computed (throughput gain). Legacy off/cutoff-only/full accepted as aliases.
+    # computed (throughput gain).
     SGLANG_RAGGED_VERIFY_MODE = EnvStr("static")
     # Test-only negative seam (§4): force the token-keyed verify capture to bake
     # the uniform (non-ragged) geometry even in compact mode, so a graph-vs-eager
