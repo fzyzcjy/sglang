@@ -212,8 +212,7 @@ def build_ragged_verify_window(
     verify_ids = compact_verify_ids(
         draft_block_ids=draft_block_ids,
         draft_tokens=draft_tokens,
-        verify_lens_cpu=verify_lens_cpu,
-        total=layout.total_verify_tokens,
+        layout=layout,
         device=device,
     )
 
@@ -235,15 +234,15 @@ def compact_verify_ids(
     *,
     draft_block_ids: torch.Tensor,
     draft_tokens: torch.Tensor,
-    verify_lens_cpu: list[int],
-    total: int,
+    layout: RaggedVerifyLayout,
     device: str,
 ) -> torch.Tensor:
     # Pack [anchor, s_0..s_{ell_r-1}] per request into a compact 1d tensor.
     # anchor = draft_block_ids[:, 0]; s_k = draft_tokens[:, k].
-    verify_lens = torch.tensor(verify_lens_cpu, device=device, dtype=torch.int64)
     req_id, within = compact_row_index(
-        verify_lens=verify_lens, total=total, device=device
+        verify_lens=layout.verify_lens,
+        total=layout.total_verify_tokens,
+        device=device,
     )
     anchors = draft_block_ids[:, 0]
     # within==0 -> anchor; else draft_tokens[:, within-1] (clamp masked at 0).
@@ -256,7 +255,6 @@ def scatter_compact_to_strided(
     *,
     compact: torch.Tensor,
     layout: RaggedVerifyLayout,
-    bs: int,
     fill_value: float,
     verify_num_draft_tokens: int,
 ) -> torch.Tensor:
@@ -269,7 +267,7 @@ def scatter_compact_to_strided(
     stride = verify_num_draft_tokens
     dim = compact.shape[1]
     strided = torch.full(
-        (bs * stride, dim),
+        (layout.bs * stride, dim),
         fill_value,
         dtype=compact.dtype,
         device=compact.device,
