@@ -680,10 +680,14 @@ class DSparkWorkerV2(BaseSpecWorker):
             return None
         verify_lens_cpu = verify_lens.to("cpu").tolist()
         grid = self._verify_layout_grid(verify_lens_cpu=verify_lens_cpu)
+        graph_num_tokens_floor = self._verify_layout_graph_num_tokens_floor(
+            num_reqs=len(verify_lens_cpu)
+        )
         return RaggedVerifyLayout.from_verify_lens(
             verify_lens_cpu=verify_lens_cpu,
             device=device,
             grid=grid,
+            graph_num_tokens_floor=graph_num_tokens_floor,
         )
 
     def _schedule_verify_lens(
@@ -754,6 +758,20 @@ class DSparkWorkerV2(BaseSpecWorker):
         if capture_num_tokens is None:
             return [total]
         return capture_num_tokens
+
+    def _verify_layout_graph_num_tokens_floor(self, *, num_reqs: int) -> int:
+        # The token-keyed capture grid {b * num_draft : b in capture_bs} ties each
+        # token tier to one capture_bs, whose graph captured exactly b request
+        # slots. A batch whose real total rounds up to a tier with fewer slots than
+        # num_reqs would not fit, so floor the bucket to this batch's bs-derived
+        # full block. Zero (no floor) when no token-keyed graph exists, where the
+        # bucket is the real total run eager.
+        if (
+            self._ragged_verify_mode is not RaggedVerifyMode.COMPACT
+            or self._ragged_capture_num_tokens() is None
+        ):
+            return 0
+        return num_reqs * self.verify_num_draft_tokens
 
     def _ragged_capture_num_tokens(self) -> Optional[list[int]]:
         # The decode runner owns the token-keyed capture grid (Plan B). Read it so

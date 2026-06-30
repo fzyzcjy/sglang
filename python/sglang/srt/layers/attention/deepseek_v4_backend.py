@@ -713,7 +713,15 @@ class DeepseekV4AttnBackend(
             )
         assert int(layout.verify_lens.min()) >= 1
         assert layout.total_verify_tokens == int(layout.verify_lens.sum())
-        assert len(layout.verify_lens_cpu) == bs
+        # The runner pads bs up to the captured tier's capture_bs; pad the layout
+        # to match so its verify_lens / extend_start_loc cover every captured
+        # request slot and sum to graph_num_tokens (the padded-token contract).
+        layout = layout.padded_to_bucket(
+            num_draft_tokens=self.speculative_num_draft_tokens
+        )
+        assert len(layout.verify_lens_cpu) == bs, (
+            f"padded ragged layout bs {len(layout.verify_lens_cpu)} != batch bs {bs}"
+        )
         return layout
 
     def _target_verify_graph_key(
@@ -725,15 +733,14 @@ class DeepseekV4AttnBackend(
         if ragged_layout is None:
             return bs, num_tokens_full_block
         graph_num_tokens = ragged_layout.graph_num_tokens
+        total_verify_tokens = ragged_layout.total_verify_tokens
         assert graph_num_tokens <= num_tokens_full_block, (
             f"ragged verify graph_num_tokens={graph_num_tokens} exceeds full block "
             f"num_draft*bs={num_tokens_full_block}"
         )
-        assert graph_num_tokens == ragged_layout.total_verify_tokens, (
-            "DSV4 token-keyed verify graph requires graph_num_tokens == "
-            f"total_verify_tokens, got {graph_num_tokens} vs "
-            f"{ragged_layout.total_verify_tokens}; round-up-to-grid bucket padding "
-            "is the decode cuda-graph runner's job (infra section 12.F, not wired)."
+        assert total_verify_tokens <= graph_num_tokens, (
+            f"ragged verify total_verify_tokens={total_verify_tokens} exceeds the "
+            f"round-up bucket graph_num_tokens={graph_num_tokens}"
         )
         return graph_num_tokens, graph_num_tokens
 
@@ -906,6 +913,25 @@ class DeepseekV4AttnBackend(
             c128_compress_metadata=c128_compress_metadata,
         )
 
+    def _ensure_verify_bs_buffers(self) -> None:
+        # Address-stable bs-axis buffers for the prep-in-cuda-graph verify path.
+        # Sized to the request-pool capacity (an upper bound on bs) and int32 (the
+        # dtype the flash_mla / sparse kernels expect). Allocated lazily here so
+        # the eager (cuda-graph-disabled) path, which never calls
+        # init_cuda_graph_state, still gets a buffer (replaces the hardcoded 1025
+        # / default-int64 alloc, L3).
+        if hasattr(self, "extend_seq_lens_buffer"):
+            return
+        num_reqs = self.req_to_token.shape[0]
+        self.extend_seq_lens_buffer = torch.full(
+            (num_reqs,),
+            self.speculative_num_draft_tokens,
+            **self.cuda_int32_kwargs,
+        )
+        self.extend_start_loc_buffer = torch.zeros(
+            num_reqs, **self.cuda_int32_kwargs
+        )
+
     def init_forward_metadata_target_verify(
         self,
         max_seq_len: int,
@@ -925,20 +951,20 @@ class DeepseekV4AttnBackend(
                 if seq_lens_cpu is None
                 else seq_lens_cpu.tolist()
             )
-            if not hasattr(self, "extend_seq_lens_buffer"):
-                self.extend_seq_lens_buffer = torch.tensor(
-                    [self.speculative_num_draft_tokens] * 1025, device=self.device
-                )
+            self._ensure_verify_bs_buffers()
             if ragged_layout is None:
+                # Reset the shared bs-axis buffer to the uniform full block: a
+                # prior ragged step wrote per-request verify_lens into it, and a
+                # layout-less (uniform) step must not inherit those stale values
+                # (M2).
+                self.extend_seq_lens_buffer[:bs].fill_(
+                    self.speculative_num_draft_tokens
+                )
                 extend_seq_lens = self.extend_seq_lens_buffer[:bs]
                 extend_start_loc = None
                 verify_lens = None
                 total_verify_tokens = self.speculative_num_draft_tokens * bs
             else:
-                if not hasattr(self, "extend_start_loc_buffer"):
-                    self.extend_start_loc_buffer = torch.zeros(
-                        1025, dtype=torch.int32, device=self.device
-                    )
                 self.extend_seq_lens_buffer[:bs].copy_(ragged_layout.verify_lens)
                 self.extend_start_loc_buffer[:bs].copy_(ragged_layout.extend_start_loc)
                 extend_seq_lens = self.extend_seq_lens_buffer[:bs]
