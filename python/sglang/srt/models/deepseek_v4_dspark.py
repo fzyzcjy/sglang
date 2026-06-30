@@ -23,10 +23,6 @@ from torch import nn
 
 from sglang.srt.configs.deepseek_v4 import DeepSeekV4Config
 from sglang.srt.distributed.communication_op import tensor_model_parallel_all_gather
-from sglang.srt.layers.attention.deepseek_v4_backend import (
-    PAGE_INDEX_ALIGNED_SIZE,
-    SWA_WINDOW,
-)
 from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.layers.linear import ColumnParallelLinear, RowParallelLinear
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
@@ -34,10 +30,7 @@ from sglang.srt.layers.radix_attention import RadixAttention
 from sglang.srt.layers.vocab_parallel_embedding import VocabParallelEmbedding
 from sglang.srt.mem_cache.deepseek_v4_memory_pool import DeepSeekV4TokenToKVPool
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
-from sglang.srt.model_executor.forward_context import (
-    get_req_to_token_pool,
-    get_token_to_kv_pool,
-)
+from sglang.srt.model_executor.forward_context import get_token_to_kv_pool
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models.dbrx import ReplicatedLinear
 from sglang.srt.models.deepseek_v4 import (
@@ -50,7 +43,6 @@ from sglang.srt.models.dspark import DSparkConfidenceHead
 from sglang.srt.runtime_context import get_parallel
 from sglang.srt.speculative.dspark_utils import parse_dspark_draft_config
 from sglang.srt.utils import add_prefix
-from sglang.srt.utils.common import ceil_align
 
 logger = logging.getLogger(__name__)
 
@@ -73,134 +65,6 @@ def apply_rotary_emb(
     x = torch.view_as_real(x * freqs_cis).flatten(-2)
     y.copy_(x)
     return y
-
-
-def build_dspark_swa_page_indices(
-    *,
-    window_swa_locs: torch.Tensor,
-    block_swa_locs: torch.Tensor,
-    context_lens: torch.Tensor,
-    block_size: int,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Build the NON-CAUSAL full-block paged SWA index layout for the draft block.
-
-    Paged port of the reference ``get_dspark_topk_idxs`` (model.py:744):
-
-        matrix = cat([arange(min(window, start_pos+1)), window + arange(block_size)])
-                 .view(1, 1, -1).expand(bsz, block_size, -1)
-
-    Every one of the ``block_size`` draft queries in a request attends the SAME set of
-    SWA slots: the whole sliding window of injected target-hidden KV plus the whole draft
-    block (NON-CAUSAL, no triangular mask). The window part is the per-request committed
-    target-hidden slots; the block part is the slots this draft forward just wrote for the
-    gamma draft tokens. Both are already in SWA space (the caller translates from full
-    space via ``translate_loc_from_full_to_swa``).
-
-    Args:
-        window_swa_locs: ``[bs, SWA_WINDOW]`` int32 SWA slots of the committed window,
-            most-recent-last, with positions before the request's start padded ``-1``.
-        block_swa_locs: ``[bs, block_size]`` int32 SWA slots written by this forward for
-            the gamma draft tokens (shared by every query row of the request).
-        context_lens: ``[bs]`` int the number of valid committed window tokens per request
-            (= min(SWA_WINDOW, prefix_len)); rows beyond this in ``window_swa_locs`` are
-            padding and excluded from the attended length.
-        block_size: gamma, the number of draft-block query rows / draft tokens.
-
-    Returns:
-        ``swa_page_indices`` ``[bs * block_size, K]`` int32 (K padded to a multiple of
-        ``PAGE_INDEX_ALIGNED_SIZE``; padding value ``-1``) and ``swa_topk_lengths``
-        ``[bs * block_size]`` int32 (= context_lens + block_size, identical across the
-        ``block_size`` rows of a request). The kernel attends only the first
-        ``swa_topk_lengths[q]`` entries, so the ``-1`` padding (both intra-window and
-        alignment) is never read.
-    """
-    if window_swa_locs.ndim != 2 or window_swa_locs.shape[1] != SWA_WINDOW:
-        raise ValueError(
-            "window_swa_locs must be [bs, SWA_WINDOW]; "
-            f"got shape={tuple(window_swa_locs.shape)} (SWA_WINDOW={SWA_WINDOW})."
-        )
-    if block_swa_locs.ndim != 2 or block_swa_locs.shape[1] != block_size:
-        raise ValueError(
-            "block_swa_locs must be [bs, block_size]; "
-            f"got shape={tuple(block_swa_locs.shape)} (block_size={block_size})."
-        )
-    bs = window_swa_locs.shape[0]
-    device = window_swa_locs.device
-
-    window_swa_locs = window_swa_locs.to(torch.int32)
-    block_swa_locs = block_swa_locs.to(torch.int32)
-    context_lens = context_lens.to(device=device, dtype=torch.int32)
-
-    # The widest row holds the full window (SWA_WINDOW) + the whole block, aligned up.
-    target_width = ceil_align(SWA_WINDOW + block_size, PAGE_INDEX_ALIGNED_SIZE)
-
-    # The valid attended entries are the first context_lens window slots immediately
-    # followed by the block slots, with no causal mask. Compact the window so the valid
-    # window slots are contiguous and directly precede the block slots, matching
-    # ``topk_lengths = context_lens + block_size`` (the kernel reads a prefix run).
-    swa_page_indices = _compact_window_then_block(
-        window_swa_locs=window_swa_locs,
-        block_swa_locs=block_swa_locs,
-        context_lens=context_lens,
-        target_width=target_width,
-        block_size=block_size,
-    )
-
-    # Replicate the request's single shared row to all block_size query rows (non-causal:
-    # every query sees the same window + whole block).
-    swa_page_indices = (
-        swa_page_indices.view(bs, 1, target_width)
-        .expand(bs, block_size, target_width)
-        .reshape(bs * block_size, target_width)
-        .contiguous()
-    )
-    swa_topk_lengths = (
-        (context_lens + block_size)
-        .view(bs, 1)
-        .expand(bs, block_size)
-        .reshape(bs * block_size)
-        .contiguous()
-        .to(torch.int32)
-    )
-    return swa_page_indices, swa_topk_lengths
-
-
-def _compact_window_then_block(
-    *,
-    window_swa_locs: torch.Tensor,
-    block_swa_locs: torch.Tensor,
-    context_lens: torch.Tensor,
-    target_width: int,
-    block_size: int,
-) -> torch.Tensor:
-    """Left-pack each request's valid window slots, then its block slots, then -1.
-
-    ``window_swa_locs`` keeps invalid (pre-start) slots as ``-1`` interleaved at the
-    front (the reference fills the most-recent-last window with padding at the start when
-    ``start_pos + 1 < window``). The kernel reads a length-prefix run, so the valid window
-    slots must be contiguous and immediately followed by the block slots. This gathers the
-    last ``context_lens`` window slots, appends the block slots, and ``-1``-pads the rest.
-    """
-    bs = window_swa_locs.shape[0]
-    device = window_swa_locs.device
-    out = torch.full((bs, target_width), -1, dtype=torch.int32, device=device)
-
-    col = torch.arange(SWA_WINDOW, device=device, dtype=torch.int32).view(1, -1)
-    # The last context_lens entries of the SWA_WINDOW columns are the valid window slots
-    # (most-recent-last). Map them to packed columns [0, context_lens).
-    valid_window = col >= (SWA_WINDOW - context_lens.view(-1, 1))
-    packed_window_col = col - (SWA_WINDOW - context_lens.view(-1, 1))
-    rows = torch.arange(bs, device=device).view(-1, 1).expand(-1, SWA_WINDOW)
-    out[rows[valid_window], packed_window_col[valid_window]] = window_swa_locs[
-        valid_window
-    ]
-
-    block_col = context_lens.view(-1, 1) + torch.arange(
-        block_size, device=device, dtype=torch.int32
-    ).view(1, -1)
-    block_rows = torch.arange(bs, device=device).view(-1, 1).expand(-1, block_size)
-    out[block_rows, block_col] = block_swa_locs
-    return out
 
 
 class DSparkAttention(nn.Module):
@@ -345,23 +209,27 @@ class DSparkAttention(nn.Module):
             ].contiguous()
         return self._attn_sink_local
 
-    def store_block_kv(
+    def _store_block_kv(
         self,
         *,
-        x: torch.Tensor,
+        kv: torch.Tensor,
         positions: torch.Tensor,
-        block_swa_locs: torch.Tensor,
+        forward_batch: ForwardBatch,
+        attn_backend,
         pool: DeepSeekV4TokenToKVPool,
     ) -> None:
-        """Project the draft block hidden into KV and write it into the SWA ring.
+        """Write the draft block raw latent KV into the SWA ring (fused norm + rope).
 
-        Mirrors ``MQALayer._compute_kv_to_cache``: wkv proj -> fused kv_norm + rope +
-        packed FlashMLA store into the production SWA buffer at the block's SWA slots.
+        Mirrors ``MQALayer._compute_kv_to_cache``: the raw ``wkv`` latent is normed +
+        rope'd + packed and stored at the block's SWA slots
+        (``attn_backend.get_swa_out_cache_loc`` translates ``out_cache_loc`` -> SWA),
+        so the backend's ``forward`` runs with ``save_kv_cache=False``. The non-causal
+        full-block index that the kernel consumes is built by the backend metadata
+        (``get_dspark_swa_page_indices``), which references the same translated slots.
         """
-        kv = self.kv_proj_only(x)
         pool.set_swa_key_buffer_radix_fused_norm_rope(
             layer_id=self.layer_id,
-            swa_loc=block_swa_locs.to(torch.int32),
+            swa_loc=attn_backend.get_swa_out_cache_loc(forward_batch),
             kv=kv,
             kv_weight=self.kv_norm.weight.data,
             eps=self.eps,
@@ -369,7 +237,7 @@ class DSparkAttention(nn.Module):
             positions=positions,
         )
 
-    def compute_q(self, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+    def _compute_q(self, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
         """Project the draft block hidden to per-head queries with rmsnorm + rope.
 
         Returns ``[num_queries, n_local_heads, head_dim]`` (flat over bs * block_size).
@@ -386,54 +254,43 @@ class DSparkAttention(nn.Module):
         apply_rotary_emb(q[..., -rd:], freqs_cis)
         return q
 
-    def attend(
+    def forward(
         self,
-        *,
-        q: torch.Tensor,
         positions: torch.Tensor,
-        swa_page_indices: torch.Tensor,
-        swa_topk_lengths: torch.Tensor,
-        pool: DeepSeekV4TokenToKVPool,
+        hidden_states: torch.Tensor,
+        forward_batch: ForwardBatch,
     ) -> torch.Tensor:
-        """Run the sparse FlashMLA kernel over the non-causal full-block SWA index.
+        from sglang.srt.model_executor.forward_context import get_attn_backend
 
-        Reads the production SWA key buffer for this layer, attends each query to its
-        ``swa_topk_lengths`` slots given by ``swa_page_indices`` (no causal mask in the
-        kernel), then applies the inverse rope and the wo_a/wo_b output projection.
-        """
-        import sgl_kernel.flash_mla as flash_mla
-
+        pool = _resolve_dspark_pool()
+        attn_backend = get_attn_backend()
         rd = self.rope_head_dim
-        swa_k_cache = pool.get_swa_key_buffer_radix(self.layer_id)
-        swa_window_size = pool.swa_window_size
-        k_cache_total_dim = pool.swa_kv_pool.kv_cache_total_dim
-        swa_k_cache = swa_k_cache[:, : swa_window_size * k_cache_total_dim].view(
-            swa_k_cache.shape[0], swa_window_size, 1, k_cache_total_dim
+
+        kv = self.kv_proj_only(hidden_states)
+        self._store_block_kv(
+            kv=kv,
+            positions=positions,
+            forward_batch=forward_batch,
+            attn_backend=attn_backend,
+            pool=pool,
         )
+        q = self._compute_q(hidden_states, positions)
 
-        attn_q = q.unsqueeze(1)
-        page_indices = swa_page_indices.unsqueeze(1)
-        assert (
-            page_indices.shape[-1] % PAGE_INDEX_ALIGNED_SIZE == 0
-        ), f"{page_indices.shape=} last dim not aligned to {PAGE_INDEX_ALIGNED_SIZE}"
-
-        o = flash_mla.flash_mla_with_kvcache(
-            q=attn_q,
-            k_cache=swa_k_cache,
-            head_dim_v=self.head_dim,
-            block_table=None,
-            cache_seqlens=None,
-            tile_scheduler_metadata=flash_mla.get_mla_metadata()[0],
-            softmax_scale=self.softmax_scale,
-            is_fp8_kvcache=True,
-            indices=page_indices,
-            topk_length=swa_topk_lengths,
+        # Drive the production sparse backend: it reads the NON-CAUSAL full-block SWA
+        # metadata built in make_core_attn_metadata (is_dspark_draft branch) and runs
+        # flash_mla over the real SWA key buffer. The KV store is already done above, so
+        # save_kv_cache=False (mirrors MQALayer's non-fused path). attn_sink is this
+        # rank's local slice.
+        o = attn_backend.forward(
+            q=q,
+            k=kv,
+            v=kv,
+            layer=self.attn,
+            forward_batch=forward_batch,
+            compress_ratio=0,
             attn_sink=self._local_attn_sink(),
-            extra_k_cache=None,
-            extra_indices_in_kvcache=None,
-            extra_topk_length=None,
-        )[0]
-        o = o.squeeze(1)
+            save_kv_cache=False,
+        )
 
         freqs_cis = self.freqs_cis[positions]
         apply_rotary_emb(o[..., -rd:], freqs_cis, inverse=True)
@@ -444,33 +301,6 @@ class DSparkAttention(nn.Module):
         out, _ = self.wo_b(o.reshape(o.shape[0], -1))
         return out
 
-    def forward(
-        self,
-        positions: torch.Tensor,
-        hidden_states: torch.Tensor,
-        forward_batch: ForwardBatch,
-    ) -> torch.Tensor:
-        pool = _resolve_dspark_pool()
-        index = build_dspark_attn_index(
-            forward_batch=forward_batch,
-            window_size=self.window_size,
-            pool=pool,
-        )
-        self.store_block_kv(
-            x=hidden_states,
-            positions=positions,
-            block_swa_locs=index.block_swa_locs,
-            pool=pool,
-        )
-        q = self.compute_q(hidden_states, positions)
-        return self.attend(
-            q=q,
-            positions=positions,
-            swa_page_indices=index.swa_page_indices,
-            swa_topk_lengths=index.swa_topk_lengths,
-            pool=pool,
-        )
-
 
 def _resolve_dspark_pool() -> DeepSeekV4TokenToKVPool:
     pool = get_token_to_kv_pool()
@@ -479,78 +309,6 @@ def _resolve_dspark_pool() -> DeepSeekV4TokenToKVPool:
         f"got {type(pool).__name__}."
     )
     return pool
-
-
-class _DSparkAttnIndex:
-    """Resolved per-forward non-causal full-block index + the block's SWA write slots."""
-
-    def __init__(
-        self,
-        *,
-        swa_page_indices: torch.Tensor,
-        swa_topk_lengths: torch.Tensor,
-        block_swa_locs: torch.Tensor,
-    ) -> None:
-        self.swa_page_indices = swa_page_indices
-        self.swa_topk_lengths = swa_topk_lengths
-        self.block_swa_locs = block_swa_locs
-
-
-def build_dspark_attn_index(
-    *,
-    forward_batch: ForwardBatch,
-    window_size: int,
-    pool: DeepSeekV4TokenToKVPool,
-) -> _DSparkAttnIndex:
-    """Resolve the non-causal full-block SWA index from a draft ForwardBatch.
-
-    The draft block ForwardBatch carries (per request): ``req_pool_indices``,
-    ``seq_lens`` (committed prefix length), ``out_cache_loc`` (the gamma block slots in
-    full space, flat ``[bs * block_size]``). The committed window's full locations are
-    ``req_to_token[req, prefix_len - W : prefix_len]`` (most-recent-last, ``-1`` where the
-    request is shorter than the window). Both window and block locs are translated to SWA
-    space and handed to ``build_dspark_swa_page_indices``.
-    """
-    spec_info = forward_batch.spec_info
-    block_size = int(spec_info.draft_token_num)
-    bs = int(forward_batch.batch_size)
-    device = forward_batch.out_cache_loc.device
-
-    req_pool_indices = forward_batch.req_pool_indices.to(device=device)
-    prefix_lens = forward_batch.seq_lens.to(device=device, dtype=torch.int64)
-    context_lens = torch.clamp(prefix_lens, max=window_size).to(torch.int32)
-
-    req_to_token = get_req_to_token_pool().req_to_token
-    offsets = (
-        prefix_lens.view(-1, 1)
-        - window_size
-        + torch.arange(window_size, device=device, dtype=torch.int64).view(1, -1)
-    )
-    invalid = offsets < 0
-    offsets = offsets.clamp(min=0)
-    window_full_locs = req_to_token[req_pool_indices.view(-1, 1), offsets]
-    window_full_locs = window_full_locs.masked_fill(invalid, 0)
-    window_swa_locs = pool.translate_loc_from_full_to_swa(window_full_locs).to(
-        torch.int32
-    )
-    window_swa_locs = window_swa_locs.masked_fill(invalid, -1)
-
-    block_full_locs = forward_batch.out_cache_loc.view(bs, block_size)
-    block_swa_locs = pool.translate_loc_from_full_to_swa(block_full_locs).to(
-        torch.int32
-    )
-
-    swa_page_indices, swa_topk_lengths = build_dspark_swa_page_indices(
-        window_swa_locs=window_swa_locs,
-        block_swa_locs=block_swa_locs,
-        context_lens=context_lens,
-        block_size=block_size,
-    )
-    return _DSparkAttnIndex(
-        swa_page_indices=swa_page_indices,
-        swa_topk_lengths=swa_topk_lengths,
-        block_swa_locs=block_full_locs.reshape(-1),
-    )
 
 
 class DSparkV4MarkovHead(nn.Module):

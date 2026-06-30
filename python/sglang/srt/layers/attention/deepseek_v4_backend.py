@@ -151,6 +151,125 @@ def _pad_last_dim(x: T, multiples_of: int = PAGE_INDEX_ALIGNED_SIZE) -> T:
     return F.pad(x, pad=(0, target_size - curr_size), mode="constant", value=-1)
 
 
+def build_dspark_swa_page_indices(
+    *,
+    window_swa_locs: torch.Tensor,
+    block_swa_locs: torch.Tensor,
+    context_lens: torch.Tensor,
+    block_size: int,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Build the NON-CAUSAL full-block paged SWA index layout for the DSpark draft block.
+
+    Paged port of the reference ``get_dspark_topk_idxs`` (model.py:744):
+
+        matrix = cat([arange(min(window, start_pos+1)), window + arange(block_size)])
+                 .view(1, 1, -1).expand(bsz, block_size, -1)
+
+    Every one of the ``block_size`` draft queries in a request attends the SAME set of SWA
+    slots: the whole committed sliding window of injected target-hidden KV plus the whole
+    draft block (NON-CAUSAL, no triangular mask). ``window_swa_locs`` / ``block_swa_locs``
+    are already in SWA space (the caller translates via ``translate_loc_from_full_to_swa``).
+
+    Args:
+        window_swa_locs: ``[bs, SWA_WINDOW]`` int32 SWA slots of the committed window,
+            most-recent-last, with positions before the request's start padded ``-1``.
+        block_swa_locs: ``[bs, block_size]`` int32 SWA slots written by this forward for the
+            gamma draft tokens (shared by every query row of the request).
+        context_lens: ``[bs]`` the number of valid committed window tokens per request
+            (= min(SWA_WINDOW, prefix_len)).
+        block_size: gamma, the number of draft-block query rows / draft tokens.
+
+    Returns:
+        ``swa_page_indices`` ``[bs * block_size, K]`` int32 (K padded to a multiple of
+        ``PAGE_INDEX_ALIGNED_SIZE``; padding ``-1``) and ``swa_topk_lengths``
+        ``[bs * block_size]`` int32 (= context_lens + block_size, identical across the
+        ``block_size`` rows of a request). The kernel attends only the first
+        ``swa_topk_lengths[q]`` entries, so the ``-1`` padding is never read.
+    """
+    if window_swa_locs.ndim != 2 or window_swa_locs.shape[1] != SWA_WINDOW:
+        raise ValueError(
+            "window_swa_locs must be [bs, SWA_WINDOW]; "
+            f"got shape={tuple(window_swa_locs.shape)} (SWA_WINDOW={SWA_WINDOW})."
+        )
+    if block_swa_locs.ndim != 2 or block_swa_locs.shape[1] != block_size:
+        raise ValueError(
+            "block_swa_locs must be [bs, block_size]; "
+            f"got shape={tuple(block_swa_locs.shape)} (block_size={block_size})."
+        )
+    bs = window_swa_locs.shape[0]
+    device = window_swa_locs.device
+
+    window_swa_locs = window_swa_locs.to(torch.int32)
+    block_swa_locs = block_swa_locs.to(torch.int32)
+    context_lens = context_lens.to(device=device, dtype=torch.int32)
+
+    # The widest row holds the full window (SWA_WINDOW) + the whole block, aligned up.
+    target_width = ceil_align(SWA_WINDOW + block_size, PAGE_INDEX_ALIGNED_SIZE)
+
+    swa_page_indices = _compact_dspark_window_then_block(
+        window_swa_locs=window_swa_locs,
+        block_swa_locs=block_swa_locs,
+        context_lens=context_lens,
+        target_width=target_width,
+        block_size=block_size,
+    )
+
+    # Replicate the request's single shared row to all block_size query rows (non-causal:
+    # every query sees the same window + whole block).
+    swa_page_indices = (
+        swa_page_indices.view(bs, 1, target_width)
+        .expand(bs, block_size, target_width)
+        .reshape(bs * block_size, target_width)
+        .contiguous()
+    )
+    swa_topk_lengths = (
+        (context_lens + block_size)
+        .view(bs, 1)
+        .expand(bs, block_size)
+        .reshape(bs * block_size)
+        .contiguous()
+        .to(torch.int32)
+    )
+    return swa_page_indices, swa_topk_lengths
+
+
+def _compact_dspark_window_then_block(
+    *,
+    window_swa_locs: torch.Tensor,
+    block_swa_locs: torch.Tensor,
+    context_lens: torch.Tensor,
+    target_width: int,
+    block_size: int,
+) -> torch.Tensor:
+    """Left-pack each request's valid window slots, then its block slots, then ``-1``.
+
+    ``window_swa_locs`` keeps invalid (pre-start) slots as ``-1`` at the front (the
+    reference fills the most-recent-last window with padding at the start when
+    ``start_pos + 1 < window``). The kernel reads a length-prefix run, so the valid window
+    slots must be contiguous and immediately precede the block slots: this gathers the last
+    ``context_lens`` window slots into packed columns ``[0, context_lens)``, places the
+    block slots at ``[context_lens, context_lens + block_size)``, and ``-1``-pads the rest.
+    """
+    bs = window_swa_locs.shape[0]
+    device = window_swa_locs.device
+    out = torch.full((bs, target_width), -1, dtype=torch.int32, device=device)
+
+    col = torch.arange(SWA_WINDOW, device=device, dtype=torch.int32).view(1, -1)
+    valid_window = col >= (SWA_WINDOW - context_lens.view(-1, 1))
+    packed_window_col = col - (SWA_WINDOW - context_lens.view(-1, 1))
+    rows = torch.arange(bs, device=device).view(-1, 1).expand(-1, SWA_WINDOW)
+    out[rows[valid_window], packed_window_col[valid_window]] = window_swa_locs[
+        valid_window
+    ]
+
+    block_col = context_lens.view(-1, 1) + torch.arange(
+        block_size, device=device, dtype=torch.int32
+    ).view(1, -1)
+    block_rows = torch.arange(bs, device=device).view(-1, 1).expand(-1, block_size)
+    out[block_rows, block_col] = block_swa_locs
+    return out
+
+
 def _create_flashmla_metadata():
     if _is_sm120:
         return None
@@ -557,6 +676,17 @@ class DeepseekV4AttnBackend(
         ] = None
         self.online_c128_mtp = OnlineC128MTPController(self)
 
+        # The DSpark draft runs its block backbone on this backend in TARGET_VERIFY mode
+        # but needs a NON-CAUSAL full-block SWA index (every one of the gamma block queries
+        # attends the whole injected target-hidden window + the whole draft block), unlike
+        # the causal target verify. Detected by capability (draft worker + DSpark spec
+        # algorithm), never by a per-call model-identity branch.
+        self.is_dspark_draft = bool(
+            getattr(model_runner, "is_draft_worker", False)
+            and model_runner.spec_algorithm is not None
+            and model_runner.spec_algorithm.is_dspark()
+        )
+
     def _move_to_device(self, x: List[int]) -> torch.Tensor:
         pin_tensor = torch.tensor(x, dtype=torch.int32, pin_memory=True)
         return pin_tensor.to(self.device, non_blocking=True)
@@ -890,6 +1020,47 @@ class DeepseekV4AttnBackend(
             need_compress=True,
             use_prefill_cuda_graph=use_prefill_cuda_graph,
             online_c128_state_slot_offset=online_c128_state_slot_offset,
+        )
+
+    def init_forward_metadata_dspark_draft_block(
+        self,
+        max_seq_len: int,
+        req_pool_indices: torch.Tensor,
+        seq_lens: torch.Tensor,
+        seq_lens_cpu: Optional[torch.Tensor],
+        out_cache_loc: torch.Tensor,
+        block_size: int,
+    ) -> DSV4Metadata:
+        """DSpark draft block metadata: gamma tokens/request, NON-CAUSAL, no compression.
+
+        Unlike ``init_forward_metadata_target_verify_old`` (the target's gamma+1 causal
+        verify, with c4/c128 compression), the DSpark draft block extends each request by
+        ``block_size`` (gamma) tokens whose KV lives only in the SWA ring (compress_ratio
+        == 0). ``make_core_attn_metadata`` then builds the NON-CAUSAL full-block SWA index
+        because ``self.is_dspark_draft`` is set. ``need_compress=False`` skips the c4/c128
+        path the draft does not have (R8: draft pool is SWA-only).
+        """
+        batch_size = len(seq_lens)
+        seq_lens_block = seq_lens + block_size
+        if seq_lens_cpu is None:
+            seq_lens_block_cpu = seq_lens_block.tolist()
+        else:
+            seq_lens_block_cpu = [int(x) + block_size for x in seq_lens_cpu.tolist()]
+        extend_seq_lens_cpu = [block_size] * batch_size
+        extend_seq_lens = self._move_to_device(extend_seq_lens_cpu)
+        num_tokens = block_size * batch_size
+        return self.init_forward_metadata_prefill(
+            max_seq_len=max_seq_len,
+            req_pool_indices=req_pool_indices,
+            seq_lens=seq_lens_block,
+            seq_lens_cpu=seq_lens_block_cpu,
+            out_cache_loc=out_cache_loc,
+            num_tokens=num_tokens,
+            extend_seq_lens=extend_seq_lens,
+            extend_seq_lens_cpu=extend_seq_lens_cpu,
+            extend_start_loc=None,
+            need_compress=False,
+            use_prefill_cuda_graph=False,
         )
 
     def make_forward_metadata_from_raw_verify(
@@ -1289,6 +1460,19 @@ class DeepseekV4AttnBackend(
                 req_pool_indices=req_pool_indices,
                 seq_lens=seq_lens,
                 out_cache_loc=out_cache_loc,
+            )
+        elif self.is_dspark_draft and logical_forward_mode.is_target_verify():
+            # DSpark draft block forward: gamma tokens/request (spec_info.draft_token_num),
+            # NON-CAUSAL full block, no compression. Distinct from the target's gamma+1
+            # causal verify -- gated by the draft-worker DSpark capability flag.
+            block_size = int(forward_batch.spec_info.draft_token_num)
+            metadata = self.init_forward_metadata_dspark_draft_block(
+                max_seq_len=max_seq_len,
+                req_pool_indices=req_pool_indices,
+                seq_lens=seq_lens,
+                seq_lens_cpu=seq_lens_cpu,
+                out_cache_loc=forward_batch.out_cache_loc,
+                block_size=block_size,
             )
         elif logical_forward_mode.is_target_verify():
             ragged_layout = self._resolve_verify_layout(forward_batch, bs=len(seq_lens))
@@ -1850,17 +2034,29 @@ class DeepseekV4AttnBackend(
 
         seq_lens_casual = seq_lens_casual.to(torch.int32)
 
-        swa_page_indices = self.get_swa_page_indices(
-            seq_lens_casual=seq_lens_casual,
-            req_pool_indices_repeated=req_pool_indices_repeated,
-        )
-
-        swa_page_indices = _pad_last_dim(
-            swa_page_indices, multiples_of=PAGE_INDEX_ALIGNED_SIZE
-        )
-
         raw_positions = seq_lens_casual - 1
-        swa_topk_lengths = torch.clamp(seq_lens_casual, max=SWA_WINDOW)
+        if self.is_dspark_draft:
+            # NON-CAUSAL full-block draft index (R1 / Step 1b): every gamma block query of
+            # a request shares the whole committed window + the whole draft block, no
+            # causal mask. Replaces the causal get_swa_page_indices for the draft backend
+            # only (gated by the draft-worker DSpark capability flag, never per-call model
+            # identity). speculative_num_draft_tokens is the verify window gamma+1; the
+            # draft block forward writes gamma slots.
+            swa_page_indices, swa_topk_lengths = self.get_dspark_swa_page_indices(
+                seq_lens_casual=seq_lens_casual,
+                req_pool_indices_repeated=req_pool_indices_repeated,
+                out_loc=out_loc,
+                block_size=self.speculative_num_draft_tokens - 1,
+            )
+        else:
+            swa_page_indices = self.get_swa_page_indices(
+                seq_lens_casual=seq_lens_casual,
+                req_pool_indices_repeated=req_pool_indices_repeated,
+            )
+            swa_page_indices = _pad_last_dim(
+                swa_page_indices, multiples_of=PAGE_INDEX_ALIGNED_SIZE
+            )
+            swa_topk_lengths = torch.clamp(seq_lens_casual, max=SWA_WINDOW)
 
         page_table = req_to_token[
             req_pool_indices_repeated, : max_seq_len : self.page_size
@@ -1890,6 +2086,86 @@ class DeepseekV4AttnBackend(
             core_attn_metadata.c4_flashmla_metadata = None
             core_attn_metadata.c128_flashmla_metadata = None
         return core_attn_metadata
+
+    def get_dspark_swa_page_indices(
+        self,
+        *,
+        seq_lens_casual: torch.Tensor,
+        req_pool_indices_repeated: torch.Tensor,
+        out_loc: torch.Tensor,
+        block_size: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """NON-CAUSAL full-block SWA index for the DSpark draft block (R1 / Step 1b).
+
+        Unlike ``get_swa_page_indices`` (causal: each token sees its own
+        ``pos - arange(SWA_WINDOW)`` window with future masked), the DSpark draft block is
+        non-causal: every one of the ``block_size`` draft queries in a request attends the
+        SAME set = the whole committed target-hidden window (the request's prefix slots)
+        plus the whole draft block (the ``block_size`` slots this forward writes). This is
+        the paged port of the reference ``get_dspark_topk_idxs`` (model.py:744), which
+        shares one ``[arange(min(W, start_pos+1)), W + arange(block_size)]`` row across all
+        block query rows with no causal triangle.
+
+        ``seq_lens_casual`` / ``req_pool_indices_repeated`` are the per-token (per draft
+        query) causal lengths and request indices laid out uniformly ``block_size`` per
+        request (the draft block forward uses a uniform-gamma TARGET_VERIFY layout). The
+        first block token of request r has ``seq_lens_casual = prefix_r + 1``, so the
+        committed window is the request's ``prefix_r`` slots; ``out_loc`` holds the
+        ``block_size`` block slots in full space, reshaped per request.
+
+        Returns ``(swa_page_indices [num_q, K], swa_topk_lengths [num_q])`` with ``K``
+        padded to a multiple of ``PAGE_INDEX_ALIGNED_SIZE`` (invalid slots ``-1``), shared
+        across the ``block_size`` query rows of each request. The FlashMLA kernel reads
+        only the first ``swa_topk_lengths[q]`` entries (no causal mask), so the ``-1``
+        padding is never attended.
+        """
+        seq_lens_casual = seq_lens_casual.to(torch.int32)
+        num_q = seq_lens_casual.size(0)
+        assert num_q % block_size == 0, (
+            f"DSpark draft block forward must be uniform-gamma: num_q={num_q} not "
+            f"divisible by block_size={block_size}."
+        )
+        bs = num_q // block_size
+        device = seq_lens_casual.device
+
+        # Per-request prefix length (committed context before the draft block) and the
+        # request's first-token row index in the uniform layout.
+        first_token = torch.arange(bs, device=device, dtype=torch.int64) * block_size
+        prefix_lens = (seq_lens_casual[first_token] - 1).to(torch.int32)
+        context_lens = torch.clamp(prefix_lens, max=SWA_WINDOW).to(torch.int32)
+        req_pool_indices_per_request = req_pool_indices_repeated[first_token]
+
+        # Window slots: the request's prefix positions [prefix - W .. prefix - 1], most
+        # recent last, future-of-block-start masked -1 (mirrors the reference window).
+        offsets = (
+            prefix_lens.to(torch.int64).unsqueeze(1)
+            - SWA_WINDOW
+            + torch.arange(SWA_WINDOW, device=device, dtype=torch.int64).unsqueeze(0)
+        )
+        invalid = offsets < 0
+        offsets = offsets.clamp(min=0)
+        window_full_locs = self.req_to_token[
+            req_pool_indices_per_request[:, None].to(torch.int64), offsets
+        ]
+        window_full_locs = window_full_locs.masked_fill(invalid, 0)
+        window_swa_locs = self.token_to_kv_pool.translate_loc_from_full_to_swa(
+            window_full_locs
+        ).to(torch.int32)
+        window_swa_locs = window_swa_locs.masked_fill(invalid, -1)
+
+        # Block slots: the gamma slots this forward writes, per request.
+        block_full_locs = out_loc[:num_q].view(bs, block_size)
+        block_swa_locs = self.token_to_kv_pool.translate_loc_from_full_to_swa(
+            block_full_locs
+        ).to(torch.int32)
+
+        swa_page_indices, swa_topk_lengths = build_dspark_swa_page_indices(
+            window_swa_locs=window_swa_locs,
+            block_swa_locs=block_swa_locs,
+            context_lens=context_lens,
+            block_size=block_size,
+        )
+        return swa_page_indices, swa_topk_lengths
 
     def get_swa_page_indices(
         self,
