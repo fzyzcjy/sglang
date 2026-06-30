@@ -2007,8 +2007,7 @@ class DeepseekV4Model(nn.Module):
         hidden_states = self.norm(hidden_states)
 
         if capture_dspark:
-            aux_hidden = torch.cat(dspark_aux_hidden_states, dim=-1)
-            return (hidden_states, pre_hc_head), aux_hidden
+            return (hidden_states, pre_hc_head), dspark_aux_hidden_states
 
         return hidden_states, pre_hc_head
 
