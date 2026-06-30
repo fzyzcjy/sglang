@@ -1,10 +1,12 @@
 import unittest
+from types import SimpleNamespace
 
 import torch
 
 from sglang.srt.layers.attention.deepseek_v4_backend import (
     PAGE_INDEX_ALIGNED_SIZE,
     SWA_WINDOW,
+    DeepseekV4AttnBackend,
     _compact_dspark_window_then_block,
     build_dspark_swa_page_indices,
 )
@@ -266,6 +268,150 @@ class TestCompactWindowThenBlockContract(CustomTestCase):
         self.assertTrue(torch.equal(out[0, :cl], window[0, SWA_WINDOW - cl : SWA_WINDOW]))
         self.assertTrue(torch.equal(out[0, cl : cl + block_size], block[0]))
         self.assertTrue((out[0, cl + block_size :] == -1).all().item())
+
+
+def _scrambled_req_to_token(
+    *, num_reqs: int, max_cols: int, base: int = 10
+) -> torch.Tensor:
+    """A ring-style req_to_token: each request scatters its positions across the slot range.
+
+    ``37`` is coprime to ``max_cols``, so within any request the column->slot map is a
+    bijection whose consecutive positions are non-monotonic (the window [prefix-W, prefix-1]
+    is scattered, i.e. wraps across the ring), exercising the gather under cross-boundary
+    layouts while keeping every position's slot distinct (full-information SET assertions).
+    """
+    table = torch.empty((num_reqs, max_cols), dtype=torch.int64)
+    for req in range(num_reqs):
+        for p in range(max_cols):
+            table[req, p] = base + req * max_cols + (p * 37) % max_cols
+    return table
+
+
+def _affine_translate(slots: torch.Tensor) -> torch.Tensor:
+    """Injective, non-identity full->swa map so a forgotten/wrong translate is caught."""
+    return slots * 3 + 5
+
+
+class TestGetDsparkSwaPageIndicesOrchestrator(CustomTestCase):
+    def _expected_attended_set(
+        self,
+        *,
+        req_to_token: torch.Tensor,
+        translate,
+        prefix: int,
+        req: int,
+        out_loc_block: torch.Tensor,
+    ) -> set:
+        context = min(prefix, SWA_WINDOW)
+        context_slots = {
+            int(translate(int(req_to_token[req, p])))
+            for p in range(prefix - context, prefix)
+        }
+        block_slots = {int(translate(int(slot))) for slot in out_loc_block.tolist()}
+        return context_slots | block_slots
+
+    def test_attended_slot_sets_match_for_both_caller_gammas(self):
+        """Each query row attends exactly {recent context slots} u {block slots}, both gammas."""
+        num_reqs, max_cols = 8, 600
+        req_to_token = _scrambled_req_to_token(num_reqs=num_reqs, max_cols=max_cols)
+        backend = SimpleNamespace(
+            req_to_token=req_to_token,
+            token_to_kv_pool=SimpleNamespace(
+                translate_loc_from_full_to_swa=_affine_translate
+            ),
+        )
+        # The eager make_core_attn_metadata caller passes block_size=num_draft-1; the
+        # in-graph replay caller passes draft_token_num. Cover both gamma geometries.
+        for block_size in (3, 4):
+            prefixes = [0, 5, 130, 200]
+            req_ids = [1, 2, 4, 7]
+            bs = len(prefixes)
+            seq_lens: list[int] = []
+            req_pool: list[int] = []
+            for prefix, req in zip(prefixes, req_ids):
+                for k in range(block_size):
+                    seq_lens.append(prefix + 1 + k)
+                    req_pool.append(req)
+            seq_lens_casual = torch.tensor(seq_lens, dtype=torch.int32)
+            req_pool_indices_repeated = torch.tensor(req_pool, dtype=torch.int32)
+            num_q = bs * block_size
+            out_loc = 500000 + torch.arange(num_q, dtype=torch.int64)
+            page_indices, topk = DeepseekV4AttnBackend.get_dspark_swa_page_indices(
+                backend,
+                seq_lens_casual=seq_lens_casual,
+                req_pool_indices_repeated=req_pool_indices_repeated,
+                out_loc=out_loc,
+                block_size=block_size,
+            )
+            for r, (prefix, req) in enumerate(zip(prefixes, req_ids)):
+                expected = self._expected_attended_set(
+                    req_to_token=req_to_token,
+                    translate=_affine_translate,
+                    prefix=prefix,
+                    req=req,
+                    out_loc_block=out_loc[r * block_size : (r + 1) * block_size],
+                )
+                for j in range(block_size):
+                    q = r * block_size + j
+                    t = int(topk[q])
+                    self.assertEqual(t, min(prefix, SWA_WINDOW) + block_size)
+                    attended = page_indices[q, :t]
+                    self.assertTrue((attended >= 0).all().item(), msg=f"{block_size=} {r=}")
+                    self.assertTrue(
+                        (page_indices[q, t:] == -1).all().item(),
+                        msg=f"{block_size=} {r=}",
+                    )
+                    self.assertEqual(
+                        set(attended.tolist()), expected, msg=f"{block_size=} {r=} {j=}"
+                    )
+                rows = page_indices[r * block_size : (r + 1) * block_size]
+                self.assertTrue(torch.equal(rows[0], rows[-1]))
+
+    def test_invalid_window_positions_do_not_leak_into_prefix(self):
+        """Pre-start window positions are filled 0 -> translated -> -1, never leaking into topk.
+
+        With a prefix < SWA_WINDOW the front window columns are invalid. The method fills them
+        0 in full space, translates, then masks them -1 in swa space (this masked_fill order:
+        fill-0 -> translate -> fill-(-1)). The translate maps 0 -> 0, a value made distinct
+        from every legitimate slot, so its absence from the valid prefix pins both the masking
+        order and the gather-the-last-context direction (a front gather would surface 0 / -1).
+        """
+        swa_size = 997
+
+        def translate(slots: torch.Tensor) -> torch.Tensor:
+            return slots % swa_size
+
+        block_size = 3
+        prefix, req = 2, 4
+        num_reqs, max_cols = 8, 64
+        req_to_token = torch.zeros((num_reqs, max_cols), dtype=torch.int64)
+        # Position-0 and position-1 slots translate to 1 and 2; the masked invalid value is 0.
+        req_to_token[req, 0] = 1
+        req_to_token[req, 1] = 2
+        backend = SimpleNamespace(
+            req_to_token=req_to_token,
+            token_to_kv_pool=SimpleNamespace(translate_loc_from_full_to_swa=translate),
+        )
+        seq_lens_casual = torch.tensor(
+            [prefix + 1 + k for k in range(block_size)], dtype=torch.int32
+        )
+        req_pool_indices_repeated = torch.full((block_size,), req, dtype=torch.int32)
+        out_loc = torch.tensor([10, 20, 30], dtype=torch.int64)
+        page_indices, topk = DeepseekV4AttnBackend.get_dspark_swa_page_indices(
+            backend,
+            seq_lens_casual=seq_lens_casual,
+            req_pool_indices_repeated=req_pool_indices_repeated,
+            out_loc=out_loc,
+            block_size=block_size,
+        )
+        expected = {1, 2, 10, 20, 30}
+        for j in range(block_size):
+            t = int(topk[j])
+            self.assertEqual(t, prefix + block_size)
+            attended = page_indices[j, :t]
+            self.assertTrue((attended >= 0).all().item())
+            self.assertNotIn(0, attended.tolist())
+            self.assertEqual(set(attended.tolist()), expected)
 
 
 if __name__ == "__main__":
