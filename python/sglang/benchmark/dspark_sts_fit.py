@@ -112,9 +112,7 @@ def fit_sts_temperatures(
     }
 
 
-def load_collected_shards(
-    *, data_glob: str
-) -> tuple[torch.Tensor, torch.Tensor]:
+def load_collected_shards(*, data_glob: str) -> tuple[torch.Tensor, torch.Tensor]:
     shard_paths = sorted(glob.glob(data_glob))
     if not shard_paths:
         raise ValueError(f"No STS data shards matched {data_glob!r}.")
@@ -148,15 +146,13 @@ def load_collected_shards(
 def fit(
     data_glob: Annotated[
         str,
-        typer.Option(help="Glob of collected .pt shards, each a dict with [n, gamma] "
-        "'logits' and 'prefix_mask' tensors."),
+        typer.Option(
+            help="Glob of collected .pt shards, each a dict with [n, gamma] "
+            "'logits' and 'prefix_mask' tensors."
+        ),
     ],
-    out: Annotated[
-        Path, typer.Option(help="Output STS calibration JSON path.")
-    ],
-    num_bins: Annotated[
-        int, typer.Option(help="Number of equal-width ECE bins.")
-    ] = 15,
+    out: Annotated[Path, typer.Option(help="Output STS calibration JSON path.")],
+    num_bins: Annotated[int, typer.Option(help="Number of equal-width ECE bins.")] = 15,
     gamma: Annotated[
         Optional[int],
         typer.Option(help="Optional gamma override to validate the shards against."),
