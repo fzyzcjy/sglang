@@ -542,6 +542,13 @@ class SchedulerBatchResultProcessor:
         result.num_correct_drafts = sum(accept_lens) - len(batch.reqs)
         result.num_correct_drafts_per_req_cpu = [x - 1 for x in accept_lens]
 
+        # Per-request correct drafts the DSpark confidence cap trimmed (CAP_ACCEPT
+        # only; None for non-DSpark workers, all-zero for STATIC/COMPACT).
+        cap_trim_lens = (
+            result.cap_trim_lens.tolist() if result.cap_trim_lens is not None else None
+        )
+        result.num_cap_trim_drafts = sum(cap_trim_lens) if cap_trim_lens else 0
+
         # Feed the adaptive controller now that accept_lens is on CPU,
         # instead of doing a synchronous GPU→CPU copy in the worker hot path.
         # BaseSpecWorker provides a no-op default for non-adaptive workers.
@@ -578,6 +585,9 @@ class SchedulerBatchResultProcessor:
                 num_correct_drafts = result.num_correct_drafts_per_req_cpu[i]
                 req.spec_num_correct_drafts += num_correct_drafts
                 req.update_spec_correct_drafts_histogram(num_correct_drafts)
+
+                if cap_trim_lens is not None:
+                    req.spec_num_cap_trim_drafts += cap_trim_lens[i]
 
             predict_tokens.append(accept_tokens)
 
@@ -656,7 +666,9 @@ class SchedulerBatchResultProcessor:
         self.metrics_reporter.num_generated_tokens += len(batch.reqs)
         if not batch.spec_algorithm.is_none():
             self.metrics_reporter.update_spec_metrics(
-                batch.batch_size(), result.num_correct_drafts
+                batch.batch_size(),
+                result.num_correct_drafts,
+                result.num_cap_trim_drafts,
             )
         if self.server_args.enable_metrics:
             self.metrics_collector.increment_decode_cuda_graph_pass(

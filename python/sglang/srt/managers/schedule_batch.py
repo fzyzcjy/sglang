@@ -963,6 +963,10 @@ class Req(ReqDllmMixin):
         # Per-request count of accepted draft tokens (excludes the bonus token).
         self.spec_num_correct_drafts = 0
 
+        # Per-request count of target-correct drafts the DSpark confidence cap
+        # trimmed (CAP_ACCEPT only; 0 in STATIC/COMPACT and non-DSpark workers).
+        self.spec_num_cap_trim_drafts = 0
+
         # Acceptance histogram for speculative decoding.
         # List index = number of accepted tokens in a step, List value = count of steps with that many accepted tokens.
         # Example: histogram[0] = 5 means 5 steps with 0 accepted tokens, histogram[3] = 10 means 10 steps with 3 accepted tokens.

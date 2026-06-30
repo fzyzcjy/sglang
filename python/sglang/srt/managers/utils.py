@@ -42,6 +42,9 @@ class GenerationBatchResult:
     next_token_ids: Optional[Union[torch.Tensor, List[torch.Tensor]]] = None
     num_correct_drafts: int = 0  # no bonus included
     num_correct_drafts_per_req_cpu: Optional[List[int]] = None
+    # Correct drafts the DSpark confidence cap (CAP_ACCEPT mode) dropped this
+    # batch; 0 in STATIC/COMPACT. Aggregate filled in _resolve_spec_v2_tokens.
+    num_cap_trim_drafts: int = 0
     can_run_cuda_graph: bool = False
 
     # PP skip output comm: True when output send/recv was skipped and
@@ -62,6 +65,10 @@ class GenerationBatchResult:
     # FIXME(lsyin): maybe move to a better place?
     # sync path: forward stream -> output processor
     accept_lens: Optional[torch.Tensor] = None
+
+    # Per-request count of target-correct drafts the DSpark confidence cap
+    # trimmed (CAP_ACCEPT only). Rides the same async D2H path as accept_lens.
+    cap_trim_lens: Optional[torch.Tensor] = None
 
     # Next-iter seq_lens; published via on_publish.
     new_seq_lens: Optional[torch.Tensor] = None
@@ -129,6 +136,9 @@ class GenerationBatchResult:
 
         if self.accept_lens is not None:
             self.accept_lens = _async_d2h(self.accept_lens)
+
+        if self.cap_trim_lens is not None:
+            self.cap_trim_lens = _async_d2h(self.cap_trim_lens)
 
         # Sub-objects only declare their device fields; the single copy+safety
         # primitive (_async_d2h: pinned D2H + record_stream) is injected here so

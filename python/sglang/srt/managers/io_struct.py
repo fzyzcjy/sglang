@@ -1269,6 +1269,8 @@ class BatchTokenIDOutput(BaseBatchReq, kw_only=True):
     spec_verify_ct: Optional[List[int]] = None
     # Accepted drafts
     spec_num_correct_drafts: Optional[List[int]] = None
+    # Correct drafts the DSpark confidence cap trimmed (CAP_ACCEPT only)
+    spec_num_cap_trim_drafts: Optional[List[int]] = None
     # Acceptance histogram
     spec_correct_drafts_histogram: Optional[List[List[int]]] = None
 
@@ -1344,6 +1346,8 @@ class BatchStrOutput(BaseBatchReq, kw_only=True):
     spec_verify_ct: Optional[List[int]] = None
     # Accepted drafts
     spec_num_correct_drafts: Optional[List[int]] = None
+    # Correct drafts the DSpark confidence cap trimmed (CAP_ACCEPT only)
+    spec_num_cap_trim_drafts: Optional[List[int]] = None
     # Acceptance histogram
     spec_correct_drafts_histogram: Optional[List[List[int]]] = None
 

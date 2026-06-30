@@ -139,6 +139,8 @@ class SchedulerMetricsReporter:
         self.spec_num_forward_ct = 0
         self.spec_total_num_accept_tokens = 0  # lifetime
         self.spec_total_num_forward_ct = 0
+        # Correct drafts the DSpark confidence cap trimmed (CAP_ACCEPT only).
+        self.spec_num_cap_trim_drafts = 0  # per-log-interval
 
         # For PD disaggregation
         self.kv_transfer_speed_gb_s: float = 0.0
@@ -344,9 +346,12 @@ class SchedulerMetricsReporter:
             "num_draft_tokens": num_draft_tokens or 0,
         }
 
-    def update_spec_metrics(self, bs: int, num_correct_drafts: int):
+    def update_spec_metrics(
+        self, bs: int, num_correct_drafts: int, num_cap_trim_drafts: int = 0
+    ):
         self.spec_num_accept_tokens += num_correct_drafts + bs
         self.spec_num_forward_ct += bs
+        self.spec_num_cap_trim_drafts += num_cap_trim_drafts
 
         # Bonus tokens updated elsewhere
         self.num_generated_tokens += num_correct_drafts
@@ -506,6 +511,7 @@ class SchedulerMetricsReporter:
         self.spec_num_forward_ct = 0
         self.spec_total_num_accept_tokens = 0
         self.spec_total_num_forward_ct = 0
+        self.spec_num_cap_trim_drafts = 0
 
     def report_prefill_stats(
         self,
@@ -742,10 +748,21 @@ class SchedulerMetricsReporter:
             spec_accept_rate = (
                 num_correct_drafts / total_draft_tokens if total_draft_tokens > 0 else 0
             )
+            # Avg correct drafts the confidence cap trimmed per verify step
+            # (CAP_ACCEPT diagnostic; 0 in STATIC/COMPACT). Computed before the
+            # spec_num_forward_ct reset below.
+            spec_cap_trim_len = (
+                self.spec_num_cap_trim_drafts / self.spec_num_forward_ct
+                if self.spec_num_forward_ct > 0
+                else 0
+            )
             self.spec_total_num_accept_tokens += self.spec_num_accept_tokens
             self.spec_total_num_forward_ct += self.spec_num_forward_ct
             self.spec_num_accept_tokens = self.spec_num_forward_ct = 0
+            self.spec_num_cap_trim_drafts = 0
             msg += f"accept len: {spec_accept_length:.2f}, accept rate: {spec_accept_rate:.2f}, "
+            if spec_cap_trim_len > 0:
+                msg += f"cap trim len: {spec_cap_trim_len:.2f}, "
 
             if self.current_scheduler_metrics_enabled:
                 spec_snapshot = self._active_spec_config_snapshot()

@@ -2367,6 +2367,20 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
                 meta_info["spec_num_proposed_drafts"] = num_proposed_drafts
                 meta_info["spec_verify_ct"] = recv_obj.spec_verify_ct[i]
 
+                # Correct drafts the DSpark confidence cap trimmed (CAP_ACCEPT
+                # only; 0 otherwise) -- accept-length the schedule left on the
+                # table. Expose both the lifetime sum and the per-verify-step
+                # average (spec_cap_trim_len parallels spec_accept_length).
+                if (
+                    getattr(recv_obj, "spec_num_cap_trim_drafts", None) is not None
+                    and len(recv_obj.spec_num_cap_trim_drafts) > i
+                ):
+                    num_cap_trim_drafts = recv_obj.spec_num_cap_trim_drafts[i]
+                    meta_info["spec_num_cap_trim_drafts"] = num_cap_trim_drafts
+                    meta_info["spec_cap_trim_len"] = (
+                        num_cap_trim_drafts / recv_obj.spec_verify_ct[i]
+                    )
+
                 # FIXME: backward-compat aliases, remove in next release.
                 meta_info["spec_accepted_drafts"] = num_correct_drafts
                 meta_info["spec_proposed_drafts"] = num_proposed_drafts

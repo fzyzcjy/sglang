@@ -422,6 +422,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             logits_output=None,
             next_token_ids=torch.empty((0,), dtype=torch.int64, device=self.device),
             accept_lens=torch.empty((0,), dtype=torch.int32, device=self.device),
+            cap_trim_lens=torch.empty((0,), dtype=torch.int32, device=self.device),
             next_draft_input=next_draft_input,
             can_run_cuda_graph=False,
             speculative_num_draft_tokens=int(self.verify_num_draft_tokens),
@@ -526,7 +527,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         logits_output = target_verify.logits_output
         can_run_cuda_graph = target_verify.can_run_cuda_graph
 
-        correct_len, bonus = accept_draft_tokens(
+        correct_len, bonus, cap_trim_lens = accept_draft_tokens(
             candidates=verify_ids_2d,
             target_logits=logits_output.next_token_logits,
             draft_block=draft_block,
@@ -586,6 +587,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             logits_output=logits_output,
             next_token_ids=out_tokens.reshape(-1),
             accept_lens=commit_lens,
+            cap_trim_lens=cap_trim_lens.to(torch.int32),
             can_run_cuda_graph=can_run_cuda_graph,
             next_draft_input=next_draft_input,
             speculative_num_draft_tokens=int(self.verify_num_draft_tokens),

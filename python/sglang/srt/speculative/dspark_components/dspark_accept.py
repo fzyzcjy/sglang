@@ -19,13 +19,22 @@ def cap_correct_len(
     *,
     correct_len: torch.Tensor,
     layout: RaggedVerifyLayout,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
     # Cutoff-only cap: commit at most ell_r = verify_len - 1 correct drafts per
     # request. Capping accept is lossless -- fewer correctly-verified drafts are
     # committed and the bonus (recomputed by callers at the capped index) is
     # still the target's true next token at the cap.
+    #
+    # cap_trim_lens = correct_len - capped (>= 0) is the per-request count of
+    # target-correct drafts the confidence cap dropped. Only the CAP_ACCEPT mode
+    # (full bs*(gamma+1) window) makes this observable: there correct_len is the
+    # true full-block accept length, so the delta measures the accept-length the
+    # confidence schedule left on the table. COMPACT only computes 1+ell_r tokens
+    # so correct_len <= ell_r already and the delta is 0; STATIC has no cap.
     ell_r = (layout.verify_lens.to(device=correct_len.device) - 1).to(correct_len.dtype)
-    return torch.minimum(correct_len, ell_r)
+    capped = torch.minimum(correct_len, ell_r)
+    cap_trim_lens = correct_len - capped
+    return capped, cap_trim_lens
 
 
 def accept_greedy(
@@ -34,7 +43,7 @@ def accept_greedy(
     target_logits: torch.Tensor,
     verify_num_draft_tokens: int,
     cutoff_layout: Optional[RaggedVerifyLayout] = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     bs = candidates.shape[0]
     target_predict = torch.argmax(target_logits, dim=-1).view(
         bs, verify_num_draft_tokens
@@ -43,11 +52,14 @@ def accept_greedy(
         candidates=candidates,
         target_predict=target_predict,
     )
+    cap_trim_lens = torch.zeros_like(correct_len)
     if cutoff_layout is not None:
-        correct_len = cap_correct_len(correct_len=correct_len, layout=cutoff_layout)
+        correct_len, cap_trim_lens = cap_correct_len(
+            correct_len=correct_len, layout=cutoff_layout
+        )
         row_ids = torch.arange(bs, device=target_predict.device)
         bonus = target_predict[row_ids, correct_len.to(torch.long)].to(torch.int64)
-    return correct_len, bonus
+    return correct_len, bonus, cap_trim_lens
 
 
 def accept_sampling(
@@ -60,7 +72,7 @@ def accept_sampling(
     gamma: int,
     verify_num_draft_tokens: int,
     cutoff_layout: Optional[RaggedVerifyLayout] = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     bs = candidates.shape[0]
     device = candidates.device
     target_probs = build_dflash_verify_target_probs(
@@ -103,12 +115,15 @@ def accept_sampling(
         deterministic=True,
     )
     correct_len = accept_token_num
+    cap_trim_lens = torch.zeros_like(correct_len)
     if cutoff_layout is not None:
-        correct_len = cap_correct_len(correct_len=correct_len, layout=cutoff_layout)
+        correct_len, cap_trim_lens = cap_correct_len(
+            correct_len=correct_len, layout=cutoff_layout
+        )
     row_ids = torch.arange(bs, dtype=torch.long, device=device)
     accept_pos = accept_index[row_ids, correct_len.to(torch.long)].to(torch.long)
     bonus = predicts[accept_pos].to(torch.int64)
-    return correct_len, bonus
+    return correct_len, bonus, cap_trim_lens
 
 
 def accept_draft_tokens(
@@ -121,9 +136,10 @@ def accept_draft_tokens(
     gamma: int,
     verify_num_draft_tokens: int,
     cutoff_layout: Optional[RaggedVerifyLayout] = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     # Per-request accept (greedy argmax-match vs rejection sampling), dispatched
-    # by batch composition. Both rules are lossless.
+    # by batch composition. Both rules are lossless. The third return is the
+    # per-request cap_trim_lens (correct drafts the confidence cap dropped).
     greedy_mask = draft_block.greedy_mask
     # All-greedy fast path. is_all_greedy is host-side, so the branch is sync-free.
     all_greedy = sampling_info is None or sampling_info.is_all_greedy
@@ -151,13 +167,13 @@ def accept_draft_tokens(
             cutoff_layout=cutoff_layout,
         )
     # Mixed: run both rules and select per row by greedy_mask.
-    greedy_len, greedy_bonus = accept_greedy(
+    greedy_len, greedy_bonus, greedy_trim = accept_greedy(
         candidates=candidates,
         target_logits=target_logits,
         verify_num_draft_tokens=verify_num_draft_tokens,
         cutoff_layout=cutoff_layout,
     )
-    sampling_len, sampling_bonus = accept_sampling(
+    sampling_len, sampling_bonus, sampling_trim = accept_sampling(
         candidates=candidates,
         target_logits=target_logits,
         draft_probs=draft_probs,
@@ -171,7 +187,10 @@ def accept_draft_tokens(
         greedy_mask, greedy_len.to(sampling_len.dtype), sampling_len
     )
     bonus = torch.where(greedy_mask, greedy_bonus, sampling_bonus)
-    return correct_len, bonus
+    cap_trim_lens = torch.where(
+        greedy_mask, greedy_trim.to(sampling_trim.dtype), sampling_trim
+    )
+    return correct_len, bonus, cap_trim_lens
 
 
 def build_out_tokens(
