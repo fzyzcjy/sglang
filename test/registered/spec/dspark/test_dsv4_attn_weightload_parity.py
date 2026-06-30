@@ -102,7 +102,7 @@ class TestDsv4AttnWeightloadParity(CustomTestCase):
         try:
             _ensure_repo_test_package()
             from test.srt.speculative._dspark_reference.deepseek_v4.parity_fixture import (
-                make_tiny_dsv4_config,
+                make_real_dsv4_config,
             )
 
             from sglang.srt.models.deepseek_v4_dspark import (
@@ -114,7 +114,7 @@ class TestDsv4AttnWeightloadParity(CustomTestCase):
             return
 
         _setup_sglang_runtime()
-        config = make_tiny_dsv4_config()
+        config = make_real_dsv4_config()
         with get_parallel().override(tp_size=1, tp_rank=0):
             cls.model = DeepseekV4ForCausalLMDSpark(config=config).to("cuda").eval()
         cls.config = config
