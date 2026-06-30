@@ -991,7 +991,12 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
                     self.model_runner.spec_algorithm.is_dflash_or_dspark()
                     and self.model_runner.is_draft_worker
                     and "input_embeds" in inspect.signature(forward).parameters
+                    and not hasattr(self.model_runner.model, "forward_embed")
                 ):
+                    # Drafts that own their embedding (dsv4 hc-expands input_ids via
+                    # forward_embed) must capture from input_ids, not the flat
+                    # input_embeds buffer; the worker leaves that buffer unpopulated for
+                    # them, so feeding it would record the wrong (un-hc-expanded) geometry.
                     kwargs["input_embeds"] = self.buffers.input_embeds[:num_tokens]
 
                 out = forward(
