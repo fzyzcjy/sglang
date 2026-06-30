@@ -23,7 +23,6 @@ import torch.nn.functional as F
 from torch import nn
 
 from sglang.srt.configs.deepseek_v4 import DeepSeekV4Config
-from sglang.srt.distributed.communication_op import tensor_model_parallel_all_gather
 from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.layers.linear import ColumnParallelLinear, RowParallelLinear
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
@@ -40,7 +39,7 @@ from sglang.srt.models.deepseek_v4 import (
     hc_head_torch,
     make_hc_head_params,
 )
-from sglang.srt.models.dspark import DSparkConfidenceHead
+from sglang.srt.models.dspark import DSparkConfidenceHead, gather_and_crop_vocab
 from sglang.srt.runtime_context import get_parallel
 from sglang.srt.speculative.dspark_utils import parse_dspark_draft_config
 from sglang.srt.utils import add_prefix
@@ -54,27 +53,26 @@ StepSampler = Callable[[torch.Tensor, int], torch.Tensor]
 class DSparkV4DraftOutput(msgspec.Struct, frozen=True):
     """Structured output of ``DeepseekV4ForCausalLMDSpark.forward`` (worker contract).
 
-    The dsv4 draft model computes its base logits internally (the hc_head collapse the
-    dense path lacks), so the worker reads them off this struct instead of calling a
-    separate hook. This struct is returned as the model-runner ``logits_output``, so the
-    worker reads ``draft_out.logits_output.{draft_hidden,base_logits,x_post_hc}``.
+    The dsv4 ``forward`` produces ONLY the raw backbone hidden; base-logit production
+    (the hc_head collapse the dense path lacks) is now the model's ``compute_base_logits``
+    hook driven by the worker post-forward, so this struct no longer carries base logits or
+    the confidence tap. This struct is returned as the model-runner ``logits_output``, so
+    the worker reads ``draft_out.logits_output.hidden_states`` and then calls
+    ``compute_base_logits`` on it.
+
+    NOTE: ``ModelRunner._forward_raw`` passes this struct through unchanged only because the
+    dsv4 draft always runs through the ``EagerRunner`` (TARGET_VERIFY + ``input_embeds``
+    both make ``PrefillCudaGraphRunner.can_run_graph`` return False). A graph runner's
+    ``execute`` only accepts ``LogitsProcessorOutput`` / ``EmbeddingPoolerOutput`` /
+    ``PPProxyTensors``; this struct must never enter one.
 
     Fields:
         draft_hidden: ``[bs * gamma, hc, d]`` post-stage hc-expanded backbone hidden (the
-            raw tensor the stages produced; retained for callers that want the pre-collapse
-            hidden, e.g. debugging / parity).
-        base_logits: ``[bs * gamma, org_vocab_size]`` the hc_head-collapsed + normed +
-            lm_head + TP-all-gathered + org-vocab-cropped logits the serial Markov head
-            consumes (the markov bias-then-sample loop runs on THESE, not raw backbone
-            logits). The worker reshapes to ``[bs, gamma, vocab]``.
-        x_post_hc: ``[bs * gamma, d]`` the post-hc_head PRE-norm tap (c-scope confidence
-            input), or ``None`` when the confidence head is disabled. The model also stashes
-            it on ``self._x_post_hc`` for ``compute_confidence``.
+            raw, un-collapsed tensor the stages produced; ``compute_base_logits`` consumes
+            this directly).
     """
 
     draft_hidden: torch.Tensor
-    base_logits: torch.Tensor
-    x_post_hc: Optional[torch.Tensor]
 
     @property
     def hidden_states(self) -> torch.Tensor:
@@ -83,10 +81,10 @@ class DSparkV4DraftOutput(msgspec.Struct, frozen=True):
         return self.draft_hidden
 
     @property
-    def next_token_logits(self) -> torch.Tensor:
-        # The DSpark draft base logits occupy the next-token-logits slot for any generic
-        # consumer; the worker reads ``base_logits`` explicitly.
-        return self.base_logits
+    def next_token_logits(self) -> None:
+        # The dsv4 draft does not surface logits on this struct; the worker calls
+        # ``compute_base_logits`` on ``hidden_states`` and never reads this slot.
+        return None
 
 
 def apply_rotary_emb(
@@ -755,17 +753,17 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         get_embedding: bool = False,
         pp_proxy_tensors=None,
     ) -> DSparkV4DraftOutput:
-        """Standard SGLang draft forward: embed -> DSpark stages -> base logits.
+        """Standard SGLang draft forward: embed -> DSpark stages -> raw backbone hidden.
 
         The worker builds the draft block ForwardBatch (TARGET_VERIFY mode, the gamma block
         slots in ``out_cache_loc``, per-row positions, ``spec_info.draft_token_num`` =
         gamma). The worker passes only ``input_ids`` (the dsv4 model hc-expands the
         embedding itself via ``forward_embed``); ``input_embeds`` is accepted for parity
-        callers. Runs the DSpark stages on the production paged SWA pool, then computes the
-        base logits internally (hc_head collapse -> norm -> lm_head -> TP all-gather ->
-        org-vocab crop). Returns a ``DSparkV4DraftOutput`` carrying the backbone hidden, the
-        base logits the serial Markov head consumes, and the post-hc_head confidence tap.
-        The head finish (serial Markov sampling) is driven by the worker.
+        callers. Runs the DSpark stages on the production paged SWA pool and returns a
+        ``DSparkV4DraftOutput`` carrying ONLY the raw, un-collapsed backbone hidden. Base
+        logits (hc_head collapse -> norm -> lm_head -> TP all-gather -> org-vocab crop) are
+        produced separately by ``compute_base_logits``, which the worker calls on the raw
+        hidden post-forward; the head finish (serial Markov sampling) is also worker-driven.
         """
         del get_embedding, pp_proxy_tensors
         if input_embeds is None:
@@ -774,14 +772,7 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         for stage in self.stages:
             x = stage(positions, x, forward_batch)
 
-        x_post_hc = self.collapse_hc_head(x)
-        self._x_post_hc = x_post_hc
-        base_logits = self._logits_from_x_post_hc(x_post_hc)
-        return DSparkV4DraftOutput(
-            draft_hidden=x,
-            base_logits=base_logits,
-            x_post_hc=x_post_hc if self.confidence_head is not None else None,
-        )
+        return DSparkV4DraftOutput(draft_hidden=x)
 
     def collapse_hc_head(self, x: torch.Tensor) -> torch.Tensor:
         """Collapse the draft mHC tensor through the last stage's hc_head (PRE-norm).
@@ -806,8 +797,13 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         Collapses the mHC draft hidden through the last stage's hc_head (PRE-norm), then
         applies ``norm`` and the target's local-vocab lm_head matmul, all-gathers to the
         full vocab (no-op at tp=1), and crops the TP vocab padding. This is the dsv4
-        analog of the dense worker's ``_compute_base_logits`` (which has no hc_head
-        collapse). The worker calls this and feeds the result to the shared Markov loop.
+        analog of the dense ``DSparkDraftMixin.compute_base_logits`` (which has no hc_head
+        collapse and keeps a weight-dtype ``matmul`` rather than this fp32 ``F.linear``).
+        This is the SOLE base-logit producer: ``forward`` no longer computes them, and the
+        post-hc_head PRE-norm tap is stashed on ``self._x_post_hc`` HERE for
+        ``compute_confidence`` (the worker calls this before ``compute_confidence``, so the
+        stash is fresh). The worker calls this on the raw forward hidden and feeds the
+        result to the shared Markov loop.
         """
         x_post_hc = self.collapse_hc_head(x)
         self._x_post_hc = x_post_hc
@@ -822,9 +818,7 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         last = self.stages[-1]
         x = last.norm(x_post_hc)
         local_logits = F.linear(x.float(), self.lm_head.weight.float())
-        full_logits = tensor_model_parallel_all_gather(local_logits, dim=-1)
-        org_vocab_size = int(self.lm_head.org_vocab_size)
-        return full_logits[..., :org_vocab_size]
+        return gather_and_crop_vocab(local_logits, self.lm_head)
 
     def compute_confidence(
         self,
