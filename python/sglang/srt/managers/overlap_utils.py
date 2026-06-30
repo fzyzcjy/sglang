@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Optional, Sequence
 
+import msgspec
 import torch
 
 from sglang.srt.environ import envs
@@ -45,6 +46,30 @@ def decide_needs_cpu_seq_lens(
     return any(
         getattr(b, "needs_cpu_seq_lens", True) for b in attn_backends if b is not None
     )
+
+
+def decide_needs_confidence_relay(server_args: ServerArgs) -> bool:
+    """Whether FutureMap must publish the per-step DSpark confidence to host.
+
+    Capability gate (mirror decide_needs_cpu_seq_lens): only DSpark in a
+    ragged-non-static verify mode reads the relayed confidence to schedule
+    per-request verify lengths. Every other algorithm (plain / EAGLE / DFlash /
+    ngram / static-DSpark) is a no-op -- the channel allocates nothing and
+    publish/resolve early-return on the False flag, so there is zero added
+    overhead. The is_dspark / mode decision lives HERE (not in the hot
+    publish/resolve path) so shared code never branches on spec identity.
+    """
+    # Local imports: keep overlap_utils' module-level deps leaf-only.
+    from sglang.srt.speculative.ragged_verify import (
+        RaggedVerifyMode,
+        read_ragged_verify_mode,
+    )
+    from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
+
+    algo = SpeculativeAlgorithm.from_string(server_args.speculative_algorithm)
+    if not algo.is_dspark():
+        return False
+    return read_ragged_verify_mode() is not RaggedVerifyMode.STATIC
 
 
 _is_cuda = is_cuda()
@@ -101,6 +126,30 @@ def resolve_forward_inputs(batch: ScheduleBatch, future_map: FutureMap) -> None:
         future_map._resolve_spec_extras(batch)
 
 
+# Sentinel for a confidence-relay row that was never written (or written for a
+# different request). The DSpark host budget planner's per-row identity guard
+# masks stale rows (stamped seq_len == this) before they enter the verify budget.
+CONFIDENCE_RELAY_UNSET_SEQ_LEN: int = -1
+
+
+class ResolvedConfidence(msgspec.Struct):
+    """Host snapshot of the relayed DSpark confidence for one batch, pulled
+    off-critical-path on the private fwd_prepare_d2h_stream (zero fresh compute-
+    stream sync). All tensors are host, indexed to the batch's request rows.
+
+    - confidence: [bs, gamma] the lag-1 per-step confidence the relay just resolved.
+    - seq_lens_stamp: [bs] the prefix_len stamped WHEN that confidence was computed
+      (the lag-1 stamp), used by the budget planner's freshness guard after the
+      host carry shifts it to lag-2 (B2).
+    - prefix_lens: [bs] the current step's prefix_len (post-commit seq_lens published
+      last step), the guard's other operand.
+    """
+
+    confidence: torch.Tensor
+    seq_lens_stamp: torch.Tensor
+    prefix_lens: torch.Tensor
+
+
 @dataclass
 class RelayPayload:
     """Per-iteration stash payload for the FutureMap bufs. Non-spec fills only
@@ -135,6 +184,7 @@ class FutureMap:
         spec_algo: SpeculativeAlgorithm,
         req_to_token_pool: ReqToTokenPool,
         needs_cpu_seq_lens: bool = True,
+        needs_confidence_relay: bool = False,
     ):
         # Bufs indexed by req_pool_idx; slot 0 mirrors KV padding row so
         # CUDA-graph padded batches (req_pool_idx == 0) are harmless.
@@ -143,6 +193,10 @@ class FutureMap:
         # Computed by decide_needs_cpu_seq_lens(); see that helper for the
         # full decision (per-backend flag + TBO / piecewise CG overrides).
         self.needs_cpu_seq_lens = needs_cpu_seq_lens
+        # Computed by decide_needs_confidence_relay(); gates the DSpark confidence
+        # channel below. False for every non-DSpark / static-mode config -> the
+        # channel allocates nothing and publish/resolve early-return.
+        self.needs_confidence_relay = needs_confidence_relay
         self.req_pool_size = req_to_token_pool.req_to_token.shape[0]
 
         self.output_tokens_buf = (
@@ -171,6 +225,19 @@ class FutureMap:
         self._forward_buf_initialized = False
 
         self.publish_ready = None  # lazy device.Event(); only spec_v2 needs it
+
+        # DSpark confidence relay (gated by needs_confidence_relay). Mirrors the
+        # seq_lens async relay: a device buf scatter-written on the forward stream
+        # by publish(), pulled to a pinned host buffer on the private
+        # fwd_prepare_d2h_stream by resolve_confidence_cpu() (gated on the same
+        # publish_ready event, so no compute-stream sync). Lazy-inited on the first
+        # publish so gamma is peeked from the confidence shape (no gamma param).
+        self.confidence_buf = None
+        self.confidence_seq_lens_buf = None
+        self.confidence_cpu_pinned = None
+        self.confidence_seq_lens_cpu_pinned = None
+        self.confidence_prefix_cpu_pinned = None
+        self._confidence_buf_initialized = False
 
     def _lazy_init_forward_buf(self, payload: RelayPayload):
         # Local import (see decide_needs_cpu_seq_lens): keep module-level deps leaf.
@@ -216,6 +283,78 @@ class FutureMap:
                 dtype=draft_probs0.dtype,
                 device=self.device,
             )
+
+    def _lazy_init_confidence_buf(self, confidence: torch.Tensor) -> None:
+        # Peek gamma from the first published confidence ([bs, gamma]); allocate the
+        # device buf + (CUDA) pinned mirrors. The seq_len stamp buf seeds the unset
+        # sentinel so a never-written row is detectably stale to the budget guard.
+        self._confidence_buf_initialized = True
+        gamma = confidence.shape[-1]
+        self.confidence_buf = torch.empty(
+            (self.req_pool_size, gamma), dtype=torch.float32, device=self.device
+        )
+        self.confidence_seq_lens_buf = torch.full(
+            (self.req_pool_size,),
+            CONFIDENCE_RELAY_UNSET_SEQ_LEN,
+            dtype=torch.int64,
+            device=self.device,
+        )
+        if _is_cuda:
+            self.confidence_cpu_pinned = torch.empty(
+                (self.req_pool_size, gamma), dtype=torch.float32, pin_memory=True
+            )
+            self.confidence_seq_lens_cpu_pinned = torch.empty(
+                (self.req_pool_size,), dtype=torch.int64, pin_memory=True
+            )
+            self.confidence_prefix_cpu_pinned = torch.empty(
+                (self.req_pool_size,), dtype=torch.int64, pin_memory=True
+            )
+
+    def resolve_confidence_cpu(
+        self, batch: ScheduleBatch
+    ) -> Optional[ResolvedConfidence]:
+        # Mirror of resolve_seq_lens_cpu for the DSpark confidence channel: pull the
+        # lag-1 confidence + its seq_len stamp + the current prefix to host without
+        # syncing the compute stream. Returns None (cold start / disabled / DP idle)
+        # so the caller falls back to verify-all. Always copies the current prefix
+        # from new_seq_lens_buf here (resolve_seq_lens_cpu skips that copy on the
+        # GPU-only needs_cpu_seq_lens=False path), keeping the budget guard backend-
+        # agnostic.
+        if not self.needs_confidence_relay or not self._confidence_buf_initialized:
+            return None
+        draft_input = batch.spec_info
+        if draft_input is None:
+            return None
+        fi = draft_input.future_indices
+        if fi is None or fi.shape[0] == 0:
+            return None
+
+        if self.fwd_prepare_d2h_stream is None or self.publish_ready is None:
+            # bootstrap / non-CUDA: synchronous pull (rare; same correctness).
+            idx = batch.req_pool_indices
+            return ResolvedConfidence(
+                confidence=self.confidence_buf[idx].cpu(),
+                seq_lens_stamp=self.confidence_seq_lens_buf[idx].cpu(),
+                prefix_lens=self.new_seq_lens_buf[idx].cpu(),
+            )
+
+        self.fwd_prepare_d2h_stream.wait_event(self.publish_ready)
+        with torch.get_device_module(self.device).stream(self.fwd_prepare_d2h_stream):
+            self.confidence_cpu_pinned.copy_(self.confidence_buf, non_blocking=True)
+            self.confidence_seq_lens_cpu_pinned.copy_(
+                self.confidence_seq_lens_buf, non_blocking=True
+            )
+            self.confidence_prefix_cpu_pinned.copy_(
+                self.new_seq_lens_buf, non_blocking=True
+            )
+        self.fwd_prepare_d2h_stream.synchronize()
+
+        idx_cpu = batch.req_pool_indices_cpu
+        return ResolvedConfidence(
+            confidence=self.confidence_cpu_pinned[idx_cpu],
+            seq_lens_stamp=self.confidence_seq_lens_cpu_pinned[idx_cpu],
+            prefix_lens=self.confidence_prefix_cpu_pinned[idx_cpu],
+        )
 
     def _resolve_spec_extras(self, batch: ScheduleBatch) -> None:
         if self.spec_algo.is_ngram():
@@ -303,11 +442,28 @@ class FutureMap:
         batch.seq_lens_cpu = self.new_seq_lens_cpu_pinned[batch.req_pool_indices_cpu]
         batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
 
-    def publish(self, future_indices: torch.Tensor, new_seq_lens: torch.Tensor) -> None:
+    def publish(
+        self,
+        future_indices: torch.Tensor,
+        new_seq_lens: torch.Tensor,
+        confidence: Optional[torch.Tensor] = None,
+        confidence_seq_lens: Optional[torch.Tensor] = None,
+    ) -> None:
         indices = future_indices
         if indices.shape[0] == 0:
             return  # DP idle
         self.new_seq_lens_buf[indices] = new_seq_lens.to(self.new_seq_lens_buf.dtype)
+        # DSpark confidence channel (gated): scatter this step's confidence + the
+        # prefix_len stamp on the forward stream BEFORE the publish_ready record, so
+        # resolve_confidence_cpu (gated on the same event) sees them. Only DSpark
+        # callers pass confidence; every other publisher leaves it None -> no-op.
+        if self.needs_confidence_relay and confidence is not None:
+            if not self._confidence_buf_initialized:
+                self._lazy_init_confidence_buf(confidence)
+            self.confidence_buf[indices] = confidence.to(self.confidence_buf.dtype)
+            self.confidence_seq_lens_buf[indices] = confidence_seq_lens.to(
+                self.confidence_seq_lens_buf.dtype
+            )
         # Only spec_v2 needs the event; it gates the seq_lens D2H on the private stream.
         if self.spec_algo.is_some():
             if self.publish_ready is None:

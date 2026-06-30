@@ -156,6 +156,7 @@ from sglang.srt.managers.min_free_slots_delayer import (
 from sglang.srt.managers.multimodal_processor import get_mm_processor, import_processors
 from sglang.srt.managers.overlap_utils import (
     RelayPayload,
+    decide_needs_confidence_relay,
     decide_needs_cpu_seq_lens,
     resolve_forward_inputs,
 )
@@ -1253,10 +1254,12 @@ class Scheduler(
         else:
             attn_backends = (self.tp_worker.model_runner.attn_backend,)
         needs_cpu_seq_lens = decide_needs_cpu_seq_lens(self.server_args, attn_backends)
+        needs_confidence_relay = decide_needs_confidence_relay(self.server_args)
         self.future_map = self.spec_algorithm.create_future_map(
             self.device,
             self.req_to_token_pool,
             needs_cpu_seq_lens=needs_cpu_seq_lens,
+            needs_confidence_relay=needs_confidence_relay,
         )
 
         if use_mlx():
