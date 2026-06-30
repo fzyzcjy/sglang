@@ -104,6 +104,29 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
         return len(self.verify_lens_cpu)
 
     @classmethod
+    def _assemble(
+        cls,
+        *,
+        verify_lens_cpu: list[int],
+        total_verify_tokens: int,
+        graph_num_tokens: int,
+        device: torch.device,
+    ) -> RaggedVerifyLayout:
+        verify_lens = torch.tensor(verify_lens_cpu, dtype=torch.int32, device=device)
+        cumsum = torch.cumsum(verify_lens, dim=0).to(torch.int32)
+        zero = torch.zeros(1, dtype=torch.int32, device=device)
+        qo_indptr_device = torch.cat([zero, cumsum])
+        extend_start_loc = qo_indptr_device[:-1].clone()
+        return cls(
+            verify_lens=verify_lens,
+            verify_lens_cpu=verify_lens_cpu,
+            total_verify_tokens=total_verify_tokens,
+            extend_start_loc=extend_start_loc,
+            qo_indptr_device=qo_indptr_device,
+            graph_num_tokens=graph_num_tokens,
+        )
+
+    @classmethod
     def from_verify_lens(
         cls,
         *,
@@ -122,19 +145,11 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
         bucket_input = max(total_verify_tokens, graph_num_tokens_floor)
         graph_num_tokens = round_up_grid(total=bucket_input, grid=grid)
 
-        verify_lens = torch.tensor(verify_lens_list, dtype=torch.int32, device=device)
-        cumsum = torch.cumsum(verify_lens, dim=0).to(torch.int32)
-        zero = torch.zeros(1, dtype=torch.int32, device=device)
-        qo_indptr_device = torch.cat([zero, cumsum])
-        extend_start_loc = qo_indptr_device[:-1].clone()
-
-        return cls(
-            verify_lens=verify_lens,
+        return cls._assemble(
             verify_lens_cpu=verify_lens_list,
             total_verify_tokens=total_verify_tokens,
-            extend_start_loc=extend_start_loc,
-            qo_indptr_device=qo_indptr_device,
             graph_num_tokens=graph_num_tokens,
+            device=device,
         )
 
     @classmethod
@@ -197,20 +212,9 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
         assert sum(padded_verify_lens_cpu) == self.graph_num_tokens
         assert min(padded_verify_lens_cpu) >= 1
 
-        device = self.verify_lens.device
-        verify_lens = torch.tensor(
-            padded_verify_lens_cpu, dtype=torch.int32, device=device
-        )
-        cumsum = torch.cumsum(verify_lens, dim=0).to(torch.int32)
-        zero = torch.zeros(1, dtype=torch.int32, device=device)
-        qo_indptr_device = torch.cat([zero, cumsum])
-        extend_start_loc = qo_indptr_device[:-1].clone()
-
-        return RaggedVerifyLayout(
-            verify_lens=verify_lens,
+        return RaggedVerifyLayout._assemble(
             verify_lens_cpu=padded_verify_lens_cpu,
             total_verify_tokens=self.graph_num_tokens,
-            extend_start_loc=extend_start_loc,
-            qo_indptr_device=qo_indptr_device,
             graph_num_tokens=self.graph_num_tokens,
+            device=self.verify_lens.device,
         )
