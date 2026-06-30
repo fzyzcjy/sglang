@@ -67,6 +67,7 @@ class TestBasicSanityDSpark(
     # still uses flashinfer, and needs_cpu_seq_lens is OR-ed over all spec-v2
     # backends.
     attention_backend = "trtllm_mha"
+    draft_attention_backend = "fa4"
 
     @classmethod
     def setUpClass(cls):
@@ -84,6 +85,8 @@ class TestBasicSanityDSpark(
                 "--trust-remote-code",
                 "--attention-backend",
                 cls.attention_backend,
+                "--speculative-draft-attention-backend",
+                cls.draft_attention_backend,
                 "--speculative-algorithm",
                 "DSPARK",
                 "--speculative-draft-model-path",
