@@ -136,7 +136,9 @@ class TestRaggedGating(CustomTestCase):
     def test_compact_without_confidence_falls_back_to_uniform_layout(self):
         """COMPACT with no confidence ring yet carries the degenerate uniform layout
         (verify_lens == gamma+1) so it still hits the token-keyed graph (C3)."""
-        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.COMPACT, scheduler=object())
+        worker = _make_worker(
+            gamma=4, mode=RaggedVerifyMode.COMPACT, scheduler=object()
+        )
         layout = worker._maybe_schedule_ragged_layout(
             req_pool_indices=torch.tensor([0, 1]),
             prefix_lens=torch.tensor([8, 8]),
@@ -147,9 +149,7 @@ class TestRaggedGating(CustomTestCase):
 
     def test_cutoff_mode_without_scheduler_returns_none(self):
         """cap-accept with no scheduler (no confidence head) falls back to uniform."""
-        worker = _make_worker(
-            gamma=4, mode=RaggedVerifyMode.CAP_ACCEPT, scheduler=None
-        )
+        worker = _make_worker(gamma=4, mode=RaggedVerifyMode.CAP_ACCEPT, scheduler=None)
         layout = worker._maybe_schedule_ragged_layout(
             req_pool_indices=torch.tensor([0, 1]),
             prefix_lens=torch.tensor([8, 8]),

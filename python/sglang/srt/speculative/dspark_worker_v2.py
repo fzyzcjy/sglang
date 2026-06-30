@@ -807,9 +807,9 @@ class DSparkWorkerV2(BaseSpecWorker):
         stamped_seq_lens = self._confidence_ring_seq_lens[read_slot, req_pool_indices]
         growth = prefix_lens.to(torch.int64) - stamped_seq_lens
         max_growth = _CONFIDENCE_RELAY_LAG_STEPS * (self.gamma + 1)
-        fresh = (
-            (stamped_seq_lens >= 0) & (growth >= 1) & (growth <= max_growth)
-        ).view(-1, 1)
+        fresh = ((stamped_seq_lens >= 0) & (growth >= 1) & (growth <= max_growth)).view(
+            -1, 1
+        )
         return torch.where(fresh, k_survival, torch.ones_like(k_survival))
 
     def _current_live_sort_survival(

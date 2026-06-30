@@ -87,7 +87,10 @@ class TestCrossStepLagBarrier(CustomTestCase):
             torch.tensor([10 + step, 20 + step]) for step in range(len(confidences))
         ]
         _drive_steps(
-            worker, req_pool_indices=idx, confidences=confidences, prefix_lens=prefix_lens
+            worker,
+            req_pool_indices=idx,
+            confidences=confidences,
+            prefix_lens=prefix_lens,
         )
 
         k_survival = worker._two_steps_prior_k_survival(
@@ -111,7 +114,10 @@ class TestCrossStepLagBarrier(CustomTestCase):
             torch.tensor([10 + step, 20 + step]) for step in range(len(confidences))
         ]
         _drive_steps(
-            worker, req_pool_indices=idx, confidences=confidences, prefix_lens=prefix_lens
+            worker,
+            req_pool_indices=idx,
+            confidences=confidences,
+            prefix_lens=prefix_lens,
         )
 
         k_before = worker._two_steps_prior_k_survival(
@@ -150,7 +156,10 @@ class TestCrossStepLagBarrier(CustomTestCase):
             torch.tensor([10 + step, 20 + step]) for step in range(len(confidences))
         ]
         _drive_steps(
-            worker, req_pool_indices=idx, confidences=confidences, prefix_lens=prefix_lens
+            worker,
+            req_pool_indices=idx,
+            confidences=confidences,
+            prefix_lens=prefix_lens,
         )
 
         k_survival = worker._two_steps_prior_k_survival(
@@ -194,7 +203,10 @@ class TestRingIdentityGuard(CustomTestCase):
             torch.tensor([100 + step, 200 + step]) for step in range(len(confidences))
         ]
         _drive_steps(
-            worker, req_pool_indices=idx, confidences=confidences, prefix_lens=prefix_lens
+            worker,
+            req_pool_indices=idx,
+            confidences=confidences,
+            prefix_lens=prefix_lens,
         )
         k_survival = worker._two_steps_prior_k_survival(
             req_pool_indices=idx, prefix_lens=prefix_lens[-1]
@@ -220,7 +232,10 @@ class TestRingIdentityGuard(CustomTestCase):
         ]
         prefix_lens[-1] = torch.tensor([5, 200 + len(confidences) - 1])
         _drive_steps(
-            worker, req_pool_indices=idx, confidences=confidences, prefix_lens=prefix_lens
+            worker,
+            req_pool_indices=idx,
+            confidences=confidences,
+            prefix_lens=prefix_lens,
         )
         k_survival = worker._two_steps_prior_k_survival(
             req_pool_indices=idx, prefix_lens=prefix_lens[-1]
