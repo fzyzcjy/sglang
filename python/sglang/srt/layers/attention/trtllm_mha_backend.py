@@ -687,6 +687,17 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
         forward_mode = forward_batch.forward_mode
         spec_info = forward_batch.spec_info
 
+        if (
+            forward_mode.is_target_verify()
+            and _resolve_ragged_verify_layout(forward_batch) is not None
+        ):
+            # Graph-admission fail-fast (mirrors FlashInfer's at flashinfer_backend.py):
+            # the runner admits a ragged verify batch on supports_ragged_verify_graph,
+            # but the variable-length (cum_seq_lens_q) query path is trtllm-gen only.
+            # Reject the xqa impl here at metadata prep (capture or replay) rather than
+            # deep inside flashinfer, so nothing silently runs the wrong uniform geometry.
+            self._assert_ragged_verify_supported()
+
         if in_capture:
             num_tokens = forward_batch.positions.numel()
             self._build_cuda_graph_metadata(
