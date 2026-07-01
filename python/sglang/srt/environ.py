@@ -286,6 +286,12 @@ class Envs:
     SGLANG_DSPARK_DEBUG_CONFIDENCE_METRICS = EnvBool(False)
     SGLANG_DSPARK_DEBUG_MAIN_OUTPUT = EnvBool(False)
     SGLANG_DSPARK_STS_COLLECT_PATH = EnvStr("")
+    # DSpark V4 draft perf toggles. FAST_KERNEL on: fused rmsnorm-rope + inverse-rope
+    # + bf16 wo_a einsum (production DeepSeek-V4 primitives); off: the eager reference
+    # path. FP32_LM_HEAD off: bf16 base-logit matmul like sglang's default lm_head /
+    # the dense DSpark draft; on: the reference-parity per-step fp32 recast.
+    SGLANG_DSPARK_FAST_KERNEL = EnvBool(True)
+    SGLANG_DSPARK_FP32_LM_HEAD = EnvBool(False)
     SGLANG_DEBUG_REVERT_PR = EnvInt(0)
     SGLANG_PHASE_CHECKER_DEBUG = EnvBool(False)
     SGLANG_TEST_REQUEST_TIME_STATS = EnvBool(False)

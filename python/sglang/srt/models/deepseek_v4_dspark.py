@@ -24,6 +24,7 @@ from torch import nn
 
 from sglang.jit_kernel.dsv4 import fused_q_norm_rope, fused_rope_inplace
 from sglang.srt.configs.deepseek_v4 import DeepSeekV4Config
+from sglang.srt.environ import envs
 from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
@@ -102,6 +103,27 @@ class DSparkV4DraftOutput(msgspec.Struct, frozen=True):
         return None
 
 
+def apply_rotary_emb(
+    x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = False
+) -> torch.Tensor:
+    """In-place rotary embedding, mirroring the DSpark reference (model.py:238).
+
+    Used by the eager (``SGLANG_DSPARK_FAST_KERNEL`` off) attention path; the fast path
+    drives the fused CUDA rope kernels instead.
+    """
+    y = x
+    x = torch.view_as_complex(x.float().unflatten(-1, (-1, 2)))
+    if inverse:
+        freqs_cis = freqs_cis.conj()
+    if x.ndim == 3:
+        freqs_cis = freqs_cis.view(x.size(0), 1, x.size(-1))
+    else:
+        freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
+    x = torch.view_as_real(x * freqs_cis).flatten(-2)
+    y.copy_(x)
+    return y
+
+
 class DSparkAttention(MqaAttentionBase):
     """Sliding-window sparse MLA for the V4 DSpark draft (compress_ratio == 0).
 
@@ -156,6 +178,8 @@ class DSparkAttention(MqaAttentionBase):
             prefix=add_prefix("attn", prefix),
         )
 
+        self._use_fast_kernel = envs.SGLANG_DSPARK_FAST_KERNEL.get()
+
     def kv_proj_only(self, x: torch.Tensor) -> torch.Tensor:
         kv, _ = self.wkv(x)
         return kv
@@ -202,15 +226,21 @@ class DSparkAttention(MqaAttentionBase):
         """Project the draft block hidden to per-head queries with rmsnorm + rope.
 
         Returns ``[num_queries, n_local_heads, head_dim]`` (flat over bs * block_size).
-        Drives the production fused rmsnorm-self + RoPE kernel (``fused_q_norm_rope``,
-        the same one ``MQALayer._compute_q_b`` uses) instead of the reference's eager
-        float rsqrt + complex ``apply_rotary_emb`` -- same layout (shared freqs_cis /
-        rope_head_dim / head_dim / eps from ``MqaAttentionBase``), fewer launches.
+        Fast path (``SGLANG_DSPARK_FAST_KERNEL`` on) drives the production fused
+        rmsnorm-self + RoPE kernel (``fused_q_norm_rope``, the same one
+        ``MQALayer._compute_q_b`` uses; same layout from ``MqaAttentionBase``). Slow path
+        is the eager reference float rsqrt + complex ``apply_rotary_emb``.
         """
         q, _ = self.wq_a(x)
         q = self.q_norm(q)
         q, _ = self.wq_b(q)
         q = q.view(-1, self.n_local_heads, self.head_dim)
+        if not self._use_fast_kernel:
+            q = q * torch.rsqrt(
+                q.float().square().mean(-1, keepdim=True) + self.eps
+            ).to(q.dtype)
+            apply_rotary_emb(q[..., -self.rope_head_dim :], self.freqs_cis[positions])
+            return q
         q_out = torch.empty_like(q)
         fused_q_norm_rope(q, q_out, self.eps, self.freqs_cis, positions)
         return q_out
@@ -266,17 +296,23 @@ class DSparkAttention(MqaAttentionBase):
         if o.shape[1] != self.n_local_heads:
             o = o[:, : self.n_local_heads, :]
 
-        fused_rope_inplace(
-            o[..., -rd:], None, self.freqs_cis, positions=positions, inverse=True
-        )
+        if self._use_fast_kernel:
+            fused_rope_inplace(
+                o[..., -rd:], None, self.freqs_cis, positions=positions, inverse=True
+            )
+        else:
+            apply_rotary_emb(o[..., -rd:], self.freqs_cis[positions], inverse=True)
 
-        # bf16 wo_a einsum, mirroring the production MQALayer else-path
-        # (deepseek_v4.py:1223) and the reference (model.py:790, also plain bf16 --
-        # no .float()). The draft's wo_a is bf16 (wo_a_fp8=False), so tensor-core
-        # fp32 accumulation makes this numerically equivalent to the old fp32 cast.
         o = o.view(o.shape[0], self.n_local_groups, -1)
         wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
-        o = torch.einsum("bgd,grd->bgr", o, wo_a)
+        if self._use_fast_kernel:
+            # bf16 wo_a einsum, mirroring the production MQALayer else-path
+            # (deepseek_v4.py:1223) and the reference (model.py:790, also plain bf16 --
+            # no .float()). wo_a is bf16 (wo_a_fp8=False), so tensor-core fp32
+            # accumulation makes this numerically equivalent to the old fp32 cast.
+            o = torch.einsum("bgd,grd->bgr", o, wo_a)
+        else:
+            o = torch.einsum("bgd,grd->bgr", o.float(), wo_a.float()).to(q.dtype)
         out, _ = self.wo_b(o.reshape(o.shape[0], -1))
         return out
 
@@ -609,9 +645,7 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
 
         self.embed_tokens: Optional[nn.Module] = None
         self.lm_head: Optional[nn.Module] = None
-        # fp32 head weight held as a real Parameter the way the reference ``ParallelHead``
-        # (model.py:719) stores its head fp32; populated once in ``attach_shared_modules``.
-        self.lm_head_weight_fp32: Optional[nn.Parameter] = None
+        self._use_fp32_lm_head = envs.SGLANG_DSPARK_FP32_LM_HEAD.get()
         self._last_confidence: Optional[torch.Tensor] = None
         self._x_post_hc: Optional[torch.Tensor] = None
 
@@ -630,20 +664,9 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
     def attach_shared_modules(
         self, *, embed_tokens: nn.Module, lm_head: nn.Module
     ) -> None:
-        """Attach the target model's shared embedding and lm_head (worker wiring).
-
-        The base-logit matmul runs in fp32 to mirror the reference ``ParallelHead``
-        (model.py:719), whose head weight is an fp32 ``nn.Parameter`` filled once from the
-        bf16 checkpoint. The shared target ``lm_head`` stays bf16 for the target's own
-        logits, so build the draft's own fp32 head weight the same way -- a Parameter
-        converted ONCE here from the (already-loaded) target weight -- instead of
-        re-casting the whole head every draft step.
-        """
+        """Attach the target model's shared embedding and lm_head (worker wiring)."""
         self.embed_tokens = embed_tokens
         self.lm_head = lm_head
-        self.lm_head_weight_fp32 = nn.Parameter(
-            lm_head.weight.detach().float(), requires_grad=False
-        )
 
     def project_target_hidden(self, main_hidden: torch.Tensor) -> torch.Tensor:
         """Project concatenated target-layer hc-mean features -> draft hidden (main_proj)."""
@@ -760,7 +783,8 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         applies ``norm`` and the target's local-vocab lm_head matmul, all-gathers to the
         full vocab (no-op at tp=1), and crops the TP vocab padding. This is the dsv4
         analog of the dense ``DSparkDraftMixin.compute_base_logits`` (which has no hc_head
-        collapse and keeps a weight-dtype ``matmul`` rather than this fp32 ``F.linear``).
+        collapse); the matmul dtype is bf16 by default like the dense path, or the
+        reference-parity fp32 ``F.linear`` when ``SGLANG_DSPARK_FP32_LM_HEAD`` is set.
         This is the SOLE base-logit producer: ``forward`` no longer computes them, and the
         post-hc_head PRE-norm tap is stashed on ``self._x_post_hc`` HERE for
         ``compute_confidence`` (the worker calls this before ``compute_confidence``, so the
@@ -779,7 +803,13 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
             )
         last = self.stages[-1]
         x = last.norm(x_post_hc)
-        local_logits = F.linear(x.float(), self.lm_head_weight_fp32)
+        weight = self.lm_head.weight
+        if self._use_fp32_lm_head:
+            # Reference-parity path (model.py:735): fp32 matmul, per-step weight upcast.
+            local_logits = F.linear(x.float(), weight.float())
+        else:
+            # sglang default / dense DSpark draft: keep the weight dtype (bf16) matmul.
+            local_logits = torch.matmul(x.to(weight.dtype), weight.T)
         return gather_and_crop_vocab(local_logits, self.lm_head)
 
     def compute_confidence(
