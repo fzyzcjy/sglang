@@ -1136,7 +1136,13 @@ class DeepseekV4AttnBackend(
                 extend_seq_lens = self.extend_seq_lens_buffer[:bs]
                 extend_start_loc = self.extend_start_loc_buffer[:bs]
                 verify_lens = self.extend_seq_lens_buffer[:bs]
-                total_verify_tokens = ragged_layout.total_verify_tokens
+                # Carry the host-known padded token count, NOT the device layout's
+                # total_verify_tokens (None on from_verify_lens_device). The layout is
+                # post padded_to_bucket, so sum(verify_lens) == graph_num_tokens; this
+                # value becomes num_q_tokens (the repeat_interleave output_size) in
+                # make_forward_metadata_from_raw_verify. A None here would silently
+                # degrade output_size to repeats.sum().item() -- a per-step D2H.
+                total_verify_tokens = ragged_layout.graph_num_tokens
 
             return DSV4RawVerifyMetadata(
                 req_pool_indices=req_pool_indices,
@@ -1276,6 +1282,11 @@ class DeepseekV4AttnBackend(
         if is_ragged:
             seq_lens = seq_lens + extend_seq_lens
             num_q_tokens = raw_metadata.total_verify_tokens
+            # Host-known padded token count (== graph_num_tokens); must not be None or
+            # the _expand_prefill_casually_vectorized output_size would fall back to
+            # repeats.sum().item() (a per-step D2H). Fail loud if a future path forgets
+            # to carry it.
+            assert num_q_tokens is not None, "ragged verify num_q_tokens is None"
             seq_lens_casual, req_pool_indices_repeated = (
                 self._expand_prefill_casually_vectorized(
                     num_tokens=num_q_tokens,
