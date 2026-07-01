@@ -282,12 +282,14 @@ def compact_row_index(
     total: int,
     device,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    # (req_id, within) for each compact row: which request owns it and the
-    # offset inside that request. From frozen verify_lens -> no GPU sync.
+    # (req_id, within) for each compact row: which request owns it + offset inside it.
+    # output_size=total is REQUIRED for sync-freedom: repeat_interleave with a tensor
+    # `repeats` and no output_size does a D2H .item() (sum) to size its output -- a
+    # per-step cudaStreamSynchronize on the compact decode path. total is the known size.
     verify_lens = verify_lens.to(device=device, dtype=torch.int64)
     bs = int(verify_lens.numel())
     req_id = torch.arange(bs, device=device, dtype=torch.int64).repeat_interleave(
-        verify_lens
+        verify_lens, output_size=total
     )
     start = torch.cumsum(verify_lens, dim=0) - verify_lens  # exclusive start
     within = torch.arange(total, device=device, dtype=torch.int64) - start[req_id]
