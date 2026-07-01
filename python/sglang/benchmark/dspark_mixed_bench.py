@@ -73,6 +73,10 @@ class RequestRecord(msgspec.Struct, kw_only=True, forbid_unknown_fields=True):
     error: str
     output_text: str
     correct: Optional[bool] = None
+    # Per-request accept length the server reports in the response meta_info
+    # (completion_tokens / verify_ct, incl. bonus) -- an OAI-side cross-check of the
+    # dump-derived acc_len, independent of the DSpark decision dump.
+    spec_accept_length: float = 0.0
 
 
 def build_gsm8k_requests(
@@ -256,6 +260,7 @@ def build_record(
         error=out.error,
         output_text=out.generated_text,
         correct=correct,
+        spec_accept_length=out.spec_accept_length,
     )
 
 
@@ -351,6 +356,7 @@ def write_summary(
             if scored
             else None
         )
+        spec_acc = [r.spec_accept_length for r in ok if r.spec_accept_length > 0]
         labels[label] = {
             "num": len(label_records),
             "num_success": len(ok),
@@ -363,6 +369,10 @@ def write_summary(
                 round(output_tokens / wall_time, 2) if wall_time > 0 else None
             ),
             "accuracy": accuracy,
+            # OAI-side per-request accept length (mean over requests that reported it),
+            # to cross-check the dump-derived acc_len from analyze_mixed.py.
+            "oai_acc_len": _mean(spec_acc),
+            "oai_acc_len_n": len(spec_acc),
         }
 
     summary = {
