@@ -335,11 +335,13 @@ class TestBuildBatchSizeSweep(CustomTestCase):
         sweep = self._sweep(1024)
         self.assertEqual(sweep[-4:], [928, 960, 992, 1024])
 
-    def test_large_max_extends_with_step_64_past_1024(self):
-        """Above 1024 the sweep continues in step-64 increments out to max."""
+    def test_large_max_extends_sparsely_past_1024(self):
+        """Above 1024 the sweep coarsens: step 128 through 2048, then step 256 to max."""
         sweep = self._sweep(8192)
         beyond = [value for value in sweep if value > 1024]
-        self.assertEqual(beyond[:3], [1088, 1152, 1216])
+        self.assertEqual(beyond[:4], [1152, 1280, 1408, 1536])
+        self.assertIn(2048, sweep)
+        self.assertIn(2304, sweep)
         self.assertEqual(sweep[-1], 8192)
 
     def test_tiny_max_truncates_the_taper(self):
