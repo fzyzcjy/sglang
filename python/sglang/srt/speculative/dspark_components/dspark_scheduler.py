@@ -50,7 +50,8 @@ def compute_verify_token_budget(
     sps_table: SpsCostTable,
     cfg: DSparkScheduleConfig,
 ) -> int:
-    cfg.validate()
+    # cfg is validated once at planner construction and is immutable, so skip the
+    # per-step re-validation on this hot path (called every decode step).
     num_requests = history_survival_probs.shape[0]
     max_len = cfg.resolved_max_verify_len()
 
@@ -84,8 +85,8 @@ def schedule_verify_lens_topk(
     # GPU-native sort (no per-element D2H). survival_probs is the CURRENT step's
     # confidence cumprod (lag 0, on the forward stream); budget is a host int (the
     # relay-fed K). Everything below runs device-side so the captured graph can
-    # consume verify_lens with zero compute-stream sync.
-    cfg.validate()
+    # consume verify_lens with zero compute-stream sync. cfg validated once at
+    # planner construction (immutable) -> no per-step re-validation here.
     num_requests, _gamma = survival_probs.shape
     max_len = cfg.resolved_max_verify_len()
     device = survival_probs.device
