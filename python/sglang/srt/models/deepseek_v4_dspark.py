@@ -235,15 +235,16 @@ class DSparkAttention(MqaAttentionBase):
         q = self.q_norm(q)
         q, _ = self.wq_b(q)
         q = q.view(-1, self.n_local_heads, self.head_dim)
-        if not self._use_fast_kernel:
+        if self._use_fast_kernel:
+            q_out = torch.empty_like(q)
+            fused_q_norm_rope(q, q_out, self.eps, self.freqs_cis, positions)
+            return q_out
+        else:
             q = q * torch.rsqrt(
                 q.float().square().mean(-1, keepdim=True) + self.eps
             ).to(q.dtype)
             apply_rotary_emb(q[..., -self.rope_head_dim :], self.freqs_cis[positions])
             return q
-        q_out = torch.empty_like(q)
-        fused_q_norm_rope(q, q_out, self.eps, self.freqs_cis, positions)
-        return q_out
 
     def forward(
         self,
