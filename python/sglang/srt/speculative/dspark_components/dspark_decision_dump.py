@@ -118,7 +118,9 @@ class DsparkDecisionDumper:
         if verify_lens is None:
             verify_len_per_req = [self.verify_num_draft_tokens] * bs
         else:
-            verify_len_per_req = [int(v) for v in verify_lens.detach().to("cpu").tolist()]
+            verify_len_per_req = [
+                int(v) for v in verify_lens.detach().to("cpu").tolist()
+            ]
 
         req_ids = req_pool_indices.detach().to("cpu").tolist()
         prefixes = prefix_lens.detach().to("cpu").tolist()
@@ -146,7 +148,7 @@ class DsparkDecisionDumper:
                 "rid": None if rids is None else rids[row],
                 "req": int(req_ids[row]),
                 "prefix": int(prefixes[row]),
-                "verify_len": int(verify_lens[row]),
+                "verify_len": int(verify_len_per_req[row]),
                 # acc_len (incl. bonus) = correct drafts committed + 1 bonus token.
                 "acc_len": int(commit[row]),
                 "correct_drafts": int(correct[row]),
@@ -162,7 +164,7 @@ class DsparkDecisionDumper:
                 entry["survival"] = [round(float(p), 4) for p in survival_rows[row]]
             reqs.append(entry)
 
-        num_verify_tokens = sum(verify_lens)
+        num_verify_tokens = sum(verify_len_per_req)
         return {
             "forward_ct": None if forward_ct is None else int(forward_ct),
             "bs": int(bs),
