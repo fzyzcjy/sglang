@@ -22,6 +22,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from sglang.jit_kernel.dsv4 import fused_q_norm_rope, fused_rope_inplace
 from sglang.srt.configs.deepseek_v4 import DeepSeekV4Config
 from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
@@ -99,23 +100,6 @@ class DSparkV4DraftOutput(msgspec.Struct, frozen=True):
         # The dsv4 draft does not surface logits on this struct; the worker calls
         # ``compute_base_logits`` on ``hidden_states`` and never reads this slot.
         return None
-
-
-def apply_rotary_emb(
-    x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = False
-) -> torch.Tensor:
-    """In-place rotary embedding, mirroring the DSpark reference (model.py:238)."""
-    y = x
-    x = torch.view_as_complex(x.float().unflatten(-1, (-1, 2)))
-    if inverse:
-        freqs_cis = freqs_cis.conj()
-    if x.ndim == 3:
-        freqs_cis = freqs_cis.view(x.size(0), 1, x.size(-1))
-    else:
-        freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
-    x = torch.view_as_real(x * freqs_cis).flatten(-2)
-    y.copy_(x)
-    return y
 
 
 class DSparkAttention(MqaAttentionBase):
@@ -218,18 +202,18 @@ class DSparkAttention(MqaAttentionBase):
         """Project the draft block hidden to per-head queries with rmsnorm + rope.
 
         Returns ``[num_queries, n_local_heads, head_dim]`` (flat over bs * block_size).
+        Drives the production fused rmsnorm-self + RoPE kernel (``fused_q_norm_rope``,
+        the same one ``MQALayer._compute_q_b`` uses) instead of the reference's eager
+        float rsqrt + complex ``apply_rotary_emb`` -- same layout (shared freqs_cis /
+        rope_head_dim / head_dim / eps from ``MqaAttentionBase``), fewer launches.
         """
-        rd = self.rope_head_dim
         q, _ = self.wq_a(x)
         q = self.q_norm(q)
         q, _ = self.wq_b(q)
         q = q.view(-1, self.n_local_heads, self.head_dim)
-        q = q * torch.rsqrt(q.float().square().mean(-1, keepdim=True) + self.eps).to(
-            q.dtype
-        )
-        freqs_cis = self.freqs_cis[positions]
-        apply_rotary_emb(q[..., -rd:], freqs_cis)
-        return q
+        q_out = torch.empty_like(q)
+        fused_q_norm_rope(q, q_out, self.eps, self.freqs_cis, positions)
+        return q_out
 
     def forward(
         self,
@@ -282,12 +266,17 @@ class DSparkAttention(MqaAttentionBase):
         if o.shape[1] != self.n_local_heads:
             o = o[:, : self.n_local_heads, :]
 
-        freqs_cis = self.freqs_cis[positions]
-        apply_rotary_emb(o[..., -rd:], freqs_cis, inverse=True)
+        fused_rope_inplace(
+            o[..., -rd:], None, self.freqs_cis, positions=positions, inverse=True
+        )
 
+        # bf16 wo_a einsum, mirroring the production MQALayer else-path
+        # (deepseek_v4.py:1223) and the reference (model.py:790, also plain bf16 --
+        # no .float()). The draft's wo_a is bf16 (wo_a_fp8=False), so tensor-core
+        # fp32 accumulation makes this numerically equivalent to the old fp32 cast.
         o = o.view(o.shape[0], self.n_local_groups, -1)
         wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
-        o = torch.einsum("bgd,grd->bgr", o.float(), wo_a.float()).to(q.dtype)
+        o = torch.einsum("bgd,grd->bgr", o, wo_a)
         out, _ = self.wo_b(o.reshape(o.shape[0], -1))
         return out
 
@@ -620,6 +609,7 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
 
         self.embed_tokens: Optional[nn.Module] = None
         self.lm_head: Optional[nn.Module] = None
+        self._lm_head_weight_fp32: Optional[torch.Tensor] = None
         self._last_confidence: Optional[torch.Tensor] = None
         self._x_post_hc: Optional[torch.Tensor] = None
 
@@ -638,9 +628,17 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
     def attach_shared_modules(
         self, *, embed_tokens: nn.Module, lm_head: nn.Module
     ) -> None:
-        """Attach the target model's shared embedding and lm_head (worker wiring)."""
+        """Attach the target model's shared embedding and lm_head (worker wiring).
+
+        The base-logit matmul runs in fp32 to mirror the reference ``ParallelHead``
+        (model.py:719, which stores its head weight as fp32, converted once at load).
+        The shared target ``lm_head`` stays bf16 for the target's own logits, so cache a
+        private fp32 copy of its local-vocab weight ONCE here (weights are already loaded
+        at worker init) instead of re-casting the whole head every draft step.
+        """
         self.embed_tokens = embed_tokens
         self.lm_head = lm_head
+        self._lm_head_weight_fp32 = lm_head.weight.float()
 
     def project_target_hidden(self, main_hidden: torch.Tensor) -> torch.Tensor:
         """Project concatenated target-layer hc-mean features -> draft hidden (main_proj)."""
@@ -776,7 +774,7 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
             )
         last = self.stages[-1]
         x = last.norm(x_post_hc)
-        local_logits = F.linear(x.float(), self.lm_head.weight.float())
+        local_logits = F.linear(x.float(), self._lm_head_weight_fp32)
         return gather_and_crop_vocab(local_logits, self.lm_head)
 
     def compute_confidence(
