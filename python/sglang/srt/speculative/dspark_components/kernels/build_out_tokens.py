@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import torch
+import triton
+import triton.language as tl
 
 from sglang.srt.environ import envs
 
@@ -42,9 +44,12 @@ class BuildOutTokens:
         verify_num_draft_tokens: int,
         gamma: int,
     ) -> torch.Tensor:
-        raise NotImplementedError(
-            "BuildOutTokens.triton is not implemented yet; run with "
-            "SGLANG_DSPARK_KERNEL_BUILD_OUT_TOKENS=torch until the triton kernel lands."
+        return build_out_tokens_triton(
+            draft_tokens=draft_tokens,
+            correct_len=correct_len,
+            bonus=bonus,
+            verify_num_draft_tokens=verify_num_draft_tokens,
+            gamma=gamma,
         )
 
 
@@ -66,3 +71,55 @@ def build_out_tokens(
     out_tokens[:, gamma].fill_(0)
     out_tokens.scatter_(1, correct_len.to(torch.int64)[:, None], bonus[:, None])
     return out_tokens
+
+
+@triton.jit
+def _build_out_tokens_kernel(
+    draft_tokens_ptr,
+    correct_len_ptr,
+    bonus_ptr,
+    out_ptr,
+    gamma,
+    T,
+    n_out,
+    BLOCK: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n_out
+    b = offs // T
+    k = offs % T
+    cl = tl.load(correct_len_ptr + b, mask=mask, other=0).to(tl.int32)
+    bonus = tl.load(bonus_ptr + b, mask=mask, other=0)
+    draft_mask = mask & (k < gamma)
+    draft = tl.load(draft_tokens_ptr + b * gamma + k, mask=draft_mask, other=0)
+    # bonus overwrites position correct_len (mirrors torch scatter after the copy);
+    # cols [0, gamma) are drafts, col gamma is the 0 anchor.
+    val = tl.where(k == cl, bonus, tl.where(k < gamma, draft, 0))
+    tl.store(out_ptr + offs, val.to(tl.int64), mask=mask)
+
+
+def build_out_tokens_triton(
+    *,
+    draft_tokens: torch.Tensor,
+    correct_len: torch.Tensor,
+    bonus: torch.Tensor,
+    verify_num_draft_tokens: int,
+    gamma: int,
+) -> torch.Tensor:
+    # Fuse copy + fill + scatter into one launch: out[b, k] = bonus[b] if
+    # k == correct_len[b] else draft_tokens[b, k] if k < gamma else 0.
+    bs = draft_tokens.shape[0]
+    T = verify_num_draft_tokens
+    device = draft_tokens.device
+    draft_tokens = draft_tokens.to(torch.int64).contiguous()
+    correct_len_i = correct_len.to(torch.int64).contiguous()
+    bonus_i = bonus.to(torch.int64).contiguous()
+    out = torch.empty((bs, T), dtype=torch.int64, device=device)
+    n_out = bs * T
+    BLOCK = 256
+    grid = (triton.cdiv(n_out, BLOCK),)
+    _build_out_tokens_kernel[grid](
+        draft_tokens, correct_len_i, bonus_i, out, gamma, T, n_out, BLOCK=BLOCK
+    )
+    return out
