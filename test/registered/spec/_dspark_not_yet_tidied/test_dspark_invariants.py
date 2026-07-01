@@ -3,7 +3,6 @@ import unittest
 import torch
 
 from sglang.srt.speculative.dspark_components.dspark_scheduler import (
-    ConfidencePrefixScheduler,
     DSparkScheduleConfig,
     compute_verify_token_budget,
     schedule_verify_lens_topk,
@@ -25,20 +24,34 @@ def _flat_sps_table() -> SpsCostTable:
     )
 
 
+def _verify_lens(
+    *,
+    cfg: DSparkScheduleConfig,
+    sps_table: SpsCostTable,
+    two_steps_prior_k_survival: torch.Tensor,
+    sort_survival: torch.Tensor,
+) -> torch.Tensor:
+    """Test-local compose mirroring the production budget->verify_lens path:
+    budget from the two-steps-prior history survival, verify_lens from the current
+    sort survival (what HostConfidenceBudgetPlanner does internally)."""
+    budget = compute_verify_token_budget(
+        history_survival_probs=two_steps_prior_k_survival, sps_table=sps_table, cfg=cfg
+    )
+    return schedule_verify_lens_topk(
+        survival_probs=sort_survival, budget=budget, cfg=cfg
+    )
+
+
 class TestNonAnticipatingScheduler(CustomTestCase):
-    """Property tests against the real ConfidencePrefixScheduler.
+    """Property tests for the production budget->verify_lens compose (the angle the
+    former ConfidencePrefixScheduler wrapper covered).
 
     Invariant 2 (non-anticipating): the decision to verify position k must not
-    depend on the realized token x_{r,k}. c-v1 satisfies this structurally --
-    compute_verify_lens only consumes the lagged-confidence survival_probs tensor
-    (the host's most recent retired snapshot, lag >= 1 step), never the verified
-    tokens. These tests guard the real scheduler's invariants (budget adherence,
-    range, determinism, eps gating) that make that safe.
+    depend on the realized token x_{r,k}. The compose only consumes the
+    lagged-confidence survival_probs tensor (the host's most recent retired
+    snapshot, lag >= 1 step), never the verified tokens. These tests guard the
+    invariants (budget adherence, range, determinism, eps gating) that make that safe.
     """
-
-    def _scheduler(self, gamma: int = 4) -> ConfidencePrefixScheduler:
-        cfg = DSparkScheduleConfig(gamma=gamma)
-        return ConfidencePrefixScheduler(sps_table=_flat_sps_table(), cfg=cfg)
 
     def test_output_depends_only_on_survival_probs(self):
         """The scheduler sees only survival_probs (never tokens), so the same
@@ -48,12 +61,17 @@ class TestNonAnticipatingScheduler(CustomTestCase):
             [[0.9, 0.8, 0.4, 0.1], [0.7, 0.6, 0.3, 0.05]], dtype=torch.float32
         )
         two_steps_prior_k_survival = torch.full((2, 4), 0.8, dtype=torch.float32)
-        sched = self._scheduler(gamma=4)
-        out1 = sched.compute_verify_lens(
+        cfg = DSparkScheduleConfig(gamma=4)
+        sps_table = _flat_sps_table()
+        out1 = _verify_lens(
+            cfg=cfg,
+            sps_table=sps_table,
             two_steps_prior_k_survival=two_steps_prior_k_survival,
             sort_survival=survival,
         )
-        out2 = sched.compute_verify_lens(
+        out2 = _verify_lens(
+            cfg=cfg,
+            sps_table=sps_table,
             two_steps_prior_k_survival=two_steps_prior_k_survival,
             sort_survival=survival.clone(),
         )
@@ -64,17 +82,20 @@ class TestNonAnticipatingScheduler(CustomTestCase):
         torch.manual_seed(42)
         survival = torch.rand(8, 6, dtype=torch.float32) * 0.9 + 0.05
         two_steps_prior_k_survival = torch.full((8, 6), 0.5, dtype=torch.float32)
-        sched = self._scheduler(gamma=6)
+        cfg = DSparkScheduleConfig(gamma=6)
+        sps_table = _flat_sps_table()
         budget = compute_verify_token_budget(
             history_survival_probs=two_steps_prior_k_survival,
-            sps_table=sched.sps_table,
-            cfg=sched.cfg,
+            sps_table=sps_table,
+            cfg=cfg,
         )
-        verify_lens = sched.compute_verify_lens(
+        verify_lens = _verify_lens(
+            cfg=cfg,
+            sps_table=sps_table,
             two_steps_prior_k_survival=two_steps_prior_k_survival,
             sort_survival=survival,
         )
-        extra = int((verify_lens - sched.cfg.min_verify_len).sum().item())
+        extra = int((verify_lens - cfg.min_verify_len).sum().item())
         self.assertLessEqual(extra, budget)
 
     def test_verify_lens_clamped_to_min_max(self):
@@ -82,15 +103,16 @@ class TestNonAnticipatingScheduler(CustomTestCase):
         torch.manual_seed(43)
         survival = torch.rand(5, 4, dtype=torch.float32)
         two_steps_prior_k_survival = torch.full((5, 4), 0.5, dtype=torch.float32)
-        sched = self._scheduler(gamma=4)
-        verify_lens = sched.compute_verify_lens(
+        cfg = DSparkScheduleConfig(gamma=4)
+        sps_table = _flat_sps_table()
+        verify_lens = _verify_lens(
+            cfg=cfg,
+            sps_table=sps_table,
             two_steps_prior_k_survival=two_steps_prior_k_survival,
             sort_survival=survival,
         )
-        self.assertTrue(bool((verify_lens >= sched.cfg.min_verify_len).all()))
-        self.assertTrue(
-            bool((verify_lens <= sched.cfg.resolved_max_verify_len()).all())
-        )
+        self.assertTrue(bool((verify_lens >= cfg.min_verify_len).all()))
+        self.assertTrue(bool((verify_lens <= cfg.resolved_max_verify_len()).all()))
 
     def test_below_eps_positions_do_not_drive_selection(self):
         """A position below survival_eps is a non-candidate: swapping its value
@@ -109,15 +131,20 @@ class TestNonAnticipatingScheduler(CustomTestCase):
         two_steps_prior_k_survival = torch.tensor(
             [[0.8, 1e-7, 1e-7, 1e-7], [0.6, 1e-7, 1e-7, 1e-7]], dtype=torch.float32
         )
-        sched = self._scheduler(gamma=4)
-        base = sched.compute_verify_lens(
+        cfg = DSparkScheduleConfig(gamma=4)
+        sps_table = _flat_sps_table()
+        base = _verify_lens(
+            cfg=cfg,
+            sps_table=sps_table,
             two_steps_prior_k_survival=two_steps_prior_k_survival,
             sort_survival=sort_survival,
         )
         # Perturb only the below-eps positions (future, invalid).
         perturbed = sort_survival.clone()
         perturbed[:, 2:] = 0.999
-        changed = sched.compute_verify_lens(
+        changed = _verify_lens(
+            cfg=cfg,
+            sps_table=sps_table,
             two_steps_prior_k_survival=two_steps_prior_k_survival,
             sort_survival=perturbed,
         )

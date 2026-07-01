@@ -11,7 +11,6 @@ from sglang.srt.speculative.dspark_components.dspark_sps_table import (
     SpsCostTable,
     load_sps_table_from_path,
 )
-from sglang.srt.utils.async_probe import maybe_assert_async
 
 # Sentinel for a host-carry row that was never written (or written for a different
 # request); the budget planner's freshness guard rejects rows still stamped with it.
@@ -172,37 +171,6 @@ def _value_independent_descending_order(
     order = order[torch.argsort(positions[order], stable=True)]
     order = order[torch.argsort(-masked_prob[order], stable=True)]
     return order
-
-
-class ConfidencePrefixScheduler:
-    def __init__(self, *, sps_table: SpsCostTable, cfg: DSparkScheduleConfig) -> None:
-        cfg.validate()
-        self.sps_table = sps_table
-        self.cfg = cfg
-
-    def compute_verify_lens(
-        self, *, two_steps_prior_k_survival: torch.Tensor, sort_survival: torch.Tensor
-    ) -> torch.Tensor:
-        budget = compute_verify_token_budget(
-            history_survival_probs=two_steps_prior_k_survival,
-            sps_table=self.sps_table,
-            cfg=self.cfg,
-        )
-        verify_lens = schedule_verify_lens_topk(
-            survival_probs=sort_survival,
-            budget=budget,
-            cfg=self.cfg,
-        )
-        verify_lens_64 = verify_lens.to(torch.int64)
-        # Measure admitted extra against the effective floor max(min_verify_len, 1)
-        # so the anchor padding added by the lower-bound clamp is not miscounted as
-        # budget overflow when an explicit min_verify_len=0 is clamped up to 1.
-        effective_floor = max(self.cfg.min_verify_len, 1)
-        maybe_assert_async(
-            (verify_lens_64 - effective_floor).sum() <= budget,
-            f"DSpark verify-len budget violated (budget={budget})",
-        )
-        return verify_lens
 
 
 class HostConfidenceBudgetPlanner:

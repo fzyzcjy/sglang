@@ -4,7 +4,6 @@ import unittest
 import torch
 
 from sglang.srt.speculative.dspark_components.dspark_scheduler import (
-    ConfidencePrefixScheduler,
     DSparkScheduleConfig,
     compute_verify_token_budget,
     schedule_verify_lens_topk,
@@ -401,7 +400,6 @@ class TestVerifyLenAnchorContract(CustomTestCase):
             max_batch_tokens=64,
         )
         cfg = DSparkScheduleConfig(gamma=3)
-        scheduler = ConfidencePrefixScheduler(sps_table=table, cfg=cfg)
         survival = _survival_from_confidence(
             torch.tensor([[0.90, 0.80, 0.70], [0.85, 0.60, 0.40]], dtype=torch.float32)
         )
@@ -409,8 +407,8 @@ class TestVerifyLenAnchorContract(CustomTestCase):
             history_survival_probs=survival, sps_table=table, cfg=cfg
         )
         self.assertEqual(budget, 0)
-        verify_lens = scheduler.compute_verify_lens(
-            two_steps_prior_k_survival=survival, sort_survival=survival
+        verify_lens = schedule_verify_lens_topk(
+            survival_probs=survival, budget=budget, cfg=cfg
         )
         self.assertGreaterEqual(int(verify_lens.min().item()), 1)
         verify_lens_cpu = verify_lens.to(torch.int64).tolist()
@@ -526,58 +524,34 @@ class TestVanillaMatchesReference(CustomTestCase):
             )
 
 
-class TestConfidencePrefixScheduler(CustomTestCase):
-    def test_compute_verify_lens_respects_history_budget(self):
-        """Different two_steps_prior_k_survival tensors yield different budgets and different verify_lens."""
+class TestVerifyLensComposition(CustomTestCase):
+    def test_verify_lens_respects_history_budget(self):
+        """Different two_steps_prior_k_survival tensors yield different budgets and
+        thus different verify_lens (the production compose: budget from history
+        survival, verify_lens from the current sort survival)."""
         low_history = torch.tensor([[0.95, 0.30, 0.05]], dtype=torch.float32)
         high_history = torch.tensor([[0.95, 0.90, 0.85]], dtype=torch.float32)
         sort_survival = torch.tensor([[0.95, 0.90, 0.85]], dtype=torch.float32)
         cfg = DSparkScheduleConfig(gamma=3)
-        scheduler = ConfidencePrefixScheduler(sps_table=_cliff_table(), cfg=cfg)
+        sps_table = _cliff_table()
         low_budget = compute_verify_token_budget(
-            history_survival_probs=low_history, sps_table=scheduler.sps_table, cfg=cfg
+            history_survival_probs=low_history, sps_table=sps_table, cfg=cfg
         )
         high_budget = compute_verify_token_budget(
-            history_survival_probs=high_history, sps_table=scheduler.sps_table, cfg=cfg
+            history_survival_probs=high_history, sps_table=sps_table, cfg=cfg
         )
         self.assertNotEqual(
             low_budget, high_budget, "budgets must differ for this test"
         )
-        lens_low = scheduler.compute_verify_lens(
-            two_steps_prior_k_survival=low_history, sort_survival=sort_survival
+        lens_low = schedule_verify_lens_topk(
+            survival_probs=sort_survival, budget=low_budget, cfg=cfg
         )
-        lens_high = scheduler.compute_verify_lens(
-            two_steps_prior_k_survival=high_history, sort_survival=sort_survival
+        lens_high = schedule_verify_lens_topk(
+            survival_probs=sort_survival, budget=high_budget, cfg=cfg
         )
         self.assertFalse(
             torch.equal(lens_low, lens_high),
             "different two_steps_prior_k_survival budgets must produce different verify_lens",
-        )
-
-    def test_compute_verify_lens_is_pure_no_state_mutation(self):
-        """compute_verify_lens does not write any new attribute to the scheduler."""
-        cfg = DSparkScheduleConfig(gamma=3)
-        scheduler = ConfidencePrefixScheduler(sps_table=_flat_table(), cfg=cfg)
-        attrs_before = set(vars(scheduler).keys())
-        two_steps_prior_k_survival = torch.tensor(
-            [[0.9, 0.8, 0.7]], dtype=torch.float32
-        )
-        sort_survival = torch.tensor([[0.9, 0.8, 0.7]], dtype=torch.float32)
-        scheduler.compute_verify_lens(
-            two_steps_prior_k_survival=two_steps_prior_k_survival,
-            sort_survival=sort_survival,
-        )
-        attrs_after = set(vars(scheduler).keys())
-        self.assertEqual(
-            attrs_before,
-            attrs_after,
-            f"compute_verify_lens must not mutate scheduler state; "
-            f"new attrs: {attrs_after - attrs_before}",
-        )
-        self.assertNotIn(
-            "cached_budget",
-            attrs_after,
-            "cached_budget must not exist on ConfidencePrefixScheduler (purity guard)",
         )
 
 
