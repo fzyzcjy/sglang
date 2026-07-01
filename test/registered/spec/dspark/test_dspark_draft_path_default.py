@@ -29,7 +29,9 @@ def _plain_hf_config() -> SimpleNamespace:
     return SimpleNamespace(architectures=["DeepseekV4ForCausalLM"])
 
 
-def _make_dspark_server_args(*, model_path: str, hf_config: SimpleNamespace) -> ServerArgs:
+def _make_dspark_server_args(
+    *, model_path: str, hf_config: SimpleNamespace
+) -> ServerArgs:
     """Build a DSpark ServerArgs stub with an injected model config (skips __post_init__).
 
     ``model_path="dummy"`` short-circuits ServerArgs.__post_init__, then the fields
