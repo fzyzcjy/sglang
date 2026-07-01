@@ -255,7 +255,7 @@ def _handle_dspark(server_args: ServerArgs) -> None:
         # draft base-logits all-gather stays within the attention-TP group (a
         # size-1 no-op returning the full vocab under pure DP). DeepEP / context
         # parallel / a2a-mismatch are rejected; a MoE (dsv4) draft under DP is
-        # gated later at worker construction until the full-DP MoE path lands.
+        # rejected at worker construction (the full-DP MoE path is not yet supported).
         if not server_args.enable_dp_lm_head:
             raise ValueError(
                 "DSpark with dp attention requires --enable-dp-lm-head."

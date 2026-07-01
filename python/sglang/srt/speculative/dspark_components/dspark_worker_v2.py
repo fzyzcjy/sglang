@@ -124,6 +124,19 @@ class DSparkWorkerV2(BaseSpecWorker):
         self._draft_dp_context_enabled = (
             server_args.enable_dp_attention and not self._draft_is_moe
         )
+        if server_args.enable_dp_attention and self._draft_is_moe:
+            # The full-DP MoE path is not supported yet. Pure-TP-MoE under DP
+            # corrupts outputs (unequal per-rank batch all-reduce, design doc 9.1),
+            # and the DeepEP expert-parallel DP path that a correct MoE-under-DP
+            # needs is not wired into the DSpark draft (and its FP4 kernels require
+            # Blackwell). Fail fast instead of silently returning garbage. Run the
+            # MoE (DeepSeek-V4) model without --enable-dp-attention, or use a dense
+            # draft.
+            raise ValueError(
+                "DSpark with dp attention does not support a DeepSeek-V4 (MoE) "
+                "draft yet. Run the MoE model without --enable-dp-attention, or "
+                "use a dense (non-MoE) draft."
+            )
 
         # Draft runner (separate KV cache + attention backend), shared with DFlash.
         with self._draft_context():
