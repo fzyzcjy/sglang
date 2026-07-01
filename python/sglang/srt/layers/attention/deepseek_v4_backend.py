@@ -1112,10 +1112,15 @@ class DeepseekV4AttnBackend(
         if envs.SGLANG_PREP_IN_CUDA_GRAPH.get():
             assert out_cache_loc is not None
             bs = len(seq_lens)
+            # needs_cpu_seq_lens=False leaves seq_lens_cpu None. On the compact path
+            # online c128 is forbidden (_resolve_verify_layout raises), so
+            # _make_target_verify_c128_metadata returns None and this list is unused
+            # downstream (make_forward_metadata_from_raw_verify never reads
+            # raw_metadata.seq_lens_cpu). Keep None rather than forcing a per-step
+            # seq_lens.cpu() D2H; materialize the host list only when a mirror exists
+            # (eager / online-c128 path, where the D2H is free or already paid).
             seq_lens_cpu_list = (
-                seq_lens.detach().cpu().tolist()
-                if seq_lens_cpu is None
-                else seq_lens_cpu.tolist()
+                seq_lens_cpu.tolist() if seq_lens_cpu is not None else None
             )
             self._ensure_verify_bs_buffers()
             if ragged_layout is None:
@@ -1530,14 +1535,18 @@ class DeepseekV4AttnBackend(
             )
             out_cache_loc = torch.zeros(bs, dtype=torch.int64, device=device)
 
-        assert seq_lens_cpu is not None
         seq_lens = seq_lens[:bs]
-        seq_lens_cpu = seq_lens_cpu[:bs]
         req_pool_indices = req_pool_indices[:bs]
-
-        actual_max_seq_len = seq_lens_cpu.max().item()
         chosen_max_seq_len = self.MAX_SEQ_LEN_FOR_CAPTURE
-        assert actual_max_seq_len <= chosen_max_seq_len
+        # Replay hook for both DECODE_OR_IDLE and TARGET_VERIFY. Under
+        # needs_cpu_seq_lens=False the host mirror is None on replay; the metadata
+        # build below always uses the frozen capture bound chosen_max_seq_len
+        # (MAX_SEQ_LEN_FOR_CAPTURE), so the host slice and the live-max<=bound check
+        # are host-mirror-only validations -- run them only when the mirror exists.
+        if seq_lens_cpu is not None:
+            seq_lens_cpu = seq_lens_cpu[:bs]
+            actual_max_seq_len = seq_lens_cpu.max().item()
+            assert actual_max_seq_len <= chosen_max_seq_len
 
         graph_key = bs
         if bucket == _GraphBucket.DECODE_OR_IDLE:
@@ -1651,11 +1660,20 @@ class DeepseekV4AttnBackend(
                     mode="constant",
                     value=0,
                 )
+            # seq_lens_cpu is None under needs_cpu_seq_lens=False; draft-extend still
+            # consumes a host length list, so fall back to a GPU read here. This is off
+            # the target-verify replay hot path (a residual draft-side D2H tracked for a
+            # later device-ization), not the sync being eliminated.
+            draft_extend_seq_lens_cpu = (
+                seq_lens_cpu.tolist()
+                if seq_lens_cpu is not None
+                else seq_lens.tolist()
+            )
             temp_metadata = self.init_forward_metadata_draft_extend(
                 max_seq_len=chosen_max_seq_len,
                 req_pool_indices=req_pool_indices,
                 seq_lens=seq_lens,
-                seq_lens_cpu=seq_lens_cpu.tolist(),
+                seq_lens_cpu=draft_extend_seq_lens_cpu,
                 num_tokens_per_bs=num_tokens_per_bs,
                 out_cache_loc=out_cache_loc,
                 use_prefill_cuda_graph=True,
@@ -1703,14 +1721,18 @@ class DeepseekV4AttnBackend(
         assert self.req_to_token_pool.req_to_token is self.req_to_token
 
         assert self.swa_page_size % SWA_WINDOW == 0 and self.page_size % 128 == 0
-        assert seq_lens_cpu is not None
         if max_seq_len_override is None:
             max_seq_len_override = getattr(forward_batch, "max_seq_len_override", None)
-        max_seq_len = (
-            int(seq_lens_cpu.max().item())
-            if max_seq_len_override is None
-            else max_seq_len_override
-        )
+        # needs_cpu_seq_lens=False leaves seq_lens_cpu None. This is the eager /
+        # breakable-cuda-graph metadata build (not the per-step replay hot path); with
+        # no override the forward is synchronous, so a GPU max() D2H is free (note §6),
+        # and cuda-graph capture passes MAX_SEQ_LEN_FOR_CAPTURE as the override (no read).
+        if max_seq_len_override is not None:
+            max_seq_len = max_seq_len_override
+        elif seq_lens_cpu is not None:
+            max_seq_len = int(seq_lens_cpu.max().item())
+        else:
+            max_seq_len = int(seq_lens.max().item())
         verify_bs = _get_target_verify_bs(forward_batch)
         online_c128_state_slot_offset = self.online_c128_mtp.prepare_forward(
             logical_forward_mode,
@@ -1765,16 +1787,22 @@ class DeepseekV4AttnBackend(
             extend_seq_lens = forward_batch.extend_seq_lens
             assert (
                 seq_lens is not None
-                and seq_lens_cpu is not None
                 and extend_seq_lens is not None
                 and extend_seq_lens_cpu is not None
             )
             is_draft = forward_batch.forward_mode.is_draft_extend_v2()
+            # seq_lens_cpu may be None under needs_cpu_seq_lens=False; prefill still
+            # consumes a host list, so fall back to a GPU read (eager path, D2H free).
+            prefill_seq_lens_cpu = (
+                seq_lens_cpu.tolist()
+                if seq_lens_cpu is not None
+                else seq_lens.tolist()
+            )
             metadata = self.init_forward_metadata_prefill(
                 max_seq_len=max_seq_len,
                 req_pool_indices=req_pool_indices,
                 seq_lens=seq_lens,
-                seq_lens_cpu=seq_lens_cpu.tolist(),
+                seq_lens_cpu=prefill_seq_lens_cpu,
                 out_cache_loc=forward_batch.out_cache_loc,
                 num_tokens=sum(extend_seq_lens_cpu),
                 extend_seq_lens=extend_seq_lens,
