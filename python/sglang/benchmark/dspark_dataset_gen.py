@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Generate a spectrum of prompt datasets (arena-hard jsonl schema) spanning
 draft predictability, to find accept-length extremes for the DSpark blog.
 
@@ -12,6 +11,7 @@ Buckets (expected acc_len, high -> low):
   story / brainstorm                              : open-ended -> LOW
   poetry / lyrics                                 : high-entropy creative -> VERY LOW
 """
+
 from __future__ import annotations
 
 import json
@@ -28,22 +28,34 @@ def rows(prompts: list[str]) -> list[dict]:
 def enumerate_ds() -> list[str]:
     out = []
     for n in [120, 150, 175, 200, 90, 110, 130, 160]:
-        out.append(f"Write out every integer from 1 to {n}, separated by commas, with no other text.")
+        out.append(
+            f"Write out every integer from 1 to {n}, separated by commas, with no other text."
+        )
     for k in [3, 4, 6, 7, 9, 11, 12, 13]:
-        out.append(f"List the first 50 multiples of {k}, comma-separated, no other text.")
+        out.append(
+            f"List the first 50 multiples of {k}, comma-separated, no other text."
+        )
     for start in [1000, 2000, 5000, 3000, 7000, 4000, 6000, 8000]:
-        out.append(f"Count down from {start} to {start-40} by ones, comma-separated, no other text.")
+        out.append(
+            f"Count down from {start} to {start-40} by ones, comma-separated, no other text."
+        )
     return out
 
 
 def alphabet_ds() -> list[str]:
     out = []
     for r in [6, 7, 8, 9, 10, 5, 11, 12]:
-        out.append(f"Write the lowercase English alphabet abcdefghijklmnopqrstuvwxyz, then repeat it {r} times, each on its own line.")
+        out.append(
+            f"Write the lowercase English alphabet abcdefghijklmnopqrstuvwxyz, then repeat it {r} times, each on its own line."
+        )
     for w in ["hello world", "the quick brown fox", "data data data", "spec decode"]:
-        out.append(f"Repeat the exact phrase '{w}' 30 times, each on its own line, nothing else.")
+        out.append(
+            f"Repeat the exact phrase '{w}' 30 times, each on its own line, nothing else."
+        )
     for d in ["0123456789", "abcabcabc", "xyzxyz"]:
-        out.append(f"Write the string '{d}' repeated 40 times with no separators and no other text.")
+        out.append(
+            f"Write the string '{d}' repeated 40 times with no separators and no other text."
+        )
     return out[:24]
 
 
@@ -60,9 +72,15 @@ def boilerplate_ds() -> list[str]:
     ]
     out = []
     for i, f in enumerate(fields):
-        out.append(f"Write a Python dataclass named Record{i} with exactly these fields and type hints, and nothing else:\n{f}")
-        out.append(f"Write a Python class Config{i} with an __init__ that assigns these attributes from arguments, and nothing else:\n{f}")
-        out.append(f"Write getter and setter methods for each of these fields in a Python class Model{i}:\n{f}")
+        out.append(
+            f"Write a Python dataclass named Record{i} with exactly these fields and type hints, and nothing else:\n{f}"
+        )
+        out.append(
+            f"Write a Python class Config{i} with an __init__ that assigns these attributes from arguments, and nothing else:\n{f}"
+        )
+        out.append(
+            f"Write getter and setter methods for each of these fields in a Python class Model{i}:\n{f}"
+        )
     return out[:24]
 
 
@@ -78,7 +96,9 @@ def json_fill_ds() -> list[str]:
     out = []
     for i, s in enumerate(schemas):
         for n in [15, 20, 25, 18]:
-            out.append(f"Output ONLY a JSON array of {n} objects, each with {s}. No prose, no code fences.")
+            out.append(
+                f"Output ONLY a JSON array of {n} objects, each with {s}. No prose, no code fences."
+            )
     return out[:24]
 
 
@@ -91,16 +111,28 @@ def code_algo_ds() -> list[str]:
         ("flatten", "nested: list", "flattens an arbitrarily nested list of ints"),
         ("count_vowels", "s: str", "returns the number of vowels in s"),
         ("merge_sort", "arr: list", "returns arr sorted ascending using merge sort"),
-        ("binary_search", "arr: list, target: int", "returns the index of target or -1"),
+        (
+            "binary_search",
+            "arr: list, target: int",
+            "returns the index of target or -1",
+        ),
         ("is_palindrome", "s: str", "returns True if s is a palindrome ignoring case"),
         ("run_length_encode", "s: str", "returns run-length encoding of s"),
-        ("two_sum", "nums: list, target: int", "returns indices of two numbers summing to target"),
+        (
+            "two_sum",
+            "nums: list, target: int",
+            "returns indices of two numbers summing to target",
+        ),
         ("rotate", "arr: list, k: int", "rotates arr right by k in place"),
     ]
     out = []
     for name, args, desc in tasks:
-        out.append(f"Write a Python function `{name}({args})` that {desc}. Return only the function, no explanation.")
-        out.append(f"Write a well-documented Python function `{name}({args})` that {desc}, with a docstring and type hints. Only the function.")
+        out.append(
+            f"Write a Python function `{name}({args})` that {desc}. Return only the function, no explanation."
+        )
+        out.append(
+            f"Write a well-documented Python function `{name}({args})` that {desc}, with a docstring and type hints. Only the function."
+        )
     return out[:24]
 
 
@@ -118,7 +150,9 @@ def sql_ds() -> list[str]:
     out = []
     for r in reqs:
         out.append(f"Write a single SQL query to {r}. Output only the SQL.")
-        out.append(f"Write a single ANSI SQL query to {r}. No explanation, only the query.")
+        out.append(
+            f"Write a single ANSI SQL query to {r}. No explanation, only the query."
+        )
     return out[:24]
 
 
@@ -137,7 +171,9 @@ def translate_ds() -> list[str]:
     out = []
     for i, s in enumerate(sents):
         lang = langs[i % len(langs)]
-        out.append(f"Translate this English sentence to {lang}. Output only the translation: '{s}'")
+        out.append(
+            f"Translate this English sentence to {lang}. Output only the translation: '{s}'"
+        )
     for i, s in enumerate(sents):
         lang = langs[(i + 1) % len(langs)]
         out.append(f"Translate to {lang}, translation only: '{s}'")
@@ -183,8 +219,12 @@ def story_ds() -> list[str]:
     ]
     out = []
     for t in themes:
-        out.append(f"Write an original creative short story (about 150 words) about {t}.")
-        out.append(f"Write an imaginative short story with a surprising twist about {t}.")
+        out.append(
+            f"Write an original creative short story (about 150 words) about {t}."
+        )
+        out.append(
+            f"Write an imaginative short story with a surprising twist about {t}."
+        )
     return out[:24]
 
 
@@ -205,32 +245,76 @@ def brainstorm_ds() -> list[str]:
     ]
     out = []
     for t in topics:
-        out.append(f"Brainstorm 12 wildly original and unexpected ideas for {t}. Number each idea.")
+        out.append(
+            f"Brainstorm 12 wildly original and unexpected ideas for {t}. Number each idea."
+        )
         out.append(f"List 10 unconventional, creative ideas for {t}, one per line.")
     return out[:24]
 
 
 def poetry_ds() -> list[str]:
-    themes = ["the ocean at dawn", "a forgotten city", "autumn leaves", "distant galaxies",
-              "an old friendship", "the first snow", "a summer thunderstorm", "time passing",
-              "a candle burning", "the desert wind", "a river journey", "midnight in a train station"]
-    poets = ["Emily Dickinson", "Pablo Neruda", "Walt Whitman", "Rumi", "Sylvia Plath", "Robert Frost"]
+    themes = [
+        "the ocean at dawn",
+        "a forgotten city",
+        "autumn leaves",
+        "distant galaxies",
+        "an old friendship",
+        "the first snow",
+        "a summer thunderstorm",
+        "time passing",
+        "a candle burning",
+        "the desert wind",
+        "a river journey",
+        "midnight in a train station",
+    ]
+    poets = [
+        "Emily Dickinson",
+        "Pablo Neruda",
+        "Walt Whitman",
+        "Rumi",
+        "Sylvia Plath",
+        "Robert Frost",
+    ]
     out = []
     for i, t in enumerate(themes):
-        out.append(f"Write an original poem about {t} in the style of {poets[i % len(poets)]}.")
+        out.append(
+            f"Write an original poem about {t} in the style of {poets[i % len(poets)]}."
+        )
         out.append(f"Write a free-verse poem about {t}. Be highly original and vivid.")
     return out[:24]
 
 
 def lyrics_ds() -> list[str]:
-    themes = ["chasing a dream", "a small town summer", "letting go", "city lights at 3am",
-              "an unlikely hero", "the road home", "a stormy heart", "dancing alone",
-              "old photographs", "a second chance", "the edge of the world", "fireflies"]
-    artists = ["Bob Dylan", "Taylor Swift", "Johnny Cash", "Adele", "David Bowie", "Beyonce"]
+    themes = [
+        "chasing a dream",
+        "a small town summer",
+        "letting go",
+        "city lights at 3am",
+        "an unlikely hero",
+        "the road home",
+        "a stormy heart",
+        "dancing alone",
+        "old photographs",
+        "a second chance",
+        "the edge of the world",
+        "fireflies",
+    ]
+    artists = [
+        "Bob Dylan",
+        "Taylor Swift",
+        "Johnny Cash",
+        "Adele",
+        "David Bowie",
+        "Beyonce",
+    ]
     out = []
     for i, t in enumerate(themes):
-        out.append(f"Write original song lyrics (a verse and a chorus) about {t} in the style of {artists[i % len(artists)]}.")
-        out.append(f"Write original, evocative song lyrics about {t}. Include a verse and a chorus.")
+        out.append(
+            f"Write original song lyrics (a verse and a chorus) about {t} in the style of {artists[i % len(artists)]}."
+        )
+        out.append(
+            f"Write original, evocative song lyrics about {t}. Include a verse and a chorus."
+        )
     return out[:24]
 
 
@@ -255,7 +339,9 @@ def main(out: Annotated[Path, typer.Option()] = Path("datasets")) -> None:
     for name, fn in DATASETS.items():
         prompts = fn()
         path = out / f"{name}.jsonl"
-        path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows(prompts)) + "\n")
+        path.write_text(
+            "\n".join(json.dumps(r, ensure_ascii=False) for r in rows(prompts)) + "\n"
+        )
         print(f"{name:<18} {len(prompts):>3} prompts -> {path}")
 
 
