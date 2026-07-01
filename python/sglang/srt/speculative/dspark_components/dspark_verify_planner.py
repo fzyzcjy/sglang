@@ -173,6 +173,18 @@ class DSparkVerifyPlanner:
     def is_compact_mode(self) -> bool:
         return self._ragged_verify_mode is RaggedVerifyMode.COMPACT
 
+    @property
+    def mode_value(self) -> str:
+        return self._ragged_verify_mode.value
+
+    @property
+    def lag_steps(self) -> Optional[int]:
+        # The two-steps-prior causal lag the host budget planner applies (None when
+        # no scheduler runs, i.e. static / no-head). Advisory metadata for the dump.
+        if self._budget_planner is None:
+            return None
+        return self._budget_planner.lag_steps
+
     def should_run_compact(self, *, layout: Optional[RaggedVerifyLayout]) -> bool:
         return (
             self._ragged_verify_mode is RaggedVerifyMode.COMPACT and layout is not None
