@@ -23,9 +23,7 @@ def test_window_gather_triton_matches_torch(bs):
     device = torch.device("cuda")
     num_q = bs * BLOCK_SIZE
     # seq_lens_casual spans small (prefix < window) and large (prefix >= window)
-    seq_lens_casual = torch.randint(
-        1, 300, (num_q,), dtype=torch.int32, device=device
-    )
+    seq_lens_casual = torch.randint(1, 300, (num_q,), dtype=torch.int32, device=device)
     req_pool_indices_repeated = torch.randint(
         0, 256, (num_q,), dtype=torch.int64, device=device
     )

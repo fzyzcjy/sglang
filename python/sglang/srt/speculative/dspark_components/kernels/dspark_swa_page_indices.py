@@ -208,9 +208,7 @@ def compute_dspark_window_gather_triton(
     device = seq_lens_casual.device
     req_pool_indices_repeated = req_pool_indices_repeated.to(device=device).contiguous()
     context_lens = torch.empty(bs, dtype=torch.int32, device=device)
-    req_pool_out = torch.empty(
-        bs, dtype=req_pool_indices_repeated.dtype, device=device
-    )
+    req_pool_out = torch.empty(bs, dtype=req_pool_indices_repeated.dtype, device=device)
     offsets = torch.empty((bs, swa_window), dtype=torch.int64, device=device)
     invalid = torch.empty((bs, swa_window), dtype=torch.bool, device=device)
     W_BLOCK = triton.next_power_of_2(swa_window)
@@ -428,7 +426,9 @@ def build_dspark_swa_page_indices_triton(
     context_lens = context_lens.to(device=device, dtype=torch.int32).contiguous()
     target_width = ceil_align(swa_window + block_size, page_index_aligned_size)
     n_q = bs * block_size
-    swa_page_indices = torch.empty((n_q, target_width), dtype=torch.int32, device=device)
+    swa_page_indices = torch.empty(
+        (n_q, target_width), dtype=torch.int32, device=device
+    )
     swa_topk_lengths = torch.empty(n_q, dtype=torch.int32, device=device)
     TW_BLOCK = triton.next_power_of_2(target_width)
     _swa_page_indices_kernel[(n_q,)](

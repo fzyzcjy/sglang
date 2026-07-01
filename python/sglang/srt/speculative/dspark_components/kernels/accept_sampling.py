@@ -185,9 +185,9 @@ def _gather_two_level_bonus_kernel(
     offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     mask = offs < n
     cl = tl.load(correct_len_ptr + offs, mask=mask, other=0).to(tl.int64)
-    accept_pos = tl.load(
-        accept_index_ptr + offs * cols + cl, mask=mask, other=0
-    ).to(tl.int64)
+    accept_pos = tl.load(accept_index_ptr + offs * cols + cl, mask=mask, other=0).to(
+        tl.int64
+    )
     bonus = tl.load(predicts_ptr + accept_pos, mask=mask, other=0)
     tl.store(out_ptr + offs, bonus.to(tl.int64), mask=mask)
 
