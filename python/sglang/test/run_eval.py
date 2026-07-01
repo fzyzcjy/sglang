@@ -152,9 +152,7 @@ def dump_and_analyze_records(args, samplers: list) -> None:
             f"max={max(accept_lengths):.4f}"
         )
         if accept_rates:
-            print(
-                f"Speculative accept rate: mean={statistics.fmean(accept_rates):.4f}"
-            )
+            print(f"Speculative accept rate: mean={statistics.fmean(accept_rates):.4f}")
     print("=" * 20)
 
 
