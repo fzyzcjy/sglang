@@ -1280,7 +1280,10 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         # padding
         self.input_ids = self._pad_tensor_to_size(self.input_ids, num_tokens)
         self.req_pool_indices = self._pad_tensor_to_size(self.req_pool_indices, bs)
-        self.lora_ids.extend((bs - len(self.lora_ids)) * [None])
+        # Spec-decoding verify/draft batches carry no LoRA (lora_ids stays None);
+        # padding is a no-op there. Only extend when the batch actually has lora_ids.
+        if self.lora_ids is not None:
+            self.lora_ids.extend((bs - len(self.lora_ids)) * [None])
 
         seq_len_fill_value = (
             model_runner.attn_backend.get_cuda_graph_seq_len_fill_value()
