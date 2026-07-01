@@ -612,7 +612,6 @@ class DSparkWorkerV2(BaseSpecWorker):
             lag_steps=self._verify_planner.lag_steps,
             verify_lens_cpu=layout.verify_lens_cpu if layout is not None else None,
             confidence=confidence,
-            two_steps_prior_survival=draft_input.two_steps_prior_survival_debug,
             req_pool_indices=batch.req_pool_indices,
             prefix_lens=prefix_lens,
             draft_tokens=draft_tokens,
@@ -687,18 +686,11 @@ class DSparkWorkerV2(BaseSpecWorker):
             return None
         if not self.server_args.disable_overlap_schedule:
             return draft_input.verify_token_budget
-        budget = self._verify_planner.compute_budget_sync(
+        return self._verify_planner.compute_budget_sync(
             confidence=confidence,
             prefix_lens=prefix_lens,
             req_pool_indices=batch.req_pool_indices,
         )
-        # Non-overlap: no intervening prepare, so the planner's fresh lagged survival
-        # matches this step's budget; attach it to draft_input for the decision dumper.
-        if budget is not None and envs.SGLANG_DSPARK_DEBUG_MAIN_OUTPUT.get():
-            draft_input.two_steps_prior_survival_debug = (
-                self._verify_planner.last_two_steps_prior_survival_debug
-            )
-        return budget
 
     def get_confidence_budget_prepare(self):
         # Injected into the scheduler's overlap prepare window when this worker

@@ -249,10 +249,6 @@ class HostConfidenceBudgetPlanner:
         self._carry_confidence: Optional[torch.Tensor] = None
         self._carry_seq_lens: Optional[torch.Tensor] = None
         self._carry_pos = 0
-        # Debug-only: the two-steps-prior survival [bs, gamma] from the most recent
-        # compute_budget, exposed so the decision dumper can prove the budget uses the
-        # lagged (not current-step) survival. Never read on the accept path.
-        self._last_two_steps_prior_survival: Optional[torch.Tensor] = None
 
     def compute_budget(
         self,
@@ -275,7 +271,6 @@ class HostConfidenceBudgetPlanner:
             lagged_stamp=lagged_stamp,
             prefix_lens=prefix_lens,
         )
-        self._last_two_steps_prior_survival = survival
         return compute_verify_token_budget(
             history_survival_probs=survival,
             sps_table=self.sps_table,

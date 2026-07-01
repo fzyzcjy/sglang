@@ -185,14 +185,6 @@ class DSparkVerifyPlanner:
             return None
         return self._budget_planner.lag_steps
 
-    @property
-    def last_two_steps_prior_survival_debug(self) -> Optional[torch.Tensor]:
-        # Debug-only: the lagged survival [bs, gamma] behind the most recent budget,
-        # for the decision dumper. None when no scheduler runs (static / no-head).
-        if self._budget_planner is None:
-            return None
-        return self._budget_planner._last_two_steps_prior_survival
-
     def should_run_compact(self, *, layout: Optional[RaggedVerifyLayout]) -> bool:
         return (
             self._ragged_verify_mode is RaggedVerifyMode.COMPACT and layout is not None
@@ -251,19 +243,9 @@ class DSparkVerifyPlanner:
         if batch.forward_mode.is_extend() or batch.is_extend_in_batch:
             return
         resolved = future_map.resolve_confidence_cpu(batch)
-        budget = self._budget_from_resolved(
+        draft_input.verify_token_budget = self._budget_from_resolved(
             resolved=resolved, req_pool_indices_cpu=batch.req_pool_indices_cpu
         )
-        draft_input.verify_token_budget = budget
-        # Snapshot the lagged survival onto THIS batch's draft_input (not the planner):
-        # under overlap the next prepare overwrites the planner stash before this
-        # step's forward reads it, so persisting it with the batch keeps the dumped
-        # survival aligned to this step's K. Only when the planner actually ran
-        # (budget not None) so a cold-start verify-all step carries no stale survival.
-        if budget is not None and envs.SGLANG_DSPARK_DEBUG_MAIN_OUTPUT.get():
-            draft_input.two_steps_prior_survival_debug = (
-                self._budget_planner._last_two_steps_prior_survival
-            )
 
     def compute_budget_sync(
         self,

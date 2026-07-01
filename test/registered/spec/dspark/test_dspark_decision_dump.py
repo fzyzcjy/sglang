@@ -30,7 +30,6 @@ def _dump_records(
     enabled: bool,
     tp_rank: int = 0,
     confidence: Optional[torch.Tensor] = None,
-    two_steps_prior_survival: Optional[torch.Tensor] = None,
     verify_lens_cpu: Optional[list[int]] = None,
     bs: int = 2,
     gamma: int = 3,
@@ -51,7 +50,6 @@ def _dump_records(
                 lag_steps=2,
                 verify_lens_cpu=verify_lens_cpu,
                 confidence=confidence,
-                two_steps_prior_survival=two_steps_prior_survival,
                 req_pool_indices=torch.tensor([4, 5][:bs]),
                 prefix_lens=torch.tensor([100, 200][:bs]),
                 draft_tokens=torch.tensor([[11, 12, 13], [21, 22, 23]][:bs]),
@@ -138,38 +136,6 @@ class TestDsparkDecisionDumper(CustomTestCase):
         record = _dump_records(enabled=True, confidence=None, verify_lens_cpu=None)[0]
         self.assertTrue(all(entry["verify_len"] == 4 for entry in record["reqs"]))
         self.assertEqual(record["num_verify_tokens"], 8)
-
-    def test_budget_survival_dumped_when_provided(self):
-        """budget_survival carries the lagged survival (rounded), distinct from current-step survival."""
-        confidence = torch.tensor([[0.9, 0.8, 0.5], [1.0, 0.5, 0.5]])
-        budget_survival = torch.tensor([[0.6, 0.36, 0.18], [0.7, 0.49, 0.245]])
-        record = _dump_records(
-            enabled=True,
-            confidence=confidence,
-            two_steps_prior_survival=budget_survival,
-            verify_lens_cpu=[2, 4],
-        )[0]
-        for row, survival_row in enumerate(budget_survival.tolist()):
-            self.assertEqual(
-                record["reqs"][row]["budget_survival"],
-                [round(p, 4) for p in survival_row],
-            )
-            # The lagged budget survival is a different tensor than current survival.
-            self.assertNotEqual(
-                record["reqs"][row]["budget_survival"],
-                record["reqs"][row]["survival"],
-            )
-
-    def test_budget_survival_absent_when_none(self):
-        """Omitting the two-steps-prior survival leaves budget_survival off every request."""
-        record = _dump_records(
-            enabled=True,
-            confidence=torch.tensor([[0.9, 0.8, 0.5], [1.0, 0.5, 0.5]]),
-            two_steps_prior_survival=None,
-            verify_lens_cpu=[2, 4],
-        )[0]
-        for entry in record["reqs"]:
-            self.assertNotIn("budget_survival", entry)
 
 
 if __name__ == "__main__":
