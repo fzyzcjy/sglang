@@ -61,7 +61,7 @@ def _build_pa_page_table_kernel(
 ):
     """Build PA-SWA page_table directly from req_to_token.
 
-    For each request, dst row = [0..prefill_len) ∪ [decode_start..seq_len).
+    For each request, dst row = [0..prefill_len) union [decode_start..seq_len).
     decode_start = max(prefill_len, seq_len - window_size)
 
     prefill_lens_ptr is the full pool-sized buffer, prefill_len is loaded
@@ -244,7 +244,7 @@ class FlashAttentionBackend(AttentionBackend):
         self.device = model_runner.device
         self.decode_cuda_graph_metadata = {}
         self.target_verify_metadata = {}
-        # Pool refs — captured at construction so they survive deletion of the
+        # Pool refs -- captured at construction so they survive deletion of the
         # corresponding ForwardBatch fields.
         self.req_to_token_pool = model_runner.req_to_token_pool
         self.token_to_kv_pool = model_runner.token_to_kv_pool
@@ -1551,7 +1551,7 @@ class FlashAttentionBackend(AttentionBackend):
 
         # When Spec Decode enabled, forward_decode would be called with two mode:
         # 1. DRAFT_DECODE: we enable cascade attention when top_k > 1
-        # 2. IDLE: we don’t need cascade attention, spec_info will be none in this case
+        # 2. IDLE: we don't need cascade attention, spec_info will be none in this case
         use_cascade_attn = forward_batch.spec_info is not None and self.topk > 1
 
         # Calculate window size (can be moved to metadata if layer properties don't change)

@@ -205,7 +205,7 @@ class ConfidencePrefixScheduler:
 
 
 class HostConfidenceBudgetPlanner:
-    """Host-side verify-budget source (paper §5.2 two-steps-prior barrier).
+    """Host-side verify-budget source (paper section 5.2 two-steps-prior barrier).
 
     Owns a per-request-row host carry that shifts the FutureMap relay's natural
     lag-1 confidence to the configured causal lag (default 2), applies the H1
