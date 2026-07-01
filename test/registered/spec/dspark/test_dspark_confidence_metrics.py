@@ -2,7 +2,9 @@ import unittest
 
 import torch
 
+from sglang.srt.environ import envs
 from sglang.srt.speculative.dspark_components.dspark_confidence_metrics import (
+    ConfidenceMetricsProbe,
     PerPositionConfidenceMetrics,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -113,6 +115,72 @@ class TestPerPositionConfidenceMetrics(CustomTestCase):
         for cpu_row, gpu_row in zip(cpu.compute(), gpu.compute()):
             for key in ("ece", "auc", "brier", "pred_mean", "target_mean"):
                 self.assertAlmostEqual(cpu_row[key], gpu_row[key], places=9, msg=key)
+
+
+def _probe_inputs(bs: int, gamma: int):
+    torch.manual_seed(0)
+    verify_num_draft_tokens = gamma + 1
+    vocab = 16
+    verify_ids_2d = torch.randint(0, vocab, (bs, verify_num_draft_tokens))
+    target_logits = torch.randn(bs * verify_num_draft_tokens, vocab)
+    confidence_raw = torch.randn(bs, gamma)
+    return verify_ids_2d, target_logits, confidence_raw
+
+
+class TestConfidenceMetricsProbe(CustomTestCase):
+    def _observe(self, probe, *, carries_confidence=True, is_compact_mode=False):
+        verify_ids_2d, target_logits, confidence_raw = _probe_inputs(bs=3, gamma=4)
+        probe.maybe_observe(
+            carries_confidence=carries_confidence,
+            is_compact_mode=is_compact_mode,
+            confidence_raw=confidence_raw,
+            verify_ids_2d=verify_ids_2d,
+            target_logits=target_logits,
+            bs=3,
+        )
+
+    def test_disabled_env_is_noop(self):
+        """With the env off, maybe_observe never builds the metrics accumulator."""
+        probe = ConfidenceMetricsProbe(gamma=4, verify_num_draft_tokens=5, tp_rank=0)
+        self._observe(probe)
+        self.assertIsNone(probe._metrics)
+        self.assertEqual(probe._step_ct, 0)
+
+    def test_non_rank0_is_noop(self):
+        """A non-zero tp_rank probe stays silent even when the env is enabled."""
+        probe = ConfidenceMetricsProbe(gamma=4, verify_num_draft_tokens=5, tp_rank=1)
+        with envs.SGLANG_DSPARK_DEBUG_CONFIDENCE_METRICS.override(True):
+            self._observe(probe)
+        self.assertIsNone(probe._metrics)
+
+    def test_missing_confidence_head_is_noop(self):
+        """carries_confidence=False skips accumulation."""
+        probe = ConfidenceMetricsProbe(gamma=4, verify_num_draft_tokens=5, tp_rank=0)
+        with envs.SGLANG_DSPARK_DEBUG_CONFIDENCE_METRICS.override(True):
+            self._observe(probe, carries_confidence=False)
+        self.assertIsNone(probe._metrics)
+
+    def test_compact_mode_warns_once_and_skips(self):
+        """Compact mode never accumulates and warns exactly once."""
+        probe = ConfidenceMetricsProbe(gamma=4, verify_num_draft_tokens=5, tp_rank=0)
+        with envs.SGLANG_DSPARK_DEBUG_CONFIDENCE_METRICS.override(True):
+            self._observe(probe, is_compact_mode=True)
+            self.assertTrue(probe._compact_warned)
+            self._observe(probe, is_compact_mode=True)
+        self.assertIsNone(probe._metrics)
+        self.assertEqual(probe._step_ct, 0)
+
+    def test_enabled_path_accumulates_and_prints(self):
+        """The enabled full-window path builds metrics and reaches the print branch."""
+        probe = ConfidenceMetricsProbe(
+            gamma=4, verify_num_draft_tokens=5, tp_rank=0, print_every=2
+        )
+        with envs.SGLANG_DSPARK_DEBUG_CONFIDENCE_METRICS.override(True):
+            self._observe(probe)
+            self.assertIsInstance(probe._metrics, PerPositionConfidenceMetrics)
+            self.assertEqual(probe._step_ct, 1)
+            self._observe(probe)
+        self.assertEqual(probe._step_ct, 2)
 
 
 if __name__ == "__main__":

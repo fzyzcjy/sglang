@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import logging
 import math
+from typing import Optional
 
 import torch
+
+from sglang.srt.environ import envs
+from sglang.srt.speculative.dflash_utils import (
+    compute_dflash_correct_drafts_and_bonus,
+)
+
+logger = logging.getLogger(__name__)
 
 EPS_PROB = 1e-8
 
@@ -176,3 +185,77 @@ class PerPositionConfidenceMetrics:
                 f"{_format_float(row['brier']):>8}"
             )
         return "\n".join(lines)
+
+
+class ConfidenceMetricsProbe:
+    # Runtime confidence-head calibration probe (read-only; never touches the accept
+    # path). Reuses the verify step's confidence_raw + num_correct_drafts to accumulate
+    # cumprod-survival vs leading-correct-prefix per draft position on-device, logging a
+    # per-position table every `print_every` verify steps. Off unless
+    # SGLANG_DSPARK_DEBUG_CONFIDENCE_METRICS is set; rank-0 only; skips compact mode
+    # (padded verify rows corrupt the per-position prefix label). Requires greedy verify:
+    # under sampling, num_correct_drafts is an argmax-match prefix, not the true accept.
+
+    def __init__(
+        self,
+        *,
+        gamma: int,
+        verify_num_draft_tokens: int,
+        tp_rank: int,
+        print_every: int = 256,
+    ) -> None:
+        self.gamma = int(gamma)
+        self.verify_num_draft_tokens = int(verify_num_draft_tokens)
+        self.tp_rank = int(tp_rank)
+        self.print_every = int(print_every)
+        self._metrics: Optional[PerPositionConfidenceMetrics] = None
+        self._step_ct: int = 0
+        self._compact_warned: bool = False
+
+    def maybe_observe(
+        self,
+        *,
+        carries_confidence: bool,
+        is_compact_mode: bool,
+        confidence_raw: Optional[torch.Tensor],
+        verify_ids_2d: torch.Tensor,
+        target_logits: torch.Tensor,
+        bs: int,
+    ) -> None:
+        if not envs.SGLANG_DSPARK_DEBUG_CONFIDENCE_METRICS.get():
+            return
+        if self.tp_rank != 0:
+            return
+        if not carries_confidence:
+            return
+        if is_compact_mode:
+            if not self._compact_warned:
+                logger.warning(
+                    "SGLANG_DSPARK_DEBUG_CONFIDENCE_METRICS is ignored under "
+                    "SGLANG_RAGGED_VERIFY_MODE=compact (padded verify rows corrupt the "
+                    "per-position prefix label); run cap-accept or static to measure it."
+                )
+                self._compact_warned = True
+            return
+        if confidence_raw is None:
+            return
+
+        target_predict = torch.argmax(target_logits, dim=-1).view(
+            bs, self.verify_num_draft_tokens
+        )
+        num_correct_drafts, _ = compute_dflash_correct_drafts_and_bonus(
+            candidates=verify_ids_2d,
+            target_predict=target_predict,
+        )
+        positions = torch.arange(self.gamma, device=confidence_raw.device).view(1, -1)
+        prefix_mask = (positions < num_correct_drafts.view(-1, 1)).to(torch.float32)
+        survival = torch.cumprod(torch.sigmoid(confidence_raw.float()), dim=1)
+
+        if self._metrics is None:
+            self._metrics = PerPositionConfidenceMetrics(
+                gamma=self.gamma, device=confidence_raw.device
+            )
+        self._metrics.update(survival=survival, prefix_mask=prefix_mask)
+        self._step_ct += 1
+        if self._step_ct % self.print_every == 0:
+            logger.info("%s", self._metrics.format_table())
