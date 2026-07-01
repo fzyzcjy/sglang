@@ -1670,9 +1670,7 @@ class DeepseekV4AttnBackend(
             # the target-verify replay hot path (a residual draft-side D2H tracked for a
             # later device-ization), not the sync being eliminated.
             draft_extend_seq_lens_cpu = (
-                seq_lens_cpu.tolist()
-                if seq_lens_cpu is not None
-                else seq_lens.tolist()
+                seq_lens_cpu.tolist() if seq_lens_cpu is not None else seq_lens.tolist()
             )
             temp_metadata = self.init_forward_metadata_draft_extend(
                 max_seq_len=chosen_max_seq_len,
@@ -1799,9 +1797,7 @@ class DeepseekV4AttnBackend(
             # seq_lens_cpu may be None under needs_cpu_seq_lens=False; prefill still
             # consumes a host list, so fall back to a GPU read (eager path, D2H free).
             prefill_seq_lens_cpu = (
-                seq_lens_cpu.tolist()
-                if seq_lens_cpu is not None
-                else seq_lens.tolist()
+                seq_lens_cpu.tolist() if seq_lens_cpu is not None else seq_lens.tolist()
             )
             metadata = self.init_forward_metadata_prefill(
                 max_seq_len=max_seq_len,
