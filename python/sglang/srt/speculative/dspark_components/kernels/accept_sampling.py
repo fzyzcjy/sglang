@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Optional
 
 import torch
+import triton
+import triton.language as tl
 
 from sglang.srt.environ import envs
 from sglang.srt.speculative.dflash_info_v2 import DFlashDraftInputV2
@@ -65,13 +67,19 @@ class AcceptSampling:
         verify_num_draft_tokens: int,
         cutoff_layout: Optional[RaggedVerifyLayout] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        raise NotImplementedError(
-            "AcceptSampling.triton is not implemented yet; run with "
-            "SGLANG_DSPARK_KERNEL_ACCEPT_SAMPLING=torch until the triton kernel lands."
+        return accept_sampling_triton(
+            candidates=candidates,
+            target_logits=target_logits,
+            draft_probs=draft_probs,
+            sampling_info=sampling_info,
+            draft_input=draft_input,
+            gamma=gamma,
+            verify_num_draft_tokens=verify_num_draft_tokens,
+            cutoff_layout=cutoff_layout,
         )
 
 
-def accept_sampling(
+def _accept_sampling_core(
     *,
     candidates: torch.Tensor,
     target_logits: torch.Tensor,
@@ -80,8 +88,11 @@ def accept_sampling(
     draft_input: DFlashDraftInputV2,
     gamma: int,
     verify_num_draft_tokens: int,
-    cutoff_layout: Optional[RaggedVerifyLayout] = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    cutoff_layout: Optional[RaggedVerifyLayout],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    # Shared setup for both impls: chain-speculative sampling + confidence cap. Returns
+    # (correct_len, cap_trim_lens, accept_index, predicts); the two impls differ only in
+    # how they gather the bonus token from (accept_index, correct_len, predicts).
     bs = candidates.shape[0]
     device = candidates.device
     target_probs = build_dflash_verify_target_probs(
@@ -129,7 +140,101 @@ def accept_sampling(
         correct_len, cap_trim_lens = CapCorrectLen.execute(
             correct_len=correct_len, layout=cutoff_layout
         )
+    return correct_len, cap_trim_lens, accept_index, predicts
+
+
+def accept_sampling(
+    *,
+    candidates: torch.Tensor,
+    target_logits: torch.Tensor,
+    draft_probs: torch.Tensor,
+    sampling_info,
+    draft_input: DFlashDraftInputV2,
+    gamma: int,
+    verify_num_draft_tokens: int,
+    cutoff_layout: Optional[RaggedVerifyLayout] = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    bs = candidates.shape[0]
+    device = candidates.device
+    correct_len, cap_trim_lens, accept_index, predicts = _accept_sampling_core(
+        candidates=candidates,
+        target_logits=target_logits,
+        draft_probs=draft_probs,
+        sampling_info=sampling_info,
+        draft_input=draft_input,
+        gamma=gamma,
+        verify_num_draft_tokens=verify_num_draft_tokens,
+        cutoff_layout=cutoff_layout,
+    )
     row_ids = torch.arange(bs, dtype=torch.long, device=device)
     accept_pos = accept_index[row_ids, correct_len.to(torch.long)].to(torch.long)
     bonus = predicts[accept_pos].to(torch.int64)
+    return correct_len, bonus, cap_trim_lens
+
+
+@triton.jit
+def _gather_two_level_bonus_kernel(
+    accept_index_ptr,
+    predicts_ptr,
+    correct_len_ptr,
+    out_ptr,
+    cols,
+    n,
+    BLOCK: tl.constexpr,
+):
+    offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n
+    cl = tl.load(correct_len_ptr + offs, mask=mask, other=0).to(tl.int64)
+    accept_pos = tl.load(
+        accept_index_ptr + offs * cols + cl, mask=mask, other=0
+    ).to(tl.int64)
+    bonus = tl.load(predicts_ptr + accept_pos, mask=mask, other=0)
+    tl.store(out_ptr + offs, bonus.to(tl.int64), mask=mask)
+
+
+def gather_two_level_bonus_triton(
+    *,
+    accept_index: torch.Tensor,
+    predicts: torch.Tensor,
+    correct_len: torch.Tensor,
+) -> torch.Tensor:
+    # bonus[b] = predicts[accept_index[b, correct_len[b]]] in one launch, replacing the
+    # arange + two chained advanced-index gathers.
+    bs, cols = accept_index.shape
+    accept_index = accept_index.contiguous()
+    predicts = predicts.contiguous()
+    correct_len = correct_len.contiguous()
+    out = torch.empty(bs, dtype=torch.int64, device=accept_index.device)
+    BLOCK = 256
+    grid = (triton.cdiv(bs, BLOCK),)
+    _gather_two_level_bonus_kernel[grid](
+        accept_index, predicts, correct_len, out, cols, bs, BLOCK=BLOCK
+    )
+    return out
+
+
+def accept_sampling_triton(
+    *,
+    candidates: torch.Tensor,
+    target_logits: torch.Tensor,
+    draft_probs: torch.Tensor,
+    sampling_info,
+    draft_input: DFlashDraftInputV2,
+    gamma: int,
+    verify_num_draft_tokens: int,
+    cutoff_layout: Optional[RaggedVerifyLayout] = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    correct_len, cap_trim_lens, accept_index, predicts = _accept_sampling_core(
+        candidates=candidates,
+        target_logits=target_logits,
+        draft_probs=draft_probs,
+        sampling_info=sampling_info,
+        draft_input=draft_input,
+        gamma=gamma,
+        verify_num_draft_tokens=verify_num_draft_tokens,
+        cutoff_layout=cutoff_layout,
+    )
+    bonus = gather_two_level_bonus_triton(
+        accept_index=accept_index, predicts=predicts, correct_len=correct_len
+    )
     return correct_len, bonus, cap_trim_lens

@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Optional
 
 import torch
+import triton
+import triton.language as tl
 
 from sglang.srt.environ import envs
 from sglang.srt.speculative.dflash_utils import (
@@ -50,9 +52,11 @@ class AcceptGreedy:
         verify_num_draft_tokens: int,
         cutoff_layout: Optional[RaggedVerifyLayout] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        raise NotImplementedError(
-            "AcceptGreedy.triton is not implemented yet; run with "
-            "SGLANG_DSPARK_KERNEL_ACCEPT_GREEDY=torch until the triton kernel lands."
+        return accept_greedy_triton(
+            candidates=candidates,
+            target_logits=target_logits,
+            verify_num_draft_tokens=verify_num_draft_tokens,
+            cutoff_layout=cutoff_layout,
         )
 
 
@@ -78,4 +82,59 @@ def accept_greedy(
         )
         row_ids = torch.arange(bs, device=target_predict.device)
         bonus = target_predict[row_ids, correct_len.to(torch.long)].to(torch.int64)
+    return correct_len, bonus, cap_trim_lens
+
+
+@triton.jit
+def _gather_row_bonus_kernel(
+    table_ptr,
+    idx_ptr,
+    out_ptr,
+    cols,
+    n,
+    BLOCK: tl.constexpr,
+):
+    offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n
+    idx = tl.load(idx_ptr + offs, mask=mask, other=0).to(tl.int64)
+    val = tl.load(table_ptr + offs * cols + idx, mask=mask, other=0)
+    tl.store(out_ptr + offs, val.to(tl.int64), mask=mask)
+
+
+def gather_row_bonus_triton(*, table: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
+    # bonus[b] = table[b, idx[b]] (the bonus token at the capped accept index) in one
+    # launch, replacing the arange + advanced-index gather.
+    bs, cols = table.shape
+    table = table.contiguous()
+    idx = idx.contiguous()
+    out = torch.empty(bs, dtype=torch.int64, device=table.device)
+    BLOCK = 256
+    grid = (triton.cdiv(bs, BLOCK),)
+    _gather_row_bonus_kernel[grid](table, idx, out, cols, bs, BLOCK=BLOCK)
+    return out
+
+
+def accept_greedy_triton(
+    *,
+    candidates: torch.Tensor,
+    target_logits: torch.Tensor,
+    verify_num_draft_tokens: int,
+    cutoff_layout: Optional[RaggedVerifyLayout] = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    # Compose the existing argmax + compute_dflash + triton CapCorrectLen with a fused
+    # bonus gather (gather_row_bonus_triton) for the capped re-read.
+    bs = candidates.shape[0]
+    target_predict = torch.argmax(target_logits, dim=-1).view(
+        bs, verify_num_draft_tokens
+    )
+    correct_len, bonus = compute_dflash_correct_drafts_and_bonus(
+        candidates=candidates,
+        target_predict=target_predict,
+    )
+    cap_trim_lens = torch.zeros_like(correct_len)
+    if cutoff_layout is not None:
+        correct_len, cap_trim_lens = CapCorrectLen.execute(
+            correct_len=correct_len, layout=cutoff_layout
+        )
+        bonus = gather_row_bonus_triton(table=target_predict, idx=correct_len)
     return correct_len, bonus, cap_trim_lens
