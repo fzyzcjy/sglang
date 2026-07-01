@@ -790,6 +790,11 @@ class DeepseekV4AttnBackend(
     use_captured_forward_metadata_for_breakable_cuda_graph: bool = True
     # Builds ragged verify metadata via make_forward_metadata_from_raw_verify.
     supports_ragged_verify_graph: bool = True
+    # DSV4 rebuilds decode/verify attention metadata from device seq_lens +
+    # preallocated buffers (cuda-graph replay uses the frozen MAX_SEQ_LEN_FOR_CAPTURE),
+    # so it never needs the host seq_lens_cpu / seq_lens_sum mirror. Opt out of the
+    # per-step D2H, matching trtllm_mla / dsa. DeepseekV4MultiStepBackend inherits this.
+    needs_cpu_seq_lens: bool = False
 
     def __init__(
         self,
