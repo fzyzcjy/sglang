@@ -107,24 +107,26 @@ def sample_draft_block(
     else:
 
         def sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:
-            # Per-row mixed sampling: greedy rows take argmax, sampling rows
-            # draw from the temperature-scaled softmax. torch.where selects per
-            # row so a mixed batch keeps each request's own draft distribution.
-            # With at least one sampling row this matches the all-sampling RNG
-            # draw count (one draw per step), so the all-sampling path
-            # stays byte-identical.
-            argmax_tokens = torch.argmax(step_logits, dim=-1)
+            # Per-row mixed sampling: greedy rows take argmax, sampling rows draw
+            # from the temperature-scaled softmax, so a mixed batch keeps each
+            # request's own draft distribution. With at least one sampling row this
+            # matches the all-sampling RNG draw count (one draw per step), so the
+            # all-sampling path stays byte-identical.
             probs = torch.softmax(step_logits.float() / temperatures[:, None], dim=-1)
             if fast_sampling:
                 # Reference Gumbel-max trick: argmax(probs / Exp(1)) ~ Categorical(probs),
                 # one fused pass with no full-vocab CDF and no D2H sync, unlike
-                # torch.multinomial. Still one RNG fill per step, so the per-step draw
-                # count stays constant across batch compositions.
-                sampled_tokens = probs.div_(
-                    torch.empty_like(probs).exponential_(1)
-                ).argmax(dim=-1)
-            else:
-                sampled_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)
+                # torch.multinomial. Folding noise=1 onto greedy rows makes their
+                # argmax(probs / 1) == argmax(probs) == argmax(logits) (softmax is
+                # monotone), so this single argmax also yields the greedy token and
+                # the separate torch.argmax(step_logits) + torch.where drop out.
+                # exponential_ still fills every row, so the per-step draw count is
+                # unchanged; greedy rows just discard their unused noise.
+                noise = torch.empty_like(probs).exponential_(1)
+                noise[greedy_mask] = 1.0
+                return probs.div_(noise).argmax(dim=-1)
+            argmax_tokens = torch.argmax(step_logits, dim=-1)
+            sampled_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)
             return torch.where(greedy_mask, argmax_tokens, sampled_tokens)
 
     draft_tokens, corrected_logits = markov_head.sample_block(
