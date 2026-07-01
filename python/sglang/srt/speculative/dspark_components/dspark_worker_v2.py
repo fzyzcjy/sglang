@@ -115,16 +115,12 @@ class DSparkWorkerV2(BaseSpecWorker):
         # inside the attention-TP context (EAGLE3-style): the patched _TP makes its
         # RowParallelLinear reduce and base-logits all-gather size-1 no-ops, so it is
         # per-DP-rank tp=attn_tp and never joins a cross-DP collective. A DeepSeek-V4
-        # (MoE) draft cannot use this (draft_tp_context does not patch attn_dp_size,
-        # so the MoE gather stays on) and needs the full-DP path, which is not wired
-        # yet -- fail-fast for now. Target forwards always stay OUTSIDE this context.
+        # (MoE) draft cannot use this (draft_tp_context does not patch attn_dp_size, so
+        # the MoE gather stays on) and instead runs full-DP: it keeps the full DP
+        # context and its _run_ffn goes through the shared parent MoE-DP gather, fed by
+        # the draft-side DP metadata (dp_moe_sync below). Target forwards always stay
+        # OUTSIDE the dense attention-TP context.
         self._draft_is_moe = draft_is_deepseek_v4(server_args=server_args)
-        if server_args.enable_dp_attention and self._draft_is_moe:
-            raise NotImplementedError(
-                "DSpark DeepSeek-V4 (MoE) draft under dp attention is not supported "
-                "yet; the dense (qwen/gemma) draft is. The MoE full-DP path is a "
-                "follow-up."
-            )
         self._draft_dp_context_enabled = (
             server_args.enable_dp_attention and not self._draft_is_moe
         )
@@ -261,6 +257,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             gamma=self.gamma,
             mask_token_id=self._mask_token_id,
             draft_block_spec_info=self._draft_block_spec_info,
+            dp_moe_sync=self._draft_is_moe and server_args.enable_dp_attention,
         )
         self._verify_executor = TargetVerifyExecutor(
             target_worker=self.target_worker,

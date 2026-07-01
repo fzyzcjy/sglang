@@ -31,6 +31,7 @@ class DraftBlockProposer:
         gamma: int,
         mask_token_id: int,
         draft_block_spec_info,
+        dp_moe_sync: bool = False,
     ) -> None:
         self.draft_model = draft_model
         self.draft_model_runner = draft_model_runner
@@ -38,6 +39,12 @@ class DraftBlockProposer:
         self._mask_token_id = mask_token_id
         self._draft_block_spec_info = draft_block_spec_info
         self._draft_sampler = None
+        # dsv4 (MoE) draft under dp attention: the draft forward runs the shared
+        # MoE-DP gather, so its manually-built ForwardBatch must carry DP metadata
+        # (global_num_tokens = per-rank bs * gamma). The dense draft runs replicated
+        # in the attention-TP context and must NOT get this (it would trigger an
+        # unwanted MLP sync in a size-1 group), so it stays False.
+        self._dp_moe_sync = dp_moe_sync
 
     def propose(
         self,
@@ -167,6 +174,25 @@ class DraftBlockProposer:
             spec_info=self._draft_block_spec_info,
             capture_hidden_mode=CaptureHiddenMode.NULL,
         )
+        if self._dp_moe_sync and batch.global_num_tokens is not None:
+            # Feed the draft eager batch the DP metadata so it enters
+            # prepare_mlp_sync_batch and the shared MoE-DP gather sizes its buffer
+            # correctly. The draft forward runs bs*gamma tokens per rank, so scale the
+            # scheduler's all-gathered per-rank bs by gamma (NOT the graph MAX_LEN
+            # uniform value). prepare_mlp_sync_batch fills dp_padding_mode /
+            # global_dp_buffer_len from these.
+            gamma = self.gamma
+            gnt = [int(x) * gamma for x in batch.global_num_tokens]
+            gnt_logprob = [int(x) * gamma for x in batch.global_num_tokens_for_logprob]
+            draft_forward_batch.global_num_tokens_cpu = gnt
+            draft_forward_batch.global_num_tokens_for_logprob_cpu = gnt_logprob
+            draft_forward_batch.global_num_tokens_gpu = torch.tensor(
+                gnt, dtype=torch.int64, device=device
+            )
+            draft_forward_batch.global_num_tokens_for_logprob_gpu = torch.tensor(
+                gnt_logprob, dtype=torch.int64, device=device
+            )
+            draft_forward_batch.can_run_dp_cuda_graph = batch.can_run_dp_cuda_graph
         with torch.inference_mode():
             draft_out = self.draft_model_runner.forward(draft_forward_batch)
         logits_output = draft_out.logits_output
