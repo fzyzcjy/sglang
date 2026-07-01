@@ -260,6 +260,12 @@ def scatter_compact_to_strided(
     # keeps them out of the commit decision (lossless).
     stride = verify_num_draft_tokens
     dim = compact.shape[1]
+    # Under DP attention the compact verify input is padded up to bs*(gamma+1) to
+    # match the dp_gather buffer (global_num_tokens = bs * draft_token_num), so the
+    # target returns trailing pad rows after the real total_verify_tokens. Those pad
+    # tokens are causal-after the real tokens and their output is discarded, so
+    # trimming here is lossless; it is a no-op without DP (compact is already exact).
+    compact = compact[: layout.total_verify_tokens]
     strided = torch.full(
         (layout.bs * stride, dim),
         fill_value,
