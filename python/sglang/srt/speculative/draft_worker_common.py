@@ -59,6 +59,16 @@ def _load_draft_hf_config(*, draft_server_args: ServerArgs) -> Optional[Any]:
     )
 
 
+def draft_is_deepseek_v4(*, server_args: ServerArgs) -> bool:
+    """Whether the DFlash/DSpark draft is a DeepSeek-V4 (MoE) draft vs a dense one.
+
+    Used to pick the DP-attention path: a dense draft runs replicated inside the
+    attention-TP context, while a DeepSeek-V4 MoE draft needs the full-DP MoE path.
+    """
+    draft_hf_config = _load_draft_hf_config(draft_server_args=server_args)
+    return draft_hf_config is not None and is_deepseek_v4(draft_hf_config)
+
+
 def _select_draft_attention_backend(
     *, draft_hf_config: Optional[Any], draft_server_args: ServerArgs, algo_label: str
 ) -> str:
