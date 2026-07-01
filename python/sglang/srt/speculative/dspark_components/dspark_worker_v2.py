@@ -416,6 +416,16 @@ class DSparkWorkerV2(BaseSpecWorker):
     def _forward_prefill(
         self, batch: ScheduleBatch, on_publish
     ) -> GenerationBatchResult:
+        if batch.forward_mode.is_idle():
+            # Global-extend step with a locally idle attention-DP group (routed here
+            # because is_extend_in_batch is the global max). Run a target idle forward
+            # (coefficient 1, matching the busy extend, spec_info left unscaled) to join
+            # the target dp_gather, then return an empty result.
+            if self.server_args.enable_dp_attention:
+                batch.capture_hidden_mode = CaptureHiddenMode.FULL
+                self.target_worker.forward_batch_generation(batch)
+            return self._decode_idle_result(on_publish=on_publish)
+
         batch.capture_hidden_mode = CaptureHiddenMode.FULL
         batch_output = self.target_worker.forward_batch_generation(batch)
         logits_output = batch_output.logits_output
