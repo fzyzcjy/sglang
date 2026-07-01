@@ -304,7 +304,13 @@ class DSparkAttention(MqaAttentionBase):
         else:
             apply_rotary_emb(o[..., -rd:], self.freqs_cis[positions], inverse=True)
 
-        o = o.view(o.shape[0], self.n_local_groups, -1)
+        # Compute the per-group dim explicitly instead of -1: the idle-DP participation
+        # forward runs 0 tokens, and view(0, n_local_groups, -1) is ambiguous (0 = 0 *
+        # n_local_groups * anything) so torch refuses to infer it. Explicit dims are a
+        # no-op change for the normal N>0 path.
+        o = o.view(
+            o.shape[0], self.n_local_groups, o.shape[1] * o.shape[2] // self.n_local_groups
+        )
         wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
         if self._use_fast_kernel:
             # bf16 wo_a einsum, mirroring the production MQALayer else-path
@@ -314,7 +320,7 @@ class DSparkAttention(MqaAttentionBase):
             o = torch.einsum("bgd,grd->bgr", o, wo_a)
         else:
             o = torch.einsum("bgd,grd->bgr", o.float(), wo_a.float()).to(q.dtype)
-        out, _ = self.wo_b(o.reshape(o.shape[0], -1))
+        out, _ = self.wo_b(o.reshape(o.shape[0], o.shape[1] * o.shape[2]))
         return out
 
 
