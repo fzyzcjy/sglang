@@ -69,11 +69,15 @@ def build_graph_num_tokens_grid(
 
 class RaggedVerifyLayout(msgspec.Struct, frozen=True):
     verify_lens: torch.Tensor
-    verify_lens_cpu: list[int]
-    total_verify_tokens: int
+    graph_num_tokens: int
     extend_start_loc: torch.Tensor
     qo_indptr_device: torch.Tensor
-    graph_num_tokens: int
+    # Host mirrors (real verify lens + their sum), populated only on the eager/host path
+    # (from_verify_lens). None on the sync-free device path (from_verify_lens_device, the
+    # per-step cuda-graph path): consumers there read device verify_lens + graph_num_tokens,
+    # never a host total. None == "device path, do not read host fields".
+    verify_lens_cpu: Optional[list[int]] = None
+    total_verify_tokens: Optional[int] = None
     qo_indptr_host: Optional[torch.Tensor] = None
     kv_indptr_host: Optional[torch.Tensor] = None
     kv_lens_host: Optional[torch.Tensor] = None
@@ -81,6 +85,12 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
     max_kv_len: Optional[int] = None
 
     def __post_init__(self) -> None:
+        # Host-path validations only. On the device path (verify_lens_cpu None) they'd
+        # need a D2H; instead the anchor(>=1)/budget bounds are checked device-side
+        # (scheduler maybe_assert_async), and total <= graph_num_tokens holds by
+        # construction (round_up_grid(bs*(gamma+1)) >= sum verify_len, each <= gamma+1).
+        if self.verify_lens_cpu is None:
+            return
         if not self.verify_lens_cpu:
             raise ValueError("RaggedVerifyLayout requires at least one request")
         if min(self.verify_lens_cpu) < 1:
@@ -101,7 +111,34 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
 
     @property
     def bs(self) -> int:
-        return len(self.verify_lens_cpu)
+        # tensor.shape is host metadata (no D2H) -> safe when verify_lens_cpu is None.
+        return int(self.verify_lens.shape[0])
+
+    @classmethod
+    def _assemble_device(
+        cls,
+        *,
+        verify_lens: torch.Tensor,
+        graph_num_tokens: int,
+        verify_lens_cpu: Optional[list[int]] = None,
+        total_verify_tokens: Optional[int] = None,
+    ) -> RaggedVerifyLayout:
+        # Build qo_indptr / extend_start_loc from a DEVICE verify_lens tensor (no host
+        # round trip). Host mirrors are passed through only on the eager/host path.
+        verify_lens = verify_lens.to(torch.int32)
+        device = verify_lens.device
+        cumsum = torch.cumsum(verify_lens, dim=0).to(torch.int32)
+        zero = torch.zeros(1, dtype=torch.int32, device=device)
+        qo_indptr_device = torch.cat([zero, cumsum])
+        extend_start_loc = qo_indptr_device[:-1].clone()
+        return cls(
+            verify_lens=verify_lens,
+            graph_num_tokens=graph_num_tokens,
+            extend_start_loc=extend_start_loc,
+            qo_indptr_device=qo_indptr_device,
+            verify_lens_cpu=verify_lens_cpu,
+            total_verify_tokens=total_verify_tokens,
+        )
 
     @classmethod
     def _assemble(
@@ -113,17 +150,25 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
         device: torch.device,
     ) -> RaggedVerifyLayout:
         verify_lens = torch.tensor(verify_lens_cpu, dtype=torch.int32, device=device)
-        cumsum = torch.cumsum(verify_lens, dim=0).to(torch.int32)
-        zero = torch.zeros(1, dtype=torch.int32, device=device)
-        qo_indptr_device = torch.cat([zero, cumsum])
-        extend_start_loc = qo_indptr_device[:-1].clone()
-        return cls(
+        return cls._assemble_device(
             verify_lens=verify_lens,
+            graph_num_tokens=graph_num_tokens,
             verify_lens_cpu=verify_lens_cpu,
             total_verify_tokens=total_verify_tokens,
-            extend_start_loc=extend_start_loc,
-            qo_indptr_device=qo_indptr_device,
-            graph_num_tokens=graph_num_tokens,
+        )
+
+    @classmethod
+    def from_verify_lens_device(
+        cls,
+        *,
+        verify_lens: torch.Tensor,
+        graph_num_tokens: int,
+    ) -> RaggedVerifyLayout:
+        # Sync-free: DEVICE verify_lens + host bs-derived graph_num_tokens, no host mirror
+        # (no verify_lens D2H). graph_num_tokens >= sum(verify_lens) holds -- caller passes
+        # round_up_grid(bs*(gamma+1)) and each verify_len <= gamma+1.
+        return cls._assemble_device(
+            verify_lens=verify_lens, graph_num_tokens=graph_num_tokens
         )
 
     @classmethod
@@ -172,51 +217,47 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
         whose verify_lens sum to exactly ``graph_num_tokens`` (the padded-token
         contract, §2.5).
 
-        The token-keyed graph is captured at a fixed capture_bs and a frozen
+        Device-native: pads the device ``verify_lens`` directly (no host
+        ``verify_lens_cpu``), so it works on the sync-free layout. The token-keyed
+        graph is captured at a fixed capture_bs and a frozen
         ``repeat_interleave(output_size=graph_num_tokens)``, so replay must feed a
-        layout with that many request slots and that many total tokens. The
-        shortfall ``graph_num_tokens - total_verify_tokens`` lands entirely in the
-        token range ``[total_verify_tokens, graph_num_tokens)`` (after every real
-        request), which the runner discards:
+        layout with that many request slots and that many total tokens. The shortfall
+        lands entirely after every real request, which the runner discards:
 
         - the appended synthetic requests (``padded_bs - bs`` of them) take a full
           ``num_draft_tokens`` block each and reference reserved req-pool slot 0;
-        - any leftover is added to the very last entry's verify_len, so even when
-          ``padded_bs == bs`` (no synthetic request, e.g. raw_bs already a
-          capture_bs but the batch is ragged) the last real request's window is
+        - any leftover is folded into the last entry's verify_len (device scalar, no
+          .item()), so even when ``padded_bs == bs`` the last real request's window is
           extended into the discarded tail.
 
-        The worker's compact scatter keeps using the real (pre-pad) verify_lens,
-        so the extended last request only adds discarded tail rows.
+        The worker's compact scatter keeps using the real (pre-pad) verify_lens, so
+        the extended/synthetic rows only add discarded tail rows.
         """
         padded_bs = self.graph_num_tokens // num_draft_tokens
-        shortfall = self.graph_num_tokens - self.total_verify_tokens
-        if padded_bs == self.bs and shortfall == 0:
-            return self
-
         assert padded_bs >= self.bs, (
             f"padded_bs {padded_bs} < bs {self.bs}: graph_num_tokens "
             f"{self.graph_num_tokens} cannot hold this batch's requests"
         )
+        device = self.verify_lens.device
         num_pad_reqs = padded_bs - self.bs
-        padded_verify_lens_cpu = [
-            *self.verify_lens_cpu,
-            *([num_draft_tokens] * num_pad_reqs),
-        ]
-        leftover = self.graph_num_tokens - sum(padded_verify_lens_cpu)
-        assert leftover >= 0, (
-            f"negative leftover {leftover} padding to bucket "
-            f"{self.graph_num_tokens} (bs={self.bs}, padded_bs={padded_bs})"
-        )
-        padded_verify_lens_cpu[-1] += leftover
-        assert sum(padded_verify_lens_cpu) == self.graph_num_tokens
-        assert min(padded_verify_lens_cpu) >= 1
+        padded = self.verify_lens.to(torch.int32)
+        if num_pad_reqs > 0:
+            pad_block = torch.full(
+                (num_pad_reqs,), num_draft_tokens, dtype=torch.int32, device=device
+            )
+            padded = torch.cat([padded, pad_block])
+        else:
+            padded = padded.clone()
+        # leftover = graph_num_tokens - sum(padded); a DEVICE scalar folded into the
+        # last (synthetic, or last real when padded_bs == bs) request. Kept on device
+        # so the pad introduces no compute-stream sync.
+        leftover = self.graph_num_tokens - padded.to(torch.int64).sum()
+        padded[-1] = (padded[-1].to(torch.int64) + leftover).to(torch.int32)
 
-        return RaggedVerifyLayout._assemble(
-            verify_lens_cpu=padded_verify_lens_cpu,
-            total_verify_tokens=self.graph_num_tokens,
+        return RaggedVerifyLayout._assemble_device(
+            verify_lens=padded,
             graph_num_tokens=self.graph_num_tokens,
-            device=self.verify_lens.device,
+            total_verify_tokens=self.graph_num_tokens,
         )
 
 
@@ -226,7 +267,10 @@ class RaggedTargetVerifyGeometry(msgspec.Struct):
     cache_seqlens_int32: torch.Tensor
     cu_seqlens_q: torch.Tensor
     cu_seqlens_k: torch.Tensor
-    max_seq_len_q: int
+    # None on the sync-free device path (no host verify_lens to max over). The cuda-graph
+    # replay overrides max_seq_len_q with the frozen capture value before use, so it is
+    # only read on the eager host path, where verify_lens_cpu is populated.
+    max_seq_len_q: Optional[int]
 
 
 def build_ragged_target_verify_geometry(
@@ -248,9 +292,12 @@ def build_ragged_target_verify_geometry(
     cu_seqlens_k = torch.nn.functional.pad(
         torch.cumsum(cache_seqlens_int32, dim=0, dtype=torch.int32), (1, 0)
     )
+    max_seq_len_q = (
+        max(layout.verify_lens_cpu) if layout.verify_lens_cpu is not None else None
+    )
     return RaggedTargetVerifyGeometry(
         cache_seqlens_int32=cache_seqlens_int32,
         cu_seqlens_q=cu_seqlens_q,
         cu_seqlens_k=cu_seqlens_k,
-        max_seq_len_q=max(layout.verify_lens_cpu),
+        max_seq_len_q=max_seq_len_q,
     )

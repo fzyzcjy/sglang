@@ -24,6 +24,7 @@ from sglang.srt.speculative.dspark_components.dspark_sts_table import (
     load_sts_calibration_from_path,
 )
 from sglang.srt.speculative.dspark_components.dspark_verify import (
+    ragged_capture_num_tokens,
     ragged_layout_exceeds_captured_grid,
     uniform_ragged_layout,
     verify_layout_graph_num_tokens_floor,
@@ -34,6 +35,7 @@ from sglang.srt.speculative.ragged_verify import (
     RaggedVerifyLayout,
     RaggedVerifyMode,
     read_ragged_verify_mode,
+    round_up_grid,
 )
 from sglang.srt.utils.async_probe import maybe_assert_async
 
@@ -338,27 +340,39 @@ class DSparkVerifyPlanner:
                     model_runner=self.model_runner,
                 )
             return None
-        # FIXME(sync-free, plan step 5): one bs-sized D2H remains here. Removing it
-        # needs the device-offset RaggedVerifyLayout rework (from_verify_lens /
-        # padded_to_bucket / host checks on device, B3/B4 replay device-ization),
-        # which must be validated on GPU; deferred. The big O(bs*gamma) syncs (budget
-        # greedy + sort) are already gone.
-        verify_lens_cpu = verify_lens.to("cpu").tolist()
+        # bs = verify_lens.shape[0] is tensor metadata (host, no D2H), so the grid gate
+        # and the bs-derived tier are computed without pulling verify_lens off the
+        # forward stream.
+        bs = int(verify_lens.shape[0])
         if ragged_layout_exceeds_captured_grid(
-            num_reqs=len(verify_lens_cpu),
+            num_reqs=bs,
             verify_num_draft_tokens=self.verify_num_draft_tokens,
             model_runner=self.model_runner,
         ):
             return None
+        graph_num_tokens_floor = verify_layout_graph_num_tokens_floor(
+            num_reqs=bs,
+            ragged_verify_mode=self._ragged_verify_mode,
+            verify_num_draft_tokens=self.verify_num_draft_tokens,
+            model_runner=self.model_runner,
+        )
+        capture_num_tokens = ragged_capture_num_tokens(model_runner=self.model_runner)
+        if graph_num_tokens_floor > 0 and capture_num_tokens is not None:
+            # Sync-free device path (COMPACT + token-keyed graph): tier is bs-derived, so
+            # verify_lens stays on the forward stream. total <= bs*(gamma+1) == floor (each
+            # verify_len <= gamma+1), so round_up_grid(max(total,floor)) == round_up_grid(
+            # floor); downstream reads device verify_lens + graph_num_tokens, no D2H.
+            graph_num_tokens = round_up_grid(graph_num_tokens_floor, capture_num_tokens)
+            return RaggedVerifyLayout.from_verify_lens_device(
+                verify_lens=verify_lens, graph_num_tokens=graph_num_tokens
+            )
+        # Eager / non-token-keyed fallback (cuda graph off, or non-COMPACT mode): the
+        # forward is already synchronous, so this host D2H is harmless -- and the eager
+        # `[total]` grid genuinely needs the exact total.
+        verify_lens_cpu = verify_lens.to("cpu").tolist()
         grid = verify_layout_grid(
             verify_lens_cpu=verify_lens_cpu,
             ragged_verify_mode=self._ragged_verify_mode,
-            model_runner=self.model_runner,
-        )
-        graph_num_tokens_floor = verify_layout_graph_num_tokens_floor(
-            num_reqs=len(verify_lens_cpu),
-            ragged_verify_mode=self._ragged_verify_mode,
-            verify_num_draft_tokens=self.verify_num_draft_tokens,
             model_runner=self.model_runner,
         )
         return RaggedVerifyLayout.from_verify_lens(

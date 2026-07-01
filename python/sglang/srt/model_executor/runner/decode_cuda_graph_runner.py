@@ -611,15 +611,13 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             return False
 
         # The captured token tier is floored to the bs-derived full block
-        # (raw_bs * num_tokens_per_bs), so the admission token budget is the larger
-        # of the real total and that floor; both must fit the largest captured
-        # tier. This also enforces raw_bs <= max_bs (mirroring the bs-keyed path's
+        # (batch_size * num_tokens_per_bs). Every verify_len <= gamma+1, so the real
+        # token total never exceeds that floor -- the floor alone is the admission
+        # budget (no D2H of the real total), and it must fit the largest captured tier.
+        # This also enforces raw_bs <= max_bs (mirroring the bs-keyed path's
         # cuda_graph_bs <= max_bs gate, without which _pad_to_bucket / the bs-axis
         # assert would crash instead of falling back to eager).
-        admission_tokens = max(
-            ragged_layout.total_verify_tokens,
-            forward_batch.batch_size * self.num_tokens_per_bs,
-        )
+        admission_tokens = forward_batch.batch_size * self.num_tokens_per_bs
         is_tokens_supported = admission_tokens <= self.capture_num_tokens[-1]
 
         # Mirror the bs-keyed gates: DP/gathered-buffer batches that can't run the
@@ -1121,12 +1119,13 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
                 )
             )
             if is_ragged:
-                # Stored raw_num_token comes from this step's plan-stream
-                # full-load. Real-N ragged token totals vary per step, so guard
-                # against a stale cross-step value (both sides are host ints).
-                assert self.raw_num_token == ragged_layout.total_verify_tokens, (
+                # Stored raw_num_token comes from this step's plan-stream full-load.
+                # It is the bs-derived padded graph_num_tokens (the sync-free layout
+                # exposes no real total); guard against a stale cross-step value (both
+                # sides are host ints).
+                assert self.raw_num_token == ragged_layout.graph_num_tokens, (
                     f"stale ragged raw_num_token {self.raw_num_token} != "
-                    f"{ragged_layout.total_verify_tokens}"
+                    f"{ragged_layout.graph_num_tokens}"
                 )
             self.buffers.input_ids[: self.raw_num_token].copy_(forward_batch.input_ids)
             self.buffers.positions[: self.raw_num_token].copy_(forward_batch.positions)
@@ -1157,22 +1156,17 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         raw_bs = forward_batch.batch_size
 
         if is_ragged:
-            # Token-keyed replay for DSpark real-N ragged verify (Plan B).
-            # Selects the captured graph by total verify-token count rather than
-            # bs, slices the token-axis buffers to the chosen graph_num_tokens
-            # tier, and leaves the verify accept / sampling / KV-commit path
-            # untouched. The capture grid {b * num_draft : b in capture_bs} ties
-            # each token tier to one capture_bs, so the chosen graph_num_tokens
-            # also fixes the bs the bs-axis tensors were captured at: pad bs to
-            # graph_num_tokens // num_tokens_per_bs (which the worker floored to be
-            # >= raw_bs). Padded rows reference reserved req-pool slot 0 and their
-            # output is discarded.
-            raw_num_token = ragged_layout.total_verify_tokens
-            # Tier-correctness: the runner re-derives the tier from the real total
-            # and it must equal the tier baked into the layout (which the worker
-            # floored to the bs-derived full block). A mismatch means a stale /
-            # wrong-bucket layout that would pad to a tier the captured graph never
-            # recorded.
+            # Token-keyed replay for DSpark real-N ragged verify (Plan B). The captured
+            # graph is the bs-derived graph_num_tokens tier baked into the layout: each
+            # verify_len <= gamma+1 so real total <= bs*(gamma+1) == floor and the tier is
+            # fully bs-determined (worker builds it sync-free, no total D2H). The token
+            # axis IS the padded graph_num_tokens -- the window packs real rows front and
+            # zeros the tail to reserved slot 0 (discarded). Capture grid ties each token
+            # tier to one capture_bs, so graph_num_tokens // num_tokens_per_bs = padded bs.
+            raw_num_token = ragged_layout.graph_num_tokens
+            # Tier-correctness: _ragged_graph_num_tokens is idempotent on a tier, so this
+            # re-derivation both validates graph_num_tokens is a captured tier (raises in
+            # round_up_grid otherwise) and must equal the tier baked into the layout.
             graph_size_key = self._ragged_graph_num_tokens(
                 max(raw_num_token, raw_bs * self.num_tokens_per_bs)
             )
