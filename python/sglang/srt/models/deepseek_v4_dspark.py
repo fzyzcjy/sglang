@@ -309,7 +309,9 @@ class DSparkAttention(MqaAttentionBase):
         # n_local_groups * anything) so torch refuses to infer it. Explicit dims are a
         # no-op change for the normal N>0 path.
         o = o.view(
-            o.shape[0], self.n_local_groups, o.shape[1] * o.shape[2] // self.n_local_groups
+            o.shape[0],
+            self.n_local_groups,
+            o.shape[1] * o.shape[2] // self.n_local_groups,
         )
         wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
         if self._use_fast_kernel:
