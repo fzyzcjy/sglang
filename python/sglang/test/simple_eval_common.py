@@ -95,6 +95,7 @@ class ChatCompletionSampler(SamplerBase):
         reasoning_effort: Optional[str] = None,
         max_tokens: int = 2048,
         extra_body: Optional[Dict[str, Any]] = None,
+        record_meta_info: bool = False,
     ):
         self.client = OpenAI(base_url=base_url, http_client=LargerHttpxClient())
 
@@ -110,8 +111,15 @@ class ChatCompletionSampler(SamplerBase):
         self.extra_body = extra_body
         self.image_format = "url"
         self._completion_tokens: list[int] = []
+        # When set, force the sglang server to echo per-request meta_info (which
+        # carries spec_accept_length / spec_accept_rate) and keep every raw
+        # (request, response) pair in `_records` so the caller can dump+aggregate
+        # them. Off by default so real-OpenAI samplers (e.g. the math grader) are
+        # unaffected -- return_meta_info is an sglang extension a real endpoint rejects.
+        self.record_meta_info = record_meta_info
+        self._records: List[Dict[str, Any]] = []
         print(
-            f"ChatCompletionSampler initialized with {self.system_message=} {self.temperature=} {self.max_tokens=} {self.reasoning_effort=} {self.extra_body=}"
+            f"ChatCompletionSampler initialized with {self.system_message=} {self.temperature=} {self.max_tokens=} {self.reasoning_effort=} {self.extra_body=} {self.record_meta_info=}"
         )
 
     def _handle_image(
@@ -140,6 +148,9 @@ class ChatCompletionSampler(SamplerBase):
             message_list = [
                 self._pack_message("system", self.system_message)
             ] + message_list
+        extra_body = self.extra_body
+        if self.record_meta_info:
+            extra_body = {**(self.extra_body or {}), "return_meta_info": True}
         trial = 0
         while trial < 6:  # 126 seconds in total
             try:
@@ -150,8 +161,23 @@ class ChatCompletionSampler(SamplerBase):
                     top_p=self.top_p,
                     max_tokens=self.max_tokens,
                     reasoning_effort=self.reasoning_effort,
-                    extra_body=self.extra_body,
+                    extra_body=extra_body,
                 )
+                if self.record_meta_info:
+                    self._records.append(
+                        {
+                            "request": {
+                                "model": self.model,
+                                "messages": message_list,
+                                "temperature": self.temperature,
+                                "top_p": self.top_p,
+                                "max_tokens": self.max_tokens,
+                                "reasoning_effort": self.reasoning_effort,
+                                "extra_body": extra_body,
+                            },
+                            "response": response.model_dump(),
+                        }
+                    )
                 if response.usage and response.usage.completion_tokens is not None:
                     self._completion_tokens.append(response.usage.completion_tokens)
                 return response.choices[0].message.content or ""
@@ -186,6 +212,7 @@ class CompletionSampler(SamplerBase):
         top_p: float = 1.0,
         max_tokens: int = 2048,
         stop: Optional[List[str]] = None,
+        record_meta_info: bool = False,
     ):
         self.client = OpenAI(base_url=base_url, http_client=LargerHttpxClient())
 
@@ -198,6 +225,11 @@ class CompletionSampler(SamplerBase):
         self.max_tokens = max_tokens
         self.stop = stop
         self._completion_tokens: list[int] = []
+        # The /v1/completions request has no return_meta_info knob (unlike chat), so
+        # this only captures raw (request, response) pairs; spec_accept_length is not
+        # available on this path. Kept symmetric with ChatCompletionSampler.
+        self.record_meta_info = record_meta_info
+        self._records: List[Dict[str, Any]] = []
         print(
             f"CompletionSampler initialized with {self.model=} {self.temperature=} {self.max_tokens=} {self.stop=}"
         )
@@ -223,6 +255,20 @@ class CompletionSampler(SamplerBase):
                     max_tokens=self.max_tokens,
                     stop=self.stop,
                 )
+                if self.record_meta_info:
+                    self._records.append(
+                        {
+                            "request": {
+                                "model": self.model,
+                                "prompt": prompt,
+                                "temperature": self.temperature,
+                                "top_p": self.top_p,
+                                "max_tokens": self.max_tokens,
+                                "stop": self.stop,
+                            },
+                            "response": response.model_dump(),
+                        }
+                    )
                 if response.usage and response.usage.completion_tokens is not None:
                     self._completion_tokens.append(response.usage.completion_tokens)
                 return response.choices[0].text or ""
