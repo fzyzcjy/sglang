@@ -1,21 +1,17 @@
 from __future__ import annotations
 
+import argparse
 import glob
 import logging
 import math
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Optional
 
 import torch
 
 from sglang.srt.speculative.dspark_components.dspark_sts_table import (
     DSparkStsCalibration,
 )
-
-try:
-    import typer
-except ModuleNotFoundError:
-    typer = None
 
 logger = logging.getLogger(__name__)
 
@@ -145,22 +141,12 @@ def load_collected_shards(*, data_glob: str) -> tuple[torch.Tensor, torch.Tensor
 
 
 def fit(
-    data_glob: Annotated[
-        str,
-        typer.Option(
-            help="Glob of collected .pt shards, each a dict with [n, gamma] "
-            "'logits' and 'prefix_mask' tensors."
-        ),
-    ],
-    out: Annotated[Path, typer.Option(help="Output STS calibration JSON path.")],
-    num_bins: Annotated[int, typer.Option(help="Number of equal-width ECE bins.")] = 15,
-    gamma: Annotated[
-        Optional[int],
-        typer.Option(help="Optional gamma override to validate the shards against."),
-    ] = None,
+    *,
+    data_glob: str,
+    out: Path,
+    num_bins: int = 15,
+    gamma: Optional[int] = None,
 ) -> None:
-    logging.basicConfig(level=logging.INFO)
-
     logits, prefix_mask = load_collected_shards(data_glob=data_glob)
     resolved_gamma = int(logits.shape[1])
     if gamma is not None and gamma != resolved_gamma:
@@ -184,13 +170,13 @@ def fit(
     )
     out.write_text(calibration.to_json(), encoding="utf-8")
 
-    typer.echo(
+    print(
         f"Fit STS temperatures over {num_samples} samples (gamma={resolved_gamma}) "
         f"-> {out}"
     )
-    typer.echo("pos  temperature  ece_before  ece_after")
+    print("pos  temperature  ece_before  ece_after")
     for position in range(resolved_gamma):
-        typer.echo(
+        print(
             f"{position:>3}  {result['temperatures'][position]:>11.4f}  "
             f"{result['ece_before'][position]:>10.4f}  "
             f"{result['ece_after'][position]:>9.4f}"
@@ -198,14 +184,47 @@ def fit(
 
 
 def main() -> None:
-    if typer is None:
-        raise RuntimeError(
-            "typer is required to run the dspark_sts_fit CLI; install it with "
-            "`pip install typer`."
-        )
-    app = typer.Typer(add_completion=False)
-    app.command()(fit)
-    app()
+    logging.basicConfig(level=logging.INFO)
+    parser = argparse.ArgumentParser(
+        description="Fit DSpark Sequential Temperature Scaling (STS) calibration "
+        "temperatures from collected confidence shards."
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    fit_parser = subparsers.add_parser(
+        "fit", help="Fit STS temperatures from collected .pt shards."
+    )
+    fit_parser.add_argument(
+        "--data-glob",
+        required=True,
+        help="Glob of collected .pt shards, each a dict with [n, gamma] "
+        "'logits' and 'prefix_mask' tensors.",
+    )
+    fit_parser.add_argument(
+        "--out",
+        required=True,
+        type=Path,
+        help="Output STS calibration JSON path.",
+    )
+    fit_parser.add_argument(
+        "--num-bins",
+        type=int,
+        default=15,
+        help="Number of equal-width ECE bins.",
+    )
+    fit_parser.add_argument(
+        "--gamma",
+        type=int,
+        default=None,
+        help="Optional gamma override to validate the shards against.",
+    )
+    args = parser.parse_args()
+
+    fit(
+        data_glob=args.data_glob,
+        out=args.out,
+        num_bins=args.num_bins,
+        gamma=args.gamma,
+    )
 
 
 if __name__ == "__main__":
