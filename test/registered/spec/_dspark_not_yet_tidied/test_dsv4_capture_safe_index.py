@@ -10,6 +10,8 @@ from sglang.srt.layers.attention.deepseek_v4_backend import (
     PAGE_INDEX_ALIGNED_SIZE,
     SWA_WINDOW,
     DeepseekV4AttnBackend,
+)
+from sglang.srt.speculative.dspark_components.kernels.dspark_swa_page_indices import (
     _compact_dspark_window_then_block,
 )
 from sglang.srt.utils import ceil_align
@@ -90,6 +92,7 @@ class TestCompactWindowThenBlockEquivalence(CustomTestCase):
                 context_lens=context,
                 target_width=target_width,
                 block_size=block_size,
+                swa_window=SWA_WINDOW,
             )
             ref_out = _reference_compact_with_boolean_mask(
                 window_swa_locs=window,
@@ -112,6 +115,7 @@ class TestCompactWindowThenBlockEquivalence(CustomTestCase):
             context_lens=torch.tensor([0], dtype=torch.int32),
             target_width=target_width,
             block_size=block_size,
+            swa_window=SWA_WINDOW,
         )
         self.assertEqual(out[0, :block_size].tolist(), [7, 8, 9, 10])
         self.assertTrue(torch.all(out[0, block_size:] == -1).item())
@@ -128,6 +132,7 @@ class TestCompactWindowThenBlockEquivalence(CustomTestCase):
             context_lens=torch.tensor([SWA_WINDOW], dtype=torch.int32),
             target_width=target_width,
             block_size=block_size,
+            swa_window=SWA_WINDOW,
         )
         self.assertEqual(out[0, :SWA_WINDOW].tolist(), list(range(SWA_WINDOW)))
         self.assertEqual(

@@ -297,6 +297,21 @@ class Envs:
     SGLANG_DSPARK_FAST_KERNEL = EnvBool(True)
     SGLANG_DSPARK_FP32_LM_HEAD = EnvBool(False)
     SGLANG_DSPARK_FAST_SAMPLING = EnvBool(False)
+    # DSpark hot-op kernel impl selectors ("triton" | "torch"), one per extracted kernel
+    # file under speculative/dspark_components/kernels/. Default "triton" is the optimized
+    # path; set the matching var to "torch" for the reference impl (e.g. while a triton
+    # kernel is unimplemented, or to A/B a suspected kernel bug against torch).
+    SGLANG_DSPARK_KERNEL_SCATTER = EnvStr("triton")
+    SGLANG_DSPARK_KERNEL_RAGGED_WINDOW = EnvStr("triton")
+    SGLANG_DSPARK_KERNEL_SCHEDULE_TOPK = EnvStr("triton")
+    SGLANG_DSPARK_KERNEL_SWA_PAGE_INDICES = EnvStr("triton")
+    SGLANG_DSPARK_KERNEL_COMPACT_LAYOUT = EnvStr("triton")
+    SGLANG_DSPARK_KERNEL_CAP_CORRECT_LEN = EnvStr("triton")
+    SGLANG_DSPARK_KERNEL_BUILD_OUT_TOKENS = EnvStr("triton")
+    SGLANG_DSPARK_KERNEL_BLOCK_SEQ_LENS_CASUAL = EnvStr("triton")
+    SGLANG_DSPARK_KERNEL_PADDED_TO_BUCKET = EnvStr("triton")
+    SGLANG_DSPARK_KERNEL_ACCEPT_GREEDY = EnvStr("triton")
+    SGLANG_DSPARK_KERNEL_ACCEPT_SAMPLING = EnvStr("triton")
     SGLANG_DEBUG_REVERT_PR = EnvInt(0)
     SGLANG_PHASE_CHECKER_DEBUG = EnvBool(False)
     SGLANG_TEST_REQUEST_TIME_STATS = EnvBool(False)

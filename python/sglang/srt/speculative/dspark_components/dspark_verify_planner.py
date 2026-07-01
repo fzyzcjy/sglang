@@ -18,7 +18,6 @@ from sglang.srt.speculative.dspark_components.dspark_scheduler import (
     DSparkScheduleConfig,
     HostConfidenceBudgetPlanner,
     build_sps_cost_table,
-    schedule_verify_lens_topk,
 )
 from sglang.srt.speculative.dspark_components.dspark_sts_table import (
     load_sts_calibration_from_path,
@@ -30,6 +29,9 @@ from sglang.srt.speculative.dspark_components.dspark_verify import (
     verify_layout_graph_num_tokens_floor,
     verify_layout_grid,
     verify_lens_broadcast_group,
+)
+from sglang.srt.speculative.dspark_components.kernels.schedule_verify_lens_topk import (
+    ScheduleVerifyLensTopk,
 )
 from sglang.srt.speculative.ragged_verify import (
     RaggedVerifyLayout,
@@ -415,7 +417,7 @@ class DSparkVerifyPlanner:
         if self._budget_planner is None or confidence is None or budget is None:
             return None
         sort_survival = torch.cumprod(confidence.to(torch.float32), dim=1)
-        verify_lens = schedule_verify_lens_topk(
+        verify_lens = ScheduleVerifyLensTopk.execute(
             survival_probs=sort_survival,
             budget=budget,
             cfg=self._schedule_cfg,
