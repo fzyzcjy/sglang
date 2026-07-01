@@ -292,21 +292,32 @@ def run_bench_cases(
                 output_len=output_len,
             ):
                 continue
-            results.append(
-                run_one_case(
-                    context.base_url,
-                    batch_size=batch_size,
-                    input_len=input_len,
-                    output_len=output_len,
-                    temperature=PROFILE_TEMPERATURE,
-                    return_logprob=False,
-                    stream_interval=PROFILE_STREAM_INTERVAL,
-                    input_len_step_percentage=PROFILE_INPUT_LEN_STEP_PERCENTAGE,
-                    run_name="dspark_sps",
-                    result_filename=str(result_path),
-                    tokenizer=tokenizer,
-                )
+            result = run_one_case(
+                context.base_url,
+                batch_size=batch_size,
+                input_len=input_len,
+                output_len=output_len,
+                temperature=PROFILE_TEMPERATURE,
+                return_logprob=False,
+                stream_interval=PROFILE_STREAM_INTERVAL,
+                input_len_step_percentage=PROFILE_INPUT_LEN_STEP_PERCENTAGE,
+                run_name="dspark_sps",
+                result_filename=str(result_path),
+                tokenizer=tokenizer,
             )
+            # Emit each case's full result the moment it is benched, so a long
+            # sweep is inspectable live (and salvageable from the log if it dies
+            # mid-run) rather than only after the whole table is assembled.
+            derived = derive_row(result)
+            logger.info(
+                "Benched bs=%s repeat=%s/%s: raw=%s derived=%s",
+                batch_size,
+                repeat + 1,
+                max(1, repeats),
+                result.model_dump(),
+                derived,
+            )
+            results.append(result)
         logger.info("Completed sweep repeat %s/%s.", repeat + 1, max(1, repeats))
     return results
 
