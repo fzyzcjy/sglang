@@ -4,7 +4,11 @@ from typing import Optional
 import torch
 
 from sglang.srt.environ import envs
-from sglang.srt.managers.overlap_utils import FutureMap, ResolvedConfidence
+from sglang.srt.managers.overlap_utils import (
+    CONFIDENCE_RELAY_RING_LAG,
+    FutureMap,
+    ResolvedConfidence,
+)
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.speculative.dspark_components.dspark_confidence import (
@@ -122,9 +126,17 @@ class DSparkVerifyPlanner:
                 server_args=self.server_args,
                 verify_num_draft_tokens=self.verify_num_draft_tokens,
             )
-            # The async FutureMap relay supplies 1 step of lag under overlap; without
-            # overlap there is no relay, so the host carry must supply the full lag.
-            relay_lag_steps = 0 if self.server_args.disable_overlap_schedule else 1
+            # The async FutureMap relay supplies CONFIDENCE_RELAY_RING_LAG steps of
+            # lag under overlap: the deferred pinned ring reads an already-landed
+            # lag-RING_LAG slot (sync-free), so the relay itself is that many steps
+            # behind. Without overlap there is no relay, so the host carry supplies
+            # the full lag. Kept equal to overlap_utils.CONFIDENCE_RELAY_RING_LAG so
+            # carry_steps = total_lag - relay_lag_steps is correct.
+            relay_lag_steps = (
+                0
+                if self.server_args.disable_overlap_schedule
+                else CONFIDENCE_RELAY_RING_LAG
+            )
             self._budget_planner = HostConfidenceBudgetPlanner(
                 sps_table=sps_table,
                 cfg=self._schedule_cfg,
