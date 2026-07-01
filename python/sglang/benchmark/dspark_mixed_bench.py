@@ -72,6 +72,7 @@ class RequestRecord(msgspec.Struct, kw_only=True, forbid_unknown_fields=True):
     success: bool
     error: str
     output_text: str
+    prompt_text: str
     correct: Optional[bool] = None
     # Per-request accept length the server reports in the response meta_info
     # (completion_tokens / verify_ct, incl. bonus) -- an OAI-side cross-check of the
@@ -259,6 +260,7 @@ def build_record(
         success=out.success,
         error=out.error,
         output_text=out.generated_text,
+        prompt_text=req.prompt,
         correct=correct,
         spec_accept_length=out.spec_accept_length,
     )
