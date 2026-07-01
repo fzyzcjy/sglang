@@ -35,8 +35,6 @@ swept by ``--input-len`` / ``--output-len``; pick them near the target workload.
 # Usage (connect to a running non-spec server)
 python -m sglang.benchmark.dspark_sps_profiler \
     --base-url http://localhost:30000 \
-    --batch-size 1 2 4 8 16 32 64 128 \
-    --input-len 512 --output-len 1024 \
     --out ~/main/artifacts/sglang/dspark_sps_table.json
 """
 
@@ -72,10 +70,12 @@ from sglang.srt.speculative.dspark_components.dspark_sps_table import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_OUT = "~/main/artifacts/sglang/dspark_sps_table.json"
-DEFAULT_BATCH_SIZE = [1, 2, 4, 8, 16, 32, 64, 128]
-DEFAULT_INPUT_LEN = [512]
+# Dense low/mid batch sampling: powers of 2 up to 8, then every 4 up to 128, so
+# the SPS(B) hardware cliffs are captured at fine granularity where they matter.
+DEFAULT_BATCH_SIZE = [1, 2, 4, 8, *range(12, 129, 4)]
+DEFAULT_INPUT_LEN = [16]
 DEFAULT_OUTPUT_LEN = [1024]
-WARMUP_INPUT_LEN = 1024
+WARMUP_INPUT_LEN = 16
 WARMUP_OUTPUT_LEN = 16
 PROFILE_SEED = 42
 

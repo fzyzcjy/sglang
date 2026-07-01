@@ -26,8 +26,6 @@ The expected workflow has two steps:
    # Launch a plain (NO speculative flags) server first, then:
    python -m sglang.benchmark.dspark_sps_profiler \
        --base-url http://localhost:30000 \
-       --batch-size 1 2 4 8 16 32 64 128 \
-       --input-len 512 --output-len 1024 \
        --out ~/sglang_artifacts/dspark_sps_table.json
    ```
 
