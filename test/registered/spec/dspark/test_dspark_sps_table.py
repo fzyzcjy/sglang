@@ -207,43 +207,27 @@ def _make_bench_result(*, batch_size: int, output_throughput: float):
 
 
 class TestProfilerConversion(CustomTestCase):
-    def _profile_with_fake_results(self, batches_per_repeat):
-        """Run the profiler against a monkeypatched bench returning fake results."""
+    def _table_from_results(self, results):
+        """Build + write + self-check a table from fake bench results, then reload it."""
         from sglang.benchmark import dspark_sps_profiler
-        from sglang.srt.server_args import ServerArgs
-        from sglang.srt.speculative.dspark_components.dspark_sps_table import (
-            load_sps_table_from_path,
+
+        outcome = dspark_sps_profiler.build_sps_table(
+            results=results, max_batch_tokens=None
         )
-
-        repeats = iter(batches_per_repeat)
-
-        def fake_run_benchmark_internal(server_args, bench_args):
-            results = [
-                _make_bench_result(batch_size=bs, output_throughput=tput)
-                for bs, tput in next(repeats)
-            ]
-            return results, {}
-
         with tempfile.TemporaryDirectory() as tmp:
             out_path = Path(tmp) / "sps.json"
-            original = dspark_sps_profiler.run_benchmark_internal
-            dspark_sps_profiler.run_benchmark_internal = fake_run_benchmark_internal
-            try:
-                dspark_sps_profiler.profile(
-                    ServerArgs(model_path="dummy"),
-                    dspark_sps_profiler.BenchArgs(base_url="http://localhost:0"),
-                    dspark_sps_profiler.ProfilerArgs(
-                        out=str(out_path), repeats=len(batches_per_repeat)
-                    ),
-                )
-            finally:
-                dspark_sps_profiler.run_benchmark_internal = original
+            out_path.write_text(outcome.table.to_json(), encoding="utf-8")
+            dspark_sps_profiler.run_self_check(out_path=out_path)
             return load_sps_table_from_path(str(out_path))
 
     def test_conversion_sets_batch_tokens_and_steps_per_sec(self):
         """batch_tokens = batch_size and steps_per_sec = output_throughput / batch_size."""
-        table = self._profile_with_fake_results(
-            [[(2, 1000.0), (4, 1600.0), (8, 2400.0)]]
+        table = self._table_from_results(
+            [
+                _make_bench_result(batch_size=2, output_throughput=1000.0),
+                _make_bench_result(batch_size=4, output_throughput=1600.0),
+                _make_bench_result(batch_size=8, output_throughput=2400.0),
+            ]
         )
         self.assertEqual(table.sample_batch_tokens, [2, 4, 8])
         self.assertAlmostEqual(table.sample_steps_per_sec[0], 500.0, places=6)
@@ -253,8 +237,12 @@ class TestProfilerConversion(CustomTestCase):
     def test_conversion_medians_across_repeats(self):
         """Repeats of the same batch size are medianed per batch_tokens."""
         # bs=4 yields steps_per_sec 250, 200, 300 across three repeats -> median 250.
-        table = self._profile_with_fake_results(
-            [[(4, 1000.0)], [(4, 800.0)], [(4, 1200.0)]]
+        table = self._table_from_results(
+            [
+                _make_bench_result(batch_size=4, output_throughput=1000.0),
+                _make_bench_result(batch_size=4, output_throughput=800.0),
+                _make_bench_result(batch_size=4, output_throughput=1200.0),
+            ]
         )
         self.assertEqual(table.sample_batch_tokens, [4])
         self.assertAlmostEqual(table.sample_steps_per_sec[0], 250.0, places=6)
@@ -262,14 +250,24 @@ class TestProfilerConversion(CustomTestCase):
     def test_conversion_keeps_non_monotone_samples_without_crashing(self):
         """A non-monotone steps_per_sec sweep warns in self-check but does not crash."""
         # bs=8 has a higher steps_per_sec than bs=4 (non-monotone rise > 10%).
-        table = self._profile_with_fake_results([[(4, 1000.0), (8, 8000.0)]])
+        table = self._table_from_results(
+            [
+                _make_bench_result(batch_size=4, output_throughput=1000.0),
+                _make_bench_result(batch_size=8, output_throughput=8000.0),
+            ]
+        )
         self.assertEqual(table.sample_batch_tokens, [4, 8])
         self.assertAlmostEqual(table.sample_steps_per_sec[0], 250.0, places=6)
         self.assertAlmostEqual(table.sample_steps_per_sec[1], 1000.0, places=6)
 
     def test_conversion_skips_degenerate_output_throughput(self):
         """Cases with output_throughput <= 0 are dropped, not turned into bad probes."""
-        table = self._profile_with_fake_results([[(4, 0.0), (8, 2400.0)]])
+        table = self._table_from_results(
+            [
+                _make_bench_result(batch_size=4, output_throughput=0.0),
+                _make_bench_result(batch_size=8, output_throughput=2400.0),
+            ]
+        )
         self.assertEqual(table.sample_batch_tokens, [8])
         self.assertAlmostEqual(table.sample_steps_per_sec[0], 300.0, places=6)
 
