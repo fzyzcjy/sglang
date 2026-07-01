@@ -189,29 +189,25 @@ def main() -> None:
         description="Fit DSpark Sequential Temperature Scaling (STS) calibration "
         "temperatures from collected confidence shards."
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    fit_parser = subparsers.add_parser(
-        "fit", help="Fit STS temperatures from collected .pt shards."
-    )
-    fit_parser.add_argument(
+    parser.add_argument(
         "--data-glob",
         required=True,
         help="Glob of collected .pt shards, each a dict with [n, gamma] "
         "'logits' and 'prefix_mask' tensors.",
     )
-    fit_parser.add_argument(
+    parser.add_argument(
         "--out",
         required=True,
         type=Path,
         help="Output STS calibration JSON path.",
     )
-    fit_parser.add_argument(
+    parser.add_argument(
         "--num-bins",
         type=int,
         default=15,
         help="Number of equal-width ECE bins.",
     )
-    fit_parser.add_argument(
+    parser.add_argument(
         "--gamma",
         type=int,
         default=None,

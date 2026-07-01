@@ -50,7 +50,7 @@ steps.
 2. **Fit the temperatures** over the collected shards:
 
    ```bash
-   python -m sglang.benchmark.dspark_sts_fit fit \
+   python -m sglang.benchmark.dspark_sts_fit \
        --data-glob '~/sglang_artifacts/sts/shard.*.pt' \
        --out ~/sglang_artifacts/sts/calib.json \
        --num-bins 15
