@@ -119,7 +119,9 @@ class TestDsparkDecisionDumper(CustomTestCase):
                 running *= p
                 expected.append(round(running, 4))
             self.assertEqual(survival, expected)
-            self.assertEqual(record["reqs"][row]["confidence"], [round(p, 4) for p in conf_row])
+            self.assertEqual(
+                record["reqs"][row]["confidence"], [round(p, 4) for p in conf_row]
+            )
 
     def test_none_confidence_omits_confidence_but_keeps_outcome(self):
         """Head-less / static path dumps acc_len etc. but no confidence/survival fields."""
