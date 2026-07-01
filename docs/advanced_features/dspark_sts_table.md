@@ -40,8 +40,9 @@ steps.
    ```
 
    STS must be **off during collection** (omit
-   `--speculative-dspark-confidence-sts-path`); the tap asserts identity
-   temperatures so the collected logits are pre-calibration. Collect with greedy
+   `--speculative-dspark-confidence-sts-path`); launching with the collection env
+   and a non-identity table set together fails fast at startup, so the collected
+   logits are guaranteed pre-calibration. Collect with greedy
    decoding for the cleanest labels: `prefix_mask[r, k]` is the uncapped
    argmax-match leading-correct-draft prefix (it excludes the bonus token and is
    computed before any verify-window cap), matching what the head predicts.

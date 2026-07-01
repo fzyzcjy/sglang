@@ -66,6 +66,15 @@ class DSparkVerifyPlanner:
             sts_temperatures = torch.tensor(
                 calibration.temperatures, dtype=torch.float32, device=device
             )
+            if envs.SGLANG_DSPARK_STS_COLLECT_PATH.get() and not bool(
+                torch.all(sts_temperatures == 1.0)
+            ):
+                raise ValueError(
+                    "DSpark STS data collection (SGLANG_DSPARK_STS_COLLECT_PATH) "
+                    "requires identity temperatures, but a non-identity calibration "
+                    f"was loaded from {sts_path}. Collect pre-calibration logits with "
+                    "no table (omit --speculative-dspark-confidence-sts-path)."
+                )
             if sts_temperatures.numel() != self.gamma:
                 raise ValueError(
                     "DSpark STS calibration was fit for gamma="
@@ -155,16 +164,6 @@ class DSparkVerifyPlanner:
         if self._confidence_head is None:
             return None
         return self._confidence_head._last_confidence_raw
-
-    def assert_sts_identity_for_collect(self) -> None:
-        if self._confidence_head is None:
-            return
-        if not bool(torch.all(self._confidence_head.sts_temperatures == 1.0)):
-            raise ValueError(
-                "DSpark STS data collection requires identity temperatures; collect "
-                "with no calibration loaded (omit "
-                "--speculative-dspark-confidence-sts-path)."
-            )
 
     @property
     def schedules_verify_budget(self) -> bool:

@@ -610,7 +610,6 @@ class DSparkWorkerV2(BaseSpecWorker):
         if confidence_raw is None:
             return
         if self._sts_recorder is None:
-            self._verify_planner.assert_sts_identity_for_collect()
             self._sts_recorder = StsDataRecorder(
                 path_stem=collect_path,
                 gamma=self.gamma,
