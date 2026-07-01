@@ -290,8 +290,13 @@ class Envs:
     # + bf16 wo_a einsum (production DeepSeek-V4 primitives); off: the eager reference
     # path. FP32_LM_HEAD off: bf16 base-logit matmul like sglang's default lm_head /
     # the dense DSpark draft; on: the reference-parity per-step fp32 recast.
+    # FAST_SAMPLING on: the reference Gumbel-max trick (argmax over probs / Exp(1)) for
+    # temperature draft sampling, avoiding torch.multinomial's full-vocab CDF + D2H sync;
+    # off: torch.multinomial. Flips the draft RNG stream, so temperature dumps must be
+    # re-baselined before it can default on. TODO: default True once re-baselined.
     SGLANG_DSPARK_FAST_KERNEL = EnvBool(True)
     SGLANG_DSPARK_FP32_LM_HEAD = EnvBool(False)
+    SGLANG_DSPARK_FAST_SAMPLING = EnvBool(False)
     SGLANG_DEBUG_REVERT_PR = EnvInt(0)
     SGLANG_PHASE_CHECKER_DEBUG = EnvBool(False)
     SGLANG_TEST_REQUEST_TIME_STATS = EnvBool(False)
