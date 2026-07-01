@@ -145,15 +145,20 @@ def compute_target_verify_graph_key(
     if ragged_layout is None:
         return bs, num_tokens_full_block
     graph_num_tokens = ragged_layout.graph_num_tokens
-    total_verify_tokens = ragged_layout.total_verify_tokens
     assert graph_num_tokens <= num_tokens_full_block, (
         f"ragged verify graph_num_tokens={graph_num_tokens} exceeds full block "
         f"num_draft*bs={num_tokens_full_block}"
     )
-    assert total_verify_tokens <= graph_num_tokens, (
-        f"ragged verify total_verify_tokens={total_verify_tokens} exceeds the "
-        f"round-up bucket graph_num_tokens={graph_num_tokens}"
-    )
+    # total_verify_tokens is None on the sync-free device layout
+    # (from_verify_lens_device); it carries a host mirror only on the eager path.
+    # The returned tier keys off graph_num_tokens (bs-derived), never the total, so
+    # validate the total<=tier invariant only when the host mirror is present.
+    total_verify_tokens = ragged_layout.total_verify_tokens
+    if total_verify_tokens is not None:
+        assert total_verify_tokens <= graph_num_tokens, (
+            f"ragged verify total_verify_tokens={total_verify_tokens} exceeds the "
+            f"round-up bucket graph_num_tokens={graph_num_tokens}"
+        )
     return graph_num_tokens, graph_num_tokens
 
 
@@ -785,6 +790,11 @@ class DeepseekV4AttnBackend(
     use_captured_forward_metadata_for_breakable_cuda_graph: bool = True
     # Builds ragged verify metadata via make_forward_metadata_from_raw_verify.
     supports_ragged_verify_graph: bool = True
+    # DSV4 rebuilds decode/verify attention metadata from device seq_lens +
+    # preallocated buffers (cuda-graph replay uses the frozen MAX_SEQ_LEN_FOR_CAPTURE),
+    # so it never needs the host seq_lens_cpu / seq_lens_sum mirror. Opt out of the
+    # per-step D2H, matching trtllm_mla / dsa. DeepseekV4MultiStepBackend inherits this.
+    needs_cpu_seq_lens: bool = False
 
     def __init__(
         self,
@@ -874,17 +884,24 @@ class DeepseekV4AttnBackend(
                 "DSV4 ragged verify does not support online c128 MTP; "
                 "set SGLANG_RAGGED_VERIFY_MODE off or disable online compress."
             )
-        assert int(layout.verify_lens.min()) >= 1
-        assert layout.total_verify_tokens == int(layout.verify_lens.sum())
+        # Host-mirror validations only. On the sync-free device path
+        # (from_verify_lens_device) verify_lens_cpu / total_verify_tokens are None,
+        # so reading them here would both deref None and force a per-step D2H. The
+        # anchor(>=1) and total<=graph_num_tokens invariants they check hold by
+        # construction on that path (round_up_grid(bs*(gamma+1)) >= sum verify_len,
+        # each verify_len <= gamma+1), mirroring RaggedVerifyLayout.__post_init__.
+        if layout.verify_lens_cpu is not None:
+            assert int(layout.verify_lens.min()) >= 1
+            assert layout.total_verify_tokens == int(layout.verify_lens.sum())
         # The runner pads bs up to the captured tier's capture_bs; pad the layout
         # to match so its verify_lens / extend_start_loc cover every captured
         # request slot and sum to graph_num_tokens (the padded-token contract).
         layout = layout.padded_to_bucket(
             num_draft_tokens=self.speculative_num_draft_tokens
         )
-        assert (
-            len(layout.verify_lens_cpu) == bs
-        ), f"padded ragged layout bs {len(layout.verify_lens_cpu)} != batch bs {bs}"
+        # layout.bs reads verify_lens.shape[0] (host tensor metadata, no D2H), so it
+        # is safe when verify_lens_cpu is None; the old len(verify_lens_cpu) crashed.
+        assert layout.bs == bs, f"padded ragged layout bs {layout.bs} != batch bs {bs}"
         return layout
 
     def _target_verify_graph_key(
@@ -1100,10 +1117,15 @@ class DeepseekV4AttnBackend(
         if envs.SGLANG_PREP_IN_CUDA_GRAPH.get():
             assert out_cache_loc is not None
             bs = len(seq_lens)
+            # needs_cpu_seq_lens=False leaves seq_lens_cpu None. On the compact path
+            # online c128 is forbidden (_resolve_verify_layout raises), so
+            # _make_target_verify_c128_metadata returns None and this list is unused
+            # downstream (make_forward_metadata_from_raw_verify never reads
+            # raw_metadata.seq_lens_cpu). Keep None rather than forcing a per-step
+            # seq_lens.cpu() D2H; materialize the host list only when a mirror exists
+            # (eager / online-c128 path, where the D2H is free or already paid).
             seq_lens_cpu_list = (
-                seq_lens.detach().cpu().tolist()
-                if seq_lens_cpu is None
-                else seq_lens_cpu.tolist()
+                seq_lens_cpu.tolist() if seq_lens_cpu is not None else None
             )
             self._ensure_verify_bs_buffers()
             if ragged_layout is None:
@@ -1124,7 +1146,13 @@ class DeepseekV4AttnBackend(
                 extend_seq_lens = self.extend_seq_lens_buffer[:bs]
                 extend_start_loc = self.extend_start_loc_buffer[:bs]
                 verify_lens = self.extend_seq_lens_buffer[:bs]
-                total_verify_tokens = ragged_layout.total_verify_tokens
+                # Carry the host-known padded token count, NOT the device layout's
+                # total_verify_tokens (None on from_verify_lens_device). The layout is
+                # post padded_to_bucket, so sum(verify_lens) == graph_num_tokens; this
+                # value becomes num_q_tokens (the repeat_interleave output_size) in
+                # make_forward_metadata_from_raw_verify. A None here would silently
+                # degrade output_size to repeats.sum().item() -- a per-step D2H.
+                total_verify_tokens = ragged_layout.graph_num_tokens
 
             return DSV4RawVerifyMetadata(
                 req_pool_indices=req_pool_indices,
@@ -1264,6 +1292,11 @@ class DeepseekV4AttnBackend(
         if is_ragged:
             seq_lens = seq_lens + extend_seq_lens
             num_q_tokens = raw_metadata.total_verify_tokens
+            # Host-known padded token count (== graph_num_tokens); must not be None or
+            # the _expand_prefill_casually_vectorized output_size would fall back to
+            # repeats.sum().item() (a per-step D2H). Fail loud if a future path forgets
+            # to carry it.
+            assert num_q_tokens is not None, "ragged verify num_q_tokens is None"
             seq_lens_casual, req_pool_indices_repeated = (
                 self._expand_prefill_casually_vectorized(
                     num_tokens=num_q_tokens,
@@ -1507,14 +1540,18 @@ class DeepseekV4AttnBackend(
             )
             out_cache_loc = torch.zeros(bs, dtype=torch.int64, device=device)
 
-        assert seq_lens_cpu is not None
         seq_lens = seq_lens[:bs]
-        seq_lens_cpu = seq_lens_cpu[:bs]
         req_pool_indices = req_pool_indices[:bs]
-
-        actual_max_seq_len = seq_lens_cpu.max().item()
         chosen_max_seq_len = self.MAX_SEQ_LEN_FOR_CAPTURE
-        assert actual_max_seq_len <= chosen_max_seq_len
+        # Replay hook for both DECODE_OR_IDLE and TARGET_VERIFY. Under
+        # needs_cpu_seq_lens=False the host mirror is None on replay; the metadata
+        # build below always uses the frozen capture bound chosen_max_seq_len
+        # (MAX_SEQ_LEN_FOR_CAPTURE), so the host slice and the live-max<=bound check
+        # are host-mirror-only validations -- run them only when the mirror exists.
+        if seq_lens_cpu is not None:
+            seq_lens_cpu = seq_lens_cpu[:bs]
+            actual_max_seq_len = seq_lens_cpu.max().item()
+            assert actual_max_seq_len <= chosen_max_seq_len
 
         graph_key = bs
         if bucket == _GraphBucket.DECODE_OR_IDLE:
@@ -1628,11 +1665,18 @@ class DeepseekV4AttnBackend(
                     mode="constant",
                     value=0,
                 )
+            # seq_lens_cpu is None under needs_cpu_seq_lens=False; draft-extend still
+            # consumes a host length list, so fall back to a GPU read here. This is off
+            # the target-verify replay hot path (a residual draft-side D2H tracked for a
+            # later device-ization), not the sync being eliminated.
+            draft_extend_seq_lens_cpu = (
+                seq_lens_cpu.tolist() if seq_lens_cpu is not None else seq_lens.tolist()
+            )
             temp_metadata = self.init_forward_metadata_draft_extend(
                 max_seq_len=chosen_max_seq_len,
                 req_pool_indices=req_pool_indices,
                 seq_lens=seq_lens,
-                seq_lens_cpu=seq_lens_cpu.tolist(),
+                seq_lens_cpu=draft_extend_seq_lens_cpu,
                 num_tokens_per_bs=num_tokens_per_bs,
                 out_cache_loc=out_cache_loc,
                 use_prefill_cuda_graph=True,
@@ -1680,14 +1724,18 @@ class DeepseekV4AttnBackend(
         assert self.req_to_token_pool.req_to_token is self.req_to_token
 
         assert self.swa_page_size % SWA_WINDOW == 0 and self.page_size % 128 == 0
-        assert seq_lens_cpu is not None
         if max_seq_len_override is None:
             max_seq_len_override = getattr(forward_batch, "max_seq_len_override", None)
-        max_seq_len = (
-            int(seq_lens_cpu.max().item())
-            if max_seq_len_override is None
-            else max_seq_len_override
-        )
+        # needs_cpu_seq_lens=False leaves seq_lens_cpu None. This is the eager /
+        # breakable-cuda-graph metadata build (not the per-step replay hot path); with
+        # no override the forward is synchronous, so a GPU max() D2H is free (note §6),
+        # and cuda-graph capture passes MAX_SEQ_LEN_FOR_CAPTURE as the override (no read).
+        if max_seq_len_override is not None:
+            max_seq_len = max_seq_len_override
+        elif seq_lens_cpu is not None:
+            max_seq_len = int(seq_lens_cpu.max().item())
+        else:
+            max_seq_len = int(seq_lens.max().item())
         verify_bs = _get_target_verify_bs(forward_batch)
         online_c128_state_slot_offset = self.online_c128_mtp.prepare_forward(
             logical_forward_mode,
@@ -1742,16 +1790,20 @@ class DeepseekV4AttnBackend(
             extend_seq_lens = forward_batch.extend_seq_lens
             assert (
                 seq_lens is not None
-                and seq_lens_cpu is not None
                 and extend_seq_lens is not None
                 and extend_seq_lens_cpu is not None
             )
             is_draft = forward_batch.forward_mode.is_draft_extend_v2()
+            # seq_lens_cpu may be None under needs_cpu_seq_lens=False; prefill still
+            # consumes a host list, so fall back to a GPU read (eager path, D2H free).
+            prefill_seq_lens_cpu = (
+                seq_lens_cpu.tolist() if seq_lens_cpu is not None else seq_lens.tolist()
+            )
             metadata = self.init_forward_metadata_prefill(
                 max_seq_len=max_seq_len,
                 req_pool_indices=req_pool_indices,
                 seq_lens=seq_lens,
-                seq_lens_cpu=seq_lens_cpu.tolist(),
+                seq_lens_cpu=prefill_seq_lens_cpu,
                 out_cache_loc=forward_batch.out_cache_loc,
                 num_tokens=sum(extend_seq_lens_cpu),
                 extend_seq_lens=extend_seq_lens,
