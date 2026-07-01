@@ -1,7 +1,9 @@
+from contextlib import nullcontext
 from typing import Optional
 
 import torch
 
+from sglang.srt.layers.dp_attention import get_attention_tp_group
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.model_executor.forward_batch_info import (
     CaptureHiddenMode,
@@ -20,6 +22,7 @@ from sglang.srt.speculative.dspark_components.dspark_info import (
     VerifyWindow,
 )
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
+from sglang.srt.speculative.spec_utils import draft_tp_context
 
 
 class DraftBlockProposer:
@@ -45,6 +48,21 @@ class DraftBlockProposer:
         # in the attention-TP context and must NOT get this (it would trigger an
         # unwanted MLP sync in a size-1 group), so it stays False.
         self._dp_moe_sync = dp_moe_sync
+
+    def _base_logits_context(self):
+        """Neutralize compute_base_logits' vocab all-gather under dsv4 (MoE) DP.
+
+        gather_and_crop_vocab all-gathers over the global TP group, but under
+        --enable-dp-lm-head + attn_tp==1 the lm_head is full-vocab per rank and each DP
+        rank holds different tokens, so a global gather is both wrong and deadlocks:
+        idle DP groups never call compute_base_logits, so busy ranks block forever on the
+        collective. Patch _TP to the size-1 attn-TP group so the gather is a per-rank
+        no-op (mirrors the dense draft, whose whole propose runs in this context). The
+        draft MODEL forward stays outside this context -- its MoE gather needs the real
+        global TP group and is matched by the idle group's run_idle_participation."""
+        if self._dp_moe_sync:
+            return draft_tp_context(get_attention_tp_group())
+        return nullcontext()
 
     def propose(
         self,
@@ -100,9 +118,10 @@ class DraftBlockProposer:
                 temperatures=temperatures,
             )
         else:
-            base_logits = self.draft_model.compute_base_logits(fwd.raw_hidden).view(
-                bs, self.gamma, -1
-            )
+            with self._base_logits_context():
+                base_logits = self.draft_model.compute_base_logits(fwd.raw_hidden).view(
+                    bs, self.gamma, -1
+                )
             draft_block = sample_draft_block(
                 base_logits=base_logits,
                 anchor_tokens=draft_block_ids[:, 0],
