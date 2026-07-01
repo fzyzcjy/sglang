@@ -22,6 +22,11 @@ class DsparkDecisionDumper:
     # scheduler "looks normal": budget shrinks per-request as the batch grows, longer
     # windows land on the high-survival requests, and the two-steps-prior budget lag.
     #
+    # Each per-request entry also carries ``rid`` (the external request id, row-aligned
+    # with ``req_pool_indices``). ``req`` is the engine pool slot, which is recycled and
+    # cannot be joined back to a question; ``rid`` is stable, so post-processing can group
+    # dump rows by a dataset label encoded in the rid (e.g. ``gsm8k::0007::r0``).
+    #
     # Design mirrors ConfidenceMetricsProbe: decoupled from the planner (fed only
     # primitives) so the worker stays a one-field, one-call wiring. The whole dump is
     # a debug tap gated behind an env flag, so the batch of D2H copies it does is
@@ -49,6 +54,7 @@ class DsparkDecisionDumper:
         verify_lens_cpu: Optional[list[int]],
         confidence: Optional[torch.Tensor],
         req_pool_indices: torch.Tensor,
+        rids: Optional[list[str]],
         prefix_lens: torch.Tensor,
         draft_tokens: torch.Tensor,
         bonus_tokens: torch.Tensor,
@@ -72,6 +78,7 @@ class DsparkDecisionDumper:
             verify_lens_cpu=verify_lens_cpu,
             confidence=confidence,
             req_pool_indices=req_pool_indices,
+            rids=rids,
             prefix_lens=prefix_lens,
             draft_tokens=draft_tokens,
             bonus_tokens=bonus_tokens,
@@ -94,6 +101,7 @@ class DsparkDecisionDumper:
         verify_lens_cpu: Optional[list[int]],
         confidence: Optional[torch.Tensor],
         req_pool_indices: torch.Tensor,
+        rids: Optional[list[str]],
         prefix_lens: torch.Tensor,
         draft_tokens: torch.Tensor,
         bonus_tokens: torch.Tensor,
@@ -131,6 +139,7 @@ class DsparkDecisionDumper:
         reqs: list[dict] = []
         for row in range(bs):
             entry = {
+                "rid": None if rids is None else rids[row],
                 "req": int(req_ids[row]),
                 "prefix": int(prefixes[row]),
                 "verify_len": int(verify_lens[row]),
