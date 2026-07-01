@@ -73,16 +73,24 @@ class BuildDsparkSwaPageIndices:
     def torch(
         cls,
         *,
-        window_swa_locs: torch.Tensor,
-        block_swa_locs: torch.Tensor,
+        req_to_token: torch.Tensor,
+        full_to_swa_mapping: torch.Tensor,
+        req_pool_indices_per_request: torch.Tensor,
+        offsets: torch.Tensor,
+        invalid: torch.Tensor,
+        out_loc: torch.Tensor,
         context_lens: torch.Tensor,
         block_size: int,
         swa_window: int,
         page_index_aligned_size: int,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         return build_dspark_swa_page_indices(
-            window_swa_locs=window_swa_locs,
-            block_swa_locs=block_swa_locs,
+            req_to_token=req_to_token,
+            full_to_swa_mapping=full_to_swa_mapping,
+            req_pool_indices_per_request=req_pool_indices_per_request,
+            offsets=offsets,
+            invalid=invalid,
+            out_loc=out_loc,
             context_lens=context_lens,
             block_size=block_size,
             swa_window=swa_window,
@@ -93,16 +101,23 @@ class BuildDsparkSwaPageIndices:
     def triton(
         cls,
         *,
-        window_swa_locs: torch.Tensor,
-        block_swa_locs: torch.Tensor,
+        req_to_token: torch.Tensor,
+        full_to_swa_mapping: torch.Tensor,
+        req_pool_indices_per_request: torch.Tensor,
+        offsets: torch.Tensor,
+        invalid: torch.Tensor,
+        out_loc: torch.Tensor,
         context_lens: torch.Tensor,
         block_size: int,
         swa_window: int,
         page_index_aligned_size: int,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         return build_dspark_swa_page_indices_triton(
-            window_swa_locs=window_swa_locs,
-            block_swa_locs=block_swa_locs,
+            req_to_token=req_to_token,
+            full_to_swa_mapping=full_to_swa_mapping,
+            req_pool_indices_per_request=req_pool_indices_per_request,
+            offsets=offsets,
+            out_loc=out_loc,
             context_lens=context_lens,
             block_size=block_size,
             swa_window=swa_window,
@@ -235,8 +250,12 @@ def compute_dspark_window_gather_triton(
 
 def build_dspark_swa_page_indices(
     *,
-    window_swa_locs: torch.Tensor,
-    block_swa_locs: torch.Tensor,
+    req_to_token: torch.Tensor,
+    full_to_swa_mapping: torch.Tensor,
+    req_pool_indices_per_request: torch.Tensor,
+    offsets: torch.Tensor,
+    invalid: torch.Tensor,
+    out_loc: torch.Tensor,
     context_lens: torch.Tensor,
     block_size: int,
     swa_window: int,
@@ -251,14 +270,25 @@ def build_dspark_swa_page_indices(
 
     Every one of the ``block_size`` draft queries in a request attends the SAME set of SWA
     slots: the whole committed sliding window of injected target-hidden KV plus the whole
-    draft block (NON-CAUSAL, no triangular mask). ``window_swa_locs`` / ``block_swa_locs``
-    are already in SWA space (the caller translates via ``translate_loc_from_full_to_swa``).
+    draft block (NON-CAUSAL, no triangular mask). This builder fuses what used to be the
+    caller's torch middle -- the ``req_to_token`` window gather, the full->SWA translate
+    (a ``full_to_swa_mapping`` table lookup), and the block-slot translate -- so the whole
+    ``get_dspark_swa_page_indices`` collapses to window_gather + this builder with no torch
+    glue in between.
 
     Args:
-        window_swa_locs: ``[bs, swa_window]`` int32 SWA slots of the committed window,
-            most-recent-last, with positions before the request's start padded ``-1``.
-        block_swa_locs: ``[bs, block_size]`` int32 SWA slots written by this forward for the
-            gamma draft tokens (shared by every query row of the request).
+        req_to_token: ``[max_reqs, max_ctx]`` the request->token-slot table (full space).
+        full_to_swa_mapping: ``[n_full]`` the full-loc -> SWA-loc translation table
+            (``translate_loc_from_full_to_swa(x) == full_to_swa_mapping[x]``).
+        req_pool_indices_per_request: ``[bs]`` the request's pool index (row into
+            ``req_to_token``).
+        offsets: ``[bs, swa_window]`` int64 window columns into ``req_to_token`` (most-recent
+            last, already ``clamp(min=0)``).
+        invalid: ``[bs, swa_window]`` bool pre-start mask (True where the window column is
+            before the request's start). Consumed only by the torch reference (the triton
+            path skips invalid columns via the context-length bound).
+        out_loc: ``[num_q]`` the full-space slots this forward writes for the gamma draft
+            tokens (block slots), flat, ``block_size`` per request.
         context_lens: ``[bs]`` the number of valid committed window tokens per request
             (= min(swa_window, prefix_len)).
         block_size: gamma, the number of draft-block query rows / draft tokens.
@@ -272,22 +302,27 @@ def build_dspark_swa_page_indices(
         ``block_size`` rows of a request). The kernel attends only the first
         ``swa_topk_lengths[q]`` entries, so the ``-1`` padding is never read.
     """
-    if window_swa_locs.ndim != 2 or window_swa_locs.shape[1] != swa_window:
+    if offsets.ndim != 2 or offsets.shape[1] != swa_window:
         raise ValueError(
-            "window_swa_locs must be [bs, swa_window]; "
-            f"got shape={tuple(window_swa_locs.shape)} (swa_window={swa_window})."
+            "offsets must be [bs, swa_window]; "
+            f"got shape={tuple(offsets.shape)} (swa_window={swa_window})."
         )
-    if block_swa_locs.ndim != 2 or block_swa_locs.shape[1] != block_size:
-        raise ValueError(
-            "block_swa_locs must be [bs, block_size]; "
-            f"got shape={tuple(block_swa_locs.shape)} (block_size={block_size})."
-        )
-    bs = window_swa_locs.shape[0]
-    device = window_swa_locs.device
-
-    window_swa_locs = window_swa_locs.to(torch.int32)
-    block_swa_locs = block_swa_locs.to(torch.int32)
+    bs = offsets.shape[0]
+    device = offsets.device
     context_lens = context_lens.to(device=device, dtype=torch.int32)
+
+    # Window gather + full->SWA translate (was the caller's torch middle). Invalid
+    # (pre-start) columns gather req_to_token slot 0 then get masked to -1; they sit at the
+    # leading columns and are never picked by the left-pack below (cl counts only valid).
+    window_full_locs = req_to_token[
+        req_pool_indices_per_request[:, None].to(torch.int64), offsets
+    ]
+    window_full_locs = window_full_locs.masked_fill(invalid, 0)
+    window_swa_locs = full_to_swa_mapping[window_full_locs].to(torch.int32)
+    window_swa_locs = window_swa_locs.masked_fill(invalid, -1)
+
+    block_full_locs = out_loc[: bs * block_size].view(bs, block_size)
+    block_swa_locs = full_to_swa_mapping[block_full_locs].to(torch.int32)
 
     # The widest row holds the full window (swa_window) + the whole block, aligned up.
     target_width = ceil_align(swa_window + block_size, page_index_aligned_size)
@@ -366,11 +401,15 @@ def _compact_dspark_window_then_block(
 
 @triton.jit
 def _swa_page_indices_kernel(
-    window_ptr,
-    block_ptr,
+    req_to_token_ptr,
+    full_to_swa_ptr,
+    req_pool_ptr,
+    offsets_ptr,
+    out_loc_ptr,
     context_lens_ptr,
     out_ptr,
     topk_ptr,
+    rt_stride,
     swa_window,
     block_size,
     target_width,
@@ -379,51 +418,62 @@ def _swa_page_indices_kernel(
     q = tl.program_id(0)
     i = q // block_size
     cl = tl.load(context_lens_ptr + i)
+    rp = tl.load(req_pool_ptr + i).to(tl.int64)
     k = tl.arange(0, TW_BLOCK)
     kmask = k < target_width
     # out[q, k] = window suffix (left-packed) for k < cl; block slot for
     # cl <= k < cl+block_size; else -1. Every one of the block_size query rows of a
     # request shares this same row (non-causal), so grid = bs*block_size writes the
-    # replication directly (no expand).
+    # replication directly (no expand). The two full->SWA gathers (req_to_token window
+    # gather + out_loc block gather, each translated through full_to_swa) are fused here,
+    # replacing the caller's torch middle. Invalid (pre-start) window columns need no mask:
+    # left-packing reads only the valid suffix (k < cl), which is always in-window.
     in_window = k < cl
     src_col = tl.minimum(tl.maximum((swa_window - cl) + k, 0), swa_window - 1)
-    win_val = tl.load(
-        window_ptr + i * swa_window + src_col, mask=kmask & in_window, other=-1
+    wmask = kmask & in_window
+    off = tl.load(offsets_ptr + i * swa_window + src_col, mask=wmask, other=0).to(tl.int64)
+    win_full = tl.load(req_to_token_ptr + rp * rt_stride + off, mask=wmask, other=0).to(
+        tl.int64
     )
+    win_swa = tl.load(full_to_swa_ptr + win_full, mask=wmask, other=-1).to(tl.int32)
+
     in_block = (k >= cl) & (k < cl + block_size)
+    bmask = kmask & in_block
     bcol = tl.maximum(k - cl, 0)
-    blk_val = tl.load(
-        block_ptr + i * block_size + bcol, mask=kmask & in_block, other=-1
+    blk_full = tl.load(out_loc_ptr + i * block_size + bcol, mask=bmask, other=0).to(
+        tl.int64
     )
-    val = tl.where(in_window, win_val, tl.where(in_block, blk_val, -1))
+    blk_swa = tl.load(full_to_swa_ptr + blk_full, mask=bmask, other=-1).to(tl.int32)
+
+    val = tl.where(in_window, win_swa, tl.where(in_block, blk_swa, -1))
     tl.store(out_ptr + q * target_width + k, val.to(tl.int32), mask=kmask)
     tl.store(topk_ptr + q, (cl + block_size).to(tl.int32))
 
 
 def build_dspark_swa_page_indices_triton(
     *,
-    window_swa_locs: torch.Tensor,
-    block_swa_locs: torch.Tensor,
+    req_to_token: torch.Tensor,
+    full_to_swa_mapping: torch.Tensor,
+    req_pool_indices_per_request: torch.Tensor,
+    offsets: torch.Tensor,
+    out_loc: torch.Tensor,
     context_lens: torch.Tensor,
     block_size: int,
     swa_window: int,
     page_index_aligned_size: int,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    if window_swa_locs.ndim != 2 or window_swa_locs.shape[1] != swa_window:
+    if offsets.ndim != 2 or offsets.shape[1] != swa_window:
         raise ValueError(
-            "window_swa_locs must be [bs, swa_window]; "
-            f"got shape={tuple(window_swa_locs.shape)} (swa_window={swa_window})."
+            "offsets must be [bs, swa_window]; "
+            f"got shape={tuple(offsets.shape)} (swa_window={swa_window})."
         )
-    if block_swa_locs.ndim != 2 or block_swa_locs.shape[1] != block_size:
-        raise ValueError(
-            "block_swa_locs must be [bs, block_size]; "
-            f"got shape={tuple(block_swa_locs.shape)} (block_size={block_size})."
-        )
-    bs = window_swa_locs.shape[0]
-    device = window_swa_locs.device
-    window = window_swa_locs.to(torch.int32).contiguous()
-    block = block_swa_locs.to(torch.int32).contiguous()
+    bs = offsets.shape[0]
+    device = offsets.device
+    req_pool = req_pool_indices_per_request.to(device=device).contiguous()
+    offsets = offsets.to(torch.int64).contiguous()
+    out_loc = out_loc[: bs * block_size].contiguous()
     context_lens = context_lens.to(device=device, dtype=torch.int32).contiguous()
+    rt_stride = req_to_token.stride(0)
     target_width = ceil_align(swa_window + block_size, page_index_aligned_size)
     n_q = bs * block_size
     swa_page_indices = torch.empty(
@@ -432,11 +482,15 @@ def build_dspark_swa_page_indices_triton(
     swa_topk_lengths = torch.empty(n_q, dtype=torch.int32, device=device)
     TW_BLOCK = triton.next_power_of_2(target_width)
     _swa_page_indices_kernel[(n_q,)](
-        window,
-        block,
+        req_to_token,
+        full_to_swa_mapping,
+        req_pool,
+        offsets,
+        out_loc,
         context_lens,
         swa_page_indices,
         swa_topk_lengths,
+        rt_stride,
         swa_window,
         block_size,
         target_width,

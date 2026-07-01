@@ -2230,31 +2230,19 @@ class DeepseekV4AttnBackend(
             block_size=block_size,
             swa_window=SWA_WINDOW,
         )
-        num_q = gather.num_q
-        bs = gather.bs
-        context_lens = gather.context_lens
-        offsets = gather.offsets
-        invalid = gather.invalid
 
-        window_full_locs = self.req_to_token[
-            gather.req_pool_indices_per_request[:, None].to(torch.int64), offsets
-        ]
-        window_full_locs = window_full_locs.masked_fill(invalid, 0)
-        window_swa_locs = self.token_to_kv_pool.translate_loc_from_full_to_swa(
-            window_full_locs
-        ).to(torch.int32)
-        window_swa_locs = window_swa_locs.masked_fill(invalid, -1)
-
-        # Block slots: the gamma slots this forward writes, per request.
-        block_full_locs = out_loc[:num_q].view(bs, block_size)
-        block_swa_locs = self.token_to_kv_pool.translate_loc_from_full_to_swa(
-            block_full_locs
-        ).to(torch.int32)
-
+        # The window req_to_token gather, both full->SWA translates and the block-slot view
+        # that used to live here are fused into BuildDsparkSwaPageIndices (it reads the raw
+        # req_to_token / full_to_swa_index_mapping / out_loc tables directly), so the whole
+        # function is now window_gather + builder with no torch glue in between.
         swa_page_indices, swa_topk_lengths = BuildDsparkSwaPageIndices.execute(
-            window_swa_locs=window_swa_locs,
-            block_swa_locs=block_swa_locs,
-            context_lens=context_lens,
+            req_to_token=self.req_to_token,
+            full_to_swa_mapping=self.token_to_kv_pool.full_to_swa_index_mapping,
+            req_pool_indices_per_request=gather.req_pool_indices_per_request,
+            offsets=gather.offsets,
+            invalid=gather.invalid,
+            out_loc=out_loc[: gather.num_q],
+            context_lens=gather.context_lens,
             block_size=block_size,
             swa_window=SWA_WINDOW,
             page_index_aligned_size=PAGE_INDEX_ALIGNED_SIZE,

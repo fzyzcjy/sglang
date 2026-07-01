@@ -50,29 +50,52 @@ def test_window_gather_triton_matches_torch(bs):
 
 @pytest.mark.parametrize("bs", [1, 2, 3, 8, 64])
 def test_page_indices_triton_matches_torch(bs):
-    """triton build_dspark_swa_page_indices equals torch (page indices + topk lengths)."""
+    """triton build_dspark_swa_page_indices equals torch with the fused req_to_token + full->SWA gathers."""
     device = torch.device("cuda")
-    window_swa_locs = torch.randint(
-        -1, 100000, (bs, SWA_WINDOW), dtype=torch.int32, device=device
+    num_q = bs * BLOCK_SIZE
+    max_reqs = 300
+    max_ctx = 400
+    n_full = 50000
+    # offsets / invalid / context_lens must derive from one seq_lens (the real invariant):
+    # the fused kernel reads only the valid window suffix (k < context_len), which the
+    # left-pack guarantees is in-window only when the three come from the same prefix.
+    seq_lens_casual = torch.randint(1, 300, (num_q,), dtype=torch.int32, device=device)
+    req_pool_indices_repeated = torch.randint(
+        0, max_reqs, (num_q,), dtype=torch.int64, device=device
     )
-    block_swa_locs = torch.randint(
-        0, 100000, (bs, BLOCK_SIZE), dtype=torch.int32, device=device
+    req_to_token = torch.randint(
+        0, n_full, (max_reqs, max_ctx), dtype=torch.int32, device=device
     )
-    context_lens = torch.randint(
-        0, SWA_WINDOW + 1, (bs,), dtype=torch.int32, device=device
+    full_to_swa_mapping = torch.randint(
+        0, 20000, (n_full,), dtype=torch.int32, device=device
+    )
+    out_loc = torch.randint(0, n_full, (num_q,), dtype=torch.int64, device=device)
+
+    gather = compute_dspark_window_gather(
+        seq_lens_casual=seq_lens_casual,
+        req_pool_indices_repeated=req_pool_indices_repeated,
+        block_size=BLOCK_SIZE,
+        swa_window=SWA_WINDOW,
     )
     idx_ref, len_ref = build_dspark_swa_page_indices(
-        window_swa_locs=window_swa_locs,
-        block_swa_locs=block_swa_locs,
-        context_lens=context_lens,
+        req_to_token=req_to_token,
+        full_to_swa_mapping=full_to_swa_mapping,
+        req_pool_indices_per_request=gather.req_pool_indices_per_request,
+        offsets=gather.offsets,
+        invalid=gather.invalid,
+        out_loc=out_loc,
+        context_lens=gather.context_lens,
         block_size=BLOCK_SIZE,
         swa_window=SWA_WINDOW,
         page_index_aligned_size=PAGE_ALIGN,
     )
     idx_got, len_got = build_dspark_swa_page_indices_triton(
-        window_swa_locs=window_swa_locs,
-        block_swa_locs=block_swa_locs,
-        context_lens=context_lens,
+        req_to_token=req_to_token,
+        full_to_swa_mapping=full_to_swa_mapping,
+        req_pool_indices_per_request=gather.req_pool_indices_per_request,
+        offsets=gather.offsets,
+        out_loc=out_loc,
+        context_lens=gather.context_lens,
         block_size=BLOCK_SIZE,
         swa_window=SWA_WINDOW,
         page_index_aligned_size=PAGE_ALIGN,
