@@ -351,9 +351,9 @@ def build_sps_cost_table(
     #
     # The flat "const" table makes the hardware-aware scheduler a no-op:
     # lookup() returns a constant, so the verify-token budget degenerates to
-    # verify-all and every request keeps verify_len == gamma (the scheduler's
-    # resolved_max_verify_len caps at gamma, so compact verifies the anchor plus
-    # up to gamma-1 drafts; this is lossless -- _cap_correct_len caps accept and
+    # verify-all and every request keeps verify_len == gamma+1 (resolved_max_verify_len
+    # = gamma+1, so compact verifies the anchor plus all gamma drafts = the full
+    # window, matching static; this is lossless -- _cap_correct_len caps accept and
     # the bonus is re-read from the target distribution). The
     # verify_lens >= 1 anchor contract (see DSparkScheduleConfig.min_verify_len
     # and schedule_verify_lens_topk's lower-bound clamp) MUST be in place before
