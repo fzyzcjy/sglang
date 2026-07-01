@@ -666,7 +666,8 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         per-row ``positions``. The worker owns full->SWA translation (after allocation) and
         the per-row commit positions; this method owns the projection + pool API. There is
         no MLA ``set_kv_buffer_prefix_valid`` equivalent, so commit-length masking is done by
-        the caller gathering only the committed flat slots (one per request).
+        the caller marking non-committed slots with ``swa_loc = -1`` (fixed-shape, no gather);
+        the fused-norm-rope writer kernel skips ``out_loc < 0``.
         """
         main_x = self.project_target_hidden(main_hidden)
         swa_loc = swa_loc.to(torch.int32)
