@@ -58,6 +58,7 @@ from sglang.srt.speculative.ragged_verify import (
     read_ragged_verify_mode,
 )
 from sglang.srt.utils import add_prefix
+from sglang.srt.utils.async_probe import maybe_detect_in_closed_range
 
 logger = logging.getLogger(__name__)
 
@@ -852,9 +853,13 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
             markov_embed_stack = None
         confidence_raw = confidence_head(x_post_hc, markov_embed_stack)
         confidence = confidence_head.apply_sts(confidence_raw)
-        assert bool(
-            ((confidence >= 0) & (confidence <= 1)).all()
-        ), "DSpark confidence must lie in [0, 1]."
+        # Async, gated probe (SGLANG_ENABLE_ASYNC_ASSERT) instead of ``assert
+        # bool(...all())``: the latter forces an is_nonzero -> item ->
+        # _local_scalar_dense -> cudaStreamSynchronize on every decode step,
+        # a hard d2h sync in the hot verify path.
+        maybe_detect_in_closed_range(
+            confidence, 0.0, 1.0, "DSpark confidence must lie in [0, 1]."
+        )
         self._last_confidence = confidence
         return confidence
 
