@@ -476,6 +476,12 @@ async def async_request_openai_chat_completions(
                         output.output_len = response_json.get("usage", {}).get(
                             "completion_tokens", output_len
                         )
+                        # Per-request spec accept length lives in choices[0].meta_info
+                        # only for non-streaming responses sent with return_meta_info=true
+                        # (the streaming usage chunk does not carry it).
+                        output.spec_accept_length = (
+                            response_json["choices"][0].get("meta_info") or {}
+                        ).get("spec_accept_length", 0.0) or 0.0
                         if getattr(args, "cache_report", False):
                             _extract_cache_from_sglext(response_json, output)
                     else:
@@ -703,7 +709,9 @@ async def async_request_sglang_generate(
                             # the final chunk carries the request's final accept length.
                             _meta_info = data.get("meta_info") or {}
                             if _meta_info.get("spec_accept_length") is not None:
-                                output.spec_accept_length = _meta_info["spec_accept_length"]
+                                output.spec_accept_length = _meta_info[
+                                    "spec_accept_length"
+                                ]
 
                             # NOTE: Some completion API might have a last
                             # usage summary response without a token so we
