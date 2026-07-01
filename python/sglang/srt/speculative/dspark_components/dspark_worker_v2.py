@@ -27,6 +27,9 @@ from sglang.srt.speculative.dspark_components.dspark_accept import (
     accept_draft_tokens,
     build_out_tokens,
 )
+from sglang.srt.speculative.dspark_components.dspark_confidence_metrics import (
+    PerPositionConfidenceMetrics,
+)
 from sglang.srt.speculative.dspark_components.dspark_draft import (
     DsparkDraftSampler,
     make_next_draft_input,
@@ -58,6 +61,7 @@ from sglang.srt.utils import get_available_gpu_memory, is_cuda
 logger = logging.getLogger(__name__)
 
 _STS_COLLECT_FLUSH_EVERY: int = 256
+_CONFIDENCE_METRICS_PRINT_EVERY: int = 256
 
 
 class DSparkWorkerV2(BaseSpecWorker):
@@ -242,6 +246,12 @@ class DSparkWorkerV2(BaseSpecWorker):
         # Offline STS data-collection tap (read-only, off unless
         # SGLANG_DSPARK_STS_COLLECT_PATH is set). Built lazily on first record.
         self._sts_recorder: Optional[StsDataRecorder] = None
+
+        # Runtime confidence-head calibration probe (read-only, off unless
+        # SGLANG_DSPARK_DEBUG_CONFIDENCE_METRICS is set). Built lazily on first step.
+        self._confidence_metrics: Optional[PerPositionConfidenceMetrics] = None
+        self._confidence_metrics_step_ct: int = 0
+        self._confidence_metrics_compact_warned: bool = False
 
     def _resolve_target_embed_tokens(self, target_model):
         # The V4 draft forward reuses the target's input embedding module. Some
@@ -578,6 +588,11 @@ class DSparkWorkerV2(BaseSpecWorker):
             target_logits=logits_output.next_token_logits,
             bs=bs,
         )
+        self._maybe_print_confidence_metrics(
+            verify_ids_2d=verify_ids_2d,
+            target_logits=logits_output.next_token_logits,
+            bs=bs,
+        )
 
         next_draft_input = make_next_draft_input(
             bonus_tokens=bonus,
@@ -626,6 +641,55 @@ class DSparkWorkerV2(BaseSpecWorker):
             confidence_raw=confidence_raw,
             num_correct_drafts=num_correct_drafts,
         )
+
+    def _maybe_print_confidence_metrics(
+        self,
+        *,
+        verify_ids_2d: torch.Tensor,
+        target_logits: torch.Tensor,
+        bs: int,
+    ) -> None:
+        if not envs.SGLANG_DSPARK_DEBUG_CONFIDENCE_METRICS.get():
+            return
+        if self.tp_rank != 0:
+            return
+        if not self._verify_planner.carries_confidence:
+            return
+        # compact pads verify rows past each request's verify_len, so num_correct_drafts
+        # over the full gamma window mislabels the high positions. Skip + warn once; the
+        # cap-accept / static full-window modes keep every position valid.
+        if self._verify_planner.is_compact_mode:
+            if not self._confidence_metrics_compact_warned:
+                logger.warning(
+                    "SGLANG_DSPARK_DEBUG_CONFIDENCE_METRICS is ignored under "
+                    "SGLANG_RAGGED_VERIFY_MODE=compact (padded verify rows corrupt the "
+                    "per-position prefix label); run cap-accept or static to measure it."
+                )
+                self._confidence_metrics_compact_warned = True
+            return
+        confidence_raw = self._verify_planner.last_confidence_raw
+        if confidence_raw is None:
+            return
+
+        target_predict = torch.argmax(target_logits, dim=-1).view(
+            bs, self.verify_num_draft_tokens
+        )
+        num_correct_drafts, _ = compute_dflash_correct_drafts_and_bonus(
+            candidates=verify_ids_2d,
+            target_predict=target_predict,
+        )
+        positions = torch.arange(self.gamma, device=confidence_raw.device).view(1, -1)
+        prefix_mask = (positions < num_correct_drafts.view(-1, 1)).to(torch.float32)
+        survival = torch.cumprod(torch.sigmoid(confidence_raw.float()), dim=1)
+
+        if self._confidence_metrics is None:
+            self._confidence_metrics = PerPositionConfidenceMetrics(
+                gamma=self.gamma, device=confidence_raw.device
+            )
+        self._confidence_metrics.update(survival=survival, prefix_mask=prefix_mask)
+        self._confidence_metrics_step_ct += 1
+        if self._confidence_metrics_step_ct % _CONFIDENCE_METRICS_PRINT_EVERY == 0:
+            logger.info("%s", self._confidence_metrics.format_table())
 
     def _resolve_verify_token_budget(
         self,

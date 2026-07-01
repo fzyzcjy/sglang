@@ -169,6 +169,10 @@ class DSparkVerifyPlanner:
     def schedules_verify_budget(self) -> bool:
         return self._budget_planner is not None
 
+    @property
+    def is_compact_mode(self) -> bool:
+        return self._ragged_verify_mode is RaggedVerifyMode.COMPACT
+
     def should_run_compact(self, *, layout: Optional[RaggedVerifyLayout]) -> bool:
         return (
             self._ragged_verify_mode is RaggedVerifyMode.COMPACT and layout is not None
