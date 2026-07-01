@@ -525,14 +525,22 @@ class DSparkV4Stage(DeepseekV4DecoderLayer):
             x, self.hc_ffn_fn, self.hc_ffn_scale, self.hc_ffn_base
         )
         x = self.post_attention_layernorm(x)
-        x = self._run_ffn(x)
+        x = self._run_ffn(x, forward_batch)
         x = self._hc_post_block(x, residual, post, comb)
         return x
 
-    def _run_ffn(self, x: torch.Tensor) -> torch.Tensor:
+    def _run_ffn(self, x: torch.Tensor, forward_batch: ForwardBatch) -> torch.Tensor:
+        # Route the draft MoE through the parent's shared MoE-DP path so it does the
+        # same dp_gather -> experts -> combine as the target under dp attention. The hc
+        # dim is already collapsed by hc_pre, so x is [bs*gamma, dim] (DP token count is
+        # bs*gamma). input_ids* are None: the draft has the hash gate off (is_nextn), so
+        # the parent's gather never consumes them. Byte-identical without DP (attn_dp==1
+        # skips the gather and self.mlp ignores forward_batch on the forward_normal path).
         shape = x.shape
         x = x.reshape(-1, self.dim)
-        y = self.mlp(x)
+        y = self._run_moe_ffn_dp_sync(
+            x, forward_batch, input_ids=None, input_ids_global=None
+        )
         return y.view(shape)
 
 
