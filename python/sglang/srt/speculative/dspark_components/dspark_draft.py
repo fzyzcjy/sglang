@@ -116,18 +116,19 @@ def sample_draft_block(
             if fast_sampling:
                 # Reference Gumbel-max trick: argmax(probs / Exp(1)) ~ Categorical(probs),
                 # one fused pass with no full-vocab CDF and no D2H sync, unlike
-                # torch.multinomial. Folding noise=1 onto greedy rows makes their
+                # torch.multinomial. Setting greedy rows' noise to 1 makes their
                 # argmax(probs / 1) == argmax(probs) == argmax(logits) (softmax is
                 # monotone), so this single argmax also yields the greedy token and
-                # the separate torch.argmax(step_logits) + torch.where drop out.
-                # exponential_ still fills every row, so the per-step draw count is
-                # unchanged; greedy rows just discard their unused noise.
+                # the separate greedy torch.argmax(step_logits) drops out (the P1
+                # argmax in the profile). exponential_ still fills every row, so the
+                # per-step draw count is unchanged; greedy rows discard their noise.
                 noise = torch.empty_like(probs).exponential_(1)
-                noise[greedy_mask] = 1.0
+                noise = torch.where(greedy_mask[:, None], 1.0, noise)
                 return probs.div_(noise).argmax(dim=-1)
-            argmax_tokens = torch.argmax(step_logits, dim=-1)
-            sampled_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)
-            return torch.where(greedy_mask, argmax_tokens, sampled_tokens)
+            else:
+                argmax_tokens = torch.argmax(step_logits, dim=-1)
+                sampled_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)
+                return torch.where(greedy_mask, argmax_tokens, sampled_tokens)
 
     draft_tokens, corrected_logits = markov_head.sample_block(
         base_logits,
