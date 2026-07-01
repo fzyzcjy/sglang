@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import torch
+import triton
+import triton.language as tl
 
 from sglang.srt.environ import envs
 
@@ -41,9 +43,8 @@ class ScheduleVerifyLensTopk:
         budget: int,
         cfg: DSparkScheduleConfig,
     ) -> torch.Tensor:
-        raise NotImplementedError(
-            "ScheduleVerifyLensTopk.triton is not implemented yet; run with "
-            "SGLANG_DSPARK_KERNEL_SCHEDULE_TOPK=torch until the triton kernel lands."
+        return schedule_verify_lens_topk_triton(
+            survival_probs=survival_probs, budget=budget, cfg=cfg
         )
 
 
@@ -143,3 +144,83 @@ def _value_independent_descending_order(
     order = order[torch.argsort(positions[order], stable=True)]
     order = order[torch.argsort(-masked_prob[order], stable=True)]
     return order
+
+
+@triton.jit
+def _schedule_topk_selected_extra_kernel(
+    survival_ptr,
+    selected_extra_ptr,
+    budget,
+    cols,
+    n,
+    survival_eps,
+    BLOCK_C: tl.constexpr,
+    BLOCK_CP: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    c = pid * BLOCK_C + tl.arange(0, BLOCK_C)
+    cmask = c < n
+    r = c // cols
+    p = c % cols
+    sp = tl.load(survival_ptr + c, mask=cmask, other=0.0)
+    valid_c = sp >= survival_eps
+    mp = tl.where(valid_c, sp, float("-inf"))
+    # rank[c] = #candidates ordered before c under (survival desc, position asc,
+    # request asc); (position, request) is unique per candidate so the order is total.
+    # selected iff valid and rank < budget -> equals torch's "chosen = order[:budget]"
+    # then per-request scatter-add of the valid flag. O(n^2), n <= bs*gamma is tiny.
+    rank = tl.zeros([BLOCK_C], dtype=tl.int32)
+    for cp0 in range(0, n, BLOCK_CP):
+        cp = cp0 + tl.arange(0, BLOCK_CP)
+        cpmask = cp < n
+        rp = cp // cols
+        pp = cp % cols
+        spp = tl.load(survival_ptr + cp, mask=cpmask, other=0.0)
+        validp = spp >= survival_eps
+        mpp = tl.where(validp, spp, float("-inf"))
+        gt = mpp[None, :] > mp[:, None]
+        eq = mpp[None, :] == mp[:, None]
+        pos_lt = pp[None, :] < p[:, None]
+        pos_eq = pp[None, :] == p[:, None]
+        req_lt = rp[None, :] < r[:, None]
+        before = gt | (eq & (pos_lt | (pos_eq & req_lt)))
+        before = before & cpmask[None, :]
+        rank += tl.sum(before.to(tl.int32), axis=1)
+    selected = valid_c & (rank < budget)
+    tl.atomic_add(selected_extra_ptr + r, selected.to(tl.int32), mask=cmask)
+
+
+def schedule_verify_lens_topk_triton(
+    *,
+    survival_probs: torch.Tensor,
+    budget: int,
+    cfg: DSparkScheduleConfig,
+) -> torch.Tensor:
+    num_requests, gamma = survival_probs.shape
+    max_len = cfg.resolved_max_verify_len()
+    device = survival_probs.device
+    cols = min(max_len, gamma)
+    n = num_requests * cols
+    selected_extra = torch.zeros(num_requests, dtype=torch.int32, device=device)
+    if budget > 0 and n > 0:
+        candidate_window = survival_probs[:, :cols].contiguous()
+        BLOCK_C = 64
+        BLOCK_CP = 256
+        grid = (triton.cdiv(n, BLOCK_C),)
+        _schedule_topk_selected_extra_kernel[grid](
+            candidate_window,
+            selected_extra,
+            int(budget),
+            cols,
+            n,
+            float(cfg.survival_eps),
+            BLOCK_C=BLOCK_C,
+            BLOCK_CP=BLOCK_CP,
+        )
+    lower_bound = max(cfg.min_verify_len, 1)
+    verify_lens = torch.clamp(
+        cfg.min_verify_len + selected_extra.to(torch.int64),
+        min=lower_bound,
+        max=max_len,
+    )
+    return verify_lens.to(torch.int32)
