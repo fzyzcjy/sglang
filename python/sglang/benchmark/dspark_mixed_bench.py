@@ -389,7 +389,9 @@ def main(
     ] = "mixed",
     num_gsm: Annotated[int, typer.Option(help="Distinct gsm8k questions.")] = 32,
     num_arena: Annotated[int, typer.Option(help="Distinct arena-hard questions.")] = 32,
-    num_aime: Annotated[int, typer.Option(help="Distinct aime25 questions (max 30).")] = 0,
+    num_aime: Annotated[
+        int, typer.Option(help="Distinct aime25 questions (max 30).")
+    ] = 0,
     runs: Annotated[
         int,
         typer.Option(help="Repeat each question this many times to fill concurrency."),
@@ -425,7 +427,9 @@ def main(
     ] = None,
     aime_data_path: Annotated[
         Optional[str],
-        typer.Option(help="Local aime25 {question,answer} jsonl (default: HF download)."),
+        typer.Option(
+            help="Local aime25 {question,answer} jsonl (default: HF download)."
+        ),
     ] = None,
 ) -> None:
     """Drive a single/mixed gsm8k + arena-hard + aime25 workload at a DSpark OAI endpoint."""
