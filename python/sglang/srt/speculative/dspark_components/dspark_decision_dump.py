@@ -16,9 +16,10 @@ class DsparkDecisionDumper:
     # (read-only; never touches the accept path). Off unless
     # SGLANG_DSPARK_DEBUG_MAIN_OUTPUT is set; rank-0 only. Emits one grep-friendly
     # ``DSPARK_DEBUG_MAIN_OUTPUT=<compact json>`` line per decode step carrying the whole
-    # decision (global budget + per-request raw confidence, cumprod survival, chosen
-    # verify_len) alongside the realized outcome (accept length, correct drafts, the
-    # confidence-cap trim). A post-processing script greps these lines to check the
+    # decision (global budget + per-request raw confidence, cumprod survival, the
+    # two-steps-prior budget_survival that sized K, chosen verify_len) alongside the
+    # realized outcome (accept length, correct drafts, the confidence-cap trim). A
+    # post-processing script greps these lines to check the
     # scheduler "looks normal": budget shrinks per-request as the batch grows, longer
     # windows land on the high-survival requests, and the two-steps-prior budget lag.
     #
@@ -48,6 +49,7 @@ class DsparkDecisionDumper:
         lag_steps: Optional[int],
         verify_lens_cpu: Optional[list[int]],
         confidence: Optional[torch.Tensor],
+        two_steps_prior_survival: Optional[torch.Tensor] = None,
         req_pool_indices: torch.Tensor,
         prefix_lens: torch.Tensor,
         draft_tokens: torch.Tensor,
@@ -71,6 +73,7 @@ class DsparkDecisionDumper:
             lag_steps=lag_steps,
             verify_lens_cpu=verify_lens_cpu,
             confidence=confidence,
+            two_steps_prior_survival=two_steps_prior_survival,
             req_pool_indices=req_pool_indices,
             prefix_lens=prefix_lens,
             draft_tokens=draft_tokens,
@@ -93,6 +96,7 @@ class DsparkDecisionDumper:
         lag_steps: Optional[int],
         verify_lens_cpu: Optional[list[int]],
         confidence: Optional[torch.Tensor],
+        two_steps_prior_survival: Optional[torch.Tensor],
         req_pool_indices: torch.Tensor,
         prefix_lens: torch.Tensor,
         draft_tokens: torch.Tensor,
@@ -128,6 +132,18 @@ class DsparkDecisionDumper:
             conf_rows = None
             survival_rows = None
 
+        # budget_survival = the two-steps-prior survival [bs, gamma] the planner used
+        # to size K this step (paper section 5.2 causal barrier), lagged vs the
+        # current-step survival above. Dumped so analysis can reconstruct K from it and
+        # confirm budget_survival != survival (the lag is real). None on the static /
+        # no-scheduler / cold-start path -> key omitted.
+        if two_steps_prior_survival is not None:
+            budget_survival_rows = (
+                two_steps_prior_survival.detach().float().to("cpu").tolist()
+            )
+        else:
+            budget_survival_rows = None
+
         reqs: list[dict] = []
         for row in range(bs):
             entry = {
@@ -147,6 +163,10 @@ class DsparkDecisionDumper:
             if conf_rows is not None:
                 entry["confidence"] = [round(float(p), 4) for p in conf_rows[row]]
                 entry["survival"] = [round(float(p), 4) for p in survival_rows[row]]
+            if budget_survival_rows is not None:
+                entry["budget_survival"] = [
+                    round(float(p), 4) for p in budget_survival_rows[row]
+                ]
             reqs.append(entry)
 
         num_verify_tokens = sum(verify_lens)

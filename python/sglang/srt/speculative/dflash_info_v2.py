@@ -64,6 +64,13 @@ class DFlashDraftInputV2(SpecInput):
     # or when no ragged scheduler is active -> uniform verify-all fallback.
     verify_token_budget: Optional[int] = None
 
+    # Debug-only snapshot of the two-steps-prior survival [bs, gamma] that produced
+    # this batch's verify_token_budget, stashed here (not on the planner) so the
+    # worker reads the survival that matches this step's K even under overlap, where
+    # the next prepare would overwrite a planner stash before this step's forward.
+    # Only attached when SGLANG_DSPARK_DEBUG_MAIN_OUTPUT is set; None otherwise.
+    two_steps_prior_survival_debug: Optional[torch.Tensor] = None
+
     def __post_init__(self):
         super().__init__(spec_input_type=SpecInputType.DFLASH_DRAFT)
 

@@ -70,19 +70,7 @@ from sglang.srt.speculative.dspark_components.dspark_sps_table import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_OUT = "~/main/artifacts/sglang/dspark_sps_table.json"
-# Batch sampling tapering from dense to coarse: powers of 2 up to 8, every 4 up
-# to 128, every 16 up to 256, then every 32 up to 1024 -- fine granularity where
-# the SPS(B) hardware cliffs are, and the capacity guard skips batches above the
-# server's running cap.
-DEFAULT_BATCH_SIZE = [
-    1,
-    2,
-    4,
-    8,
-    *range(12, 128, 4),
-    *range(128, 256, 16),
-    *range(256, 1024 + 1, 32),
-]
+DEFAULT_MAX_NUM_TOKENS = 1024
 DEFAULT_INPUT_LEN = [16]
 DEFAULT_OUTPUT_LEN = [1024]
 WARMUP_INPUT_LEN = 16
@@ -106,6 +94,29 @@ KV_HISTORY_CAVEAT = (
     "latency -> under-estimates steps_per_sec -> scheduler is conservative "
     "(never over-extends). Direction-safe."
 )
+
+
+def build_batch_size_sweep(max_num_tokens: int) -> list[int]:
+    if max_num_tokens < 1:
+        raise ValueError(f"max_num_tokens must be >= 1, got {max_num_tokens}.")
+    # Taper from dense at small batches to coarse at large ones: powers of 2 up to
+    # 8, then step 4 / 16 / 32 through 1024, then step 64 out to max_num_tokens.
+    # Fine granularity is where the SPS(B) hardware cliffs live; the capacity guard
+    # later skips any probe above the server's running / KV cap.
+    raw = [
+        1,
+        2,
+        4,
+        8,
+        *range(12, 128, 4),
+        *range(128, 256, 16),
+        *range(256, 1024, 32),
+        *range(1024, max_num_tokens + 1, 64),
+    ]
+    sweep = sorted({value for value in raw if 1 <= value <= max_num_tokens})
+    if sweep[-1] != max_num_tokens:
+        sweep.append(max_num_tokens)
+    return sweep
 
 
 class ServerContext(msgspec.Struct, frozen=True):
@@ -496,9 +507,19 @@ def cli_main() -> None:
         "--batch-size",
         type=int,
         nargs="+",
-        default=DEFAULT_BATCH_SIZE,
-        help="Decode batch sizes to sweep. Each maps to a batch_tokens probe in "
-        "the SPS table.",
+        default=None,
+        help="Explicit decode batch sizes to sweep (each maps to a batch_tokens "
+        "probe). Overrides --max-num-tokens when given; defaults to None, i.e. the "
+        "tapered sweep derived from --max-num-tokens.",
+    )
+    parser.add_argument(
+        "--max-num-tokens",
+        type=int,
+        default=DEFAULT_MAX_NUM_TOKENS,
+        help="Upper bound of the auto-generated tapered batch-size sweep (used only "
+        "when --batch-size is not given): powers of 2 up to 8, then step 4 / 16 / "
+        "32 through 1024, then step 64 out to this value. This is the largest "
+        "batch_tokens the table will probe.",
     )
     parser.add_argument(
         "--input-len",
@@ -569,9 +590,15 @@ def cli_main() -> None:
     )
     random.seed(PROFILE_SEED)
 
+    batch_size = (
+        args.batch_size
+        if args.batch_size is not None
+        else build_batch_size_sweep(args.max_num_tokens)
+    )
+
     profile(
         base_url=args.base_url,
-        batch_size=args.batch_size,
+        batch_size=batch_size,
         input_len=args.input_len,
         output_len=args.output_len,
         out=args.out,

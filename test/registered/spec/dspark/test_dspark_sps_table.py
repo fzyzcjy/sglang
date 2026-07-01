@@ -311,5 +311,46 @@ class TestBuildSpsCostTableContract(CustomTestCase):
         self.assertEqual(loaded.max_batch_tokens, table.max_batch_tokens)
 
 
+class TestBuildBatchSizeSweep(CustomTestCase):
+    def _sweep(self, max_num_tokens):
+        from sglang.benchmark.dspark_sps_profiler import build_batch_size_sweep
+
+        return build_batch_size_sweep(max_num_tokens)
+
+    def test_sweep_is_strictly_increasing_deduped_and_ends_at_max(self):
+        """Every generated sweep is sorted, unique, within [1, max], and ends at max."""
+        for max_num_tokens in (8, 100, 1024, 4096, 8192):
+            sweep = self._sweep(max_num_tokens)
+            self.assertEqual(sweep, sorted(set(sweep)))
+            self.assertTrue(all(1 <= value <= max_num_tokens for value in sweep))
+            self.assertEqual(sweep[-1], max_num_tokens)
+
+    def test_sweep_head_is_the_fixed_taper(self):
+        """The small-batch head is the fixed powers-of-2 / step-4 taper."""
+        sweep = self._sweep(1024)
+        self.assertEqual(sweep[:6], [1, 2, 4, 8, 12, 16])
+
+    def test_default_max_matches_legacy_endpoints(self):
+        """max_num_tokens=1024 keeps the legacy sweep's 32-step approach to 1024."""
+        sweep = self._sweep(1024)
+        self.assertEqual(sweep[-4:], [928, 960, 992, 1024])
+
+    def test_large_max_extends_with_step_64_past_1024(self):
+        """Above 1024 the sweep continues in step-64 increments out to max."""
+        sweep = self._sweep(8192)
+        beyond = [value for value in sweep if value > 1024]
+        self.assertEqual(beyond[:3], [1088, 1152, 1216])
+        self.assertEqual(sweep[-1], 8192)
+
+    def test_tiny_max_truncates_the_taper(self):
+        """A small max keeps only the head values that fit."""
+        self.assertEqual(self._sweep(8), [1, 2, 4, 8])
+
+    def test_non_positive_max_raises(self):
+        """max_num_tokens < 1 is rejected."""
+        with self.assertRaises(ValueError):
+            self._sweep(0)
+
+
 if __name__ == "__main__":
     unittest.main()
