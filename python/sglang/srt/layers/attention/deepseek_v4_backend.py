@@ -145,15 +145,20 @@ def compute_target_verify_graph_key(
     if ragged_layout is None:
         return bs, num_tokens_full_block
     graph_num_tokens = ragged_layout.graph_num_tokens
-    total_verify_tokens = ragged_layout.total_verify_tokens
     assert graph_num_tokens <= num_tokens_full_block, (
         f"ragged verify graph_num_tokens={graph_num_tokens} exceeds full block "
         f"num_draft*bs={num_tokens_full_block}"
     )
-    assert total_verify_tokens <= graph_num_tokens, (
-        f"ragged verify total_verify_tokens={total_verify_tokens} exceeds the "
-        f"round-up bucket graph_num_tokens={graph_num_tokens}"
-    )
+    # total_verify_tokens is None on the sync-free device layout
+    # (from_verify_lens_device); it carries a host mirror only on the eager path.
+    # The returned tier keys off graph_num_tokens (bs-derived), never the total, so
+    # validate the total<=tier invariant only when the host mirror is present.
+    total_verify_tokens = ragged_layout.total_verify_tokens
+    if total_verify_tokens is not None:
+        assert total_verify_tokens <= graph_num_tokens, (
+            f"ragged verify total_verify_tokens={total_verify_tokens} exceeds the "
+            f"round-up bucket graph_num_tokens={graph_num_tokens}"
+        )
     return graph_num_tokens, graph_num_tokens
 
 
@@ -874,17 +879,26 @@ class DeepseekV4AttnBackend(
                 "DSV4 ragged verify does not support online c128 MTP; "
                 "set SGLANG_RAGGED_VERIFY_MODE off or disable online compress."
             )
-        assert int(layout.verify_lens.min()) >= 1
-        assert layout.total_verify_tokens == int(layout.verify_lens.sum())
+        # Host-mirror validations only. On the sync-free device path
+        # (from_verify_lens_device) verify_lens_cpu / total_verify_tokens are None,
+        # so reading them here would both deref None and force a per-step D2H. The
+        # anchor(>=1) and total<=graph_num_tokens invariants they check hold by
+        # construction on that path (round_up_grid(bs*(gamma+1)) >= sum verify_len,
+        # each verify_len <= gamma+1), mirroring RaggedVerifyLayout.__post_init__.
+        if layout.verify_lens_cpu is not None:
+            assert int(layout.verify_lens.min()) >= 1
+            assert layout.total_verify_tokens == int(layout.verify_lens.sum())
         # The runner pads bs up to the captured tier's capture_bs; pad the layout
         # to match so its verify_lens / extend_start_loc cover every captured
         # request slot and sum to graph_num_tokens (the padded-token contract).
         layout = layout.padded_to_bucket(
             num_draft_tokens=self.speculative_num_draft_tokens
         )
+        # layout.bs reads verify_lens.shape[0] (host tensor metadata, no D2H), so it
+        # is safe when verify_lens_cpu is None; the old len(verify_lens_cpu) crashed.
         assert (
-            len(layout.verify_lens_cpu) == bs
-        ), f"padded ragged layout bs {len(layout.verify_lens_cpu)} != batch bs {bs}"
+            layout.bs == bs
+        ), f"padded ragged layout bs {layout.bs} != batch bs {bs}"
         return layout
 
     def _target_verify_graph_key(
