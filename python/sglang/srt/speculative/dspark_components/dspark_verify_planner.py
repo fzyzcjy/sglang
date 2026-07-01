@@ -268,19 +268,24 @@ class DSparkVerifyPlanner:
         prefix_lens: torch.Tensor,
         req_pool_indices: torch.Tensor,
     ) -> Optional[int]:
-        # Non-overlap fallback: no relay, so snapshot this step's confidence + prefix
-        # to host synchronously (acceptable -- the non-overlap loop is already
-        # synchronous) and feed the same host carry + greedy. The carry was built with
-        # relay_lag_steps=0 so it supplies the full causal lag here.
+        # Non-overlap fallback: no relay, so snapshot this step's confidence to host
+        # synchronously (the non-overlap loop is already synchronous) and feed the same
+        # carry + greedy; the carry (relay_lag_steps=0) supplies the full lag. generation
+        # = each slot's current occupancy stamp for this step's confidence.
+        # (prefix_lens is vestigial now the guard uses generation, not the seq_len stamp.)
+        del prefix_lens
         if self._budget_planner is None:
             return None
+        req_pool_indices_cpu = req_pool_indices.to("cpu").to(torch.int64)
+        generation = self.model_runner.req_to_token_pool.req_generation[
+            req_pool_indices_cpu
+        ].clone()
         resolved = ResolvedConfidence(
             confidence=confidence.to("cpu"),
-            seq_lens_stamp=prefix_lens.to("cpu"),
-            prefix_lens=prefix_lens.to("cpu"),
+            generation=generation,
         )
         return self._budget_from_resolved(
-            resolved=resolved, req_pool_indices_cpu=req_pool_indices.to("cpu")
+            resolved=resolved, req_pool_indices_cpu=req_pool_indices_cpu
         )
 
     def _budget_from_resolved(
@@ -293,11 +298,16 @@ class DSparkVerifyPlanner:
         # uniform verify-all layout, identical to the pre-relay startup behavior.
         if resolved is None:
             return None
+        # Each slot's CURRENT occupancy generation (host, no D2H) for the guard to
+        # compare against the relayed confidence's stamped generation.
+        current_generation = self.model_runner.req_to_token_pool.req_generation[
+            req_pool_indices_cpu.to(torch.int64)
+        ]
         return int(
             self._budget_planner.compute_budget(
                 confidence=resolved.confidence,
-                seq_lens_stamp=resolved.seq_lens_stamp,
-                prefix_lens=resolved.prefix_lens,
+                generation=resolved.generation,
+                current_generation=current_generation,
                 req_pool_indices_cpu=req_pool_indices_cpu,
             )
         )
