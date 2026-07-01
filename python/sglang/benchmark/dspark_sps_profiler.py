@@ -260,6 +260,44 @@ def _should_skip_case(
     )
 
 
+def _bench_case_or_none(
+    *,
+    base_url: str,
+    batch_size: int,
+    input_len: int,
+    output_len: int,
+    run_name: str,
+    result_filename: str,
+    tokenizer: object,
+) -> Optional[BenchOneCaseResult]:
+    try:
+        return run_one_case(
+            base_url,
+            batch_size=batch_size,
+            input_len=input_len,
+            output_len=output_len,
+            temperature=PROFILE_TEMPERATURE,
+            return_logprob=False,
+            stream_interval=PROFILE_STREAM_INTERVAL,
+            input_len_step_percentage=PROFILE_INPUT_LEN_STEP_PERCENTAGE,
+            run_name=run_name,
+            result_filename=result_filename,
+            tokenizer=tokenizer,
+        )
+    except Exception:
+        # A large batch can OOM the server (killing the scheduler) or drop the
+        # streamed response; skip that probe instead of aborting the whole sweep,
+        # so the table is still built from the cases that survived.
+        logger.warning(
+            "Bench case bs=%s (input_len=%s, output_len=%s) failed; skipping it.",
+            batch_size,
+            input_len,
+            output_len,
+            exc_info=True,
+        )
+        return None
+
+
 def run_bench_cases(
     *,
     context: ServerContext,
@@ -280,15 +318,11 @@ def run_bench_cases(
             output_len=WARMUP_OUTPUT_LEN,
         ):
             continue
-        run_one_case(
-            context.base_url,
+        _bench_case_or_none(
+            base_url=context.base_url,
             batch_size=batch_size,
             input_len=WARMUP_INPUT_LEN,
             output_len=WARMUP_OUTPUT_LEN,
-            temperature=PROFILE_TEMPERATURE,
-            return_logprob=False,
-            stream_interval=PROFILE_STREAM_INTERVAL,
-            input_len_step_percentage=PROFILE_INPUT_LEN_STEP_PERCENTAGE,
             run_name="",
             result_filename="",
             tokenizer=tokenizer,
@@ -306,19 +340,17 @@ def run_bench_cases(
                 output_len=output_len,
             ):
                 continue
-            result = run_one_case(
-                context.base_url,
+            result = _bench_case_or_none(
+                base_url=context.base_url,
                 batch_size=batch_size,
                 input_len=input_len,
                 output_len=output_len,
-                temperature=PROFILE_TEMPERATURE,
-                return_logprob=False,
-                stream_interval=PROFILE_STREAM_INTERVAL,
-                input_len_step_percentage=PROFILE_INPUT_LEN_STEP_PERCENTAGE,
                 run_name="dspark_sps",
                 result_filename=str(result_path),
                 tokenizer=tokenizer,
             )
+            if result is None:
+                continue
             # Emit each case's result the moment it is benched, so a long sweep
             # is inspectable live (and salvageable from the log if it dies
             # mid-run) rather than only after the whole table is assembled. Two
