@@ -213,6 +213,13 @@ class FlashAttentionBackend(AttentionBackend):
     - For each forward batch, init_replay_cuda_graph will be called first and then replay the graph.
     """
 
+    # DSpark compact (ragged) target-verify is cuda-graphable here: the verify
+    # forward is varlen-native (flash_attn reads cu_seqlens_q), so a token-keyed
+    # graph captures the uniform tier geometry and replay refills cu_seqlens_q /
+    # cache_seqlens from the padded-to-bucket ragged layout (see
+    # _apply_cuda_graph_metadata's target-verify ragged branch).
+    supports_ragged_verify_graph: bool = True
+
     def __init__(
         self,
         model_runner: ModelRunner,
@@ -420,30 +427,11 @@ class FlashAttentionBackend(AttentionBackend):
             num_splits=self.num_splits,
         )
 
-    def _assert_no_ragged_verify(self, forward_batch: ForwardBatch) -> None:
-        # FlashAttention serves ragged (compact) verify EAGERLY (init_forward_metadata
-        # builds the variable-length geometry from spec_info.ragged_verify_layout), but
-        # has no token-keyed cuda-graph builder yet. supports_ragged_verify_graph is
-        # False, so the runner forces a ragged batch to eager and never reaches the
-        # graph capture/replay path; this guard stays on that path as a safety net so a
-        # ragged layout can never silently run the uniform gamma+1 capture geometry.
-        spec_info = forward_batch.spec_info
-        if (
-            forward_batch.forward_mode.is_target_verify()
-            and getattr(spec_info, "ragged_verify_layout", None) is not None
-        ):
-            raise NotImplementedError(
-                "FlashAttention does not support cuda-graphed DSpark compact (ragged) "
-                "verify; supports_ragged_verify_graph is False so this batch should "
-                "have run eager. set SGLANG_RAGGED_VERIFY_MODE=static to graph it."
-            )
-
     def init_forward_metadata_out_graph(
         self,
         forward_batch: ForwardBatch,
         in_capture: bool = False,
     ):
-        self._assert_no_ragged_verify(forward_batch)
         bs = forward_batch.batch_size
         req_pool_indices = forward_batch.req_pool_indices
         seq_lens = forward_batch.seq_lens
@@ -683,16 +671,13 @@ class FlashAttentionBackend(AttentionBackend):
                     forward_batch.spec_info, "ragged_verify_layout", None
                 )
                 if ragged_layout is not None:
-                    # DSpark compact (ragged) verify: each request verifies its own
-                    # verify_lens entry, so the query side is variable-length. The
-                    # flash-attn varlen kernel reads cu_seqlens_q (the layout's
-                    # qo_indptr) directly, exactly as it reads the uniform arange
-                    # below -- the forward needs no ragged-vs-uniform branch. This is
-                    # the EAGER builder; fa3 has no token-keyed ragged graph yet, so
-                    # the graphed path is reached only with cuda graph disabled (the
-                    # decode runner still attempts a ragged verify capture whenever
-                    # SGLANG_RAGGED_VERIFY_MODE=compact, which init_forward_metadata_out_graph
-                    # rejects via supports_ragged_verify_graph=False).
+                    # DSpark compact (ragged) verify, EAGER path: each request verifies
+                    # its own verify_lens entry, so cu_seqlens_q is variable. flash-attn
+                    # reads it directly (same as the uniform arange below) -- no
+                    # ragged-vs-uniform forward branch. Hit when the batch is not
+                    # admitted to a token-keyed graph tier (too many tokens / DP
+                    # mismatch); the graphed path is _apply_cuda_graph_metadata's ragged
+                    # branch.
                     geometry = build_ragged_target_verify_geometry(
                         seq_lens=forward_batch.seq_lens, layout=ragged_layout
                     )
@@ -2553,9 +2538,26 @@ class FlashAttentionBackend(AttentionBackend):
         elif forward_mode.is_target_verify():
             if self.topk <= 1:
                 metadata = self.target_verify_metadata[bs]
-                metadata.cache_seqlens_int32.copy_(
-                    (seq_lens + self.speculative_num_draft_tokens)
-                )
+                ragged_layout = getattr(spec_info, "ragged_verify_layout", None)
+                if ragged_layout is not None:
+                    # DSpark compact (ragged) verify replay: the graph was captured at
+                    # the uniform tier (cu_seqlens_q = arange step=num_draft_tokens);
+                    # refill it with the padded-to-bucket variable qo_indptr (same total
+                    # tokens as the captured tier) and cache_seqlens = seq_lens +
+                    # per-request verify_lens. max_seq_len_q stays frozen at
+                    # num_draft_tokens (set at capture); the padded tail is discarded.
+                    padded = ragged_layout.padded_to_bucket(
+                        num_draft_tokens=self.speculative_num_draft_tokens
+                    )
+                    geometry = build_ragged_target_verify_geometry(
+                        seq_lens=seq_lens, layout=padded
+                    )
+                    metadata.cache_seqlens_int32.copy_(geometry.cache_seqlens_int32)
+                    metadata.cu_seqlens_q.copy_(geometry.cu_seqlens_q)
+                else:
+                    metadata.cache_seqlens_int32.copy_(
+                        (seq_lens + self.speculative_num_draft_tokens)
+                    )
 
                 # Page table built on-device (self-guards on cache_seqlens);
                 # max_seq_len_k left unset -- unread here (scheduler_metadata is
