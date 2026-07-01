@@ -72,7 +72,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_OUT = "~/main/artifacts/sglang/dspark_sps_table.json"
 # Dense low/mid batch sampling: powers of 2 up to 8, then every 4 up to 128, so
 # the SPS(B) hardware cliffs are captured at fine granularity where they matter.
-DEFAULT_BATCH_SIZE = [1, 2, 4, 8, *range(12, 128 + 1, 4), *range(160, 256 + 1, 16), *range(256, 1024 + 1, 32)]
+DEFAULT_BATCH_SIZE = [1, 2, 4, 8, *range(12, 128, 4), *range(128, 256, 16), *range(256, 1024 + 1, 32)]
 DEFAULT_INPUT_LEN = [16]
 DEFAULT_OUTPUT_LEN = [1024]
 WARMUP_INPUT_LEN = 16
