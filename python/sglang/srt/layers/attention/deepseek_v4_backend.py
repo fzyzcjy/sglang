@@ -896,9 +896,7 @@ class DeepseekV4AttnBackend(
         )
         # layout.bs reads verify_lens.shape[0] (host tensor metadata, no D2H), so it
         # is safe when verify_lens_cpu is None; the old len(verify_lens_cpu) crashed.
-        assert (
-            layout.bs == bs
-        ), f"padded ragged layout bs {layout.bs} != batch bs {bs}"
+        assert layout.bs == bs, f"padded ragged layout bs {layout.bs} != batch bs {bs}"
         return layout
 
     def _target_verify_graph_key(
