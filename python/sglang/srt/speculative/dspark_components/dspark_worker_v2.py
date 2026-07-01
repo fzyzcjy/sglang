@@ -124,18 +124,22 @@ class DSparkWorkerV2(BaseSpecWorker):
         self._draft_dp_context_enabled = (
             server_args.enable_dp_attention and not self._draft_is_moe
         )
-        if server_args.enable_dp_attention and self._draft_is_moe:
-            # The full-DP MoE path is not supported yet. Pure-TP-MoE under DP
-            # corrupts outputs (unequal per-rank batch all-reduce, design doc 9.1),
-            # and the DeepEP expert-parallel DP path that a correct MoE-under-DP
-            # needs is not wired into the DSpark draft (and its FP4 kernels require
-            # Blackwell). Fail fast instead of silently returning garbage. Run the
-            # MoE (DeepSeek-V4) model without --enable-dp-attention, or use a dense
-            # draft.
+        attn_tp_size = server_args.tp_size // max(server_args.dp_size, 1)
+        if (
+            server_args.enable_dp_attention
+            and self._draft_is_moe
+            and attn_tp_size > 1
+        ):
+            # MoE draft under DP runs full-DP pure-TP-MoE (a2a="none"): its _run_ffn
+            # goes through the shared parent MoE-DP gather (dp_moe_sync). That path is
+            # only correct when attn_tp == 1 (dp_size == tp_size); with attn_tp > 1 the
+            # unequal per-rank verify batch corrupts the attn-TP all-reduce (design doc
+            # 9.1). MXFP4 experts have no DeepEP runner, so DeepEP-EP is not an option.
+            # Fail fast on the known-broken attn_tp > 1 case instead of silent garbage.
             raise ValueError(
-                "DSpark with dp attention does not support a DeepSeek-V4 (MoE) "
-                "draft yet. Run the MoE model without --enable-dp-attention, or "
-                "use a dense (non-MoE) draft."
+                "DSpark + dp attention with a DeepSeek-V4 (MoE) draft requires "
+                "attn_tp == 1 (set --dp-size == --tp). attn_tp > 1 corrupts the "
+                "MoE-under-DP all-reduce."
             )
 
         # Draft runner (separate KV cache + attention backend), shared with DFlash.
