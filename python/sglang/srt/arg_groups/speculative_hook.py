@@ -245,6 +245,29 @@ def _handle_dflash(server_args: ServerArgs) -> None:
         )
 
 
+def _target_checkpoint_bundles_dspark_draft(server_args: ServerArgs) -> bool:
+    """True iff the target checkpoint carries a bundled dsv4 DSpark draft head.
+
+    dsv4 DSpark checkpoints (e.g. ``DeepSeek-V4-Flash-DSpark``) are a superset of the base
+    model: they add the ``mtp.*`` draft weights and the ``dspark_*``-prefixed draft
+    hyperparameters (``dspark_block_size`` / ``dspark_markov_rank`` /
+    ``dspark_noise_token_id`` / ``dspark_target_layer_ids``) on the base config. Their
+    presence is the signal that the target and draft can share one repo / one download.
+    Dense DSpark drafts live in a separate ``*DSpark`` repo and carry none of these on the
+    target config, so this returns False for them.
+    """
+    hf_config = server_args.get_model_config().hf_config
+    return any(
+        getattr(hf_config, key, None) is not None
+        for key in (
+            "dspark_block_size",
+            "dspark_markov_rank",
+            "dspark_noise_token_id",
+            "dspark_target_layer_ids",
+        )
+    )
+
+
 def _handle_dspark(server_args: ServerArgs) -> None:
     if not server_args.device.startswith("cuda"):
         raise ValueError("DSpark speculative decoding only supports CUDA device.")
@@ -284,10 +307,25 @@ def _handle_dspark(server_args: ServerArgs) -> None:
         )
 
     if server_args.speculative_draft_model_path is None:
-        raise ValueError(
-            "DSpark dense speculative decoding requires setting "
-            "--speculative-draft-model-path."
-        )
+        # A dsv4 DSpark checkpoint bundles the base target AND the mtp.* draft head in one
+        # repo (like DeepSeek MTP/NEXTN): the target loader skips all mtp.* weights and the
+        # DSpark draft loader consumes only mtp.*, so both can share one --model-path / one
+        # download. Detect the bundled draft by the dspark_* config fields and default the
+        # draft path to the model path. A plain target (dense DSpark, whose draft is a
+        # separate *DSpark repo) carries no such fields and still requires an explicit path.
+        if _target_checkpoint_bundles_dspark_draft(server_args):
+            server_args.speculative_draft_model_path = server_args.model_path
+            server_args.speculative_draft_model_revision = server_args.revision
+            logger.info(
+                "DSpark draft weights are bundled in the target checkpoint; "
+                "defaulting --speculative-draft-model-path to --model-path (%s).",
+                server_args.model_path,
+            )
+        else:
+            raise ValueError(
+                "DSpark dense speculative decoding requires setting "
+                "--speculative-draft-model-path."
+            )
 
     # DSpark does not use EAGLE-style num_steps/topk, but those still affect generic
     # scheduler/KV accounting. Force them to 1.

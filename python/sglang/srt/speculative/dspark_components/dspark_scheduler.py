@@ -11,11 +11,6 @@ from sglang.srt.speculative.dspark_components.dspark_sps_table import (
     SpsCostTable,
     load_sps_table_from_path,
 )
-from sglang.srt.utils.async_probe import maybe_assert_async
-
-# Sentinel for a host-carry row that was never written (or written for a different
-# request); the budget planner's freshness guard rejects rows still stamped with it.
-_CONFIDENCE_RELAY_UNSET_SEQ_LEN: int = -1
 
 
 class DSparkScheduleConfig(msgspec.Struct):
@@ -50,7 +45,8 @@ def compute_verify_token_budget(
     sps_table: SpsCostTable,
     cfg: DSparkScheduleConfig,
 ) -> int:
-    cfg.validate()
+    # cfg is validated once at planner construction and is immutable, so skip the
+    # per-step re-validation on this hot path (called every decode step).
     num_requests = history_survival_probs.shape[0]
     max_len = cfg.resolved_max_verify_len()
 
@@ -84,8 +80,8 @@ def schedule_verify_lens_topk(
     # GPU-native sort (no per-element D2H). survival_probs is the CURRENT step's
     # confidence cumprod (lag 0, on the forward stream); budget is a host int (the
     # relay-fed K). Everything below runs device-side so the captured graph can
-    # consume verify_lens with zero compute-stream sync.
-    cfg.validate()
+    # consume verify_lens with zero compute-stream sync. cfg validated once at
+    # planner construction (immutable) -> no per-step re-validation here.
     num_requests, _gamma = survival_probs.shape
     max_len = cfg.resolved_max_verify_len()
     device = survival_probs.device
@@ -173,45 +169,15 @@ def _value_independent_descending_order(
     return order
 
 
-class ConfidencePrefixScheduler:
-    def __init__(self, *, sps_table: SpsCostTable, cfg: DSparkScheduleConfig) -> None:
-        cfg.validate()
-        self.sps_table = sps_table
-        self.cfg = cfg
-
-    def compute_verify_lens(
-        self, *, two_steps_prior_k_survival: torch.Tensor, sort_survival: torch.Tensor
-    ) -> torch.Tensor:
-        budget = compute_verify_token_budget(
-            history_survival_probs=two_steps_prior_k_survival,
-            sps_table=self.sps_table,
-            cfg=self.cfg,
-        )
-        verify_lens = schedule_verify_lens_topk(
-            survival_probs=sort_survival,
-            budget=budget,
-            cfg=self.cfg,
-        )
-        verify_lens_64 = verify_lens.to(torch.int64)
-        # Measure admitted extra against the effective floor max(min_verify_len, 1)
-        # so the anchor padding added by the lower-bound clamp is not miscounted as
-        # budget overflow when an explicit min_verify_len=0 is clamped up to 1.
-        effective_floor = max(self.cfg.min_verify_len, 1)
-        maybe_assert_async(
-            (verify_lens_64 - effective_floor).sum() <= budget,
-            f"DSpark verify-len budget violated (budget={budget})",
-        )
-        return verify_lens
-
-
 class HostConfidenceBudgetPlanner:
     """Host-side verify-budget source (paper section 5.2 two-steps-prior barrier).
 
-    Owns a per-request-row host carry that shifts the FutureMap relay's natural
-    lag-1 confidence to the configured causal lag (default 2), applies the H1
-    freshness guard, and runs the pure-CPU greedy. Everything is a host tensor, so
-    the budget K is produced with zero D2H sync. Two feed paths share the carry +
-    guard + greedy:
+    Owns a per-request-row host carry that shifts the FutureMap relay's confidence
+    to the configured causal lag (default 2), applies the exact same-request guard
+    (req-pool occupancy generation: use the relayed confidence iff the slot still
+    holds the same request -- a recycled slot's generation differs), and runs the
+    pure-CPU greedy. Everything is a host tensor, so the budget K is produced with
+    zero D2H sync. Two feed paths share the carry + guard + greedy:
 
     - overlap: ``prepare_budget(resolved, req_pool_indices_cpu)`` consumes
       ``FutureMap.resolve_confidence_cpu`` in the scheduler prepare window.
@@ -247,29 +213,30 @@ class HostConfidenceBudgetPlanner:
         )
         self.carry_steps = max(self.lag_steps - int(relay_lag_steps), 0)
         self._carry_confidence: Optional[torch.Tensor] = None
-        self._carry_seq_lens: Optional[torch.Tensor] = None
+        self._carry_generation: Optional[torch.Tensor] = None
         self._carry_pos = 0
 
     def compute_budget(
         self,
         *,
         confidence: torch.Tensor,
-        seq_lens_stamp: torch.Tensor,
-        prefix_lens: torch.Tensor,
+        generation: torch.Tensor,
+        current_generation: torch.Tensor,
         req_pool_indices_cpu: torch.Tensor,
     ) -> int:
-        # confidence [bs, gamma], seq_lens_stamp [bs], prefix_lens [bs] -- all host,
-        # the relay's lag-1 snapshot for this batch's rows. Shift to lag, guard,
+        # confidence [bs, gamma], generation [bs] (the req-pool occupancy generation
+        # stamped with that confidence), current_generation [bs] (each slot's gen NOW)
+        # -- all host, the relay's snapshot for this batch's rows. Shift to lag, guard,
         # greedy. req_pool_indices_cpu scatters/gathers the per-row carry.
-        lagged_confidence, lagged_stamp = self._shift_to_lag(
+        lagged_confidence, lagged_generation = self._shift_to_lag(
             confidence=confidence,
-            seq_lens_stamp=seq_lens_stamp,
+            generation=generation,
             req_pool_indices_cpu=req_pool_indices_cpu,
         )
         survival = self._two_steps_prior_survival(
             lagged_confidence=lagged_confidence,
-            lagged_stamp=lagged_stamp,
-            prefix_lens=prefix_lens,
+            lagged_generation=lagged_generation,
+            current_generation=current_generation,
         )
         return compute_verify_token_budget(
             history_survival_probs=survival,
@@ -281,43 +248,41 @@ class HostConfidenceBudgetPlanner:
         self,
         *,
         confidence: torch.Tensor,
-        seq_lens_stamp: torch.Tensor,
+        generation: torch.Tensor,
         req_pool_indices_cpu: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # carry_steps == 0 (lag == 1): the relay's lag-1 value is used directly.
-        # Otherwise read the carry slot written carry_steps steps ago for these
-        # rows (= the lag-steps-prior confidence + its seq_len stamp, B2), then write
-        # this step's relay value back. Rows idle for a cycle keep a stale carry whose
-        # stamp the freshness guard rejects.
+        # carry_steps == 0 (relay already supplies the full lag): use the relayed
+        # value directly. Otherwise read the carry slot written carry_steps steps ago
+        # for these rows (= the lag-steps-prior confidence + its occupancy generation),
+        # then write this step's relayed value back. Rows idle for a cycle keep a stale
+        # carry whose generation the freshness guard rejects.
         if self.carry_steps == 0:
-            return confidence, seq_lens_stamp
+            return confidence, generation
         self._ensure_carry(gamma=confidence.shape[-1])
         slot = self._carry_pos % self.carry_steps
         rows = req_pool_indices_cpu.to(torch.int64)
         lagged_confidence = self._carry_confidence[slot, rows].clone()
-        lagged_stamp = self._carry_seq_lens[slot, rows].clone()
+        lagged_generation = self._carry_generation[slot, rows].clone()
         self._carry_confidence[slot, rows] = confidence.to(torch.float32)
-        self._carry_seq_lens[slot, rows] = seq_lens_stamp.to(torch.int64)
+        self._carry_generation[slot, rows] = generation.to(torch.int64)
         self._carry_pos += 1
-        return lagged_confidence, lagged_stamp
+        return lagged_confidence, lagged_generation
 
     def _two_steps_prior_survival(
         self,
         *,
         lagged_confidence: torch.Tensor,
-        lagged_stamp: torch.Tensor,
-        prefix_lens: torch.Tensor,
+        lagged_generation: torch.Tensor,
+        current_generation: torch.Tensor,
     ) -> torch.Tensor:
-        # cumprod of the lag-steps-prior confidence, with the H1 identity guard: a
-        # row is the SAME request iff its carried stamp is present (>= 0), strictly
-        # smaller than the current prefix (a live request commits >= 1 token/step),
-        # and within lag_steps of growth (<= lag_steps * (gamma + 1)). Stale / new /
-        # just-switched rows fall back to verify-all (survival = 1.0 everywhere).
+        # cumprod of the lag-steps-prior confidence, gated by the exact same-request
+        # check: fresh iff the stamped occupancy generation equals the slot's current
+        # generation and the slot is live (current_gen >= 1). Stale / recycled / cold-
+        # start rows fall back to verify-all (survival = 1.0). No seq_len, no coincidence.
         k_survival = torch.cumprod(lagged_confidence.to(torch.float32), dim=1)
-        growth = prefix_lens.to(torch.int64) - lagged_stamp.to(torch.int64)
-        max_growth = self.lag_steps * (self.cfg.gamma + 1)
+        current_gen = current_generation.to(torch.int64)
         fresh = (
-            (lagged_stamp.to(torch.int64) >= 0) & (growth >= 1) & (growth <= max_growth)
+            (current_gen >= 1) & (lagged_generation.to(torch.int64) == current_gen)
         ).view(-1, 1)
         return torch.where(fresh, k_survival, torch.ones_like(k_survival))
 
@@ -328,9 +293,10 @@ class HostConfidenceBudgetPlanner:
         self._carry_confidence = torch.zeros(
             (self.carry_steps, req_pool_size, gamma), dtype=torch.float32
         )
-        self._carry_seq_lens = torch.full(
+        # Init 0 (= no occupancy); a never-written carry row mismatches any live
+        # generation (>= 1), so the guard rejects it -> verify-all.
+        self._carry_generation = torch.zeros(
             (self.carry_steps, req_pool_size),
-            _CONFIDENCE_RELAY_UNSET_SEQ_LEN,
             dtype=torch.int64,
         )
 

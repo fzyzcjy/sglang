@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 import msgspec
 import torch
@@ -126,28 +126,35 @@ def resolve_forward_inputs(batch: ScheduleBatch, future_map: FutureMap) -> None:
         future_map._resolve_spec_extras(batch)
 
 
-# Sentinel for a confidence-relay row that was never written (or written for a
-# different request). The DSpark host budget planner's per-row identity guard
-# masks stale rows (stamped seq_len == this) before they enter the verify budget.
-CONFIDENCE_RELAY_UNSET_SEQ_LEN: int = -1
+# Sync-free confidence relay (deferred pinned ring). The D2H copy is issued at
+# publish time (async, gated on publish_ready), not at resolve time, so
+# resolve_confidence_cpu reads an already-landed pinned slot with NO
+# cudaStreamSynchronize. RING_LAG is how many publishes back resolve reads: under
+# the 1-deep overlap pipeline the immediately-prior forward (lag 1) is still in
+# flight at resolve, so the newest GUARANTEED-landed publish is lag 2 (that
+# forward's result was already popped/processed by event_loop_overlap). Reading
+# lag 2 needs no wait. This RING_LAG replaces the old "wait_event + synchronize"
+# lag-1 pull; the DSpark planner's overlap relay_lag_steps MUST equal RING_LAG so
+# the host carry supplies the correct remaining lag (carry_steps = total_lag -
+# RING_LAG). RING_DEPTH = RING_LAG + 1 keeps the slot being read alive across the
+# one intervening publish before it is overwritten.
+CONFIDENCE_RELAY_RING_LAG: int = 2
+CONFIDENCE_RELAY_RING_DEPTH: int = CONFIDENCE_RELAY_RING_LAG + 1
 
 
 class ResolvedConfidence(msgspec.Struct):
-    """Host snapshot of the relayed DSpark confidence for one batch, pulled
-    off-critical-path on the private fwd_prepare_d2h_stream (zero fresh compute-
-    stream sync). All tensors are host, indexed to the batch's request rows.
+    """Host snapshot of one batch's relayed DSpark confidence, read from the
+    already-landed pinned ring slot (host tensors, indexed to the batch's rows).
 
-    - confidence: [bs, gamma] the lag-1 per-step confidence the relay just resolved.
-    - seq_lens_stamp: [bs] the prefix_len stamped WHEN that confidence was computed
-      (the lag-1 stamp), used by the budget planner's freshness guard after the
-      host carry shifts it to lag-2 (B2).
-    - prefix_lens: [bs] the current step's prefix_len (post-commit seq_lens published
-      last step), the guard's other operand.
+    - confidence: [bs, gamma] the lag-RING_LAG per-step confidence; with overlap
+      carry_steps == 0 the budget planner consumes it directly as two-steps-prior.
+    - generation: [bs] the req-pool occupancy generation stamped with this confidence
+      (see ReqToTokenPool.req_generation). The guard uses it iff it equals the slot's
+      current generation (same request still holds the slot); else verify-all.
     """
 
     confidence: torch.Tensor
-    seq_lens_stamp: torch.Tensor
-    prefix_lens: torch.Tensor
+    generation: torch.Tensor
 
 
 @dataclass
@@ -170,6 +177,125 @@ class RelayPayload:
             topk_index=draft_input.topk_index,
             hidden_states=draft_input.hidden_states,
             draft_probs=getattr(draft_input, "draft_probs", None),
+        )
+
+
+class ConfidenceRelay(msgspec.Struct):
+    """DSpark confidence channel state + sync-free pinned-ring relay (see the
+    CONFIDENCE_RELAY_RING_LAG comment for the lag / no-sync rationale).
+
+    scatter() writes this step's confidence into the device buf; issue_ring_copy()
+    async-D2Hs it into the next pinned ring slot (gated on publish_ready) and records
+    the per-slot occupancy generation into a parallel HOST gen ring (no D2H). resolve()
+    reads the already-landed lag-RING_LAG slot's confidence + its gen stamp (the guard
+    compares gen vs the slot's current generation; see ReqToTokenPool.req_generation).
+    Buffers lazy-init on the first publish (gamma peeked from the confidence shape);
+    device/req_pool_size/pool set at construction, else None/0 (inert when
+    needs_confidence_relay is False).
+    """
+
+    device: torch.device
+    req_pool_size: int
+    # ReqToTokenPool (source of the per-slot occupancy generation). Typed Any, not
+    # ReqToTokenPool: that name is TYPE_CHECKING-only, and msgspec resolves Struct
+    # field annotations at class-definition time -> a real name would NameError.
+    pool: Any
+    # device scatter target (accumulates across steps; only this batch's rows update)
+    confidence_buf: Optional[torch.Tensor] = None
+    # pinned confidence ring (depth CONFIDENCE_RELAY_RING_DEPTH), D2H'd at publish
+    conf_ring: Optional[torch.Tensor] = None
+    # HOST generation ring, parallel to conf_ring: gen_ring[slot] snapshots
+    # pool.req_generation at that publish (no D2H). Compared at resolve.
+    gen_ring: Optional[torch.Tensor] = None
+    # one device.Event per slot; query() at resolve is the fuse that the slot landed
+    copy_done: Optional[list] = None
+    # monotone publish counter; slot = pos % depth, resolve reads pos - RING_LAG
+    ring_pos: int = 0
+    initialized: bool = False
+
+    def _lazy_init(self, confidence: torch.Tensor) -> None:
+        # Peek gamma from the first published confidence ([bs, gamma]); allocate the
+        # device buf + (CUDA) pinned confidence ring + host gen ring. gen_ring seeds 0
+        # (= no occupancy) so a never-written slot mismatches any live generation.
+        self.initialized = True
+        gamma = confidence.shape[-1]
+        self.confidence_buf = torch.empty(
+            (self.req_pool_size, gamma), dtype=torch.float32, device=self.device
+        )
+        if _is_cuda:
+            depth = CONFIDENCE_RELAY_RING_DEPTH
+            self.conf_ring = torch.empty(
+                (depth, self.req_pool_size, gamma),
+                dtype=torch.float32,
+                pin_memory=True,
+            )
+            self.gen_ring = torch.zeros((depth, self.req_pool_size), dtype=torch.int64)
+            self.copy_done = [
+                torch.get_device_module(self.device).Event() for _ in range(depth)
+            ]
+
+    def scatter(self, indices: torch.Tensor, confidence: torch.Tensor) -> None:
+        # Scatter this step's confidence into the device buf, BEFORE publish records
+        # publish_ready (so the gated ring D2H sees it).
+        if not self.initialized:
+            self._lazy_init(confidence)
+        self.confidence_buf[indices] = confidence.to(self.confidence_buf.dtype)
+
+    def issue_ring_copy(self, *, stream, publish_ready) -> None:
+        # Async-D2H the whole confidence buf into the next ring slot, gated on the
+        # just-recorded publish_ready; also snapshot the current per-slot generation
+        # into the parallel HOST gen ring (plain host copy, no D2H). ring_pos advances
+        # once per confidence publish (decode-verify step), in lockstep with resolve.
+        if not self.initialized or stream is None or publish_ready is None:
+            return
+        slot = self.ring_pos % CONFIDENCE_RELAY_RING_DEPTH
+        stream.wait_event(publish_ready)
+        with torch.get_device_module(self.device).stream(stream):
+            self.conf_ring[slot].copy_(self.confidence_buf, non_blocking=True)
+            self.copy_done[slot].record()
+        self.gen_ring[slot].copy_(self.pool.req_generation)
+        self.ring_pos += 1
+
+    def resolve(
+        self, batch: ScheduleBatch, *, stream, publish_ready
+    ) -> Optional[ResolvedConfidence]:
+        # Sync-free pull: read the pinned ring slot published RING_LAG steps ago (its
+        # async D2H is already landed) -> NO cudaStreamSynchronize. Returns None (cold
+        # start / DP idle) so the caller falls back to verify-all.
+        if not self.initialized:
+            return None
+        draft_input = batch.spec_info
+        if draft_input is None:
+            return None
+        fi = draft_input.future_indices
+        if fi is None or fi.shape[0] == 0:
+            return None
+
+        if stream is None or publish_ready is None:
+            # bootstrap / non-CUDA: synchronous pull (rare). generation = the current
+            # gen, so the guard's equality holds -> fresh (same as the old bootstrap).
+            idx = batch.req_pool_indices
+            idx_cpu = batch.req_pool_indices_cpu
+            return ResolvedConfidence(
+                confidence=self.confidence_buf[idx].cpu(),
+                generation=self.pool.req_generation[idx_cpu].clone(),
+            )
+
+        # Not enough publishes yet for a lag-RING_LAG slot -> verify-all fallback.
+        if self.ring_pos < CONFIDENCE_RELAY_RING_LAG:
+            return None
+        slot = (self.ring_pos - CONFIDENCE_RELAY_RING_LAG) % CONFIDENCE_RELAY_RING_DEPTH
+        # Fuse: the lag-RING_LAG copy is expected landed (that forward was already
+        # processed by the overlap loop). If not (deeper pipeline than assumed), fall
+        # back to verify-all rather than reading a stale/unlanded slot -- safe, never
+        # wrong (losslessness is the accept-cap's job, not the budget's).
+        if not self.copy_done[slot].query():
+            return None
+
+        idx_cpu = batch.req_pool_indices_cpu
+        return ResolvedConfidence(
+            confidence=self.conf_ring[slot][idx_cpu],
+            generation=self.gen_ring[slot][idx_cpu],
         )
 
 
@@ -226,18 +352,14 @@ class FutureMap:
 
         self.publish_ready = None  # lazy device.Event(); only spec_v2 needs it
 
-        # DSpark confidence relay (gated by needs_confidence_relay). Mirrors the
-        # seq_lens async relay: a device buf scatter-written on the forward stream
-        # by publish(), pulled to a pinned host buffer on the private
-        # fwd_prepare_d2h_stream by resolve_confidence_cpu() (gated on the same
-        # publish_ready event, so no compute-stream sync). Lazy-inited on the first
-        # publish so gamma is peeked from the confidence shape (no gamma param).
-        self.confidence_buf = None
-        self.confidence_seq_lens_buf = None
-        self.confidence_cpu_pinned = None
-        self.confidence_seq_lens_cpu_pinned = None
-        self.confidence_prefix_cpu_pinned = None
-        self._confidence_buf_initialized = False
+        # DSpark confidence relay: all per-step state + the sync-free ring logic live
+        # in ConfidenceRelay; publish() / resolve_confidence_cpu() are thin forwarders.
+        # Gated by needs_confidence_relay (False for non-DSpark -> never touched).
+        self.confidence_relay = ConfidenceRelay(
+            device=self.device,
+            req_pool_size=self.req_pool_size,
+            pool=req_to_token_pool,
+        )
 
     def _lazy_init_forward_buf(self, payload: RelayPayload):
         # Local import (see decide_needs_cpu_seq_lens): keep module-level deps leaf.
@@ -284,76 +406,16 @@ class FutureMap:
                 device=self.device,
             )
 
-    def _lazy_init_confidence_buf(self, confidence: torch.Tensor) -> None:
-        # Peek gamma from the first published confidence ([bs, gamma]); allocate the
-        # device buf + (CUDA) pinned mirrors. The seq_len stamp buf seeds the unset
-        # sentinel so a never-written row is detectably stale to the budget guard.
-        self._confidence_buf_initialized = True
-        gamma = confidence.shape[-1]
-        self.confidence_buf = torch.empty(
-            (self.req_pool_size, gamma), dtype=torch.float32, device=self.device
-        )
-        self.confidence_seq_lens_buf = torch.full(
-            (self.req_pool_size,),
-            CONFIDENCE_RELAY_UNSET_SEQ_LEN,
-            dtype=torch.int64,
-            device=self.device,
-        )
-        if _is_cuda:
-            self.confidence_cpu_pinned = torch.empty(
-                (self.req_pool_size, gamma), dtype=torch.float32, pin_memory=True
-            )
-            self.confidence_seq_lens_cpu_pinned = torch.empty(
-                (self.req_pool_size,), dtype=torch.int64, pin_memory=True
-            )
-            self.confidence_prefix_cpu_pinned = torch.empty(
-                (self.req_pool_size,), dtype=torch.int64, pin_memory=True
-            )
-
     def resolve_confidence_cpu(
         self, batch: ScheduleBatch
     ) -> Optional[ResolvedConfidence]:
-        # Mirror of resolve_seq_lens_cpu for the DSpark confidence channel: pull the
-        # lag-1 confidence + its seq_len stamp + the current prefix to host without
-        # syncing the compute stream. Returns None (cold start / disabled / DP idle)
-        # so the caller falls back to verify-all. Always copies the current prefix
-        # from new_seq_lens_buf here (resolve_seq_lens_cpu skips that copy on the
-        # GPU-only needs_cpu_seq_lens=False path), keeping the budget guard backend-
-        # agnostic.
-        if not self.needs_confidence_relay or not self._confidence_buf_initialized:
+        # Thin forwarder to the DSpark confidence relay's sync-free ring read.
+        if not self.needs_confidence_relay:
             return None
-        draft_input = batch.spec_info
-        if draft_input is None:
-            return None
-        fi = draft_input.future_indices
-        if fi is None or fi.shape[0] == 0:
-            return None
-
-        if self.fwd_prepare_d2h_stream is None or self.publish_ready is None:
-            # bootstrap / non-CUDA: synchronous pull (rare; same correctness).
-            idx = batch.req_pool_indices
-            return ResolvedConfidence(
-                confidence=self.confidence_buf[idx].cpu(),
-                seq_lens_stamp=self.confidence_seq_lens_buf[idx].cpu(),
-                prefix_lens=self.new_seq_lens_buf[idx].cpu(),
-            )
-
-        self.fwd_prepare_d2h_stream.wait_event(self.publish_ready)
-        with torch.get_device_module(self.device).stream(self.fwd_prepare_d2h_stream):
-            self.confidence_cpu_pinned.copy_(self.confidence_buf, non_blocking=True)
-            self.confidence_seq_lens_cpu_pinned.copy_(
-                self.confidence_seq_lens_buf, non_blocking=True
-            )
-            self.confidence_prefix_cpu_pinned.copy_(
-                self.new_seq_lens_buf, non_blocking=True
-            )
-        self.fwd_prepare_d2h_stream.synchronize()
-
-        idx_cpu = batch.req_pool_indices_cpu
-        return ResolvedConfidence(
-            confidence=self.confidence_cpu_pinned[idx_cpu],
-            seq_lens_stamp=self.confidence_seq_lens_cpu_pinned[idx_cpu],
-            prefix_lens=self.confidence_prefix_cpu_pinned[idx_cpu],
+        return self.confidence_relay.resolve(
+            batch,
+            stream=self.fwd_prepare_d2h_stream,
+            publish_ready=self.publish_ready,
         )
 
     def _resolve_spec_extras(self, batch: ScheduleBatch) -> None:
@@ -453,22 +515,28 @@ class FutureMap:
         if indices.shape[0] == 0:
             return  # DP idle
         self.new_seq_lens_buf[indices] = new_seq_lens.to(self.new_seq_lens_buf.dtype)
-        # DSpark confidence channel (gated): scatter this step's confidence + the
-        # prefix_len stamp on the forward stream BEFORE the publish_ready record, so
-        # resolve_confidence_cpu (gated on the same event) sees them. Only DSpark
+        # DSpark confidence channel (gated): scatter this step's confidence into the
+        # device buf on the forward stream BEFORE the publish_ready record, so the ring
+        # D2H (issued after the record, gated on the same event) sees it. Only DSpark
         # callers pass confidence; every other publisher leaves it None -> no-op.
-        if self.needs_confidence_relay and confidence is not None:
-            if not self._confidence_buf_initialized:
-                self._lazy_init_confidence_buf(confidence)
-            self.confidence_buf[indices] = confidence.to(self.confidence_buf.dtype)
-            self.confidence_seq_lens_buf[indices] = confidence_seq_lens.to(
-                self.confidence_seq_lens_buf.dtype
-            )
+        # (confidence_seq_lens is vestigial now the guard uses req-pool generation
+        # instead of the seq_len stamp; kept until the worker call is tidied.)
+        del confidence_seq_lens
+        publish_confidence = self.needs_confidence_relay and confidence is not None
+        if publish_confidence:
+            self.confidence_relay.scatter(indices, confidence)
         # Only spec_v2 needs the event; it gates the seq_lens D2H on the private stream.
         if self.spec_algo.is_some():
             if self.publish_ready is None:
                 self.publish_ready = torch.get_device_module(self.device).Event()
             self.publish_ready.record()
+        # Issue the ring D2H AFTER the record (so it is gated on the just-recorded
+        # publish_ready); see ConfidenceRelay.issue_ring_copy.
+        if publish_confidence:
+            self.confidence_relay.issue_ring_copy(
+                stream=self.fwd_prepare_d2h_stream,
+                publish_ready=self.publish_ready,
+            )
 
     def stash(self, future_indices: torch.Tensor, payload: RelayPayload) -> None:
         if self.spec_algo.is_ngram():

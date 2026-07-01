@@ -11,7 +11,6 @@ from sglang.srt.layers.dp_attention import (
     is_dp_attention_enabled,
 )
 from sglang.srt.managers.schedule_batch import ScheduleBatch
-from sglang.srt.model_executor.forward_batch_info import compute_position
 from sglang.srt.speculative.dflash_utils import apply_dflash_verify_logits_adjustments
 from sglang.srt.speculative.dspark_components.dspark_info import (
     RaggedVerifyWindow,
@@ -184,21 +183,28 @@ def build_ragged_verify_window(
     verify_num_draft_tokens: int,
     model_runner,
 ) -> RaggedVerifyWindow:
-    # Compact (real-N) verify window. Request r contributes only its scheduled
-    # prefix [anchor, s_0..s_{ell_r-1}] = verify_len_r tokens, packed back to
-    # back into a `total`-token compact layout keyed by layout.extend_start_loc.
-    # Cache slots are over-allocated to the full gamma+1 block (plan section 6);
-    # the compact window writes only the first verify_len_r reserved slots.
+    # Compact (real-N) verify window, sync-free: sized to the host-known padded
+    # graph_num_tokens (no verify_lens D2H; see compact_row_index). Request r contributes
+    # its [anchor, s_0..s_{ell_r-1}] = verify_len_r tokens; cache slots are over-allocated
+    # to the full gamma+1 block (plan section 6). Padding rows (valid False) get position
+    # 0 / slot 0 -- the runner's tail-zero contract (no stale KV slot / vocab id read).
     prefix_lens = batch.seq_lens
     verify_lens = layout.verify_lens.to(device=device, dtype=torch.int32)
+    padded_total = layout.graph_num_tokens
 
-    positions, _ = compute_position(
-        model_runner.server_args.attention_backend,
-        prefix_lens.to(torch.int32),
-        verify_lens,
-        layout.total_verify_tokens,
+    req_id, within, valid = compact_row_index(
+        verify_lens=verify_lens, padded_total=padded_total, device=device
     )
-    verify_cache_loc = assign_extend_cache_locs_func(
+    safe_req = req_id.clamp(max=bs - 1)  # sink req_id == bs on padding rows
+    positions = torch.where(
+        valid,
+        prefix_lens.to(torch.int64)[safe_req] + within,
+        torch.zeros_like(within),
+    )
+    # Cache locs are written compactly (same ordering as req_id/within) into a bs*stride
+    # buffer; pad to graph_num_tokens and zero padding rows (also clears the
+    # [real_total, bs*stride) torch.empty tail).
+    real_cache_loc = assign_extend_cache_locs_func(
         req_pool_indices=batch.req_pool_indices,
         req_to_token=model_runner.req_to_token_pool.req_to_token,
         start_offset=prefix_lens,
@@ -206,7 +212,13 @@ def build_ragged_verify_window(
         batch_size=bs,
         draft_token_num=verify_num_draft_tokens,
         device=device,
-    )[: layout.total_verify_tokens]
+    )
+    verify_cache_loc = torch.nn.functional.pad(
+        real_cache_loc, (0, padded_total - real_cache_loc.shape[0])
+    )
+    verify_cache_loc = torch.where(
+        valid, verify_cache_loc, torch.zeros_like(verify_cache_loc)
+    )
 
     verify_ids = compact_verify_ids(
         draft_block_ids=draft_block_ids,
@@ -231,17 +243,20 @@ def compact_verify_ids(
     layout: RaggedVerifyLayout,
     device: str,
 ) -> torch.Tensor:
-    # Pack [anchor, s_0..s_{ell_r-1}] per request into a compact 1d tensor.
-    # anchor = draft_block_ids[:, 0]; s_k = draft_tokens[:, k].
-    req_id, within = compact_row_index(
+    # Pack [anchor, s_0..s_{ell_r-1}] per request into a compact graph_num_tokens-row
+    # tensor; padding tail (valid False) is zeroed. anchor = draft_block_ids[:, 0].
+    req_id, within, valid = compact_row_index(
         verify_lens=layout.verify_lens,
-        total=layout.total_verify_tokens,
+        padded_total=layout.graph_num_tokens,
         device=device,
     )
+    bs = layout.verify_lens.shape[0]
+    safe_req = req_id.clamp(max=bs - 1)  # sink req_id == bs on padding rows
     anchors = draft_block_ids[:, 0]
     # within==0 -> anchor; else draft_tokens[:, within-1] (clamp masked at 0).
-    drafts = draft_tokens[req_id, (within - 1).clamp_min(0)]
-    verify_ids = torch.where(within == 0, anchors[req_id], drafts)
+    drafts = draft_tokens[safe_req, (within - 1).clamp_min(0)]
+    verify_ids = torch.where(within == 0, anchors[safe_req], drafts)
+    verify_ids = torch.where(valid, verify_ids, torch.zeros_like(verify_ids))
     return verify_ids.to(torch.int64)
 
 
@@ -252,54 +267,74 @@ def scatter_compact_to_strided(
     fill_value: float,
     verify_num_draft_tokens: int,
 ) -> torch.Tensor:
-    # compact->strided scatter (infra section 12.E). compact is [total, dim]
-    # (one row per verified token, packed by layout.extend_start_loc). The
-    # accept path + result processor expect a [bs*(gamma+1), dim] strided
-    # tensor where request i owns rows [i*(gamma+1), i*(gamma+1)+verify_len_i).
-    # Padded strided rows are filled with `fill_value`; the accept cap to ell_r
-    # keeps them out of the commit decision (lossless).
+    # compact->strided scatter (infra section 12.E). compact is [graph_num_tokens, dim];
+    # scatter to the [bs*(gamma+1), dim] strided layout accept/inject expect (request i
+    # owns rows [i*stride, i*stride+verify_len_i); intra-request pad = fill_value, kept
+    # out of commit by the accept cap -> lossless). The compact padding tail (valid False)
+    # routes to a throwaway sink row that the [:bs*stride] return drops, so the output is
+    # shape/semantics-identical to the old real-N scatter -- accept/inject stay unchanged.
     stride = verify_num_draft_tokens
+    bs = layout.verify_lens.shape[0]
     dim = compact.shape[1]
-    # Under DP attention the compact verify input is padded up to bs*(gamma+1) to
-    # match the dp_gather buffer (global_num_tokens = bs * draft_token_num), so the
-    # target returns trailing pad rows after the real total_verify_tokens. Those pad
-    # tokens are causal-after the real tokens and their output is discarded, so
-    # trimming here is lossless; it is a no-op without DP (compact is already exact).
-    compact = compact[: layout.total_verify_tokens]
+    device = compact.device
+    # Under DP attention the compact verify input is padded up to the dp_gather
+    # buffer (global_num_tokens = bs * draft_token_num >= graph_num_tokens), so the
+    # target returns trailing pad rows past graph_num_tokens. The scatter below
+    # indexes exactly graph_num_tokens rows (compact_row_index padded_total), so
+    # trim compact to graph_num_tokens: the extra pad tokens are causal-after the
+    # real tokens and their output is discarded (lossless), and it is a no-op
+    # without DP (compact is already graph_num_tokens rows).
+    compact = compact[: layout.graph_num_tokens]
     strided = torch.full(
-        (layout.bs * stride, dim),
-        fill_value,
-        dtype=compact.dtype,
-        device=compact.device,
+        (bs * stride + 1, dim), fill_value, dtype=compact.dtype, device=device
     )
-    req_id, within = compact_row_index(
+    req_id, within, valid = compact_row_index(
         verify_lens=layout.verify_lens,
-        total=layout.total_verify_tokens,
-        device=compact.device,
+        padded_total=layout.graph_num_tokens,
+        device=device,
     )
-    strided_pos = req_id * stride + within
+    sink = bs * stride
+    strided_pos = torch.where(
+        valid,
+        req_id.clamp(max=bs - 1) * stride + within,
+        torch.full_like(within, sink),
+    )
     strided.index_copy_(0, strided_pos, compact)
-    return strided
+    return strided[: bs * stride]
 
 
 def compact_row_index(
     *,
     verify_lens: torch.Tensor,
-    total: int,
+    padded_total: int,
     device,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    # (req_id, within) for each compact row: which request owns it + offset inside it.
-    # output_size=total is REQUIRED for sync-freedom: repeat_interleave with a tensor
-    # `repeats` and no output_size does a D2H .item() (sum) to size its output -- a
-    # per-step cudaStreamSynchronize on the compact decode path. total is the known size.
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    # (req_id, within, valid) for each row of a FIXED padded_total-row compact buffer.
+    #
+    # padded_total is the host-known, bs-derived graph_num_tokens (>= the real total
+    # sum(verify_lens)); the first real_total rows pack each request's window back to
+    # back, rows [real_total, padded_total) are padding. The old design sized the
+    # buffer to the exact host `total` via repeat_interleave(output_size=total), which
+    # forced the caller to D2H verify_lens off the forward stream first (one
+    # per-step cudaStreamSynchronize -- the very sync this removes). Here real_total is
+    # a DEVICE scalar (cumsum[-1]) compared against a host-sized arange, so the row->req
+    # map is built with NO compute-stream sync. Padding rows carry req_id == bs (a sink
+    # id the callers route to a discarded slot) and within == 0.
     verify_lens = verify_lens.to(device=device, dtype=torch.int64)
     bs = int(verify_lens.numel())
-    req_id = torch.arange(bs, device=device, dtype=torch.int64).repeat_interleave(
-        verify_lens, output_size=total
+    incl = torch.cumsum(verify_lens, dim=0)  # inclusive prefix sum, device [bs]
+    start = incl - verify_lens  # exclusive per-request start
+    real_total = incl[-1]  # DEVICE scalar; never read to host
+    row = torch.arange(padded_total, device=device, dtype=torch.int64)
+    valid = row < real_total  # device mask, no sync
+    # searchsorted(incl, row, right=True) is the owning request; rows >= real_total map
+    # to bs (past the last request) -> routed to the sink.
+    req_id = torch.searchsorted(incl, row, right=True)
+    req_id = torch.where(valid, req_id, torch.full_like(req_id, bs))
+    within = torch.where(
+        valid, row - start[req_id.clamp(max=bs - 1)], torch.zeros_like(row)
     )
-    start = torch.cumsum(verify_lens, dim=0) - verify_lens  # exclusive start
-    within = torch.arange(total, device=device, dtype=torch.int64) - start[req_id]
-    return req_id, within
+    return req_id, within, valid
 
 
 def apply_logits_adjustments_strided(

@@ -4,7 +4,11 @@ from typing import Optional
 import torch
 
 from sglang.srt.environ import envs
-from sglang.srt.managers.overlap_utils import FutureMap, ResolvedConfidence
+from sglang.srt.managers.overlap_utils import (
+    CONFIDENCE_RELAY_RING_LAG,
+    FutureMap,
+    ResolvedConfidence,
+)
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.speculative.dspark_components.dspark_confidence import (
@@ -20,6 +24,7 @@ from sglang.srt.speculative.dspark_components.dspark_sts_table import (
     load_sts_calibration_from_path,
 )
 from sglang.srt.speculative.dspark_components.dspark_verify import (
+    ragged_capture_num_tokens,
     ragged_layout_exceeds_captured_grid,
     uniform_ragged_layout,
     verify_layout_graph_num_tokens_floor,
@@ -30,6 +35,7 @@ from sglang.srt.speculative.ragged_verify import (
     RaggedVerifyLayout,
     RaggedVerifyMode,
     read_ragged_verify_mode,
+    round_up_grid,
 )
 from sglang.srt.utils.async_probe import maybe_assert_async
 
@@ -122,9 +128,17 @@ class DSparkVerifyPlanner:
                 server_args=self.server_args,
                 verify_num_draft_tokens=self.verify_num_draft_tokens,
             )
-            # The async FutureMap relay supplies 1 step of lag under overlap; without
-            # overlap there is no relay, so the host carry must supply the full lag.
-            relay_lag_steps = 0 if self.server_args.disable_overlap_schedule else 1
+            # The async FutureMap relay supplies CONFIDENCE_RELAY_RING_LAG steps of
+            # lag under overlap: the deferred pinned ring reads an already-landed
+            # lag-RING_LAG slot (sync-free), so the relay itself is that many steps
+            # behind. Without overlap there is no relay, so the host carry supplies
+            # the full lag. Kept equal to overlap_utils.CONFIDENCE_RELAY_RING_LAG so
+            # carry_steps = total_lag - relay_lag_steps is correct.
+            relay_lag_steps = (
+                0
+                if self.server_args.disable_overlap_schedule
+                else CONFIDENCE_RELAY_RING_LAG
+            )
             self._budget_planner = HostConfidenceBudgetPlanner(
                 sps_table=sps_table,
                 cfg=self._schedule_cfg,
@@ -254,19 +268,24 @@ class DSparkVerifyPlanner:
         prefix_lens: torch.Tensor,
         req_pool_indices: torch.Tensor,
     ) -> Optional[int]:
-        # Non-overlap fallback: no relay, so snapshot this step's confidence + prefix
-        # to host synchronously (acceptable -- the non-overlap loop is already
-        # synchronous) and feed the same host carry + greedy. The carry was built with
-        # relay_lag_steps=0 so it supplies the full causal lag here.
+        # Non-overlap fallback: no relay, so snapshot this step's confidence to host
+        # synchronously (the non-overlap loop is already synchronous) and feed the same
+        # carry + greedy; the carry (relay_lag_steps=0) supplies the full lag. generation
+        # = each slot's current occupancy stamp for this step's confidence.
+        # (prefix_lens is vestigial now the guard uses generation, not the seq_len stamp.)
+        del prefix_lens
         if self._budget_planner is None:
             return None
+        req_pool_indices_cpu = req_pool_indices.to("cpu").to(torch.int64)
+        generation = self.model_runner.req_to_token_pool.req_generation[
+            req_pool_indices_cpu
+        ].clone()
         resolved = ResolvedConfidence(
             confidence=confidence.to("cpu"),
-            seq_lens_stamp=prefix_lens.to("cpu"),
-            prefix_lens=prefix_lens.to("cpu"),
+            generation=generation,
         )
         return self._budget_from_resolved(
-            resolved=resolved, req_pool_indices_cpu=req_pool_indices.to("cpu")
+            resolved=resolved, req_pool_indices_cpu=req_pool_indices_cpu
         )
 
     def _budget_from_resolved(
@@ -279,11 +298,16 @@ class DSparkVerifyPlanner:
         # uniform verify-all layout, identical to the pre-relay startup behavior.
         if resolved is None:
             return None
+        # Each slot's CURRENT occupancy generation (host, no D2H) for the guard to
+        # compare against the relayed confidence's stamped generation.
+        current_generation = self.model_runner.req_to_token_pool.req_generation[
+            req_pool_indices_cpu.to(torch.int64)
+        ]
         return int(
             self._budget_planner.compute_budget(
                 confidence=resolved.confidence,
-                seq_lens_stamp=resolved.seq_lens_stamp,
-                prefix_lens=resolved.prefix_lens,
+                generation=resolved.generation,
+                current_generation=current_generation,
                 req_pool_indices_cpu=req_pool_indices_cpu,
             )
         )
@@ -326,27 +350,39 @@ class DSparkVerifyPlanner:
                     model_runner=self.model_runner,
                 )
             return None
-        # FIXME(sync-free, plan step 5): one bs-sized D2H remains here. Removing it
-        # needs the device-offset RaggedVerifyLayout rework (from_verify_lens /
-        # padded_to_bucket / host checks on device, B3/B4 replay device-ization),
-        # which must be validated on GPU; deferred. The big O(bs*gamma) syncs (budget
-        # greedy + sort) are already gone.
-        verify_lens_cpu = verify_lens.to("cpu").tolist()
+        # bs = verify_lens.shape[0] is tensor metadata (host, no D2H), so the grid gate
+        # and the bs-derived tier are computed without pulling verify_lens off the
+        # forward stream.
+        bs = int(verify_lens.shape[0])
         if ragged_layout_exceeds_captured_grid(
-            num_reqs=len(verify_lens_cpu),
+            num_reqs=bs,
             verify_num_draft_tokens=self.verify_num_draft_tokens,
             model_runner=self.model_runner,
         ):
             return None
+        graph_num_tokens_floor = verify_layout_graph_num_tokens_floor(
+            num_reqs=bs,
+            ragged_verify_mode=self._ragged_verify_mode,
+            verify_num_draft_tokens=self.verify_num_draft_tokens,
+            model_runner=self.model_runner,
+        )
+        capture_num_tokens = ragged_capture_num_tokens(model_runner=self.model_runner)
+        if graph_num_tokens_floor > 0 and capture_num_tokens is not None:
+            # Sync-free device path (COMPACT + token-keyed graph): tier is bs-derived, so
+            # verify_lens stays on the forward stream. total <= bs*(gamma+1) == floor (each
+            # verify_len <= gamma+1), so round_up_grid(max(total,floor)) == round_up_grid(
+            # floor); downstream reads device verify_lens + graph_num_tokens, no D2H.
+            graph_num_tokens = round_up_grid(graph_num_tokens_floor, capture_num_tokens)
+            return RaggedVerifyLayout.from_verify_lens_device(
+                verify_lens=verify_lens, graph_num_tokens=graph_num_tokens
+            )
+        # Eager / non-token-keyed fallback (cuda graph off, or non-COMPACT mode): the
+        # forward is already synchronous, so this host D2H is harmless -- and the eager
+        # `[total]` grid genuinely needs the exact total.
+        verify_lens_cpu = verify_lens.to("cpu").tolist()
         grid = verify_layout_grid(
             verify_lens_cpu=verify_lens_cpu,
             ragged_verify_mode=self._ragged_verify_mode,
-            model_runner=self.model_runner,
-        )
-        graph_num_tokens_floor = verify_layout_graph_num_tokens_floor(
-            num_reqs=len(verify_lens_cpu),
-            ragged_verify_mode=self._ragged_verify_mode,
-            verify_num_draft_tokens=self.verify_num_draft_tokens,
             model_runner=self.model_runner,
         )
         return RaggedVerifyLayout.from_verify_lens(
