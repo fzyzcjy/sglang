@@ -265,6 +265,11 @@ K_KERNEL void fused_k_norm_rope_flashmla(const __grid_constant__ FusedKNormRopeF
   const auto input_ptr = static_cast<const DType*>(params.kv) + work_id * params.kv_stride_batch;
   const auto position = static_cast<int32_t>(static_cast<const PosT*>(params.positions)[work_id]);
   const auto out_loc = params.out_loc[work_id];
+  // Skip sentinel slots (out_loc < 0): callers that write a fixed-shape [bs*verify_len]
+  // batch mark non-committed rows with out_loc = -1 to avoid a masked-select D2H sync.
+  // out_loc is uniform across the block (block-per-token), so the whole block returns
+  // together -- no __syncthreads divergence, same shape as the work_id bounds return above.
+  if (out_loc < 0) return;
   const auto freqs_cis = params.freqs_cis + position * kRopeDim;
 
   PDLWaitPrimary<kUsePDL>();

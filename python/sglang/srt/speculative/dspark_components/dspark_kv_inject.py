@@ -95,35 +95,30 @@ class TargetHiddenKvInjector:
         # the RAW latent the radix-fused-norm-rope writer expects -- the kernel does
         # norm + rope + fp8 pack inside, pinned to ``_fused_norm_rope``, NOT ``_fused``).
         #
-        # There is no MLA ``set_kv_buffer_prefix_valid`` (that is MHA-only), so the
-        # committed prefix is gathered to a flat ``swa_loc``: prefill writes the whole
-        # per-request window slots (one latent per prefill token); decode-commit writes
-        # EVERY accepted slot per request (columns ``0..commit_len[r]-1`` of the verify
-        # window), one target-hidden latent per committed position -- matching the MHA
-        # prefix-valid write and the SoT reference, so the draft attends per-position
-        # target hidden rather than only the bonus.
-        # ``translate_loc_from_full_to_swa`` is an alloc-time state lookup -- the slots
-        # are already allocated here (assign_extend_cache_locs / _alloc_verify_window
-        # ran first) and padded rows map to -1, so we translate only AFTER allocation
-        # and never read a default-0 SWA slot.
+        # There is no MLA ``set_kv_buffer_prefix_valid`` (MHA-only). To keep this write
+        # sync-free we do NOT masked-select the committed rows: that gather's output shape
+        # depends on the mask, forcing a D2H count readback every verify step. Instead we
+        # translate the FULL fixed-shape ``cache_loc`` and mark the non-committed rows
+        # (columns ``>= commit_len[r]`` of the verify window) with ``swa_loc = -1`` via
+        # ``torch.where``; the fused-norm-rope writer kernel skips ``out_loc < 0``, so only
+        # columns ``0..commit_len[r]-1`` per request are written -- the same committed set
+        # as the MHA prefix-valid write and the SoT reference (per-position target hidden,
+        # not only the bonus). Prefill (no commit_lens) writes the whole window.
+        # ``translate_loc_from_full_to_swa`` is a post-alloc integer lookup (slots already
+        # allocated by assign_extend_cache_locs / _alloc_verify_window), so it stays
+        # fixed-shape and sync-free even over the full window.
+        swa_loc = pool.translate_loc_from_full_to_swa(cache_loc).to(torch.int32)
         if commit_lens is not None and cache_loc_2d is not None:
             bs, verify_len = cache_loc_2d.shape
             col = torch.arange(verify_len, device=cache_loc.device).view(1, -1)
-            committed_mask = col < commit_lens.to(torch.long).view(-1, 1)
-            write_full_loc = cache_loc_2d[committed_mask]
-            write_positions = positions.view(bs, verify_len)[committed_mask]
-            write_hidden = target_hidden.view(bs, verify_len, -1)[committed_mask]
-        else:
-            write_full_loc = cache_loc
-            write_positions = positions
-            write_hidden = target_hidden
-        swa_loc = pool.translate_loc_from_full_to_swa(write_full_loc).to(torch.int32)
+            committed_mask = (col < commit_lens.to(torch.long).view(-1, 1)).reshape(-1)
+            swa_loc = torch.where(committed_mask, swa_loc, torch.full_like(swa_loc, -1))
 
         with torch.inference_mode():
             self.draft_model.write_target_hidden_kv(
-                main_hidden=write_hidden,
+                main_hidden=target_hidden,
                 swa_loc=swa_loc,
-                positions=write_positions,
+                positions=positions,
                 pool=pool,
             )
 
