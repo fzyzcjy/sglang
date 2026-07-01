@@ -257,9 +257,7 @@ def _handle_dspark(server_args: ServerArgs) -> None:
         # parallel / a2a-mismatch are rejected; a MoE (dsv4) draft under DP is
         # rejected at worker construction (the full-DP MoE path is not yet supported).
         if not server_args.enable_dp_lm_head:
-            raise ValueError(
-                "DSpark with dp attention requires --enable-dp-lm-head."
-            )
+            raise ValueError("DSpark with dp attention requires --enable-dp-lm-head.")
         if server_args.moe_a2a_backend != "none":
             raise ValueError(
                 "DSpark with dp attention only supports the built-in TP MoE "
@@ -272,8 +270,7 @@ def _handle_dspark(server_args: ServerArgs) -> None:
             )
         if (
             server_args.speculative_moe_a2a_backend is not None
-            and server_args.speculative_moe_a2a_backend
-            != server_args.moe_a2a_backend
+            and server_args.speculative_moe_a2a_backend != server_args.moe_a2a_backend
         ):
             raise ValueError(
                 "DSpark ignores --speculative-moe-a2a-backend; with dp attention it "
