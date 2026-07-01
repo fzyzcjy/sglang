@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import torch
+import triton
+import triton.language as tl
 
 from sglang.srt.environ import envs
 from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 
 _KERNEL_IMPL = envs.SGLANG_DSPARK_KERNEL_COMPACT_LAYOUT.get()
+
+# Binary-search iteration count for the row->request searchsorted: fixed at 11 so a
+# single compiled kernel covers any bs up to 2^11 (>> max_running_requests). Extra
+# iterations after convergence are no-ops (the active mask is False).
+_SEARCH_NBITS = 11
 
 
 class CompactRowIndex:
@@ -39,9 +46,10 @@ class CompactRowIndex:
         padded_total: int,
         device,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        raise NotImplementedError(
-            "CompactRowIndex.triton is not implemented yet; run with "
-            "SGLANG_DSPARK_KERNEL_COMPACT_LAYOUT=torch until the triton kernel lands."
+        return compact_row_index_triton(
+            verify_lens=verify_lens,
+            padded_total=padded_total,
+            device=device,
         )
 
 
@@ -77,9 +85,11 @@ class CompactVerifyIds:
         layout: RaggedVerifyLayout,
         device: str,
     ) -> torch.Tensor:
-        raise NotImplementedError(
-            "CompactVerifyIds.triton is not implemented yet; run with "
-            "SGLANG_DSPARK_KERNEL_COMPACT_LAYOUT=torch until the triton kernel lands."
+        return compact_verify_ids_triton(
+            draft_block_ids=draft_block_ids,
+            draft_tokens=draft_tokens,
+            layout=layout,
+            device=device,
         )
 
 
@@ -139,3 +149,119 @@ def compact_row_index(
         valid, row - start[req_id.clamp(max=bs - 1)], torch.zeros_like(row)
     )
     return req_id, within, valid
+
+
+@triton.jit
+def _compact_row_index_kernel(
+    incl_ptr,
+    req_out_ptr,
+    within_out_ptr,
+    valid_out_ptr,
+    bs,
+    n,
+    BLOCK: tl.constexpr,
+    NBITS: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n
+    row = offs.to(tl.int64)
+    real_total = tl.load(incl_ptr + (bs - 1))  # incl[-1], device scalar, no host sync
+    # vectorized searchsorted(incl, row, right=True) == count of incl[j] <= row
+    lo = tl.zeros([BLOCK], dtype=tl.int32)
+    hi = tl.full([BLOCK], bs, dtype=tl.int32)
+    for _ in range(NBITS):
+        mid = (lo + hi) // 2
+        active = lo < hi
+        val = tl.load(incl_ptr + tl.minimum(mid, bs - 1), mask=mask, other=0)
+        go_right = val <= row
+        lo = tl.where(active & go_right, mid + 1, lo)
+        hi = tl.where(active & (~go_right), mid, hi)
+    req = lo
+    gidx = tl.maximum(req - 1, 0)
+    start = tl.load(incl_ptr + gidx, mask=mask, other=0)  # incl[req-1]
+    start = tl.where(req > 0, start, 0)
+    valid = row < real_total
+    within = tl.where(valid, row - start, 0)
+    req_final = tl.where(valid, req.to(tl.int64), bs)
+    tl.store(req_out_ptr + offs, req_final, mask=mask)
+    tl.store(within_out_ptr + offs, within, mask=mask)
+    tl.store(valid_out_ptr + offs, valid, mask=mask)
+
+
+def compact_row_index_triton(
+    *,
+    verify_lens: torch.Tensor,
+    padded_total: int,
+    device,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    # cumsum (1 launch) + one binary-search kernel (1 launch) replaces the
+    # searchsorted + arange + 2x where + clamp torch chain. real_total = incl[-1] is
+    # read inside the kernel (device), so no D2H sync is introduced.
+    verify_lens = verify_lens.to(device=device, dtype=torch.int64).contiguous()
+    bs = verify_lens.shape[0]
+    incl = torch.cumsum(verify_lens, dim=0).contiguous()
+    req = torch.empty(padded_total, dtype=torch.int64, device=device)
+    within = torch.empty(padded_total, dtype=torch.int64, device=device)
+    valid = torch.empty(padded_total, dtype=torch.bool, device=device)
+    BLOCK = 256
+    grid = (triton.cdiv(padded_total, BLOCK),)
+    _compact_row_index_kernel[grid](
+        incl, req, within, valid, bs, padded_total, BLOCK=BLOCK, NBITS=_SEARCH_NBITS
+    )
+    return req, within, valid
+
+
+@triton.jit
+def _compact_verify_ids_gather_kernel(
+    req_ptr,
+    within_ptr,
+    draft_block_ids_ptr,
+    draft_tokens_ptr,
+    out_ptr,
+    bs,
+    gamma,
+    n,
+    BLOCK: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n
+    req = tl.load(req_ptr + offs, mask=mask, other=0)
+    within = tl.load(within_ptr + offs, mask=mask, other=0)
+    valid = req < bs  # compact_row_index sets req == bs (and within == 0) on padding
+    safe_req = tl.minimum(req, bs - 1)
+    anchor = tl.load(draft_block_ids_ptr + safe_req * gamma, mask=mask, other=0)
+    wcol = tl.maximum(within - 1, 0)
+    draft = tl.load(draft_tokens_ptr + safe_req * gamma + wcol, mask=mask, other=0)
+    v = tl.where(within == 0, anchor, draft)
+    v = tl.where(valid, v, 0)
+    tl.store(out_ptr + offs, v.to(tl.int64), mask=mask)
+
+
+def compact_verify_ids_triton(
+    *,
+    draft_block_ids: torch.Tensor,
+    draft_tokens: torch.Tensor,
+    layout: RaggedVerifyLayout,
+    device: str,
+) -> torch.Tensor:
+    # Compose the verified compact_row_index_triton with a fused gather: within==0 ->
+    # anchor (draft_block_ids[:, 0]), else draft_tokens[:, within-1]; padding -> 0.
+    req, within, _valid = compact_row_index_triton(
+        verify_lens=layout.verify_lens,
+        padded_total=layout.graph_num_tokens,
+        device=device,
+    )
+    bs = layout.verify_lens.shape[0]
+    gamma = draft_tokens.shape[1]
+    draft_block_ids = draft_block_ids.to(device=device, dtype=torch.int64).contiguous()
+    draft_tokens = draft_tokens.to(device=device, dtype=torch.int64).contiguous()
+    n = layout.graph_num_tokens
+    out = torch.empty(n, dtype=torch.int64, device=device)
+    BLOCK = 256
+    grid = (triton.cdiv(n, BLOCK),)
+    _compact_verify_ids_gather_kernel[grid](
+        req, within, draft_block_ids, draft_tokens, out, bs, gamma, n, BLOCK=BLOCK
+    )
+    return out
