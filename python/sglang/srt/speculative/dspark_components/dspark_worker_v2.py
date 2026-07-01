@@ -125,11 +125,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             server_args.enable_dp_attention and not self._draft_is_moe
         )
         attn_tp_size = server_args.tp_size // max(server_args.dp_size, 1)
-        if (
-            server_args.enable_dp_attention
-            and self._draft_is_moe
-            and attn_tp_size > 1
-        ):
+        if server_args.enable_dp_attention and self._draft_is_moe and attn_tp_size > 1:
             # MoE draft under DP runs full-DP pure-TP-MoE (a2a="none"): its _run_ffn
             # goes through the shared parent MoE-DP gather (dp_moe_sync). That path is
             # only correct when attn_tp == 1 (dp_size == tp_size); with attn_tp > 1 the
