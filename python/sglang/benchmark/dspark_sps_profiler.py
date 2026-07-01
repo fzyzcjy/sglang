@@ -305,18 +305,26 @@ def run_bench_cases(
                 result_filename=str(result_path),
                 tokenizer=tokenizer,
             )
-            # Emit each case's full result the moment it is benched, so a long
-            # sweep is inspectable live (and salvageable from the log if it dies
-            # mid-run) rather than only after the whole table is assembled.
+            # Emit each case's result the moment it is benched, so a long sweep
+            # is inspectable live (and salvageable from the log if it dies
+            # mid-run) rather than only after the whole table is assembled. Two
+            # lines per case: a concise core line, then the full raw dict.
             derived = derive_row(result)
+            core = (
+                f"steps_per_sec={derived.steps_per_sec:.3f} "
+                f"itl_ms={derived.itl_ms:.3f} "
+                f"output_throughput={derived.output_throughput:.1f}"
+                if derived is not None
+                else "degenerate (no derived row)"
+            )
             logger.info(
-                "Benched bs=%s repeat=%s/%s: raw=%s derived=%s",
+                "Benched bs=%s repeat=%s/%s: %s",
                 batch_size,
                 repeat + 1,
                 max(1, repeats),
-                result.model_dump(),
-                derived,
+                core,
             )
+            logger.info("Benched bs=%s raw=%s", batch_size, result.model_dump())
             results.append(result)
         logger.info("Completed sweep repeat %s/%s.", repeat + 1, max(1, repeats))
     return results
