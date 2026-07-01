@@ -25,15 +25,19 @@ class DSparkScheduleConfig(msgspec.Struct):
     survival_eps: float = 1e-6
 
     def resolved_max_verify_len(self) -> int:
-        return self.max_verify_len or self.gamma
+        # The full verify window is gamma+1 (anchor + all gamma drafts) =
+        # num_draft_tokens, which is what static verifies. Capping at gamma would
+        # verify only gamma-1 drafts (the last draft never checked) and drop accept
+        # below static.
+        return self.max_verify_len or (self.gamma + 1)
 
     def validate(self) -> None:
         max_len = self.resolved_max_verify_len()
         if self.gamma < 1:
             raise ValueError(f"DSpark gamma must be >= 1, got {self.gamma}.")
-        if not (0 <= self.min_verify_len <= max_len <= self.gamma):
+        if not (0 <= self.min_verify_len <= max_len <= self.gamma + 1):
             raise ValueError(
-                "DSpark verify-len config must satisfy 0 <= min <= max <= gamma, "
+                "DSpark verify-len config must satisfy 0 <= min <= max <= gamma+1, "
                 f"got min={self.min_verify_len}, max={max_len}, gamma={self.gamma}."
             )
         if self.survival_eps < 0:
@@ -50,7 +54,10 @@ def compute_verify_token_budget(
     num_requests = history_survival_probs.shape[0]
     max_len = cfg.resolved_max_verify_len()
 
-    candidates = history_survival_probs[:, cfg.min_verify_len : max_len].flatten()
+    # Candidates span all gamma draft slots (cols 0..gamma-1) so the budget can reach
+    # gamma (verify the full window); slicing [min_verify_len:max_len] gives gamma-1
+    # slots and caps the budget one draft short.
+    candidates = history_survival_probs[:, :max_len].flatten()
     candidates = candidates[candidates >= cfg.survival_eps].to(torch.float64)
     candidates_sorted = torch.sort(candidates, descending=True).values
     prefix_sum = torch.cumsum(candidates_sorted, dim=0)
@@ -85,7 +92,11 @@ def schedule_verify_lens_topk(
 
     selected_extra = torch.zeros(num_requests, dtype=torch.int64, device=device)
     if budget > 0:
-        candidate_window = survival_probs[:, cfg.min_verify_len : max_len]
+        # Window spans all gamma draft slots (cols 0..gamma-1) so selected_extra can
+        # reach gamma -> verify_len reaches gamma+1 (full window, == static); slicing
+        # [min_verify_len:max_len] gives gamma-1 slots and caps verify_len at gamma
+        # (the last draft never verified).
+        candidate_window = survival_probs[:, :max_len]
         num_candidates = candidate_window.numel()
         if num_candidates > 0:
             request_index = (
@@ -94,7 +105,7 @@ def schedule_verify_lens_topk(
                 .expand_as(candidate_window)
             )
             position_index = (
-                torch.arange(cfg.min_verify_len, max_len, device=device)
+                torch.arange(candidate_window.shape[1], device=device)
                 .view(1, candidate_window.shape[1])
                 .expand_as(candidate_window)
             )
