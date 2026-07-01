@@ -1714,6 +1714,29 @@ class DeepseekV4DecoderLayer(nn.Module):
             if not norm_fused:
                 hidden_states = self.post_attention_layernorm(hidden_states)
 
+        hidden_states = self._run_moe_ffn_dp_sync(
+            hidden_states,
+            forward_batch,
+            input_ids=input_ids,
+            input_ids_global=input_ids_global,
+        )
+
+        if not use_fused:
+            hidden_states = self.hc_post(hidden_states, residual, post, comb)
+            return hidden_states, None, None, None
+
+        # Return the deferred FFN hc_post state; the next layer consumes it with
+        # cross-layer fusion, and the final layer is completed in DeepseekV4Model.
+        return hidden_states, residual, post, comb
+
+    def _run_moe_ffn_dp_sync(
+        self,
+        hidden_states: torch.Tensor,
+        forward_batch: ForwardBatch,
+        *,
+        input_ids: torch.Tensor,
+        input_ids_global: torch.Tensor,
+    ) -> torch.Tensor:
         _use_cp = self.dsa_enable_prefill_cp and dsa_use_prefill_cp(forward_batch)
         _use_tp_moe_gather = (
             not _use_cp
@@ -1846,14 +1869,7 @@ class DeepseekV4DecoderLayer(nn.Module):
             gathered = [torch.empty_like(t) for t in _a2a_scatter_chunks]
             attn_tp_all_gather(gathered, hidden_states.contiguous())
             hidden_states = torch.cat(gathered)
-
-        if not use_fused:
-            hidden_states = self.hc_post(hidden_states, residual, post, comb)
-            return hidden_states, None, None, None
-
-        # Return the deferred FFN hc_post state; the next layer consumes it with
-        # cross-layer fusion, and the final layer is completed in DeepseekV4Model.
-        return hidden_states, residual, post, comb
+        return hidden_states
 
 
 class DeepseekV4Model(nn.Module):
