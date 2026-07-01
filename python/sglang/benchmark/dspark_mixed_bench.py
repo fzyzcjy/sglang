@@ -271,6 +271,7 @@ async def run_workload(
     model: str,
     max_osl: int,
     max_concurrency: int,
+    disable_stream: bool,
     jsonl_path: Path,
 ) -> list[RequestRecord]:
     api_url = f"{base_url.rstrip('/')}/v1/chat/completions"
@@ -299,6 +300,12 @@ async def run_workload(
                 # requested max and throughput/tpot come out wrong.
                 "stream_options": {"include_usage": True},
             }
+            if disable_stream:
+                # Per-request spec_accept_length is only in choices[0].meta_info of a
+                # non-streaming response (the streaming usage chunk omits it), so ask for
+                # meta_info here for the OAI-side acc_len cross-check. The server rejects
+                # return_meta_info under streaming, hence gating both on disable_stream.
+                extra_request_body["return_meta_info"] = True
             request_func_input = serving.RequestFuncInput(
                 prompt=req.prompt,
                 api_url=api_url,
@@ -441,6 +448,13 @@ def main(
             help="Local aime25 {question,answer} jsonl (default: HF download)."
         ),
     ] = None,
+    disable_stream: Annotated[
+        bool,
+        typer.Option(
+            help="Non-streaming requests + return_meta_info, to capture the OAI-side "
+            "per-request spec_accept_length (oai_acc_len cross-check). Loses ITL/TTFT."
+        ),
+    ] = False,
 ) -> None:
     """Drive a single/mixed gsm8k + arena-hard + aime25 workload at a DSpark OAI endpoint."""
     logging.basicConfig(
@@ -454,7 +468,7 @@ def main(
     # request also sends ignore_eos=False explicitly.
     serving.set_global_args(
         argparse.Namespace(
-            disable_stream=False,
+            disable_stream=disable_stream,
             disable_ignore_eos=True,
             print_requests=False,
         )
@@ -535,6 +549,7 @@ def main(
             model=model,
             max_osl=max_osl,
             max_concurrency=max_concurrency,
+            disable_stream=disable_stream,
             jsonl_path=jsonl_path,
         )
     )
