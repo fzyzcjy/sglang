@@ -117,6 +117,45 @@ class DraftBlockProposer:
             draft_hidden=fwd.draft_hidden_3d,
         )
 
+    def run_idle_participation(self, batch: ScheduleBatch) -> None:
+        """dsv4 (MoE) draft under DP attention: run a 0-token draft forward so an idle
+        attention-DP group joins the draft's dp_gather (busy ranks gather bs*gamma
+        tokens across DP). No-op unless dp_moe_sync. Scale global_num_tokens by gamma
+        exactly like the busy draft; the idle rank's own entry is already 0, so it
+        contributes 0 rows to the gather. Output discarded."""
+        if not self._dp_moe_sync or batch.global_num_tokens is None:
+            return
+        device = self.draft_model_runner.device
+        gamma = self.gamma
+        empty_long = torch.empty((0,), dtype=torch.int64, device=device)
+        idle_batch = ForwardBatch(
+            forward_mode=ForwardMode.IDLE,
+            batch_size=0,
+            input_ids=empty_long,
+            req_pool_indices=empty_long,
+            seq_lens=empty_long,
+            out_cache_loc=empty_long,
+            seq_lens_sum=0,
+            seq_lens_cpu=torch.empty((0,), dtype=torch.int64),
+            positions=empty_long,
+            spec_algorithm=SpeculativeAlgorithm.DSPARK,
+            spec_info=self._draft_block_spec_info,
+            capture_hidden_mode=CaptureHiddenMode.NULL,
+        )
+        gnt = [int(x) * gamma for x in batch.global_num_tokens]
+        gnt_logprob = [int(x) * gamma for x in batch.global_num_tokens_for_logprob]
+        idle_batch.global_num_tokens_cpu = gnt
+        idle_batch.global_num_tokens_for_logprob_cpu = gnt_logprob
+        idle_batch.global_num_tokens_gpu = torch.tensor(
+            gnt, dtype=torch.int64, device=device
+        )
+        idle_batch.global_num_tokens_for_logprob_gpu = torch.tensor(
+            gnt_logprob, dtype=torch.int64, device=device
+        )
+        idle_batch.can_run_dp_cuda_graph = batch.can_run_dp_cuda_graph
+        with torch.inference_mode():
+            self.draft_model_runner.forward(idle_batch)
+
     def _run_forward(
         self,
         *,

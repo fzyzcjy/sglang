@@ -527,6 +527,10 @@ class DSparkWorkerV2(BaseSpecWorker):
 
         if batch.forward_mode.is_idle():
             if self.server_args.enable_dp_attention:
+                # dsv4 (MoE) draft gathers across DP, so the idle group must join the
+                # draft dp_gather too (propose then verify, matching the busy order).
+                if self._draft_is_moe:
+                    self._proposer.run_idle_participation(batch)
                 self._run_idle_verify_participation(batch)
             return self._decode_idle_result(on_publish=on_publish)
 
