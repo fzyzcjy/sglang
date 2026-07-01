@@ -15,7 +15,7 @@ class DsparkDecisionDumper:
     # Runtime observability probe for the confidence + verify-length schedule
     # (read-only; never touches the accept path). Off unless
     # SGLANG_DSPARK_DEBUG_MAIN_OUTPUT is set; rank-0 only. Emits one grep-friendly
-    # ``MAIN_OUTPUT=<compact json>`` line per decode step carrying the whole
+    # ``DSPARK_DEBUG_MAIN_OUTPUT=<compact json>`` line per decode step carrying the whole
     # decision (global budget + per-request raw confidence, cumprod survival, chosen
     # verify_len) alongside the realized outcome (accept length, correct drafts, the
     # confidence-cap trim). A post-processing script greps these lines to check the
@@ -79,7 +79,9 @@ class DsparkDecisionDumper:
             cap_trim_lens=cap_trim_lens,
             commit_lens=commit_lens,
         )
-        logger.info("MAIN_OUTPUT=%s", json.dumps(record, separators=(",", ":")))
+        logger.info(
+            "DSPARK_DEBUG_MAIN_OUTPUT=%s", json.dumps(record, separators=(",", ":"))
+        )
 
     def _build_record(
         self,

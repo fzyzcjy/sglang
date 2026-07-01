@@ -61,15 +61,15 @@ def _dump_records(
     finally:
         dspark_decision_dump.logger.removeHandler(handler)
     return [
-        json.loads(msg.split("MAIN_OUTPUT=", 1)[1])
+        json.loads(msg.split("DSPARK_DEBUG_MAIN_OUTPUT=", 1)[1])
         for msg in handler.records
-        if msg.startswith("MAIN_OUTPUT=")
+        if msg.startswith("DSPARK_DEBUG_MAIN_OUTPUT=")
     ]
 
 
 class TestDsparkDecisionDumper(CustomTestCase):
     def test_disabled_emits_nothing(self):
-        """Env flag off produces no MAIN_OUTPUT line."""
+        """Env flag off produces no DSPARK_DEBUG_MAIN_OUTPUT line."""
         self.assertEqual(_dump_records(enabled=False), [])
 
     def test_non_rank0_emits_nothing(self):
