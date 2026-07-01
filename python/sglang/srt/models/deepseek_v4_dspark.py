@@ -609,7 +609,9 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
 
         self.embed_tokens: Optional[nn.Module] = None
         self.lm_head: Optional[nn.Module] = None
-        self._lm_head_weight_fp32: Optional[torch.Tensor] = None
+        # fp32 head weight held as a real Parameter the way the reference ``ParallelHead``
+        # (model.py:719) stores its head fp32; populated once in ``attach_shared_modules``.
+        self.lm_head_weight_fp32: Optional[nn.Parameter] = None
         self._last_confidence: Optional[torch.Tensor] = None
         self._x_post_hc: Optional[torch.Tensor] = None
 
@@ -631,14 +633,17 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         """Attach the target model's shared embedding and lm_head (worker wiring).
 
         The base-logit matmul runs in fp32 to mirror the reference ``ParallelHead``
-        (model.py:719, which stores its head weight as fp32, converted once at load).
-        The shared target ``lm_head`` stays bf16 for the target's own logits, so cache a
-        private fp32 copy of its local-vocab weight ONCE here (weights are already loaded
-        at worker init) instead of re-casting the whole head every draft step.
+        (model.py:719), whose head weight is an fp32 ``nn.Parameter`` filled once from the
+        bf16 checkpoint. The shared target ``lm_head`` stays bf16 for the target's own
+        logits, so build the draft's own fp32 head weight the same way -- a Parameter
+        converted ONCE here from the (already-loaded) target weight -- instead of
+        re-casting the whole head every draft step.
         """
         self.embed_tokens = embed_tokens
         self.lm_head = lm_head
-        self._lm_head_weight_fp32 = lm_head.weight.float()
+        self.lm_head_weight_fp32 = nn.Parameter(
+            lm_head.weight.detach().float(), requires_grad=False
+        )
 
     def project_target_hidden(self, main_hidden: torch.Tensor) -> torch.Tensor:
         """Project concatenated target-layer hc-mean features -> draft hidden (main_proj)."""
@@ -774,7 +779,7 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
             )
         last = self.stages[-1]
         x = last.norm(x_post_hc)
-        local_logits = F.linear(x.float(), self._lm_head_weight_fp32)
+        local_logits = F.linear(x.float(), self.lm_head_weight_fp32)
         return gather_and_crop_vocab(local_logits, self.lm_head)
 
     def compute_confidence(
