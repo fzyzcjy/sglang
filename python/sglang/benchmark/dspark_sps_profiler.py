@@ -88,6 +88,12 @@ DEFAULT_OUTPUT_LEN = [1024]
 WARMUP_INPUT_LEN = 16
 WARMUP_OUTPUT_LEN = 16
 PROFILE_SEED = 42
+# Decode-step cost is temperature-independent, so profile greedily; stream every
+# token so the measured ITL reflects the true per-step latency; keep every request
+# at a uniform input_len (no ramp) so batch_tokens == batch_size holds exactly.
+PROFILE_TEMPERATURE = 0.0
+PROFILE_STREAM_INTERVAL = 1
+PROFILE_INPUT_LEN_STEP_PERCENTAGE = 0.0
 
 CONVERSION_FORMULA = (
     "batch_tokens = batch_size; "
@@ -265,6 +271,10 @@ def run_bench_cases(
             batch_size=batch_size,
             input_len=WARMUP_INPUT_LEN,
             output_len=WARMUP_OUTPUT_LEN,
+            temperature=PROFILE_TEMPERATURE,
+            return_logprob=False,
+            stream_interval=PROFILE_STREAM_INTERVAL,
+            input_len_step_percentage=PROFILE_INPUT_LEN_STEP_PERCENTAGE,
             run_name="",
             result_filename="",
             tokenizer=tokenizer,
@@ -288,6 +298,10 @@ def run_bench_cases(
                     batch_size=batch_size,
                     input_len=input_len,
                     output_len=output_len,
+                    temperature=PROFILE_TEMPERATURE,
+                    return_logprob=False,
+                    stream_interval=PROFILE_STREAM_INTERVAL,
+                    input_len_step_percentage=PROFILE_INPUT_LEN_STEP_PERCENTAGE,
                     run_name="dspark_sps",
                     result_filename=str(result_path),
                     tokenizer=tokenizer,
