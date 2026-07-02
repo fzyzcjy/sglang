@@ -50,6 +50,9 @@ from sglang.srt.models.dspark import (
     run_markov_block,
 )
 from sglang.srt.runtime_context import get_parallel
+from sglang.srt.speculative.dspark_components.kernels.commit_kv_proj import (
+    CommitKvProj,
+)
 from sglang.srt.speculative.dspark_components.dspark_utils import (
     parse_dspark_draft_config,
 )
@@ -699,9 +702,12 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         """
         main_x = self.project_target_hidden(main_hidden)
         swa_loc = swa_loc.to(torch.int32)
-        for stage in self.stages:
+        kvs = CommitKvProj.execute(
+            main_x=main_x,
+            wkv_linears=[stage.self_attn.wkv for stage in self.stages],
+        )
+        for stage, kv in zip(self.stages, kvs):
             attn = stage.self_attn
-            kv = attn.kv_proj_only(main_x)
             pool.set_swa_key_buffer_radix_fused_norm_rope(
                 layer_id=attn.layer_id,
                 swa_loc=swa_loc,
