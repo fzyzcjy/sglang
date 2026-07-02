@@ -16,17 +16,33 @@ def greedy_step_sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tenso
 class DsparkDraftSampler:
     """Capture-safe greedy proposal (model.compute_base_logits + Markov argmax) folded
     into the draft cuda graph, like DFlash #29395. Greedy-only/no-RNG: the worker reads
-    ``out`` only for all-greedy batches, else eager. tp=1 only (compute_base_logits'
-    vocab all-gather is a no-op at tp=1 but an uncapturable collective above it).
+    ``out`` only for all-greedy batches, else eager. tp>1 is fine: capture runs inside
+    the runner's graph-capture context, which makes compute_base_logits' vocab
+    all-gather graph-safe (same as the target lm-head gather in every decode graph).
+
+    When ``confidence_fn`` is set (the planner carries a confidence head), confidence
+    is also computed in-graph right after the Markov block and written to
+    ``confidence_out``. This is a correctness requirement, not an optimization: the
+    dsv4 hook reads the ``_x_post_hc`` tap stashed by compute_base_logits, and only a
+    same-graph read is guaranteed fresh -- an eager post-replay read would see the LAST
+    captured bs-tier's capture-time buffer.
     """
 
-    def __init__(self, *, model, gamma, max_bs, device):
+    def __init__(self, *, model, gamma, max_bs, device, confidence_fn=None):
         self.model = model
         self.markov_head = model.markov_head
         self.gamma = int(gamma)
         # Proposed draft tokens [bs*gamma]: written in-graph, read after replay.
         self.out = torch.empty(
             (int(max_bs) * self.gamma,), dtype=torch.int64, device=device
+        )
+        # planner.compute_confidence_tensor-shaped callable, or None (no head).
+        self.confidence_fn = confidence_fn
+        # Confidence [max_bs, gamma]: written in-graph, read after replay.
+        self.confidence_out = (
+            torch.empty((int(max_bs), self.gamma), dtype=torch.float32, device=device)
+            if confidence_fn is not None
+            else None
         )
 
     def __call__(self, hidden_states, input_ids):
@@ -43,6 +59,13 @@ class DsparkDraftSampler:
             sampler=greedy_step_sampler,
         )
         self.out[: draft_tokens.numel()].copy_(draft_tokens.reshape(-1))
+        if self.confidence_out is not None:
+            confidence = self.confidence_fn(
+                draft_hidden=hidden_states.view(bs, self.gamma, -1),
+                anchor_tokens=anchor,
+                draft_tokens=draft_tokens,
+            )
+            self.confidence_out[:bs].copy_(confidence)
 
 
 def make_next_draft_input(

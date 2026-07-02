@@ -48,3 +48,9 @@ class DraftProposal(msgspec.Struct, frozen=True):
     draft_block_ids: torch.Tensor
     draft_block: DraftBlockResult
     draft_hidden: Optional[torch.Tensor]
+    # Confidence computed inside the captured draft graph (a slice of the sampler's
+    # static out buffer). None on the eager path; the worker then falls back to the
+    # eager compute_confidence_tensor. Folding it into the graph keeps the dsv4
+    # ``_x_post_hc`` tap same-graph fresh across bs tiers (the eager fallback would
+    # read the LAST captured tier's stale capture-time buffer).
+    confidence: Optional[torch.Tensor] = None
