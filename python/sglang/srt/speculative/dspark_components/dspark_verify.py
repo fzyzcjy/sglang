@@ -27,14 +27,20 @@ def uniform_ragged_layout(
     verify_num_draft_tokens: int,
     ragged_verify_mode: RaggedVerifyMode,
     model_runner,
+    tier_num_reqs: Optional[int] = None,
 ) -> Optional[RaggedVerifyLayout]:
     # The degenerate uniform layout (verify_lens = [gamma+1] * bs) that a
     # layout-less compact verify carries so it hits the same token-keyed graph
     # the real ragged batch does (C3). Geometry matches the static full block.
     # A batch too large for any captured tier gets no layout and falls to the
     # bs-keyed eager path instead of crashing round_up_grid.
+    # Under DP the captured token-keyed graph holds a cross-DP MoE gather, so the
+    # tier (exceeds-grid gate + graph_num_tokens floor) must key off the DP-global
+    # max bs (tier_num_reqs), identical on every rank, while verify_lens stay this
+    # rank's local bs. tier_num_reqs is None (falls back to bs) without DP.
+    tier_num_reqs = bs if tier_num_reqs is None else tier_num_reqs
     if ragged_layout_exceeds_captured_grid(
-        num_reqs=bs,
+        num_reqs=tier_num_reqs,
         verify_num_draft_tokens=verify_num_draft_tokens,
         model_runner=model_runner,
     ):
@@ -46,7 +52,7 @@ def uniform_ragged_layout(
         model_runner=model_runner,
     )
     graph_num_tokens_floor = verify_layout_graph_num_tokens_floor(
-        num_reqs=bs,
+        num_reqs=tier_num_reqs,
         ragged_verify_mode=ragged_verify_mode,
         verify_num_draft_tokens=verify_num_draft_tokens,
         model_runner=model_runner,

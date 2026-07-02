@@ -597,12 +597,24 @@ class DSparkWorkerV2(BaseSpecWorker):
             prefix_lens=prefix_lens,
         )
 
+        # dsv4 (MoE) draft under DP: the compact verify's token-keyed cuda graph holds a
+        # cross-DP MoE gather, so every rank must select the same graph tier. Feed the
+        # planner the DP-global max bs (already all-gathered on batch.global_num_tokens,
+        # per-rank decode bs) so the tier floors to it uniformly. None off this path.
+        global_num_reqs = (
+            max(batch.global_num_tokens)
+            if self._draft_is_moe
+            and self.server_args.enable_dp_attention
+            and batch.global_num_tokens is not None
+            else None
+        )
         layout = self._verify_planner.schedule_layout(
             req_pool_indices=batch.req_pool_indices,
             prefix_lens=prefix_lens,
             device=device,
             confidence=confidence,
             budget=verify_token_budget,
+            global_num_reqs=global_num_reqs,
         )
         run_compact = self._verify_planner.should_run_compact(layout=layout)
 

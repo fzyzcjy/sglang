@@ -320,6 +320,7 @@ class DSparkVerifyPlanner:
         device: torch.device,
         confidence: Optional[torch.Tensor],
         budget: Optional[int],
+        global_num_reqs: Optional[int] = None,
     ) -> Optional[RaggedVerifyLayout]:
         # Gate: STATIC -> None (uniform path). CAP_ACCEPT/COMPACT build a ragged
         # layout from the per-request verify_lens (GPU-sorted by the current-step
@@ -348,20 +349,27 @@ class DSparkVerifyPlanner:
                     verify_num_draft_tokens=self.verify_num_draft_tokens,
                     ragged_verify_mode=self._ragged_verify_mode,
                     model_runner=self.model_runner,
+                    tier_num_reqs=global_num_reqs,
                 )
             return None
         # bs = verify_lens.shape[0] is tensor metadata (host, no D2H), so the grid gate
         # and the bs-derived tier are computed without pulling verify_lens off the
         # forward stream.
         bs = int(verify_lens.shape[0])
+        # Under DP the token-keyed graph tier must be identical on every rank (the
+        # captured graph holds a cross-DP MoE gather), so the exceeds-grid gate and the
+        # graph_num_tokens floor key off the DP-global max bs, not this rank's local bs.
+        # verify_lens itself stays local (device tensor). global_num_reqs is None (=> bs)
+        # without DP MoE sync.
+        tier_num_reqs = bs if global_num_reqs is None else global_num_reqs
         if ragged_layout_exceeds_captured_grid(
-            num_reqs=bs,
+            num_reqs=tier_num_reqs,
             verify_num_draft_tokens=self.verify_num_draft_tokens,
             model_runner=self.model_runner,
         ):
             return None
         graph_num_tokens_floor = verify_layout_graph_num_tokens_floor(
-            num_reqs=bs,
+            num_reqs=tier_num_reqs,
             ragged_verify_mode=self._ragged_verify_mode,
             verify_num_draft_tokens=self.verify_num_draft_tokens,
             model_runner=self.model_runner,
