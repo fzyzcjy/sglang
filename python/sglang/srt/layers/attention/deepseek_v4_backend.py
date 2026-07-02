@@ -65,9 +65,15 @@ from sglang.srt.speculative.dspark_components.kernels.build_block_seq_lens_casua
 from sglang.srt.speculative.dspark_components.kernels.build_block_seq_lens_casual import (
     build_block_seq_lens_casual as build_block_seq_lens_casual,
 )
+from sglang.srt.speculative.dspark_components.kernels.causal_swa_page_indices import (
+    BuildCausalSwaPageIndices,
+)
 from sglang.srt.speculative.dspark_components.kernels.dspark_swa_page_indices import (
     BuildDsparkSwaPageIndices,
     ComputeDsparkWindowGather,
+)
+from sglang.srt.speculative.dspark_components.kernels.expand_prefill_casually import (
+    ExpandPrefillCasually,
 )
 from sglang.srt.speculative.dspark_components.kernels.page_table_positions import (
     BuildPageTablePositions,
@@ -672,6 +678,19 @@ class DeepseekV4AttnBackend(
         pin_tensor = torch.tensor(x, dtype=torch.int32, pin_memory=True)
         return pin_tensor.to(self.device, non_blocking=True)
 
+    def _draft_extend_lens(self, *, block_size: int, bs: int) -> torch.Tensor:
+        # The draft block's extend lens are the constant [block_size] * bs; a cached
+        # request-pool-capacity buffer replaces the old per-step pinned alloc + H2D
+        # copy (_move_to_device of a constant host list).
+        if not hasattr(self, "_draft_extend_lens_buffer"):
+            num_reqs = self.req_to_token.shape[0]
+            self._draft_extend_lens_buffer = torch.full(
+                (num_reqs,), block_size, **self.cuda_int32_kwargs
+            )
+            self._draft_extend_lens_block_size = block_size
+        assert self._draft_extend_lens_block_size == block_size
+        return self._draft_extend_lens_buffer[:bs]
+
     def _resolve_verify_layout(
         self,
         forward_batch: ForwardBatch,
@@ -1067,7 +1086,7 @@ class DeepseekV4AttnBackend(
             seq_lens_cpu=seq_lens_cpu_list,
             extend_len=block_size,
         )
-        extend_seq_lens = self._move_to_device(lengths.extend_seq_lens_cpu)
+        extend_seq_lens = self._draft_extend_lens(block_size=block_size, bs=len(seq_lens))
         return self.init_forward_metadata_prefill(
             max_seq_len=max_seq_len,
             req_pool_indices=req_pool_indices,
@@ -2013,46 +2032,21 @@ class DeepseekV4AttnBackend(
         extend_seq_lens_tensor: Optional[torch.Tensor] = None,
         extend_start_loc: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        if (
-            seq_lens_tensor is not None
-            and extend_seq_lens_tensor is not None
-            and extend_start_loc is not None
-        ):
-            return self._expand_prefill_casually_vectorized(
-                num_tokens=num_tokens,
-                seq_lens=seq_lens_tensor,
-                extend_seq_lens=extend_seq_lens_tensor,
-                extend_start_loc=extend_start_loc,
-                req_pool_indices=req_pool_indices,
-                padded_num_tokens=padded_num_tokens,
-            )
-
-        seq_lens_casual = torch.empty(num_tokens, **self.cuda_int32_kwargs)
-        idx_to_req_repeated = torch.empty(num_tokens, **self.cuda_int32_kwargs)
-        offset = 0
-        for i, (kv_len, qo_len) in enumerate(zip(seq_lens, extend_seq_lens)):
-            out = seq_lens_casual[offset : offset + qo_len]
-            offset += qo_len
-            torch.arange(kv_len - qo_len + 1, kv_len + 1, out=out)
-            idx_to_req_repeated[offset - qo_len : offset].fill_(i)
-
-        assert offset == num_tokens
-        req_pool_indices_repeated = req_pool_indices[idx_to_req_repeated]
-
-        if padded_num_tokens is not None and padded_num_tokens > num_tokens:
-            pad_size = padded_num_tokens - num_tokens
-            seq_lens_casual = torch.nn.functional.pad(
-                seq_lens_casual,
-                (0, pad_size),
-                value=1,
-            )
-            req_pool_indices_repeated = torch.nn.functional.pad(
-                req_pool_indices_repeated,
-                (0, pad_size),
-                value=req_pool_indices_repeated[-1].item(),
-            )
-
-        return seq_lens_casual, req_pool_indices_repeated
+        # The whole per-token expansion (both the old vectorized repeat_interleave
+        # chain and the old host-loop branch) lives in the ExpandPrefillCasually
+        # kernel; the host lists are only consumed by its torch reference impl.
+        assert seq_lens_tensor is not None and extend_seq_lens_tensor is not None
+        result = ExpandPrefillCasually.execute(
+            req_pool_indices=req_pool_indices,
+            seq_lens=seq_lens_tensor,
+            extend_seq_lens=extend_seq_lens_tensor,
+            extend_start_loc=extend_start_loc,
+            seq_lens_cpu=seq_lens,
+            extend_seq_lens_cpu=extend_seq_lens,
+            num_tokens=num_tokens,
+            padded_num_tokens=padded_num_tokens,
+        )
+        return result.seq_lens_casual, result.req_pool_indices_repeated
 
     def _expand_prefill_casually_vectorized(
         self,
@@ -2063,38 +2057,17 @@ class DeepseekV4AttnBackend(
         req_pool_indices: torch.Tensor,
         padded_num_tokens: Optional[int],
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        repeats = extend_seq_lens.to(torch.int64)
-        req_pool_indices_repeated = torch.repeat_interleave(
-            req_pool_indices, repeats, output_size=num_tokens
+        result = ExpandPrefillCasually.execute(
+            req_pool_indices=req_pool_indices,
+            seq_lens=seq_lens,
+            extend_seq_lens=extend_seq_lens,
+            extend_start_loc=extend_start_loc,
+            seq_lens_cpu=None,
+            extend_seq_lens_cpu=None,
+            num_tokens=num_tokens,
+            padded_num_tokens=padded_num_tokens,
         )
-
-        start_positions = seq_lens.to(torch.int32) - extend_seq_lens.to(torch.int32) + 1
-        start_positions_repeated = torch.repeat_interleave(
-            start_positions, repeats, output_size=num_tokens
-        )
-        start_locs_repeated = torch.repeat_interleave(
-            extend_start_loc.to(torch.int32), repeats, output_size=num_tokens
-        )
-        token_offsets = (
-            torch.arange(num_tokens, **self.cuda_int32_kwargs) - start_locs_repeated
-        )
-        seq_lens_casual = start_positions_repeated + token_offsets
-
-        if padded_num_tokens is not None and padded_num_tokens > num_tokens:
-            pad_size = padded_num_tokens - num_tokens
-            seq_lens_casual = torch.nn.functional.pad(
-                seq_lens_casual,
-                (0, pad_size),
-                value=1,
-            )
-            req_pool_indices_repeated = torch.cat(
-                (
-                    req_pool_indices_repeated,
-                    req_pool_indices_repeated[-1:].expand(pad_size),
-                )
-            )
-
-        return seq_lens_casual, req_pool_indices_repeated
+        return result.seq_lens_casual, result.req_pool_indices_repeated
 
     def expand_extend_with_same_length(
         self,
@@ -2170,12 +2143,17 @@ class DeepseekV4AttnBackend(
                 block_size=dspark_block_size,
             )
         else:
-            swa_page_indices = self.get_swa_page_indices(
-                seq_lens_casual=seq_lens_casual,
+            # Causal SWA index build + -1 pad fused into one launch (the old
+            # get_swa_page_indices arange/masked_fill/gather/translate/cast chain
+            # plus _pad_last_dim). The padded tail columns are never attended (the
+            # consumer reads only swa_topk_lengths entries per row).
+            swa_page_indices = BuildCausalSwaPageIndices.execute(
+                req_to_token=self.req_to_token,
+                full_to_swa_mapping=self.token_to_kv_pool.full_to_swa_index_mapping,
                 req_pool_indices_repeated=req_pool_indices_repeated,
-            )
-            swa_page_indices = _pad_last_dim(
-                swa_page_indices, multiples_of=PAGE_INDEX_ALIGNED_SIZE
+                seq_lens_casual=seq_lens_casual,
+                swa_window=SWA_WINDOW,
+                page_index_aligned_size=PAGE_INDEX_ALIGNED_SIZE,
             )
             swa_topk_lengths = prep.swa_topk_lengths
 
@@ -2261,26 +2239,6 @@ class DeepseekV4AttnBackend(
             page_index_aligned_size=PAGE_INDEX_ALIGNED_SIZE,
         )
         return swa_page_indices, swa_topk_lengths
-
-    def get_swa_page_indices(
-        self,
-        seq_lens_casual: torch.Tensor,
-        req_pool_indices_repeated: torch.Tensor,
-    ) -> torch.Tensor:
-        pos_causal = seq_lens_casual - 1
-        num_qo_tokens = seq_lens_casual.size(0)
-        offsets = pos_causal.unsqueeze(1) - torch.arange(
-            SWA_WINDOW, **self.cuda_int32_kwargs
-        ).unsqueeze(0)
-        invalid_offset_mask = offsets < 0
-        offsets.masked_fill_(invalid_offset_mask, 0)
-        raw_indices = self.req_to_token[req_pool_indices_repeated[:, None], offsets]
-        assert raw_indices.shape == (num_qo_tokens, SWA_WINDOW)
-        raw_indices.masked_fill_(invalid_offset_mask, -1)
-        swa_indices = self.token_to_kv_pool.translate_loc_from_full_to_swa(raw_indices)
-        # flash_mla attention requires int32 page indices.
-        return swa_indices.to(torch.int32)
-
 
 class DeepseekV4MultiStepBackend(DeepseekV4AttnBackend):
     def __init__(
