@@ -44,6 +44,9 @@ from sglang.srt.speculative.dspark_components.dspark_utils import (
 from sglang.srt.speculative.dspark_components.kernels.build_step_local import (
     BuildStepLocal,
 )
+
+_ADHOC_MARKOV_PRINTS = [0]  # ADHOC-SHAPE-PRINT (workflow ii, revert after capture)
+
 from sglang.srt.speculative.dspark_components.kernels.commit_kv_proj import (
     CommitKvProj,
 )
@@ -455,6 +458,17 @@ class DSparkV4MarkovHead(nn.Module):
         else:
             bias = F.linear(latent.float(), weight_local)
         step_local = BuildStepLocal.execute(bias=bias, base_local=base_local)
+        if _ADHOC_MARKOV_PRINTS[0] < 24:  # ADHOC-SHAPE-PRINT (workflow ii, revert after)
+            _ADHOC_MARKOV_PRINTS[0] += 1
+            from sglang.srt.debug_utils.dumper import get_tensor_info as _gti
+
+            print(
+                f"[SHAPE][markov_sharded #{_ADHOC_MARKOV_PRINTS[0]}] "
+                f"latent {_gti(latent)} || bias {_gti(bias)} || base_local {_gti(base_local)} || "
+                f"step_local {_gti(step_local)} || org=[{shard.org_vocab_start},{shard.org_vocab_end}) "
+                f"per_partition={shard.num_embeddings_per_partition} tp={shard.tp_size}",
+                flush=True,
+            )
         if shard.tp_size > 1:
             # Reuse the attn-TP group so the collective is a no-op (size-1) under DP
             # attention -- a gather on the full TP group here would deadlock against the
