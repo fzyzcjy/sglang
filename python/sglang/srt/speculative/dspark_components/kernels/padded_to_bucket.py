@@ -23,13 +23,13 @@ class PaddedToBucket:
         verify_lens: torch.Tensor,
         graph_num_tokens: int,
         bs: int,
-        num_draft_tokens: int,
+        padded_bs: int,
     ) -> torch.Tensor:
         return pad_verify_lens_to_bucket(
             verify_lens=verify_lens,
             graph_num_tokens=graph_num_tokens,
             bs=bs,
-            num_draft_tokens=num_draft_tokens,
+            padded_bs=padded_bs,
         )
 
     @classmethod
@@ -39,13 +39,13 @@ class PaddedToBucket:
         verify_lens: torch.Tensor,
         graph_num_tokens: int,
         bs: int,
-        num_draft_tokens: int,
+        padded_bs: int,
     ) -> torch.Tensor:
         return pad_verify_lens_to_bucket_triton(
             verify_lens=verify_lens,
             graph_num_tokens=graph_num_tokens,
             bs=bs,
-            num_draft_tokens=num_draft_tokens,
+            padded_bs=padded_bs,
         )
 
 
@@ -54,25 +54,33 @@ def pad_verify_lens_to_bucket(
     verify_lens: torch.Tensor,
     graph_num_tokens: int,
     bs: int,
-    num_draft_tokens: int,
+    padded_bs: int,
 ) -> torch.Tensor:
-    padded_bs = graph_num_tokens // num_draft_tokens
+    # Grow the [bs] real verify_lens to the captured [padded_bs] rows so they
+    # sum to exactly graph_num_tokens. The slack (tier tokens minus real
+    # tokens) spreads as evenly as possible over the pad rows; with no pad row
+    # it rides on the last real row. A row absorbing slack may exceed gamma+1
+    # (and a pad row may be 0): compact packing keeps every real token at the
+    # FRONT of its row, so right-aligned causal attention still computes real
+    # tokens exactly, and the pad-token outputs are never read.
     assert padded_bs >= bs, (
-        f"padded_bs {padded_bs} < bs {bs}: graph_num_tokens "
-        f"{graph_num_tokens} cannot hold this batch's requests"
+        f"padded_bs {padded_bs} < bs {bs}: the captured tier cannot hold this "
+        "batch's requests"
     )
     device = verify_lens.device
     num_pad_reqs = padded_bs - bs
     padded = verify_lens.to(torch.int32)
+    leftover = graph_num_tokens - padded.to(torch.int64).sum()
     if num_pad_reqs > 0:
-        pad_block = torch.full(
-            (num_pad_reqs,), num_draft_tokens, dtype=torch.int32, device=device
+        base = leftover // num_pad_reqs
+        rem = leftover - base * num_pad_reqs
+        pad_block = base + (
+            torch.arange(num_pad_reqs, device=device, dtype=torch.int64) < rem
         )
-        padded = torch.cat([padded, pad_block])
+        padded = torch.cat([padded, pad_block.to(torch.int32)])
     else:
         padded = padded.clone()
-    leftover = graph_num_tokens - padded.to(torch.int64).sum()
-    padded[-1] = (padded[-1].to(torch.int64) + leftover).to(torch.int32)
+        padded[-1] = (padded[-1].to(torch.int64) + leftover).to(torch.int32)
     return padded
 
 
@@ -82,7 +90,6 @@ def _padded_to_bucket_kernel(
     out_ptr,
     bs,
     padded_bs,
-    num_draft_tokens,
     graph_num_tokens,
     BLOCK: tl.constexpr,
 ):
@@ -90,11 +97,15 @@ def _padded_to_bucket_kernel(
     valid = idx < padded_bs
     is_real = idx < bs
     vl = tl.load(verify_lens_ptr + idx, mask=is_real, other=0).to(tl.int64)
-    base = tl.where(is_real, vl, num_draft_tokens)
-    base = tl.where(valid, base, 0)
-    leftover = graph_num_tokens - tl.sum(base)
-    is_last = idx == (padded_bs - 1)
-    final = base + tl.where(is_last, leftover, 0)
+    leftover = graph_num_tokens - tl.sum(vl)
+    num_pad = padded_bs - bs
+    # Guard the divisor; base/rem are only read on pad rows (num_pad > 0).
+    num_pad_safe = tl.maximum(num_pad, 1)
+    base = leftover // num_pad_safe
+    rem = leftover - base * num_pad_safe
+    pad_len = base + tl.where((idx - bs) < rem, 1, 0)
+    final = tl.where(is_real, vl, pad_len)
+    final = final + tl.where((num_pad == 0) & (idx == bs - 1), leftover, 0)
     tl.store(out_ptr + idx, final.to(tl.int32), mask=valid)
 
 
@@ -103,12 +114,11 @@ def pad_verify_lens_to_bucket_triton(
     verify_lens: torch.Tensor,
     graph_num_tokens: int,
     bs: int,
-    num_draft_tokens: int,
+    padded_bs: int,
 ) -> torch.Tensor:
-    padded_bs = graph_num_tokens // num_draft_tokens
     assert padded_bs >= bs, (
-        f"padded_bs {padded_bs} < bs {bs}: graph_num_tokens "
-        f"{graph_num_tokens} cannot hold this batch's requests"
+        f"padded_bs {padded_bs} < bs {bs}: the captured tier cannot hold this "
+        "batch's requests"
     )
     device = verify_lens.device
     verify_lens = verify_lens.to(torch.int32).contiguous()
@@ -119,7 +129,6 @@ def pad_verify_lens_to_bucket_triton(
         out,
         bs,
         padded_bs,
-        num_draft_tokens,
         graph_num_tokens,
         BLOCK=BLOCK,
     )

@@ -443,7 +443,6 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
                 self.decode_cuda_graph_metadata[bs] = metadata
         elif forward_mode.is_target_verify():
             # Target Verify (topk = 1)
-            tokens_per_req = num_tokens // bs
             metadata.cache_seqlens_int32 = self.target_verify_metadata["cache_seqlens"][
                 :bs
             ]
@@ -453,9 +452,17 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
             metadata.cu_seqlens_k = self.target_verify_metadata["cu_seqlens_k"][
                 : bs + 1
             ]
-            metadata.max_seq_len_q = tokens_per_req
             metadata.is_ragged_verify = (
                 getattr(spec_info, "ragged_verify_layout", None) is not None
+            )
+            # Ragged verify captures decoupled (slots, tokens): num_tokens //
+            # bs is the layout's mean row length, not the per-request bound the
+            # kernel must budget for -- a replayed real row can hold up to the
+            # full verify window.
+            metadata.max_seq_len_q = (
+                self.speculative_num_draft_tokens
+                if metadata.is_ragged_verify
+                else num_tokens // bs
             )
             metadata.page_table = self.target_verify_metadata["page_table"][:bs, :]
             self._bind_swa_page_table(
@@ -533,9 +540,7 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
             metadata = self.target_verify_metadata[bs]
             ragged_layout = getattr(spec_info, "ragged_verify_layout", None)
             if ragged_layout is not None:
-                padded_layout = ragged_layout.padded_to_bucket(
-                    num_draft_tokens=self.speculative_num_draft_tokens
-                )
+                padded_layout = ragged_layout.padded_to_bucket(padded_bs=bs)
                 geometry = build_ragged_target_verify_geometry(
                     seq_lens=seq_lens, layout=padded_layout
                 )

@@ -189,7 +189,7 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
             grid=grid,
         )
 
-    def padded_to_bucket(self, *, num_draft_tokens: int) -> RaggedVerifyLayout:
+    def padded_to_bucket(self, *, padded_bs: int) -> RaggedVerifyLayout:
         from sglang.srt.speculative.dspark_components.kernels.padded_to_bucket import (
             PaddedToBucket,
         )
@@ -198,7 +198,7 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
             verify_lens=self.verify_lens,
             graph_num_tokens=self.graph_num_tokens,
             bs=self.bs,
-            num_draft_tokens=num_draft_tokens,
+            padded_bs=padded_bs,
         )
 
         return RaggedVerifyLayout._assemble_device(
@@ -206,6 +206,30 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
             graph_num_tokens=self.graph_num_tokens,
             total_verify_tokens=self.graph_num_tokens,
         )
+
+
+def build_capture_verify_lens(
+    *,
+    num_tokens: int,
+    num_slots: int,
+    num_draft_tokens: int,
+) -> list[int]:
+    # Legal (slots, tokens) layout for graph capture: every row in
+    # [1, num_draft_tokens] and the rows sum to exactly num_tokens, so the
+    # captured kernels see a self-consistent ragged geometry.
+    if num_slots < 1 or num_tokens < num_slots:
+        raise ValueError(
+            f"capture layout needs 1 <= num_slots <= num_tokens, got "
+            f"num_slots={num_slots}, num_tokens={num_tokens}"
+        )
+    if num_tokens > num_slots * num_draft_tokens:
+        raise ValueError(
+            f"capture layout cannot pack num_tokens={num_tokens} into "
+            f"{num_slots} rows of at most {num_draft_tokens} tokens"
+        )
+    base = num_tokens // num_slots
+    rem = num_tokens - base * num_slots
+    return [base + 1] * rem + [base] * (num_slots - rem)
 
 
 class RaggedTargetVerifyGeometry(msgspec.Struct):

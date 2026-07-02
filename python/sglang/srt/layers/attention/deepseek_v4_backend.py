@@ -677,10 +677,7 @@ class DeepseekV4AttnBackend(
         if layout.verify_lens_cpu is not None:
             assert int(layout.verify_lens.min()) >= 1
             assert layout.total_verify_tokens == int(layout.verify_lens.sum())
-        layout = layout.padded_to_bucket(
-            num_draft_tokens=self.speculative_num_draft_tokens
-        )
-        assert layout.bs == bs, f"padded ragged layout bs {layout.bs} != batch bs {bs}"
+        layout = layout.padded_to_bucket(padded_bs=bs)
         return layout
 
     def _target_verify_graph_key(

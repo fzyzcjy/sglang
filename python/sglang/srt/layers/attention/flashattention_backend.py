@@ -2514,9 +2514,7 @@ class FlashAttentionBackend(AttentionBackend):
                 metadata = self.target_verify_metadata[bs]
                 ragged_layout = getattr(spec_info, "ragged_verify_layout", None)
                 if ragged_layout is not None:
-                    padded = ragged_layout.padded_to_bucket(
-                        num_draft_tokens=self.speculative_num_draft_tokens
-                    )
+                    padded = ragged_layout.padded_to_bucket(padded_bs=bs)
                     geometry = build_ragged_target_verify_geometry(
                         seq_lens=seq_lens, layout=padded
                     )
