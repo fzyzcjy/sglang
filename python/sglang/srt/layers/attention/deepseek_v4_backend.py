@@ -3,7 +3,6 @@ from __future__ import annotations
 import enum
 import functools
 import logging
-import os
 from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
@@ -97,40 +96,6 @@ if TYPE_CHECKING:
 _is_sm120 = is_sm120_supported()
 
 logger = logging.getLogger(__name__)
-
-_IMA_DEBUG = os.environ.get("IMA_DEBUG") == "1"
-
-
-def _ima_active() -> bool:
-    return _IMA_DEBUG and not torch.cuda.is_current_stream_capturing()
-
-
-def _ima_check(
-    name: str,
-    t: Optional[torch.Tensor],
-    bound: Optional[int] = None,
-    min_allowed: int = 0,
-) -> None:
-    if t is None:
-        logger.info(f"[IMA-DEBUG] {name} None")
-        return
-    if t.numel() == 0:
-        logger.info(f"[IMA-DEBUG] {name} shape={tuple(t.shape)} dtype={t.dtype} empty")
-        return
-    t_min = t.min().item()
-    t_max = t.max().item()
-    bound_ok = True
-    if bound is not None:
-        bound_ok = t_min >= min_allowed and t_max < bound
-    logger.info(
-        f"[IMA-DEBUG] {name} shape={tuple(t.shape)} dtype={t.dtype}"
-        f" min={t_min} max={t_max} min_allowed={min_allowed} bound={bound}"
-        f" bound_ok={bound_ok}"
-    )
-    assert bound_ok, (
-        f"[IMA-DEBUG] OOB {name}: min={t_min} max={t_max}"
-        f" min_allowed={min_allowed} bound={bound}"
-    )
 
 SWA_WINDOW = 128
 C4_TOPK = 512
@@ -1097,52 +1062,6 @@ class DeepseekV4AttnBackend(
                     padded_num_tokens=out_cache_loc.shape[0],
                 )
             )
-            if _ima_active():
-                num_reqs, req_cols = self.req_to_token.shape
-                pool_bound = (
-                    self.token_to_kv_pool.size + self.token_to_kv_pool.page_size
-                )
-                logger.info(
-                    f"[IMA-DEBUG] raw_verify ragged: bs={bs} num_q_tokens={num_q_tokens}"
-                    f" padded_num_tokens={out_cache_loc.shape[0]}"
-                    f" req_to_token={tuple(self.req_to_token.shape)}"
-                    f" pool_bound={pool_bound}"
-                )
-                verify_lens_sum = int(raw_metadata.verify_lens.sum().item())
-                logger.info(
-                    f"[IMA-DEBUG] verify_lens sum={verify_lens_sum}"
-                    f" total_verify_tokens={num_q_tokens}"
-                    f" len={raw_metadata.verify_lens.shape[0]}"
-                )
-                assert verify_lens_sum == num_q_tokens, (
-                    f"[IMA-DEBUG] verify_lens sum {verify_lens_sum}"
-                    f" != total_verify_tokens {num_q_tokens}"
-                )
-                _ima_check(
-                    "verify_lens",
-                    raw_metadata.verify_lens,
-                    bound=self.speculative_num_draft_tokens + 1,
-                )
-                _ima_check(
-                    "extend_start_loc",
-                    raw_metadata.extend_start_loc,
-                    bound=num_q_tokens + 1,
-                )
-                _ima_check("req_pool_indices", req_pool_indices, bound=num_reqs)
-                _ima_check("out_cache_loc", out_cache_loc, bound=pool_bound)
-                _ima_check("seq_lens_extended", seq_lens, bound=req_cols + 1)
-                _ima_check("seq_lens_casual", seq_lens_casual, bound=req_cols + 1)
-                _ima_check(
-                    "req_pool_indices_repeated",
-                    req_pool_indices_repeated,
-                    bound=num_reqs,
-                )
-                assert (
-                    seq_lens_casual.shape[0] == out_cache_loc.shape[0]
-                ), f"{seq_lens_casual.shape=} vs {out_cache_loc.shape=}"
-                assert (
-                    req_pool_indices_repeated.shape[0] == out_cache_loc.shape[0]
-                ), f"{req_pool_indices_repeated.shape=} vs {out_cache_loc.shape=}"
         else:
             seq_lens = seq_lens + self.speculative_num_draft_tokens
             num_q_tokens = num_draft_tokens * bs
@@ -1163,28 +1082,6 @@ class DeepseekV4AttnBackend(
             need_compress=True,
         )
         indexer_metadata = self.init_forward_metadata_indexer(core_attn_metadata)
-        if is_ragged and _ima_active():
-            pool_bound = self.token_to_kv_pool.size + self.token_to_kv_pool.page_size
-            _ima_check(
-                "core.page_table",
-                core_attn_metadata.page_table,
-                bound=pool_bound,
-                min_allowed=-1,
-            )
-            _ima_check(
-                "core.positions_casual",
-                core_attn_metadata.positions_casual,
-            )
-            _ima_check(
-                "core.swa_page_indices(raw_verify)",
-                core_attn_metadata.swa_page_indices,
-                min_allowed=-1,
-            )
-            _ima_check(
-                "core.swa_topk_lengths(raw_verify)",
-                core_attn_metadata.swa_topk_lengths,
-                bound=core_attn_metadata.swa_page_indices.shape[-1] + 1,
-            )
         create = functools.partial(
             create_paged_compressor_data,
             is_prefill=True,
@@ -1877,42 +1774,6 @@ class DeepseekV4AttnBackend(
                     core_attn_metadata=core_attn_metadata,
                     attn_sink=attn_sink,
                 )
-
-            if _ima_active() and forward_batch.forward_mode.is_target_verify():
-                swa_token_bound = swa_k_cache.shape[0] * swa_k_cache.shape[1]
-                logger.info(
-                    f"[IMA-DEBUG] forward sparse layer={layer_id}"
-                    f" compress_ratio={compress_ratio} q={tuple(q.shape)}"
-                    f" swa_k_cache={tuple(swa_k_cache.shape)}"
-                    f" extra_k_cache="
-                    f"{tuple(extra_k_cache.shape) if extra_k_cache is not None else None}"
-                )
-                _ima_check(
-                    f"swa_page_indices[L{layer_id}/c{compress_ratio}]",
-                    swa_page_indices,
-                    bound=swa_token_bound,
-                    min_allowed=-1,
-                )
-                _ima_check(
-                    f"swa_topk_lengths[L{layer_id}/c{compress_ratio}]",
-                    swa_topk_lengths,
-                    bound=swa_page_indices.shape[-1] + 1,
-                )
-                if extra_indices is not None:
-                    extra_token_bound = (
-                        extra_k_cache.shape[0] * extra_k_cache.shape[1]
-                    )
-                    _ima_check(
-                        f"extra_indices[L{layer_id}/c{compress_ratio}]",
-                        extra_indices,
-                        bound=extra_token_bound,
-                        min_allowed=-1,
-                    )
-                    _ima_check(
-                        f"extra_topk_lengths[L{layer_id}/c{compress_ratio}]",
-                        extra_topk_lengths,
-                        bound=extra_indices.shape[-1] + 1,
-                    )
 
             if _is_sm120:
                 from sglang.srt.layers.attention.flash_mla_sm120 import (
