@@ -37,11 +37,15 @@ class TargetVerifyExecutor:
         verify_num_draft_tokens: int,
         model_runner,
         kv_injector: TargetHiddenKvInjector,
+        verify_epilogue=None,
     ) -> None:
         self.target_worker = target_worker
         self.verify_num_draft_tokens = verify_num_draft_tokens
         self.model_runner = model_runner
         self.kv_injector = kv_injector
+        # DsparkVerifyEpilogue when the compact scatter folds into the
+        # token-keyed graph; None -> eager scatter.
+        self.verify_epilogue = verify_epilogue
         self._verify_backend_self_adds_seq_lens_cache: Optional[bool] = None
 
     def run_non_compact(
@@ -201,6 +205,10 @@ class TargetVerifyExecutor:
             verify_num_draft_tokens=self.verify_num_draft_tokens,
             model_runner=self.model_runner,
         )
+        if self.verify_epilogue is not None:
+            # Feed the in-graph scatter's static verify_lens pre-replay
+            # (harmless on an eager-fallback step).
+            self.verify_epilogue.fill_verify_lens(layout.verify_lens)
         target_verify = self._run_ragged(
             batch=batch,
             layout=layout,
@@ -209,29 +217,44 @@ class TargetVerifyExecutor:
         )
         logits_output = target_verify.logits_output
 
-        compact_logits = logits_output.next_token_logits
-        strided_logits = ScatterCompactToStrided.execute(
-            compact=compact_logits,
-            layout=layout,
-            fill_value=0.0,
-            verify_num_draft_tokens=self.verify_num_draft_tokens,
-        )
+        stride = self.verify_num_draft_tokens
+        if self.verify_epilogue is not None and target_verify.can_run_cuda_graph:
+            # The graph already scattered into the epilogue's static buffers
+            # (padded rows zero-filled, sliced off here); only the sampling-info
+            # adjustments stay eager, in place on the static buffer.
+            strided_logits = self.verify_epilogue.strided_logits
+            hidden_strided = self.verify_epilogue.strided_hidden
+            assert strided_logits is not None and hidden_strided is not None, (
+                "verify epilogue buffers unwritten after a graph replay -- the "
+                "replayed graph was captured without the epilogue"
+            )
+            strided_logits = strided_logits[: bs * stride]
+            hidden_strided = hidden_strided[: bs * stride]
+        else:
+            compact_logits = logits_output.next_token_logits
+            strided_logits = ScatterCompactToStrided.execute(
+                compact=compact_logits,
+                layout=layout,
+                fill_value=0.0,
+                verify_num_draft_tokens=stride,
+            )
+            compact_hidden = logits_output.hidden_states
+            if compact_hidden is None:
+                raise RuntimeError(
+                    "DSpark verify requires target hidden states, got None."
+                )
+            hidden_strided = ScatterCompactToStrided.execute(
+                compact=compact_hidden,
+                layout=layout,
+                fill_value=0.0,
+                verify_num_draft_tokens=stride,
+            )
         apply_logits_adjustments_strided(
             next_token_logits=strided_logits,
             sampling_info=sampling_info,
-            verify_num_draft_tokens=self.verify_num_draft_tokens,
+            verify_num_draft_tokens=stride,
         )
         logits_output.next_token_logits = strided_logits
-
-        compact_hidden = logits_output.hidden_states
-        if compact_hidden is None:
-            raise RuntimeError("DSpark verify requires target hidden states, got None.")
-        hidden_strided = ScatterCompactToStrided.execute(
-            compact=compact_hidden,
-            layout=layout,
-            fill_value=0.0,
-            verify_num_draft_tokens=self.verify_num_draft_tokens,
-        )
         logits_output.hidden_states = hidden_strided
         return target_verify, hidden_strided
 

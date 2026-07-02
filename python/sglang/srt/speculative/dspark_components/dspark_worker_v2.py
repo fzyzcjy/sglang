@@ -58,6 +58,9 @@ from sglang.srt.speculative.dspark_components.dspark_utils import (
 from sglang.srt.speculative.dspark_components.dspark_verify import (
     alloc_verify_window,
 )
+from sglang.srt.speculative.dspark_components.dspark_verify_epilogue import (
+    DsparkVerifyEpilogue,
+)
 from sglang.srt.speculative.dspark_components.dspark_verify_planner import (
     DSparkVerifyPlanner,
 )
@@ -245,11 +248,28 @@ class DSparkWorkerV2(BaseSpecWorker):
             draft_block_spec_info=self._draft_block_spec_info,
             dp_moe_sync=self._draft_is_moe and server_args.enable_dp_attention,
         )
+        # Compact-mode verify epilogue, attached to the TARGET model runner
+        # HERE: the scheduler captures the target verify graphs right after
+        # worker construction, before this worker's own (draft) init_cuda_graphs.
+        self._verify_epilogue = None
+        if (
+            self._verify_planner.is_compact_mode
+            and not server_args.disable_cuda_graph
+            and is_cuda()
+        ):
+            self._verify_epilogue = DsparkVerifyEpilogue(
+                max_bs=max(server_args.cuda_graph_config.decode.bs),
+                verify_num_draft_tokens=self.verify_num_draft_tokens,
+                device=self.device,
+            )
+            self.model_runner.dspark_verify_epilogue = self._verify_epilogue
+
         self._verify_executor = TargetVerifyExecutor(
             target_worker=self.target_worker,
             verify_num_draft_tokens=self.verify_num_draft_tokens,
             model_runner=self.model_runner,
             kv_injector=self._kv_injector,
+            verify_epilogue=self._verify_epilogue,
         )
 
         self._sts_recorder: Optional[StsDataRecorder] = None

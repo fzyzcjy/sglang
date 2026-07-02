@@ -948,6 +948,27 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
                             "hidden_states to capture into the graph."
                         )
                     draft_sampler(out.hidden_states, forward_batch.input_ids)
+                verify_epilogue = getattr(
+                    self.model_runner, "dspark_verify_epilogue", None
+                )
+                if (
+                    verify_epilogue is not None
+                    and self.ragged_verify_mode
+                    and not self.model_runner.is_draft_worker
+                    and isinstance(out, LogitsProcessorOutput)
+                    and out.next_token_logits is not None
+                    and out.hidden_states is not None
+                ):
+                    # DSpark: fold the compact->strided post-verify scatter
+                    # into the token-keyed verify graph. NULL-hidden initial
+                    # captures are skipped -- the first real verify forces a
+                    # FULL recapture (recapture_if_needed) and only that graph
+                    # ever replays a verify.
+                    verify_epilogue(
+                        compact_logits=out.next_token_logits,
+                        compact_hidden=out.hidden_states,
+                        bs=num_tokens // self.num_tokens_per_bs,
+                    )
                 return out
 
             self.deepep_adapter.capture(is_extend_in_batch=False)
