@@ -48,6 +48,12 @@ class AttentionBackend(ABC):
     # 0-length rows and slack rows longer than the verify window. Backends
     # that keep the legacy slots == tokens/(gamma+1) coupling replay the
     # pinned round_up(bs*(gamma+1)) tier only.
+    # TODO(dspark): every ragged-verify-capable backend (fa3, dsv4; trtllm_mha
+    # pending a Blackwell run) now supports decoupled capture -- once trtllm
+    # is verified, delete this flag, make decoupled the unconditional compact
+    # behavior, fold the tolerance requirement into the
+    # supports_ragged_verify_graph contract, and drop the lazy tier resolve in
+    # DSparkVerifyPlanner plus SGLANG_TEST_RAGGED_VERIFY_FORCE_DECOUPLED_CAPTURE.
     supports_decoupled_ragged_capture: bool = False
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
