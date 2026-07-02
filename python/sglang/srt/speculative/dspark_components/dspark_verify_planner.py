@@ -32,6 +32,7 @@ from sglang.srt.speculative.dspark_components.dspark_verify import (
 )
 from sglang.srt.speculative.dspark_components.kernels.schedule_verify_lens_topk import (
     ScheduleVerifyLensTopk,
+    compute_sort_survival,
 )
 from sglang.srt.speculative.ragged_verify import (
     RaggedVerifyLayout,
@@ -424,29 +425,35 @@ class DSparkVerifyPlanner:
         # cap index. The split affects only scheduling quality, never correctness.
         if self._budget_planner is None or confidence is None or budget is None:
             return None
-        sort_survival = torch.cumprod(confidence.to(torch.float32), dim=1)
         verify_lens = ScheduleVerifyLensTopk.execute(
-            survival_probs=sort_survival,
+            confidence=confidence,
             budget=budget,
             cfg=self._schedule_cfg,
         ).to(device=device, dtype=torch.int32)
 
-        verify_lens_64 = verify_lens.to(torch.int64)
-        # Measure admitted extra against the effective floor max(min_verify_len, 1) so
-        # the anchor padding added by the lower-bound clamp is not miscounted as budget
-        # overflow when an explicit min_verify_len=0 is clamped up to 1 (B5).
-        effective_floor = max(self._schedule_cfg.min_verify_len, 1)
-        maybe_assert_async(
-            (verify_lens_64 - effective_floor).sum() <= budget,
-            f"DSpark verify-len budget violated (budget={budget})",
-        )
+        if envs.SGLANG_ENABLE_ASYNC_ASSERT.get():
+            # Gate hoisted to the call site: maybe_assert_async no-ops when the env
+            # is off, but the condition expression (cast + sub + sum + le, 4 launches
+            # per step) would still be evaluated here unconditionally.
+            verify_lens_64 = verify_lens.to(torch.int64)
+            # Measure admitted extra against the effective floor max(min_verify_len,
+            # 1) so the anchor padding added by the lower-bound clamp is not
+            # miscounted as budget overflow when an explicit min_verify_len=0 is
+            # clamped up to 1 (B5).
+            effective_floor = max(self._schedule_cfg.min_verify_len, 1)
+            maybe_assert_async(
+                (verify_lens_64 - effective_floor).sum() <= budget,
+                f"DSpark verify-len budget violated (budget={budget})",
+            )
 
         if envs.SGLANG_DSPARK_DEBUG_CONFIDENCE_PREFIX_SCHEDULER.get():
+            # Recomputed only on this debug path: the hot path folds the cumprod into
+            # ScheduleVerifyLensTopk and never materializes the survival keys.
             self._log_verify_lens_decision(
                 req_pool_indices=req_pool_indices,
                 prefix_lens=prefix_lens,
                 budget=budget,
-                sort_survival=sort_survival,
+                sort_survival=compute_sort_survival(confidence),
                 verify_lens=verify_lens,
             )
 

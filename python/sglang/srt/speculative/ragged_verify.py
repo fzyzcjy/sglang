@@ -125,17 +125,17 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
     ) -> RaggedVerifyLayout:
         # Build qo_indptr / extend_start_loc from a DEVICE verify_lens tensor (no host
         # round trip). Host mirrors are passed through only on the eager/host path.
+        from sglang.srt.speculative.dspark_components.kernels.qo_indptr import (
+            BuildQoIndptr,
+        )
+
         verify_lens = verify_lens.to(torch.int32)
-        device = verify_lens.device
-        cumsum = torch.cumsum(verify_lens, dim=0).to(torch.int32)
-        zero = torch.zeros(1, dtype=torch.int32, device=device)
-        qo_indptr_device = torch.cat([zero, cumsum])
-        extend_start_loc = qo_indptr_device[:-1].clone()
+        indptr = BuildQoIndptr.execute(verify_lens=verify_lens)
         return cls(
             verify_lens=verify_lens,
             graph_num_tokens=graph_num_tokens,
-            extend_start_loc=extend_start_loc,
-            qo_indptr_device=qo_indptr_device,
+            extend_start_loc=indptr.extend_start_loc,
+            qo_indptr_device=indptr.qo_indptr,
             verify_lens_cpu=verify_lens_cpu,
             total_verify_tokens=total_verify_tokens,
         )
