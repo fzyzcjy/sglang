@@ -488,24 +488,13 @@ class DSparkWorkerV2(BaseSpecWorker):
         groups hang. The dummy DFlashVerifyInput carries draft_token_num ==
         verify_num_draft_tokens so get_spec_adjusted_global_num_tokens scales
         global_num_tokens by the same factor as a busy verify -> matching dp buffer
-        length across ranks. The forward output is discarded (no real requests).
-
-        Under compact ragged verify the busy groups replay the token-keyed graph
-        (their verify carries a ragged_verify_layout). The idle group MUST select the
-        SAME graph, else it replays the bs-keyed graph while busy replays the
-        token-keyed one -> two distinct captured graphs whose baked dp_gather
-        collectives can never rendezvous -> hang. So carry the same uniform layout the
-        planner builds for a layout-less compact step, floored to the DP-global tier
-        (0 local reqs -> the graph pads it out). None outside compact / when DP metadata
-        is absent, keeping static / cap-accept on the shared bs-keyed path."""
-        idle_layout = self._idle_verify_ragged_layout(batch)
+        length across ranks. The forward output is discarded (no real requests)."""
         verify_input = DFlashVerifyInput(
             draft_token=torch.empty((0,), dtype=torch.int64, device=self.device),
             positions=torch.empty((0,), dtype=torch.int64, device=self.device),
             draft_token_num=self.verify_num_draft_tokens,
             custom_mask=None,
             capture_hidden_mode=CaptureHiddenMode.FULL,
-            ragged_verify_layout=idle_layout,
         )
         batch.out_cache_loc = torch.empty((0,), dtype=torch.int64, device=self.device)
         verify_forward_batch, _ = verify_input.prepare_for_verify(
@@ -516,25 +505,6 @@ class DSparkWorkerV2(BaseSpecWorker):
             forward_batch=verify_forward_batch,
             is_verify=True,
             skip_attn_backend_init=True,
-        )
-
-    def _idle_verify_ragged_layout(self, batch: ScheduleBatch):
-        # Reuse the planner's layout-less compact fallback so the idle verify keys the
-        # exact same token-keyed graph tier as the busy compact verify. confidence/budget
-        # are None (no real requests), so schedule_layout returns the uniform
-        # graph_num_tokens layout for compact and None for static / cap-accept; the tier
-        # is floored to the DP-global max bs (max(batch.global_num_tokens)), identical on
-        # every rank.
-        if batch.global_num_tokens is None:
-            return None
-        empty = torch.empty((0,), dtype=torch.int64, device=self.device)
-        return self._verify_planner.schedule_layout(
-            req_pool_indices=empty,
-            prefix_lens=empty,
-            device=self.device,
-            confidence=None,
-            budget=None,
-            global_num_reqs=max(batch.global_num_tokens),
         )
 
     def _decode_idle_result(
