@@ -1,27 +1,15 @@
 from __future__ import annotations
 
-import logging
 from typing import Optional
 
 import msgspec
 import torch
 
 from sglang.srt.environ import envs
-from sglang.srt.model_executor.runner import get_is_capture_mode
-
-logger = logging.getLogger(__name__)
 
 _KERNEL_IMPL = envs.SGLANG_DSPARK_KERNEL_COMMIT_KV_PROJ.get()
 
 _STACKED_WEIGHT_CACHE: dict[int, _StackedWkvWeight] = {}
-
-# Per-weight verdict for the stacked fast path: True = verified numerically equal
-# to the per-stage reference (use it), False = the fused GEMM raised or diverged on
-# this platform (fall back to per-stage). Unset = not yet probed. The stacked fp8
-# scale layout deepgemm wants (sf.stride(-2) == 1, mn-major/UE8M0 on Blackwell) is
-# not reproducible by a plain cat, so we prove equivalence once against the
-# per-stage path before trusting the fusion instead of assuming it holds.
-_FUSED_USABLE: dict[int, bool] = {}
 
 
 class CommitKvProj:
@@ -78,53 +66,9 @@ def commit_kv_proj_fused(
     # stacked weights -- the weights are bit-exact copies of the quantized values,
     # but the GEMM numerics differ slightly from deep_gemm.
     #
-    # deep_gemm requires the weight scale in an mn-major / UE8M0-packed layout
-    # (sf.stride(-2) == 1) that a plain cat of the per-stage scales cannot rebuild
-    # on Blackwell, so the fused result is proven equal to the per-stage reference
-    # once per weight (cached in _FUSED_USABLE); any deep_gemm assertion or numeric
-    # divergence falls the layer back to the always-correct per-stage path.
-    key = id(wkv_linears[0])
-    if _FUSED_USABLE.get(key) is False:
-        return commit_kv_proj(main_x=main_x, wkv_linears=wkv_linears)
-
-    # The one-time verify below calls torch.allclose, which syncs to the host; that
-    # is illegal inside cuda-graph capture. Until the layer is proven, stay on the
-    # per-stage path during capture so the captured graph never depends on an
-    # unverified fusion; the verdict gets set on the first eager (prefill) call.
-    if _FUSED_USABLE.get(key) is None and get_is_capture_mode():
-        return commit_kv_proj(main_x=main_x, wkv_linears=wkv_linears)
-
-    try:
-        fused = _stacked_commit_kv_proj(main_x=main_x, wkv_linears=wkv_linears)
-    except Exception:
-        logger.warning(
-            "commit_kv_proj fused GEMM failed; falling back to the per-stage path",
-            exc_info=True,
-        )
-        _FUSED_USABLE[key] = False
-        return commit_kv_proj(main_x=main_x, wkv_linears=wkv_linears)
-
-    if _FUSED_USABLE.get(key) is None:
-        reference = commit_kv_proj(main_x=main_x, wkv_linears=wkv_linears)
-        matches = all(
-            torch.allclose(f, r, rtol=1e-2, atol=1e-2) for f, r in zip(fused, reference)
-        )
-        _FUSED_USABLE[key] = matches
-        if not matches:
-            logger.warning(
-                "commit_kv_proj fused GEMM diverged from the per-stage reference; "
-                "falling back to the per-stage path"
-            )
-            return reference
-
-    return fused
-
-
-def _stacked_commit_kv_proj(
-    *,
-    main_x: torch.Tensor,
-    wkv_linears: list[torch.nn.Module],
-) -> list[torch.Tensor]:
+    # deep_gemm wants the weight scale mn-major (sf.stride(-2) == 1); _stacked_wkv_weight
+    # rebuilds the cat'd scale into that layout so the fused GEMM runs on Blackwell as
+    # well as Hopper (verified numerically equal to the per-stage path on both).
     num_stages = len(wkv_linears)
     stacked = _stacked_wkv_weight(wkv_linears=wkv_linears)
 

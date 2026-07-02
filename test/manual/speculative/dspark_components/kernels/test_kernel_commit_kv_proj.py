@@ -1,7 +1,6 @@
 import pytest
 import torch
 
-import sglang.srt.speculative.dspark_components.kernels.commit_kv_proj as ckp
 from sglang.srt.speculative.dspark_components.kernels.commit_kv_proj import (
     _dequant_linear_weight,
     commit_kv_proj,
@@ -15,13 +14,6 @@ pytestmark = pytest.mark.skipif(
 HIDDEN = 1024
 HEAD_DIM = 576
 NUM_STAGES = 3
-
-
-@pytest.fixture(autouse=True)
-def _clear_fused_verdict():
-    ckp._FUSED_USABLE.clear()
-    yield
-    ckp._FUSED_USABLE.clear()
 
 
 class _Bf16Linear(torch.nn.Module):
@@ -64,58 +56,6 @@ def test_fused_matches_per_stage_loop(num_tokens):
         assert kv_got.shape == kv_ref.shape
         assert kv_got.is_contiguous()
         torch.testing.assert_close(kv_got.float(), kv_ref.float(), rtol=2e-2, atol=2e-3)
-
-
-def test_fused_falls_back_when_gemm_raises(monkeypatch):
-    """A deep_gemm layout failure in the fused GEMM falls the layer back to the per-stage loop and caches the verdict."""
-    device = torch.device("cuda")
-    linears = _make_linears(device, seed=7)
-    g = torch.Generator(device=device).manual_seed(7)
-    main_x = (torch.randn(8, HIDDEN, device=device, generator=g) * 0.5).to(
-        torch.bfloat16
-    )
-
-    def _boom(**kwargs):
-        raise RuntimeError("deep_gemm InternalError: sf.stride(-2) == 1 or mn == 1")
-
-    monkeypatch.setattr(ckp, "_stacked_commit_kv_proj", _boom)
-
-    got = ckp.commit_kv_proj_fused(main_x=main_x, wkv_linears=linears)
-    ref = commit_kv_proj(main_x=main_x, wkv_linears=linears)
-
-    for kv_got, kv_ref in zip(got, ref):
-        assert torch.equal(kv_got, kv_ref)
-    assert ckp._FUSED_USABLE[id(linears[0])] is False
-
-
-def test_fused_falls_back_on_numeric_divergence(monkeypatch):
-    """A fused result that diverges from the per-stage reference is rejected and the layer stays on the per-stage loop."""
-    device = torch.device("cuda")
-    linears = _make_linears(device, seed=11)
-    g = torch.Generator(device=device).manual_seed(11)
-    main_x = (torch.randn(8, HIDDEN, device=device, generator=g) * 0.5).to(
-        torch.bfloat16
-    )
-
-    def _wrong(*, main_x, wkv_linears):
-        return [
-            torch.full(
-                (main_x.shape[0], HEAD_DIM),
-                9.0,
-                device=main_x.device,
-                dtype=torch.bfloat16,
-            )
-            for _ in wkv_linears
-        ]
-
-    monkeypatch.setattr(ckp, "_stacked_commit_kv_proj", _wrong)
-
-    got = ckp.commit_kv_proj_fused(main_x=main_x, wkv_linears=linears)
-    ref = commit_kv_proj(main_x=main_x, wkv_linears=linears)
-
-    for kv_got, kv_ref in zip(got, ref):
-        assert torch.equal(kv_got, kv_ref)
-    assert ckp._FUSED_USABLE[id(linears[0])] is False
 
 
 def test_dequant_fp8_blockwise_weight():
