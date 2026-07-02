@@ -9,7 +9,6 @@ from sglang.srt.layers.vocab_parallel_embedding import (
 )
 
 
-
 def _lm_head_partition(vocab: int, tp_size: int) -> tuple[int, int]:
     """Padded per-partition width + padded vocab, mirroring VocabParallelEmbedding."""
     padding_size = DEFAULT_VOCAB_PADDING_SIZE

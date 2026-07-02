@@ -184,6 +184,11 @@ def sample_step_tokens_triton(
         BLOCK_V=_BLOCK_V,
     )
     _online_combine_kernel[row_grid](
-        tile_max, partial_key, partial_idx, next_tokens, n_tiles, BLOCK_TILES=block_tiles
+        tile_max,
+        partial_key,
+        partial_idx,
+        next_tokens,
+        n_tiles,
+        BLOCK_TILES=block_tiles,
     )
     return next_tokens

@@ -10,7 +10,6 @@ requires_cuda = pytest.mark.skipif(
 )
 
 
-
 @requires_cuda
 @pytest.mark.parametrize("bs", [1, 3])
 @pytest.mark.parametrize("vocab", [5003, 130000])
