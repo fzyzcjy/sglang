@@ -464,6 +464,13 @@ class CudaGraphBufferRegistry:
                     dst = slot.buffer
                 else:
                     dst = slot.buffer[:raw_n]
+            if dst.shape[:1] != src.shape[:1]:
+                logger.error(
+                    "fill_from shape mismatch on slot %r: dst %s vs src %s",
+                    slot.name,
+                    tuple(dst.shape),
+                    tuple(src.shape),
+                )
             # foreach_copy_ requires same-device tensors per call — bucket
             # by device.
             if dst.device.type == "cpu":
