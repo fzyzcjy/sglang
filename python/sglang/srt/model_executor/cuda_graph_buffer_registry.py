@@ -52,22 +52,11 @@ def _grouped_foreach_copy_(dsts: List[torch.Tensor], srcs: List[torch.Tensor]) -
     def _foreach_copy(
         group_dsts: List[torch.Tensor], group_srcs: List[torch.Tensor]
     ) -> None:
-        try:
-            if _has_foreach_copy:
-                torch._foreach_copy_(group_dsts, group_srcs)
-            else:
-                for dst, src in zip(group_dsts, group_srcs):
-                    dst.copy_(src)
-        except RuntimeError:
-            shapes = [
-                (tuple(dst.shape), tuple(src.shape))
-                for dst, src in zip(group_dsts, group_srcs)
-                if tuple(dst.shape) != tuple(src.shape)
-            ]
-            logger.error(
-                "grouped foreach copy shape mismatch (dst vs src): %s", shapes
-            )
-            raise
+        if _has_foreach_copy:
+            torch._foreach_copy_(group_dsts, group_srcs)
+        else:
+            for dst, src in zip(group_dsts, group_srcs):
+                dst.copy_(src)
 
     groups: Dict[Tuple[torch.dtype, torch.dtype], Tuple[List, List]] = {}
     for dst, src in zip(dsts, srcs):
