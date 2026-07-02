@@ -16,7 +16,6 @@ from sglang.srt.speculative.dspark_components.kernels.cap_correct_len import (
     CapCorrectLen,
 )
 from sglang.srt.speculative.dspark_components.kernels.softmax_temp import SoftmaxTemp
-from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 from sglang.srt.speculative.reject_sampling import chain_speculative_sampling_triton
 
 _KERNEL_IMPL = envs.SGLANG_DSPARK_KERNEL_ACCEPT_SAMPLING.get()
@@ -42,7 +41,7 @@ class AcceptSampling:
         draft_input: DFlashDraftInputV2,
         gamma: int,
         verify_num_draft_tokens: int,
-        cutoff_layout: Optional[RaggedVerifyLayout] = None,
+        cutoff_verify_lens: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         return accept_sampling(
             candidates=candidates,
@@ -52,7 +51,7 @@ class AcceptSampling:
             draft_input=draft_input,
             gamma=gamma,
             verify_num_draft_tokens=verify_num_draft_tokens,
-            cutoff_layout=cutoff_layout,
+            cutoff_verify_lens=cutoff_verify_lens,
         )
 
     @classmethod
@@ -66,7 +65,7 @@ class AcceptSampling:
         draft_input: DFlashDraftInputV2,
         gamma: int,
         verify_num_draft_tokens: int,
-        cutoff_layout: Optional[RaggedVerifyLayout] = None,
+        cutoff_verify_lens: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         return accept_sampling_triton(
             candidates=candidates,
@@ -76,7 +75,7 @@ class AcceptSampling:
             draft_input=draft_input,
             gamma=gamma,
             verify_num_draft_tokens=verify_num_draft_tokens,
-            cutoff_layout=cutoff_layout,
+            cutoff_verify_lens=cutoff_verify_lens,
         )
 
 
@@ -89,7 +88,7 @@ def _accept_sampling_core(
     draft_input: DFlashDraftInputV2,
     gamma: int,
     verify_num_draft_tokens: int,
-    cutoff_layout: Optional[RaggedVerifyLayout],
+    cutoff_verify_lens: Optional[torch.Tensor],
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     bs = candidates.shape[0]
     device = candidates.device
@@ -139,9 +138,9 @@ def _accept_sampling_core(
         deterministic=True,
     )
     correct_len = accept_token_num
-    if cutoff_layout is not None:
+    if cutoff_verify_lens is not None:
         correct_len, cap_trim_lens = CapCorrectLen.execute(
-            correct_len=correct_len, layout=cutoff_layout
+            correct_len=correct_len, verify_lens=cutoff_verify_lens
         )
     else:
         cap_trim_lens = torch.zeros_like(correct_len)
@@ -157,7 +156,7 @@ def accept_sampling(
     draft_input: DFlashDraftInputV2,
     gamma: int,
     verify_num_draft_tokens: int,
-    cutoff_layout: Optional[RaggedVerifyLayout] = None,
+    cutoff_verify_lens: Optional[torch.Tensor] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     bs = candidates.shape[0]
     device = candidates.device
@@ -169,7 +168,7 @@ def accept_sampling(
         draft_input=draft_input,
         gamma=gamma,
         verify_num_draft_tokens=verify_num_draft_tokens,
-        cutoff_layout=cutoff_layout,
+        cutoff_verify_lens=cutoff_verify_lens,
     )
     row_ids = torch.arange(bs, dtype=torch.long, device=device)
     accept_pos = accept_index[row_ids, correct_len.to(torch.long)].to(torch.long)
@@ -225,7 +224,7 @@ def accept_sampling_triton(
     draft_input: DFlashDraftInputV2,
     gamma: int,
     verify_num_draft_tokens: int,
-    cutoff_layout: Optional[RaggedVerifyLayout] = None,
+    cutoff_verify_lens: Optional[torch.Tensor] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     correct_len, cap_trim_lens, accept_index, predicts = _accept_sampling_core(
         candidates=candidates,
@@ -235,7 +234,7 @@ def accept_sampling_triton(
         draft_input=draft_input,
         gamma=gamma,
         verify_num_draft_tokens=verify_num_draft_tokens,
-        cutoff_layout=cutoff_layout,
+        cutoff_verify_lens=cutoff_verify_lens,
     )
     bonus = gather_two_level_bonus_triton(
         accept_index=accept_index, predicts=predicts, correct_len=correct_len

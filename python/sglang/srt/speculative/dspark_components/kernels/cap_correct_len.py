@@ -5,7 +5,6 @@ import triton
 import triton.language as tl
 
 from sglang.srt.environ import envs
-from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 
 _KERNEL_IMPL = envs.SGLANG_DSPARK_KERNEL_CAP_CORRECT_LEN.get()
 
@@ -22,11 +21,11 @@ class CapCorrectLen:
         cls,
         *,
         correct_len: torch.Tensor,
-        layout: RaggedVerifyLayout,
+        verify_lens: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         return cap_correct_len(
             correct_len=correct_len,
-            layout=layout,
+            verify_lens=verify_lens,
         )
 
     @classmethod
@@ -34,20 +33,20 @@ class CapCorrectLen:
         cls,
         *,
         correct_len: torch.Tensor,
-        layout: RaggedVerifyLayout,
+        verify_lens: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         return cap_correct_len_triton(
             correct_len=correct_len,
-            layout=layout,
+            verify_lens=verify_lens,
         )
 
 
 def cap_correct_len(
     *,
     correct_len: torch.Tensor,
-    layout: RaggedVerifyLayout,
+    verify_lens: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    ell_r = (layout.verify_lens.to(device=correct_len.device) - 1).to(correct_len.dtype)
+    ell_r = (verify_lens.to(device=correct_len.device) - 1).to(correct_len.dtype)
     capped = torch.minimum(correct_len, ell_r)
     cap_trim_lens = correct_len - capped
     return capped, cap_trim_lens
@@ -77,11 +76,11 @@ def _cap_correct_len_kernel(
 def cap_correct_len_triton(
     *,
     correct_len: torch.Tensor,
-    layout: RaggedVerifyLayout,
+    verify_lens: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     device = correct_len.device
     correct_len = correct_len.contiguous()
-    verify_lens = layout.verify_lens.to(device=device).contiguous()
+    verify_lens = verify_lens.to(device=device).contiguous()
     n = correct_len.shape[0]
     capped = torch.empty_like(correct_len)
     trim = torch.empty_like(correct_len)

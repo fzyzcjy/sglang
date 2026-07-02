@@ -45,13 +45,6 @@ class AcceptOuts(msgspec.Struct):
     out_tokens: torch.Tensor
 
 
-class _VerifyLensCutoff(msgspec.Struct):
-    # Duck-typed stand-in for RaggedVerifyLayout inside the capture: CapCorrectLen
-    # reads only .verify_lens, and the real layout's tensors are capture-local
-    # (dead addresses at replay) while this one wraps the epilogue's static buffer.
-    verify_lens: torch.Tensor
-
-
 class DsparkVerifyEpilogue:
     """Post-verify chain captured inside the token-keyed verify graph, right
     after the target forward:
@@ -278,7 +271,7 @@ class DsparkVerifyEpilogue:
             candidates=candidates.view(bs, self.stride),
             target_logits=self.strided_logits[: bs * self.stride],
             verify_num_draft_tokens=self.stride,
-            cutoff_layout=_VerifyLensCutoff(verify_lens=verify_lens),
+            cutoff_verify_lens=verify_lens,
         )
         finalized = finalize_accept_lens_triton(
             correct_len=correct_len,

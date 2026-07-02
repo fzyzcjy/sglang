@@ -13,7 +13,6 @@ from sglang.srt.speculative.dflash_utils import (
 from sglang.srt.speculative.dspark_components.kernels.cap_correct_len import (
     CapCorrectLen,
 )
-from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 
 _KERNEL_IMPL = envs.SGLANG_DSPARK_KERNEL_ACCEPT_GREEDY.get()
 
@@ -34,13 +33,13 @@ class AcceptGreedy:
         candidates: torch.Tensor,
         target_logits: torch.Tensor,
         verify_num_draft_tokens: int,
-        cutoff_layout: Optional[RaggedVerifyLayout] = None,
+        cutoff_verify_lens: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         return accept_greedy(
             candidates=candidates,
             target_logits=target_logits,
             verify_num_draft_tokens=verify_num_draft_tokens,
-            cutoff_layout=cutoff_layout,
+            cutoff_verify_lens=cutoff_verify_lens,
         )
 
     @classmethod
@@ -50,13 +49,13 @@ class AcceptGreedy:
         candidates: torch.Tensor,
         target_logits: torch.Tensor,
         verify_num_draft_tokens: int,
-        cutoff_layout: Optional[RaggedVerifyLayout] = None,
+        cutoff_verify_lens: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         return accept_greedy_triton(
             candidates=candidates,
             target_logits=target_logits,
             verify_num_draft_tokens=verify_num_draft_tokens,
-            cutoff_layout=cutoff_layout,
+            cutoff_verify_lens=cutoff_verify_lens,
         )
 
 
@@ -65,7 +64,7 @@ def accept_greedy(
     candidates: torch.Tensor,
     target_logits: torch.Tensor,
     verify_num_draft_tokens: int,
-    cutoff_layout: Optional[RaggedVerifyLayout] = None,
+    cutoff_verify_lens: Optional[torch.Tensor] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     bs = candidates.shape[0]
     target_predict = torch.argmax(target_logits, dim=-1).view(
@@ -76,9 +75,9 @@ def accept_greedy(
         target_predict=target_predict,
     )
     cap_trim_lens = torch.zeros_like(correct_len)
-    if cutoff_layout is not None:
+    if cutoff_verify_lens is not None:
         correct_len, cap_trim_lens = CapCorrectLen.execute(
-            correct_len=correct_len, layout=cutoff_layout
+            correct_len=correct_len, verify_lens=cutoff_verify_lens
         )
         row_ids = torch.arange(bs, device=target_predict.device)
         bonus = target_predict[row_ids, correct_len.to(torch.long)].to(torch.int64)
@@ -117,7 +116,7 @@ def accept_greedy_triton(
     candidates: torch.Tensor,
     target_logits: torch.Tensor,
     verify_num_draft_tokens: int,
-    cutoff_layout: Optional[RaggedVerifyLayout] = None,
+    cutoff_verify_lens: Optional[torch.Tensor] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     bs = candidates.shape[0]
     target_predict = torch.argmax(target_logits, dim=-1).view(
@@ -128,9 +127,9 @@ def accept_greedy_triton(
         target_predict=target_predict,
     )
     cap_trim_lens = torch.zeros_like(correct_len)
-    if cutoff_layout is not None:
+    if cutoff_verify_lens is not None:
         correct_len, cap_trim_lens = CapCorrectLen.execute(
-            correct_len=correct_len, layout=cutoff_layout
+            correct_len=correct_len, verify_lens=cutoff_verify_lens
         )
         bonus = gather_row_bonus_triton(table=target_predict, idx=correct_len)
     return correct_len, bonus, cap_trim_lens
