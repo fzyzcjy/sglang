@@ -70,9 +70,9 @@ def test_flashinfer_matches_torch_probs(rows_per_request, vocab, dtype):
     """flashinfer fused temp-softmax matches the torch cast/div/softmax chain within float tolerance."""
     device = torch.device("cuda")
     g = torch.Generator(device=device).manual_seed(rows_per_request * 100 + vocab)
-    logits = (torch.randn(rows_per_request, vocab, device=device, generator=g) * 8.0).to(
-        dtype
-    )
+    logits = (
+        torch.randn(rows_per_request, vocab, device=device, generator=g) * 8.0
+    ).to(dtype)
     temperatures = (torch.rand(1, device=device, generator=g) * 1.5 + 0.05).to(
         torch.float32
     )
@@ -131,4 +131,6 @@ def test_impl_timing_smoke():
             end.record()
             torch.cuda.synchronize()
             per_call_us = start.elapsed_time(end) / 100 * 1e3
-            print(f"[softmax_temp] rows={rows_per_request} {name}: {per_call_us:.1f} us/call")
+            print(
+                f"[softmax_temp] rows={rows_per_request} {name}: {per_call_us:.1f} us/call"
+            )
