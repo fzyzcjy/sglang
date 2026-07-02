@@ -109,6 +109,8 @@ class RequestFuncOutput:
     cached_tokens: int = 0
     cached_tokens_details: Optional[Dict[str, Any]] = None
     spec_accept_length: float = 0.0
+    spec_cap_length: float = 0.0
+    spec_block_accept_length: float = 0.0
 
     @staticmethod
     def init_new(request_func_input: RequestFuncInput):
@@ -474,9 +476,16 @@ async def async_request_openai_chat_completions(
                         output.output_len = response_json.get("usage", {}).get(
                             "completion_tokens", output_len
                         )
+                        _meta_info = response_json["choices"][0].get("meta_info") or {}
                         output.spec_accept_length = (
-                            response_json["choices"][0].get("meta_info") or {}
-                        ).get("spec_accept_length", 0.0) or 0.0
+                            _meta_info.get("spec_accept_length", 0.0) or 0.0
+                        )
+                        output.spec_cap_length = (
+                            _meta_info.get("spec_cap_length", 0.0) or 0.0
+                        )
+                        output.spec_block_accept_length = (
+                            _meta_info.get("spec_block_accept_length", 0.0) or 0.0
+                        )
                         if getattr(args, "cache_report", False):
                             _extract_cache_from_sglext(response_json, output)
                     else:
