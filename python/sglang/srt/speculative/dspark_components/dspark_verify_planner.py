@@ -423,15 +423,20 @@ class DSparkVerifyPlanner:
             cfg=self._schedule_cfg,
         ).to(device=device, dtype=torch.int32)
 
-        verify_lens_64 = verify_lens.to(torch.int64)
-        # Measure admitted extra against the effective floor max(min_verify_len, 1) so
-        # the anchor padding added by the lower-bound clamp is not miscounted as budget
-        # overflow when an explicit min_verify_len=0 is clamped up to 1 (B5).
-        effective_floor = max(self._schedule_cfg.min_verify_len, 1)
-        maybe_assert_async(
-            (verify_lens_64 - effective_floor).sum() <= budget,
-            f"DSpark verify-len budget violated (budget={budget})",
-        )
+        if envs.SGLANG_ENABLE_ASYNC_ASSERT.get():
+            # Gate hoisted to the call site: maybe_assert_async no-ops when the env
+            # is off, but the condition expression (cast + sub + sum + le, 4 launches
+            # per step) would still be evaluated here unconditionally.
+            verify_lens_64 = verify_lens.to(torch.int64)
+            # Measure admitted extra against the effective floor max(min_verify_len,
+            # 1) so the anchor padding added by the lower-bound clamp is not
+            # miscounted as budget overflow when an explicit min_verify_len=0 is
+            # clamped up to 1 (B5).
+            effective_floor = max(self._schedule_cfg.min_verify_len, 1)
+            maybe_assert_async(
+                (verify_lens_64 - effective_floor).sum() <= budget,
+                f"DSpark verify-len budget violated (budget={budget})",
+            )
 
         if envs.SGLANG_DSPARK_DEBUG_CONFIDENCE_PREFIX_SCHEDULER.get():
             # Recomputed only on this debug path: the hot path folds the cumprod into
