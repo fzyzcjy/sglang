@@ -208,9 +208,7 @@ class DSparkAttention(MqaAttentionBase):
             rank = self.attn_tp_rank
             num_heads = self.n_local_heads
             sink = self.attn_sink.new_zeros(max(num_heads, _PAD_NUM_HEADS))
-            sink[:num_heads] = self.attn_sink[
-                rank * num_heads : (rank + 1) * num_heads
-            ]
+            sink[:num_heads] = self.attn_sink[rank * num_heads : (rank + 1) * num_heads]
             self._attn_sink_local = sink
         return self._attn_sink_local
 
