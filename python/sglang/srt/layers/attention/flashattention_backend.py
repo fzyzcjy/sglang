@@ -61,7 +61,7 @@ def _build_pa_page_table_kernel(
 ):
     """Build PA-SWA page_table directly from req_to_token.
 
-    For each request, dst row = [0..prefill_len) union [decode_start..seq_len).
+    For each request, dst row = [0..prefill_len) ∪ [decode_start..seq_len).
     decode_start = max(prefill_len, seq_len - window_size)
 
     prefill_lens_ptr is the full pool-sized buffer, prefill_len is loaded
@@ -213,11 +213,6 @@ class FlashAttentionBackend(AttentionBackend):
     - For each forward batch, init_replay_cuda_graph will be called first and then replay the graph.
     """
 
-    # DSpark compact (ragged) target-verify is cuda-graphable here: the verify
-    # forward is varlen-native (flash_attn reads cu_seqlens_q), so a token-keyed
-    # graph captures the uniform tier geometry and replay refills cu_seqlens_q /
-    # cache_seqlens from the padded-to-bucket ragged layout (see
-    # _apply_cuda_graph_metadata's target-verify ragged branch).
     supports_ragged_verify_graph: bool = True
 
     def __init__(
@@ -244,7 +239,6 @@ class FlashAttentionBackend(AttentionBackend):
         self.device = model_runner.device
         self.decode_cuda_graph_metadata = {}
         self.target_verify_metadata = {}
-        # Pool refs -- captured at construction so they survive deletion of the
         # corresponding ForwardBatch fields.
         self.req_to_token_pool = model_runner.req_to_token_pool
         self.token_to_kv_pool = model_runner.token_to_kv_pool
@@ -257,9 +251,6 @@ class FlashAttentionBackend(AttentionBackend):
         self.max_num_pages = (
             self.max_context_len + self.page_size - 1
         ) // self.page_size
-        # Opt out of the seq_lens_cpu D2H for dflash/dspark (both workers adapt to
-        # the GPU-only relay via the host-precomputed reserved_seq_lens_cpu);
-        # EAGLE/MTP/standalone/non-spec keep the CPU mirror.
         self.needs_cpu_seq_lens = not SpeculativeAlgorithm.from_string(
             model_runner.server_args.speculative_algorithm
         ).is_dflash_or_dspark()
@@ -281,15 +272,6 @@ class FlashAttentionBackend(AttentionBackend):
             self.speculative_num_draft_tokens is not None
             and model_runner.is_draft_worker
         ):
-            # The draft runner's TARGET_VERIFY metadata (q stride, cache_seqlens,
-            # page_table width) is sized by speculative_num_draft_tokens. For DSpark
-            # the draft block is gamma tokens while speculative_num_draft_tokens
-            # (gamma + 1) is the target verify window only, so the draft forward
-            # feeds gamma query tokens; using gamma + 1 here would over-read the q
-            # buffer / req_to_token in the FlashAttention forward. Resolve the draft
-            # block token count the same way the decode cuda graph runner does so the
-            # two stay consistent (a no-op for DFlash, whose draft block already
-            # equals speculative_num_draft_tokens).
             self.speculative_num_draft_tokens = SpeculativeAlgorithm.from_string(
                 model_runner.server_args.speculative_algorithm
             ).get_num_tokens_per_bs_for_target_verify(
@@ -671,13 +653,6 @@ class FlashAttentionBackend(AttentionBackend):
                     forward_batch.spec_info, "ragged_verify_layout", None
                 )
                 if ragged_layout is not None:
-                    # DSpark compact (ragged) verify, EAGER path: each request verifies
-                    # its own verify_lens entry, so cu_seqlens_q is variable. flash-attn
-                    # reads it directly (same as the uniform arange below) -- no
-                    # ragged-vs-uniform forward branch. Hit when the batch is not
-                    # admitted to a token-keyed graph tier (too many tokens / DP
-                    # mismatch); the graphed path is _apply_cuda_graph_metadata's ragged
-                    # branch.
                     geometry = build_ragged_target_verify_geometry(
                         seq_lens=forward_batch.seq_lens, layout=ragged_layout
                     )
@@ -1551,7 +1526,6 @@ class FlashAttentionBackend(AttentionBackend):
 
         # When Spec Decode enabled, forward_decode would be called with two mode:
         # 1. DRAFT_DECODE: we enable cascade attention when top_k > 1
-        # 2. IDLE: we don't need cascade attention, spec_info will be none in this case
         use_cascade_attn = forward_batch.spec_info is not None and self.topk > 1
 
         # Calculate window size (can be moved to metadata if layer properties don't change)
@@ -2540,12 +2514,6 @@ class FlashAttentionBackend(AttentionBackend):
                 metadata = self.target_verify_metadata[bs]
                 ragged_layout = getattr(spec_info, "ragged_verify_layout", None)
                 if ragged_layout is not None:
-                    # DSpark compact (ragged) verify replay: the graph was captured at
-                    # the uniform tier (cu_seqlens_q = arange step=num_draft_tokens);
-                    # refill it with the padded-to-bucket variable qo_indptr (same total
-                    # tokens as the captured tier) and cache_seqlens = seq_lens +
-                    # per-request verify_lens. max_seq_len_q stays frozen at
-                    # num_draft_tokens (set at capture); the padded tail is discarded.
                     padded = ragged_layout.padded_to_bucket(
                         num_draft_tokens=self.speculative_num_draft_tokens
                     )

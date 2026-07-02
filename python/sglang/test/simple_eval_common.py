@@ -111,11 +111,6 @@ class ChatCompletionSampler(SamplerBase):
         self.extra_body = extra_body
         self.image_format = "url"
         self._completion_tokens: list[int] = []
-        # When set, force the sglang server to echo per-request meta_info (which
-        # carries spec_accept_length / spec_accept_rate) and keep every raw
-        # (request, response) pair in `_records` so the caller can dump+aggregate
-        # them. Off by default so real-OpenAI samplers (e.g. the math grader) are
-        # unaffected -- return_meta_info is an sglang extension a real endpoint rejects.
         self.record_meta_info = record_meta_info
         self._records: List[Dict[str, Any]] = []
         print(
@@ -225,9 +220,6 @@ class CompletionSampler(SamplerBase):
         self.max_tokens = max_tokens
         self.stop = stop
         self._completion_tokens: list[int] = []
-        # The /v1/completions request has no return_meta_info knob (unlike chat), so
-        # this only captures raw (request, response) pairs; spec_accept_length is not
-        # available on this path. Kept symmetric with ChatCompletionSampler.
         self.record_meta_info = record_meta_info
         self._records: List[Dict[str, Any]] = []
         print(

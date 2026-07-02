@@ -1,9 +1,3 @@
-# Adapted from the DeepSpec DSpark reference (deepspec/modeling/dspark) but
-# implemented with SGLang primitives. The DSpark dense draft reuses the DFlash
-# KV-injection backbone (DFlashDraftModel) and adds a serial Markov head; it
-# carries no token embedding / lm_head (the target model's are used) but does
-# add an optional confidence head (DSparkConfidenceHead) that scores per-draft
-# accept probability for the confidence-aware scheduler.
 
 from __future__ import annotations
 
@@ -13,7 +7,6 @@ from typing import Callable, Iterable, Optional, Tuple
 import torch
 from torch import nn
 
-# from sglang.srt.debug_utils.dumper import dumper
 from sglang.srt.distributed.communication_op import tensor_model_parallel_all_gather
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models.dflash import DFlashDraftModel
@@ -27,7 +20,6 @@ from sglang.srt.speculative.ragged_verify import (
 
 logger = logging.getLogger(__name__)
 
-# A per-step sampler: (step_logits [bs, vocab], step_idx) -> sampled tokens [bs].
 StepSampler = Callable[[torch.Tensor, int], torch.Tensor]
 
 
@@ -46,13 +38,6 @@ def run_markov_block(
     hidden_states: Optional[torch.Tensor],
     sampler: StepSampler,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Serial Markov draft loop shared by the stateless heads (the dense
-    ``VanillaMarkov`` and the dsv4 ``DSparkV4MarkovHead``): step k corrects
-    ``base_logits[:, k]`` via ``head.apply_step_logits`` conditioned on the
-    previous step's sampled token, then ``sampler`` draws the next token.
-    Stateful heads (``RNNHead``) override ``sample_block`` directly.
-    Returns ``(draft_tokens [bs, gamma], corrected_logits [bs, gamma, vocab])``.
-    """
     batch_size, proposal_len = base_logits.shape[:2]
     if proposal_len == 0:
         empty = torch.empty(batch_size, 0, dtype=torch.long, device=base_logits.device)
@@ -79,10 +64,6 @@ def run_markov_block(
 
 
 class VanillaMarkov(nn.Module):
-    """Memoryless Markov head: bias = w2(w1(prev_token)). Ignores hidden state.
-
-    Mirrors DeepSpec ``markov_head.VanillaMarkov`` (``markov_w1``/``markov_w2``).
-    """
 
     markov_head_type = "vanilla"
 
@@ -149,10 +130,6 @@ class VanillaMarkov(nn.Module):
 
 
 class GatedMarkovHead(VanillaMarkov):
-    """Gated Markov head: bias = w2(gate * w1(prev)), gate = σ(gate_proj([h; w1])).
-
-    Mirrors DeepSpec ``markov_head.GatedMarkovHead``.
-    """
 
     markov_head_type = "gated"
 
@@ -184,10 +161,6 @@ class GatedMarkovHead(VanillaMarkov):
 
 
 class RNNHead(VanillaMarkov):
-    """Recurrent Markov head carrying state across positions within a block.
-
-    Mirrors DeepSpec ``markov_head.RNNHead`` (GRU-like ``joint_proj``).
-    """
 
     markov_head_type = "rnn"
 
@@ -313,15 +286,6 @@ def build_markov_head(config) -> Optional[nn.Module]:
 
 
 class DSparkConfidenceHead(nn.Module):
-    """Per-draft confidence head: RAW accept-rate logit (no sigmoid).
-
-    Mirrors DeepSpec ``common.AcceptRatePredictor`` (a single ``proj`` Linear
-    whose forward is ``proj(features).squeeze(-1)``). When ``with_markov`` the
-    input is ``cat([hidden, markov_embed], -1)`` with feature dim
-    ``hidden_size + markov_rank``; otherwise just ``hidden`` (dim ``hidden_size``).
-    The head emits a raw logit; ``apply_sts`` applies the per-position STS
-    temperature then sigmoid before the value is relayed to the scheduler.
-    """
 
     def __init__(
         self,
@@ -366,16 +330,6 @@ class DSparkConfidenceHead(nn.Module):
 
 
 def build_confidence_head(config) -> Optional[nn.Module]:
-    """Build the DSpark confidence head (enabled outside static ragged-verify).
-
-    Mirrors ``build_dspark_v4_confidence_head``: ``static`` ragged-verify uses a uniform
-    block and never consults the head, so it is skipped there; otherwise the
-    ``enable_confidence_head`` flag is not read, because a DSpark draft checkpoint is
-    expected to carry trained confidence weights. A config that lacks the field is only
-    warned about; a checkpoint that genuinely lacks the weights is surfaced later by the
-    weight-load assert. The ``proj`` keeps the reference ``AcceptRatePredictor`` bias
-    (dense checkpoints ship it, unlike the bias-less DSpark V4 head).
-    """
     if read_ragged_verify_mode() is RaggedVerifyMode.STATIC:
         return None
     if not hasattr(config, "enable_confidence_head"):
@@ -398,10 +352,6 @@ def build_confidence_head(config) -> Optional[nn.Module]:
     )
 
 
-# Weight-name prefixes that exist in the DSpark checkpoint but are intentionally
-# not materialized for the static-verify MVP draft: the target model supplies the
-# embedding/lm_head. ``confidence_head.`` is loaded when the draft config enables
-# the head; see DSparkDraftMixin.load_weights.
 _DSPARK_SKIPPED_WEIGHT_PREFIXES = (
     "embed_tokens.",
     "lm_head.",
@@ -410,13 +360,6 @@ _DSPARK_SKIPPED_WEIGHT_PREFIXES = (
 
 
 class DSparkDraftMixin:
-    """Mixin that attaches a Markov head and DSpark-aware load_weights to any
-    KV-injection draft backbone.
-
-    MRO must place this mixin before the backbone base class so cooperative
-    super().__init__ reaches the backbone (which sets self.block_size) first;
-    the mixin then builds the Markov head on top.
-    """
 
     def __init__(self, config, quant_config=None, prefix: str = "") -> None:
         super().__init__(config=config, quant_config=quant_config, prefix=prefix)
@@ -434,37 +377,20 @@ class DSparkDraftMixin:
     def attach_shared_modules(
         self, *, embed_tokens: nn.Module, lm_head: nn.Module
     ) -> None:
-        """Attach the target model's shared lm_head (worker wiring).
-
-        The dense draft already carries its own token embedding through the backbone, so
-        ``embed_tokens`` is ignored here; only the target's local-vocab ``lm_head`` shard
-        is stored (the same live object the worker passes), preserving the TP vocab shard
-        + ``org_vocab_size`` for ``compute_base_logits``.
-        """
         del embed_tokens
         self.lm_head = lm_head
 
     def compute_base_logits(self, hidden: torch.Tensor) -> torch.Tensor:
-        """Base logits from the post-norm draft hidden: target lm_head matmul + gather.
-
-        Mirrors the former worker-side ``_compute_base_logits``: matmul the post-norm draft
-        hidden against the target's local-vocab head weight (casting only when the dtype
-        differs, bit-identical no-op copy otherwise), TP all-gather to the full vocab, and
-        crop the TP vocab padding. The dense path keeps the weight-dtype ``matmul`` operator
-        (NOT the dsv4 fp32 ``F.linear``) so the base logits are byte-identical to before.
-        """
         if self.lm_head is None:
             raise ValueError(
                 "DSpark dense draft requires the target lm_head "
                 "(call attach_shared_modules first)."
             )
-        # dumper.dump("draft__base_logits_in_hidden", hidden)
         weight = self.lm_head.weight
         if hidden.dtype != weight.dtype:
             hidden = hidden.to(weight.dtype)
         local_logits = torch.matmul(hidden, weight.T)
         base_logits = gather_and_crop_vocab(local_logits, self.lm_head)
-        # dumper.dump("draft__base_logits", base_logits)
         return base_logits
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
@@ -541,13 +467,6 @@ class DSparkDraftMixin:
         cache_loc_2d: Optional[torch.Tensor] = None,
         commit_lens: Optional[torch.Tensor] = None,
     ) -> None:
-        """Write the committed target hidden's K/V into every draft layer's pool slot.
-
-        Dense MHA counterpart of the V4 ``write_target_hidden_kv`` (which writes an MLA
-        latent ring). Per-layer kv_proj -> k/v norm -> k rope -> set_kv_buffer; the
-        worker owns device transfer + slot selection. cache_loc_2d + commit_lens select
-        the prefix-valid write, else flat cache_loc.
-        """
         ctx_hidden = self.project_target_hidden(target_hidden)
         for layer in self.layers:
             attn = layer.self_attn
@@ -579,7 +498,6 @@ class DSparkDraftMixin:
 
 
 class DSparkDraftModel(DSparkDraftMixin, DFlashDraftModel):
-    """DSpark dense draft model: DFlash KV-injection backbone + serial Markov head."""
 
     pass
 

@@ -24,7 +24,6 @@ def _make_verify_lens(bs, device):
 @pytest.mark.parametrize("bs", [1, 2, 3, 8, 64])
 @pytest.mark.parametrize("pad", ["exact", "bucket"])
 def test_row_index_triton_matches_torch(bs, pad):
-    """triton compact_row_index equals torch (req_id, within, valid) with and without padding."""
     device = torch.device("cuda")
     verify_lens = _make_verify_lens(bs, device)
     total = int(verify_lens.sum().item())
@@ -43,7 +42,6 @@ def test_row_index_triton_matches_torch(bs, pad):
 @pytest.mark.parametrize("bs", [1, 2, 3, 8, 64])
 @pytest.mark.parametrize("pad", ["exact", "bucket"])
 def test_verify_ids_triton_matches_torch(bs, pad):
-    """triton compact_verify_ids equals torch (anchor/draft gather with padding zeroed)."""
     device = torch.device("cuda")
     verify_lens = _make_verify_lens(bs, device)
     total = int(verify_lens.sum().item())

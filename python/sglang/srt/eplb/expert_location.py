@@ -291,9 +291,6 @@ class ExpertLocationMetadata:
         # Use CPU copy to avoid GPU→CPU sync on every call, which is expensive in update weights scenario
         cpu_map = self.logical_to_all_physical_map_cpu
         if layer_id >= cpu_map.shape[0]:
-            # Speculative-draft layers (e.g. DSpark stages indexed past the target's
-            # num_hidden_layers) are outside the target's EPLB placement; resolve them
-            # to the trivial local mapping, which is exact when expert parallelism is off.
             if require_global_experts:
                 num_physical_experts = cpu_map.shape[-1]
                 return list(

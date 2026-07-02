@@ -1,42 +1,3 @@
-"""
-Profile a DSpark SPS cost table (JSON) from an already-running non-spec server.
-
-This profiler connects to a plain server the user launched separately (NO
-speculative flags) and sweeps decode batch sizes, reading the steady-state
-average inter-token latency (ITL) of each batch. It reuses ``one_batch_server``'s
-single-case measurement primitive (``run_one_case``) but owns a small,
-purpose-built CLI: it never launches a server, so it deliberately does NOT expose
-the full ``ServerArgs`` / ``BenchArgs`` surface -- only a handful of its own args.
-The one non-spec server fact it needs (tokenizer path, tp_size, running/KV
-capacity, and the assert that the server is non-spec) is read once over HTTP from
-``/server_info``.
-
-Core insight: one uniform verify step over ``batch_tokens`` tokens costs about
-the same as one non-spec decode step over the same total token count -- both are
-a single forward over that many tokens. A non-spec decode at batch size ``bs``
-forwards exactly ``bs`` tokens (one per request), so:
-
-    batch_tokens  = bs
-    steps_per_sec = output_throughput / bs = 1000 / ITL_ms
-
-(see ``one_batch_server.get_report_summary``: ``ITL_ms = 1000 * bs / output_throughput``).
-We compute steps_per_sec from the in-memory ``BenchOneCaseResult`` (full
-precision), not by re-reading the rounded ``result.jsonl``.
-
-KV-history approximation caveat (direction-safe, not a blocker): a non-spec
-decode at batch N reads N independent KV histories, but a real verify step over
-N tokens reads only ``N / (gamma + 1)`` histories (the gamma+1 query tokens of
-one request share a history). So the non-spec proxy over-reads history ->
-over-estimates per-step latency -> under-estimates steps_per_sec -> the
-scheduler is slightly conservative (verify window opens a touch short, never
-over-extends). The table is also implicitly conditioned on the context regime
-swept by ``--input-len`` / ``--output-len``; pick them near the target workload.
-
-# Usage (connect to a running non-spec server)
-python -m sglang.benchmark.dspark_sps_profiler \
-    --base-url http://localhost:30000 \
-    --out ~/main/artifacts/sglang/dspark_sps_table.json
-"""
 
 from __future__ import annotations
 
@@ -77,9 +38,6 @@ DEFAULT_OUTPUT_LEN = [1024]
 WARMUP_INPUT_LEN = 16
 WARMUP_OUTPUT_LEN = 16
 PROFILE_SEED = 42
-# Decode-step cost is temperature-independent, so profile greedily; stream every
-# token so the measured ITL reflects the true per-step latency; keep every request
-# at a uniform input_len (no ramp) so batch_tokens == batch_size holds exactly.
 PROFILE_TEMPERATURE = 0.0
 PROFILE_STREAM_INTERVAL = 1
 PROFILE_INPUT_LEN_STEP_PERCENTAGE = 0.0
@@ -260,9 +218,6 @@ def _bench_case_or_none(
             tokenizer=tokenizer,
         )
     except Exception:
-        # A large batch can OOM the server (killing the scheduler) or drop the
-        # streamed response; skip that probe instead of aborting the whole sweep,
-        # so the table is still built from the cases that survived.
         logger.warning(
             "Bench case bs=%s (input_len=%s, output_len=%s) failed; skipping it.",
             batch_size,
@@ -283,8 +238,6 @@ def run_bench_cases(
     repeats: int,
     result_path: Path,
 ) -> list[BenchOneCaseResult]:
-    # Warm up once per unique batch size (hot CUDA graphs / caches) so the first
-    # measured case already reports steady-state ITL. Warmup rows are not dumped.
     for batch_size in sorted(set(batch_sizes)):
         if _should_skip_case(
             context=context,
@@ -326,10 +279,6 @@ def run_bench_cases(
             )
             if result is None:
                 continue
-            # Emit each case's result the moment it is benched, so a long sweep
-            # is inspectable live (and salvageable from the log if it dies
-            # mid-run) rather than only after the whole table is assembled. Two
-            # lines per case: a concise core line, then the full raw dict.
             derived = derive_row(result)
             core = (
                 f"steps_per_sec={derived.steps_per_sec:.3f} "
@@ -356,12 +305,6 @@ def run_self_check(*, out_path: Path) -> None:
     if len(table.sample_batch_tokens) != len(table.sample_steps_per_sec):
         raise RuntimeError("Reloaded table has mismatched probe / SPS lengths.")
 
-    # Every stored probe must look up to a positive SPS, and looking up below the
-    # smallest probe must clamp to it (the loader's bisect-floor + clamp
-    # contract). The per-step throughput should not increase as the batch grows
-    # (a larger forward costs at least as much), so the table is expected to be
-    # monotone non-increasing across probes -- a >10% rise only warns, since the
-    # bench ITL can jitter, but it should not happen with a stable sweep.
     previous_sps: Optional[float] = None
     for batch_tokens, _ in zip(table.sample_batch_tokens, table.sample_steps_per_sec):
         looked_up = table.lookup(batch_tokens)
@@ -455,8 +398,6 @@ def profile(
     result_path = out_path.with_name(out_path.stem + ".result.jsonl")
     manifest_path = out_path.with_name(out_path.name + ".manifest.json")
 
-    # The bench appends each case to result_filename; start from a clean file so a
-    # rerun does not accumulate stale rows across invocations.
     if result_path.exists():
         result_path.unlink()
 

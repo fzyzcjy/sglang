@@ -77,9 +77,6 @@ def sanitize_nan_logits(logits: torch.Tensor, msg: str = ""):
 
 
 def maybe_assert_async(cond: torch.Tensor, msg: str = ""):
-    """Gated raw async assert — fire torch._assert_async(cond) without a
-    GPU-CPU sync when SGLANG_ENABLE_ASYNC_ASSERT is on. ``cond`` is a GPU bool
-    tensor (0-dim scalar, or reduced via .all())."""
     if not envs.SGLANG_ENABLE_ASYNC_ASSERT.get():
         return
     torch._assert_async(cond, msg)
@@ -108,7 +105,6 @@ def maybe_detect_inf(tensor: Optional[torch.Tensor], msg: str = ""):
 def maybe_detect_in_closed_range(
     tensor: Optional[torch.Tensor], low: float, high: float, msg: str = ""
 ):
-    """Async closed-interval [low, high] check on float values (e.g. probabilities)."""
     if not envs.SGLANG_ENABLE_ASYNC_ASSERT.get():
         return
     if tensor is None or tensor.numel() == 0:

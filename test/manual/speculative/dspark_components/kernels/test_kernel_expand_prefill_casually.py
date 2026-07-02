@@ -32,7 +32,6 @@ def _make_inputs(bs, uniform_extend, device, seed):
 @pytest.mark.parametrize("bs", [1, 2, 3, 8, 64])
 @pytest.mark.parametrize("pad", [0, 5])
 def test_triton_matches_torch_vectorized_branch(bs, pad):
-    """triton expansion is bit-exact vs the vectorized repeat_interleave torch branch incl. padding."""
     device = torch.device("cuda")
     seq_lens, extend, start_loc, req_pool_indices = _make_inputs(
         bs, None, device, seed=100 + bs
@@ -64,7 +63,6 @@ def test_triton_matches_torch_vectorized_branch(bs, pad):
 
 @pytest.mark.parametrize("bs", [1, 3, 8])
 def test_triton_matches_torch_loop_branch_uniform(bs):
-    """triton expansion equals the host-loop torch branch for the uniform draft-block geometry."""
     device = torch.device("cuda")
     block_size = 6
     seq_lens, extend, _, req_pool_indices = _make_inputs(

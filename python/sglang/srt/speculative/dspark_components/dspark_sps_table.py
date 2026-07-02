@@ -15,10 +15,6 @@ logger = logging.getLogger(__name__)
 class SpsCostTable(msgspec.Struct, frozen=True):
     sample_batch_tokens: list[int]
     sample_steps_per_sec: list[float]
-    # Advisory metadata: the production ceiling the profile was built for
-    # (e.g. max_running_requests * (gamma + 1)). lookup() never reads it --
-    # B above the largest probe clamps to the last SPS regardless. Validated
-    # >= largest probe so it cannot contradict the probes.
     max_batch_tokens: int
 
     def __post_init__(self) -> None:
@@ -41,11 +37,6 @@ class SpsCostTable(msgspec.Struct, frozen=True):
             )
 
     def lookup(self, batch_tokens: int) -> float:
-        # Floor B to the largest probe <= B (step-function, no interpolation;
-        # preserves hardware cliffs). Between probes this returns the pre-cliff
-        # (higher) SPS -- a slight OPTIMISTIC bias, opposite to the profiler's
-        # conservative KV-history approximation, so keep probes dense near
-        # cliffs. Out-of-range B clamps to the first/last probe.
         idx = bisect.bisect_right(self.sample_batch_tokens, batch_tokens) - 1
         idx = max(0, min(idx, len(self.sample_batch_tokens) - 1))
         return self.sample_steps_per_sec[idx]
@@ -103,11 +94,6 @@ def load_sps_table_from_path(path: str) -> SpsCostTable:
 
 
 def build_uninitialized_sps_table(*, max_batch_tokens: int) -> SpsCostTable:
-    # The UNINITIALIZED table: a flat single-probe constant SPS, built when no
-    # --speculative-dspark-sps-table-path is given. lookup() is constant, so the
-    # verify budget degenerates to verify-all (lossless, zero scheduling gain by
-    # itself); it is also the cold start online profiling learns from. Runtime-
-    # internal concept only -- there is deliberately no CLI sentinel spelling it.
     return SpsCostTable(
         sample_batch_tokens=[1],
         sample_steps_per_sec=[1.0],
@@ -116,23 +102,12 @@ def build_uninitialized_sps_table(*, max_batch_tokens: int) -> SpsCostTable:
 
 
 def is_uninitialized_sps_table(table: SpsCostTable) -> bool:
-    # Single probe == the uninitialized flat shape; a profiled table always
-    # carries a multi-probe sweep.
     return len(table.sample_batch_tokens) <= 1
 
 
 def build_batch_size_sweep(max_num_tokens: int) -> list[int]:
     if max_num_tokens < 1:
         raise ValueError(f"max_num_tokens must be >= 1, got {max_num_tokens}.")
-    # Taper from dense at small batches to coarse at large ones: powers of 2 up to
-    # 8, step 4 / 16 / 32 through 1024, step 128 through 2048, then step 256 out to
-    # max_num_tokens. Large batches are sampled sparsely -- the SPS curve is smooth
-    # there and each big-batch probe is an expensive eager forward. Fine
-    # granularity stays where the SPS(B) hardware cliffs live. Consumers: the
-    # offline profiler's default sweep (its capacity guard skips probes above the
-    # server's running / KV cap) and the online profiler's default bin grid when
-    # the initial table is the uninitialized flat one (a single probe, no grid to
-    # reuse).
     raw = [
         1,
         2,
@@ -150,49 +125,11 @@ def build_batch_size_sweep(max_num_tokens: int) -> list[int]:
     return sweep
 
 
-# Online profiling constants: per-bin rolling sample window (old samples age out,
-# so the table tracks workload / context-regime drift), and the sanity ceiling on
-# one paired step interval -- a longer gap is an idle stretch or a stall, not a
-# decode step, and would poison the bin median.
 ONLINE_SAMPLE_WINDOW = 128
 ONLINE_MAX_STEP_INTERVAL_SECONDS = 1.0
 
 
 class OnlineSpsProfiler:
-    """Rebuild the SPS cost table online from the live server's own decode steps.
-
-    Where the offline profiler (sglang.benchmark.dspark_sps_profiler) measures a
-    NON-spec decode proxy, this measures the deployed verify path itself --
-    compact packing, cuda-graph bucket quantization, and shared KV history
-    included -- so the offline proxy's conservative KV-history bias disappears.
-
-    Sampling: one (batch_tokens, dt) sample per pair of consecutive decode steps.
-    observe_step is called once per decode step (from
-    HostConfidenceBudgetPlanner.compute_budget) with the scheduler's own cost
-    coordinate B = bs + K, the same batch_tokens axis theta = tau * SPS(B)
-    optimizes over. dt is host wall-clock between the two calls -- the step rate
-    SPS actually means (it includes CPU/scheduling overhead, unlike a GPU-only
-    timer). The interval is attributed to the EARLIER step's B; under overlap the
-    interval is paced by the in-flight forward, so attribution carries about one
-    step of slack, absorbed by the per-bin median at steady state.
-
-    Pairing breaks (prefill/extend steps, budget-less cold-start steps) must be
-    signalled via note_non_decode_step; idle gaps are additionally dropped by the
-    ONLINE_MAX_STEP_INTERVAL_SECONDS bound. Residual outliers are absorbed by the
-    rolling-window median.
-
-    Bin grid and fallback: a profiled initial table keeps its own probe grid, and
-    an unmeasured bin keeps the initial (offline) value -- per-bin replacement.
-    The uninitialized flat table (no --speculative-dspark-sps-table-path; a
-    single probe) has no usable grid, so the offline sweep's taper is reused as
-    the grid, and an unmeasured bin is filled from the nearest measured bin below
-    (else above) instead of the flat constant: filling with the constant would
-    score already-observed B ranges far above unexplored ones and pin the budget
-    inside them -- a self-limiting loop that never explores a larger B.
-
-    Rank-locality: one instance per TP-rank scheduler process, no cross-rank sync
-    (see the wiring comment in dspark_verify_planner).
-    """
 
     def __init__(
         self,
@@ -221,18 +158,13 @@ class OnlineSpsProfiler:
         self._rebuild_interval_steps = rebuild_interval_steps
         self._min_bin_samples = min_bin_samples
         self._clock = clock
-        # (timestamp, batch_tokens) of the previous decode step's observe_step;
-        # None whenever the consecutive-decode chain is broken.
         self._prev_stamp: Optional[tuple[float, int]] = None
         self._steps_since_rebuild = 0
 
     def note_non_decode_step(self) -> None:
-        # A prefill/extend or budget-less step ran between two decode steps, so
-        # the next observe_step interval would not measure one decode step.
         self._prev_stamp = None
 
     def observe_step(self, *, batch_tokens: int) -> Optional[SpsCostTable]:
-        """Record one decode step; returns a rebuilt table on rebuild ticks, else None."""
         now = self._clock()
         prev = self._prev_stamp
         self._prev_stamp = (now, batch_tokens)
@@ -241,8 +173,6 @@ class OnlineSpsProfiler:
             dt = now - prev_time
             if 0.0 < dt <= ONLINE_MAX_STEP_INTERVAL_SECONDS:
                 self._samples[self._bin_index(prev_batch_tokens)].append(dt)
-        # The rebuild cadence counts every decode step (not just accepted
-        # samples) so swaps stay periodic even under sparse pairing.
         self._steps_since_rebuild += 1
         if self._steps_since_rebuild < self._rebuild_interval_steps:
             return None
@@ -258,8 +188,6 @@ class OnlineSpsProfiler:
         return len(self._bin_edges)
 
     def _bin_index(self, batch_tokens: int) -> int:
-        # Same floor + clamp contract as SpsCostTable.lookup, so a sample at B
-        # updates exactly the bin whose SPS a lookup at B would return.
         idx = bisect.bisect_right(self._bin_edges, batch_tokens) - 1
         return max(0, min(idx, len(self._bin_edges) - 1))
 
@@ -291,9 +219,6 @@ class OnlineSpsProfiler:
         )
 
     def _fallback_sps(self, *, measured: list, idx: int) -> float:
-        # See the class docstring: offline prior for a profiled initial table,
-        # nearest-measured-neighbor fill for the uninitialized flat table
-        # (exploration).
         if self._initial_is_profiled:
             return self._initial_table.lookup(self._bin_edges[idx])
         for j in range(idx - 1, -1, -1):

@@ -78,9 +78,6 @@ def select_mixed_accept(
     sampling_bonus: torch.Tensor,
     sampling_trim: torch.Tensor,
 ) -> MixedAcceptSelectResult:
-    # Faithful original chain from accept_draft_tokens' mixed branch: per-row
-    # select between the greedy and sampling rule outputs (three torch.where
-    # launches plus the dtype-align casts).
     correct_len = torch.where(
         greedy_mask, greedy_len.to(sampling_len.dtype), sampling_len
     )

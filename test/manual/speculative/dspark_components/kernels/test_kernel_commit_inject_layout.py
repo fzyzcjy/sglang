@@ -51,7 +51,6 @@ def _make_inputs(bs, device, seed):
 
 @pytest.mark.parametrize("bs", [1, 2, 3, 8, 64])
 def test_triton_matches_torch_layout(bs):
-    """triton fused commit-inject layout is bit-exact vs the assign_extend+translate+mask torch chain."""
     device = torch.device("cuda")
     (
         req_pool_indices,
@@ -88,7 +87,6 @@ def test_triton_matches_torch_layout(bs):
 
 
 def test_commit_len_edges_mask_expected_columns():
-    """commit_len 0 masks the whole row to -1 and commit_len == stride masks nothing."""
     device = torch.device("cuda")
     (
         req_pool_indices,

@@ -51,10 +51,6 @@ def build_block_seq_lens_casual(
     block_size: int,
     device: torch.device,
 ) -> torch.Tensor:
-    # The per-token causal length for a uniform-gamma draft block: request r's gamma
-    # tokens have causal lengths prefix_r + 1 .. prefix_r + gamma (the non-causal index
-    # builder only reads the first-token prefix per request, but the layout must match
-    # expand_prefill_casually's [prefix+1 .. prefix+gamma] ordering).
     prefix = seq_lens.to(torch.int32)
     steps = torch.arange(1, block_size + 1, device=device, dtype=torch.int32)
     return (prefix[:, None] + steps[None, :]).reshape(-1)
@@ -83,8 +79,6 @@ def build_block_seq_lens_casual_triton(
     block_size: int,
     device: torch.device,
 ) -> torch.Tensor:
-    # Single fused kernel: out[r*G + j] = seq_lens[r] + (j + 1), replacing the
-    # arange + broadcast-add + reshape torch chain with one launch.
     seq_lens = seq_lens.to(device=device, dtype=torch.int64).contiguous()
     n_rows = seq_lens.shape[0]
     n_out = n_rows * block_size

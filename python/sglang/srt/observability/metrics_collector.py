@@ -109,13 +109,7 @@ class SchedulerStats:
     # Speculative decoding
     spec_accept_length: float = 0.0
     spec_accept_rate: float = 0.0
-    # DSpark confidence-scheduled verify window per verify step, incl the bonus
-    # slot (= ell_r + 1), so accept_length <= cap_length compares directly.
-    # 0.0 when no cap is scheduled (STATIC / non-DSpark).
     spec_cap_length: float = 0.0
-    # Uncapped full-block accept length (accept + cap-trimmed drafts). Only
-    # CAP_ACCEPT verifies the full block, so only there is this exact; 0.0 in
-    # other modes.
     spec_block_accept_length: float = 0.0
     # Adaptive speculative decoding (currently active tier).
     spec_num_steps: int = 0

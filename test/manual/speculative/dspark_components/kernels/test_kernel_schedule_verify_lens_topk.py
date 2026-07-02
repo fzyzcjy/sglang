@@ -24,7 +24,6 @@ def _make_confidence(mode, bs, device):
     if mode == "ties":
         return torch.full((bs, GAMMA), 0.5, device=device)
     if mode == "coarse":
-        # heavy ties: quantize to {0, .25, .5, .75} so the (position, request) tie-break drives the order
         return (base * 4).floor() / 4
     if mode == "some_invalid":
         return torch.where(base < 0.3, torch.zeros_like(base), base)
@@ -35,7 +34,6 @@ def _make_confidence(mode, bs, device):
 @pytest.mark.parametrize("budget", [0, 1, 3, 7, 10, 1000])
 @pytest.mark.parametrize("mode", ["random", "ties", "coarse", "some_invalid"])
 def test_triton_matches_torch_selection(bs, budget, mode):
-    """triton schedule_verify_lens_topk (fused cumprod+finalize) equals torch verify_lens across ties/invalids/budgets."""
     device = torch.device("cuda")
     cfg = DSparkScheduleConfig(gamma=GAMMA)
     confidence = _make_confidence(mode, bs, device)

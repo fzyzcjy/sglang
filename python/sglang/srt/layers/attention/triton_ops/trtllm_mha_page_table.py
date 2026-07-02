@@ -44,7 +44,7 @@ def create_trtllm_mha_kv_indices_triton(
     full_to_swa_ptr,  # full->SWA token-slot lookup table, or dummy when not SWA
     page_table_ptr,  # [bs, num_pages] int32 block ids (output)
     swa_page_table_ptr,  # [bs, num_pages] int32 SWA block ids (output), or dummy
-    full_to_swa_numel,  # length of full_to_swa (incl. -1 sentinel), or 0 when not SWA
+    full_to_swa_numel,
     req_to_token_stride: tl.constexpr,
     page_table_stride: tl.constexpr,
     PAGE_SIZE: tl.constexpr,
@@ -58,13 +58,9 @@ def create_trtllm_mha_kv_indices_triton(
     Programs past the request's page count are guarded out, so the work (and the
     DRAM traffic) is bounded by the device-side ``seq_lens`` — no host max needed.
 
-    For real requests the gathered ``slot`` is a valid full-pool token slot, so the
-    SWA lookup ``full_to_swa[slot]`` is in range. DSpark ragged verify, however,
-    appends padded / synthetic requests that reference reserved req-pool slot 0,
-    whose ``req_to_token`` row may be stale; the gathered ``slot`` is then garbage
-    and an unguarded ``full_to_swa`` gather would read out of bounds. The SWA index
-    is clamped into ``[0, full_to_swa_numel)`` before the gather: a no-op for real
-    rows, and for padded rows it keeps the (discarded-output) read in bounds.
+    The SWA lookup assumes valid (``>= 0``) slots, unlike
+    ``translate_loc_from_full_to_swa``'s ``-1`` sentinel handling; page-boundary
+    reads stay within ``seq_len``, so slots are always valid here.
     """
     PAGES_PER_BLOCK: tl.constexpr = _MHA_KV_INDEX_BLOCK_TOKENS_TL // PAGE_SIZE
     pid_req = tl.program_id(0)
@@ -90,7 +86,6 @@ def create_trtllm_mha_kv_indices_triton(
     out_off = pid_req * page_table_stride + page_idx
     tl.store(page_table_ptr + out_off, (slot // PAGE_SIZE).to(tl.int32), mask=mask)
     if HAS_SWA:
-        # Clamp the gather index so a padded/slot-0 stale slot cannot read OOB.
         swa_index = tl.minimum(tl.maximum(slot, 0), full_to_swa_numel - 1)
         swa_slot = tl.load(full_to_swa_ptr + swa_index.to(tl.int64), mask=mask)
         tl.store(

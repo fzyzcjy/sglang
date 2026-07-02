@@ -704,7 +704,6 @@ def compute_dflash_sampling_correct_drafts_and_bonus(
         accept_index=accept_index,
         accept_token_num=accept_token_num,
         candidates=candidates_i64,
-        # kwarg LHS retained as `retrive_*` to match sgl_kernel op schema.
         retrive_index=retrieve_index,
         retrive_next_token=retrieve_next_token,
         retrive_next_sibling=retrieve_next_sibling,
@@ -734,12 +733,6 @@ def build_dflash_verify_target_probs(
     uniform_top_k_value: Optional[int] = None,
     use_sparse_topk: bool = True,
 ) -> torch.Tensor:
-    """Build per-verify-row target distributions ``[bs, draft_token_num, vocab]``.
-
-    Applies per-request temperature then top-k / top-p (top-k-first semantics
-    with a sparse exact fast path). Shared by DFlash tree verify and DSpark chain
-    verify.
-    """
     device = next_token_logits.device
     need_top_k = bool(getattr(sampling_info, "need_top_k_sampling", True))
     need_top_p = bool(getattr(sampling_info, "need_top_p_sampling", False))

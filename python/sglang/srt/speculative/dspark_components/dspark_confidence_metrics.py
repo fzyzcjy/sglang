@@ -24,10 +24,6 @@ def _format_float(value: float, digits: int = 4) -> str:
 
 
 class PerPositionConfidenceMetrics:
-    # Ported from DeepSpec deepspec/eval/dspark/confidence_head.py
-    # PerPositionConfidenceMetrics: single-process (dropped all_reduce/dist) with a
-    # batched [bs, gamma] update. Histograms live on `device` and are only copied to
-    # host inside compute(), so per-step update() stays sync-free.
 
     def __init__(
         self,
@@ -188,13 +184,6 @@ class PerPositionConfidenceMetrics:
 
 
 class ConfidenceMetricsProbe:
-    # Runtime confidence-head calibration probe (read-only; never touches the accept
-    # path). Reuses the verify step's confidence_raw + num_correct_drafts to accumulate
-    # cumprod-survival vs leading-correct-prefix per draft position on-device, logging a
-    # per-position table every `print_every` verify steps. Off unless
-    # SGLANG_DSPARK_DEBUG_CONFIDENCE_METRICS is set; rank-0 only; skips compact mode
-    # (padded verify rows corrupt the per-position prefix label). Requires greedy verify:
-    # under sampling, num_correct_drafts is an argmax-match prefix, not the true accept.
 
     def __init__(
         self,

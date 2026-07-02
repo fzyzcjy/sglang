@@ -41,7 +41,6 @@ def _make_linears(device, seed):
 
 @pytest.mark.parametrize("num_tokens", [1, 8, 56])
 def test_fused_matches_per_stage_loop(num_tokens):
-    """fused stacked-GEMM kv proj matches the per-stage linear loop within bf16 GEMM tolerance."""
     device = torch.device("cuda")
     linears = _make_linears(device, seed=num_tokens)
     g = torch.Generator(device=device).manual_seed(999 + num_tokens)
@@ -56,13 +55,10 @@ def test_fused_matches_per_stage_loop(num_tokens):
     for kv_got, kv_ref in zip(got, ref):
         assert kv_got.shape == kv_ref.shape
         assert kv_got.is_contiguous()
-        # Same K-reduction over the same bf16 values; only cuBLAS tiling differs
-        # between the [head_dim] and stacked [num_stages*head_dim] GEMM shapes.
         torch.testing.assert_close(kv_got.float(), kv_ref.float(), rtol=2e-2, atol=2e-3)
 
 
 def test_dequant_fp8_blockwise_weight():
-    """fp8 128x128-blockwise dequant expands the scale grid to per-element scales exactly (incl. partial tail blocks)."""
     device = torch.device("cuda")
     g = torch.Generator(device=device).manual_seed(3)
     out_dim, in_dim, block = 192, 384, 128

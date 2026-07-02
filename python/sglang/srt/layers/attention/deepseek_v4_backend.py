@@ -133,8 +133,6 @@ def _get_target_verify_bs(forward_batch: ForwardBatch) -> int:
     return draft_count // draft_token_num
 
 
-# Verify-schedule mode string constants, mirroring RaggedVerifyMode values
-# (single source of truth).
 RAGGED_VERIFY_STATIC = RaggedVerifyMode.STATIC.value
 RAGGED_VERIFY_CAP_ACCEPT = RaggedVerifyMode.CAP_ACCEPT.value
 RAGGED_VERIFY_COMPACT = RaggedVerifyMode.COMPACT.value
@@ -168,10 +166,6 @@ def compute_target_verify_graph_key(
         f"ragged verify graph_num_tokens={graph_num_tokens} exceeds full block "
         f"num_draft*bs={num_tokens_full_block}"
     )
-    # total_verify_tokens is None on the sync-free device layout
-    # (from_verify_lens_device); it carries a host mirror only on the eager path.
-    # The returned tier keys off graph_num_tokens (bs-derived), never the total, so
-    # validate the total<=tier invariant only when the host mirror is present.
     total_verify_tokens = ragged_layout.total_verify_tokens
     if total_verify_tokens is not None:
         assert total_verify_tokens <= graph_num_tokens, (
@@ -206,13 +200,6 @@ def compute_uniform_extend_lengths(
     seq_lens_cpu: List[int],
     extend_len: int,
 ) -> VerifyExtendLengths:
-    """Eager same-length verify extend: every request grows by ``extend_len`` tokens.
-
-    Serves the uniform-gamma target verify (``extend_len = speculative_num_draft_tokens``)
-    and the DSpark draft block (``extend_len = block_size``). ``seq_lens_cpu`` must already be
-    a ``list[int]`` (call sites normalize); the int contract keeps ``seq_lens_cpu_extended``
-    from degrading into a list of 0-d tensors.
-    """
     batch_size = len(seq_lens_cpu)
     seq_lens_extended = seq_lens + extend_len
     seq_lens_cpu_extended = [x + extend_len for x in seq_lens_cpu]
@@ -233,7 +220,6 @@ def compute_ragged_extend_lengths(
     seq_lens_cpu: List[int],
     ragged_layout: RaggedVerifyLayout,
 ) -> VerifyExtendLengths:
-    """Eager ragged verify extend: each request grows by its own ``verify_lens`` entry."""
     extend_seq_lens_cpu = list(ragged_layout.verify_lens_cpu)
     seq_lens_extended = seq_lens + ragged_layout.verify_lens
     seq_lens_cpu_extended = [
@@ -602,12 +588,7 @@ class DeepseekV4AttnBackend(
     AttentionBackend, C4IndexerBackendMixin, CompressorBackendMixin
 ):
     use_captured_forward_metadata_for_breakable_cuda_graph: bool = True
-    # Builds ragged verify metadata via make_forward_metadata_from_raw_verify.
     supports_ragged_verify_graph: bool = True
-    # DSV4 rebuilds decode/verify attention metadata from device seq_lens +
-    # preallocated buffers (cuda-graph replay uses the frozen MAX_SEQ_LEN_FOR_CAPTURE),
-    # so it never needs the host seq_lens_cpu / seq_lens_sum mirror. Opt out of the
-    # per-step D2H, matching trtllm_mla / dsa. DeepseekV4MultiStepBackend inherits this.
     needs_cpu_seq_lens: bool = False
 
     def __init__(
@@ -663,11 +644,6 @@ class DeepseekV4AttnBackend(
         ] = None
         self.online_c128_mtp = OnlineC128MTPController(self)
 
-        # The DSpark draft runs its block backbone on this backend in TARGET_VERIFY mode
-        # but needs a NON-CAUSAL full-block SWA index (every one of the gamma block queries
-        # attends the whole injected target-hidden window + the whole draft block), unlike
-        # the causal target verify. Detected by capability (draft worker + DSpark spec
-        # algorithm), never by a per-call model-identity branch.
         self.is_dspark_draft = bool(
             getattr(model_runner, "is_draft_worker", False)
             and model_runner.spec_algorithm is not None
@@ -698,23 +674,12 @@ class DeepseekV4AttnBackend(
                 "DSV4 ragged verify does not support online c128 MTP; "
                 "set SGLANG_RAGGED_VERIFY_MODE off or disable online compress."
             )
-        # Host-mirror validations only. On the sync-free device path
-        # (from_verify_lens_device) verify_lens_cpu / total_verify_tokens are None,
-        # so reading them here would both deref None and force a per-step D2H. The
-        # anchor(>=1) and total<=graph_num_tokens invariants they check hold by
-        # construction on that path (round_up_grid(bs*(gamma+1)) >= sum verify_len,
-        # each verify_len <= gamma+1), mirroring RaggedVerifyLayout.__post_init__.
         if layout.verify_lens_cpu is not None:
             assert int(layout.verify_lens.min()) >= 1
             assert layout.total_verify_tokens == int(layout.verify_lens.sum())
-        # The runner pads bs up to the captured tier's capture_bs; pad the layout
-        # to match so its verify_lens / extend_start_loc cover every captured
-        # request slot and sum to graph_num_tokens (the padded-token contract).
         layout = layout.padded_to_bucket(
             num_draft_tokens=self.speculative_num_draft_tokens
         )
-        # layout.bs reads verify_lens.shape[0] (host tensor metadata, no D2H), so it
-        # is safe when verify_lens_cpu is None; the old len(verify_lens_cpu) crashed.
         assert layout.bs == bs, f"padded ragged layout bs {layout.bs} != batch bs {bs}"
         return layout
 
@@ -901,12 +866,6 @@ class DeepseekV4AttnBackend(
         )
 
     def _ensure_verify_bs_buffers(self) -> None:
-        # Address-stable bs-axis buffers for the prep-in-cuda-graph verify path.
-        # Sized to the request-pool capacity (an upper bound on bs) and int32 (the
-        # dtype the flash_mla / sparse kernels expect). Allocated lazily here so
-        # the eager (cuda-graph-disabled) path, which never calls
-        # init_cuda_graph_state, still gets a buffer (replaces the hardcoded 1025
-        # / default-int64 alloc, L3).
         if hasattr(self, "extend_seq_lens_buffer"):
             return
         num_reqs = self.req_to_token.shape[0]
@@ -931,22 +890,11 @@ class DeepseekV4AttnBackend(
         if envs.SGLANG_PREP_IN_CUDA_GRAPH.get():
             assert out_cache_loc is not None
             bs = len(seq_lens)
-            # needs_cpu_seq_lens=False leaves seq_lens_cpu None. On the compact path
-            # online c128 is forbidden (_resolve_verify_layout raises), so
-            # _make_target_verify_c128_metadata returns None and this list is unused
-            # downstream (make_forward_metadata_from_raw_verify never reads
-            # raw_metadata.seq_lens_cpu). Keep None rather than forcing a per-step
-            # seq_lens.cpu() D2H; materialize the host list only when a mirror exists
-            # (eager / online-c128 path, where the D2H is free or already paid).
             seq_lens_cpu_list = (
                 seq_lens_cpu.tolist() if seq_lens_cpu is not None else None
             )
             self._ensure_verify_bs_buffers()
             if ragged_layout is None:
-                # Reset the shared bs-axis buffer to the uniform full block: a
-                # prior ragged step wrote per-request verify_lens into it, and a
-                # layout-less (uniform) step must not inherit those stale values
-                # (M2).
                 self.extend_seq_lens_buffer[:bs].fill_(
                     self.speculative_num_draft_tokens
                 )
@@ -960,12 +908,6 @@ class DeepseekV4AttnBackend(
                 extend_seq_lens = self.extend_seq_lens_buffer[:bs]
                 extend_start_loc = self.extend_start_loc_buffer[:bs]
                 verify_lens = self.extend_seq_lens_buffer[:bs]
-                # Carry the host-known padded token count, NOT the device layout's
-                # total_verify_tokens (None on from_verify_lens_device). The layout is
-                # post padded_to_bucket, so sum(verify_lens) == graph_num_tokens; this
-                # value becomes num_q_tokens (the repeat_interleave output_size) in
-                # make_forward_metadata_from_raw_verify. A None here would silently
-                # degrade output_size to repeats.sum().item() -- a per-step D2H.
                 total_verify_tokens = ragged_layout.graph_num_tokens
 
             return DSV4RawVerifyMetadata(
@@ -1055,15 +997,6 @@ class DeepseekV4AttnBackend(
         out_cache_loc: torch.Tensor,
         block_size: int,
     ) -> DSV4Metadata:
-        """DSpark draft block metadata: gamma tokens/request, NON-CAUSAL, no compression.
-
-        Unlike ``init_forward_metadata_target_verify_old`` (the target's gamma+1 causal
-        verify, with c4/c128 compression), the DSpark draft block extends each request by
-        ``block_size`` (gamma) tokens whose KV lives only in the SWA ring (compress_ratio
-        == 0). ``make_core_attn_metadata`` then builds the NON-CAUSAL full-block SWA index
-        because ``self.is_dspark_draft`` is set. ``need_compress=False`` skips the c4/c128
-        path the draft does not have (R8: draft pool is SWA-only).
-        """
         if seq_lens_cpu is None:
             seq_lens_cpu_list = seq_lens.tolist()
         else:
@@ -1106,10 +1039,6 @@ class DeepseekV4AttnBackend(
         if is_ragged:
             seq_lens = seq_lens + extend_seq_lens
             num_q_tokens = raw_metadata.total_verify_tokens
-            # Host-known padded token count (== graph_num_tokens); must not be None or
-            # the _expand_prefill_casually_vectorized output_size would fall back to
-            # repeats.sum().item() (a per-step D2H). Fail loud if a future path forgets
-            # to carry it.
             assert num_q_tokens is not None, "ragged verify num_q_tokens is None"
             seq_lens_casual, req_pool_indices_repeated = (
                 self._expand_prefill_casually_vectorized(
@@ -1274,10 +1203,6 @@ class DeepseekV4AttnBackend(
             )
 
             if self.is_dspark_draft and forward_batch.forward_mode.is_target_verify():
-                # Re-derive the NON-CAUSAL full-block index from the live out_cache_loc +
-                # seq_lens inside the recorded graph so cuda-graph replay (which rebinds
-                # out_cache_loc) attends the correct block + window slots (R7). The eager
-                # build in make_core_attn_metadata is overwritten here on every replay.
                 block_size = int(forward_batch.spec_info.draft_token_num)
                 seq_lens_casual = self._dspark_seq_lens_casual(
                     seq_lens=forward_batch.seq_lens, block_size=block_size
@@ -1357,11 +1282,6 @@ class DeepseekV4AttnBackend(
         seq_lens = seq_lens[:bs]
         req_pool_indices = req_pool_indices[:bs]
         chosen_max_seq_len = self.MAX_SEQ_LEN_FOR_CAPTURE
-        # Replay hook for both DECODE_OR_IDLE and TARGET_VERIFY. Under
-        # needs_cpu_seq_lens=False the host mirror is None on replay; the metadata
-        # build below always uses the frozen capture bound chosen_max_seq_len
-        # (MAX_SEQ_LEN_FOR_CAPTURE), so the host slice and the live-max<=bound check
-        # are host-mirror-only validations -- run them only when the mirror exists.
         if seq_lens_cpu is not None:
             seq_lens_cpu = seq_lens_cpu[:bs]
             actual_max_seq_len = seq_lens_cpu.max().item()
@@ -1389,15 +1309,6 @@ class DeepseekV4AttnBackend(
                 out_cache_loc=out_cache_loc_padded,
             )
         elif bucket == _GraphBucket.TARGET_VERIFY and self.is_dspark_draft:
-            # DSpark draft block capture: build the gamma-token, NON-CAUSAL, no-compression
-            # geometry directly (symmetric to eager _build_forward_metadata), NOT the
-            # target's gamma+1 causal verify with c4/c128. The draft runner captures
-            # TARGET_VERIFY with num_tokens_per_bs = gamma, so out_cache_loc / positions
-            # carry bs*gamma slots; init_forward_metadata_target_verify would have produced
-            # gamma+1 page_table / seq_lens / compression rows that the gamma swa index
-            # rebuilt in init_forward_metadata_in_graph cannot match. The draft is not
-            # ragged (uniform gamma) and SWA-only, so it skips the ragged-layout / verify_bs
-            # / online-c128 path entirely.
             block_size = self.speculative_num_draft_tokens - 1
             num_tokens_block = block_size * bs
             graph_key = bs
@@ -1479,10 +1390,6 @@ class DeepseekV4AttnBackend(
                     mode="constant",
                     value=0,
                 )
-            # seq_lens_cpu is None under needs_cpu_seq_lens=False; draft-extend still
-            # consumes a host length list, so fall back to a GPU read here. This is off
-            # the target-verify replay hot path (a residual draft-side D2H tracked for a
-            # later device-ization), not the sync being eliminated.
             draft_extend_seq_lens_cpu = (
                 seq_lens_cpu.tolist() if seq_lens_cpu is not None else seq_lens.tolist()
             )
@@ -1540,10 +1447,6 @@ class DeepseekV4AttnBackend(
         assert self.swa_page_size % SWA_WINDOW == 0 and self.page_size % 128 == 0
         if max_seq_len_override is None:
             max_seq_len_override = getattr(forward_batch, "max_seq_len_override", None)
-        # needs_cpu_seq_lens=False leaves seq_lens_cpu None. This is the eager /
-        # breakable-cuda-graph metadata build (not the per-step replay hot path); with
-        # no override the forward is synchronous, so a GPU max() D2H is free (note §6),
-        # and cuda-graph capture passes MAX_SEQ_LEN_FOR_CAPTURE as the override (no read).
         if max_seq_len_override is not None:
             max_seq_len = max_seq_len_override
         elif seq_lens_cpu is not None:
@@ -1576,9 +1479,6 @@ class DeepseekV4AttnBackend(
                 out_cache_loc=out_cache_loc,
             )
         elif self.is_dspark_draft and logical_forward_mode.is_target_verify():
-            # DSpark draft block forward: gamma tokens/request (spec_info.draft_token_num),
-            # NON-CAUSAL full block, no compression. Distinct from the target's gamma+1
-            # causal verify -- gated by the draft-worker DSpark capability flag.
             block_size = int(forward_batch.spec_info.draft_token_num)
             metadata = self.init_forward_metadata_dspark_draft_block(
                 max_seq_len=max_seq_len,
@@ -1608,8 +1508,6 @@ class DeepseekV4AttnBackend(
                 and extend_seq_lens_cpu is not None
             )
             is_draft = forward_batch.forward_mode.is_draft_extend_v2()
-            # seq_lens_cpu may be None under needs_cpu_seq_lens=False; prefill still
-            # consumes a host list, so fall back to a GPU read (eager path, D2H free).
             prefill_seq_lens_cpu = (
                 seq_lens_cpu.tolist() if seq_lens_cpu is not None else seq_lens.tolist()
             )
@@ -2019,9 +1917,6 @@ class DeepseekV4AttnBackend(
         extend_seq_lens_tensor: Optional[torch.Tensor] = None,
         extend_start_loc: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        # The whole per-token expansion (both the old vectorized repeat_interleave
-        # chain and the old host-loop branch) lives in the ExpandPrefillCasually
-        # kernel; the host lists are only consumed by its torch reference impl.
         assert seq_lens_tensor is not None and extend_seq_lens_tensor is not None
         result = ExpandPrefillCasually.execute(
             req_pool_indices=req_pool_indices,
@@ -2087,11 +1982,6 @@ class DeepseekV4AttnBackend(
     ) -> DSV4AttnMetadata:
         assert self.swa_page_size == SWA_WINDOW
 
-        # One launch for the per-token scalar prep + page-table gather (int32 lens,
-        # positions = lens - 1, req_to_token strided page gather // page_size, causal
-        # SWA clamp) that used to be 5-6 separate torch ops here. The dspark draft
-        # branch ignores the clamp output (its lengths come from
-        # BuildDsparkSwaPageIndices).
         prep = BuildPageTablePositions.execute(
             req_to_token=req_to_token,
             req_pool_indices_repeated=req_pool_indices_repeated,
@@ -2104,16 +1994,6 @@ class DeepseekV4AttnBackend(
 
         raw_positions = prep.positions_casual
         if dspark_block_size is not None:
-            # NON-CAUSAL full-block draft index (R1 / Step 1b): every gamma block query of
-            # a request shares the whole committed window + the whole draft block, no
-            # causal mask. Gated on the explicit dspark_block_size geometry, NOT on
-            # self.is_dspark_draft: only the uniform-gamma draft-block builder passes it
-            # (num_q = bs*gamma), while the draft worker's own decode / idle / raw-verify /
-            # plain-prefill paths leave it None and stay on the causal get_swa_page_indices.
-            # Flag-only gating fed those non-gamma geometries into the uniform-gamma assert
-            # in get_dspark_swa_page_indices and crashed cuda-graph capture (capture's
-            # gamma+1 verify geometry is not a gamma multiple). speculative_num_draft_tokens
-            # is the verify window gamma+1; the draft block forward writes gamma slots.
             assert (
                 self.is_dspark_draft
                 and dspark_block_size == self.speculative_num_draft_tokens - 1
@@ -2130,10 +2010,6 @@ class DeepseekV4AttnBackend(
                 block_size=dspark_block_size,
             )
         else:
-            # Causal SWA index build + -1 pad fused into one launch (the old
-            # get_swa_page_indices arange/masked_fill/gather/translate/cast chain
-            # plus _pad_last_dim). The padded tail columns are never attended (the
-            # consumer reads only swa_topk_lengths entries per row).
             swa_page_indices = BuildCausalSwaPageIndices.execute(
                 req_to_token=self.req_to_token,
                 full_to_swa_mapping=self.token_to_kv_pool.full_to_swa_index_mapping,
@@ -2178,30 +2054,6 @@ class DeepseekV4AttnBackend(
         out_loc: torch.Tensor,
         block_size: int,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """NON-CAUSAL full-block SWA index for the DSpark draft block (R1 / Step 1b).
-
-        Unlike ``get_swa_page_indices`` (causal: each token sees its own
-        ``pos - arange(SWA_WINDOW)`` window with future masked), the DSpark draft block is
-        non-causal: every one of the ``block_size`` draft queries in a request attends the
-        SAME set = the whole committed target-hidden window (the request's prefix slots)
-        plus the whole draft block (the ``block_size`` slots this forward writes). This is
-        the paged port of the reference ``get_dspark_topk_idxs`` (model.py:744), which
-        shares one ``[arange(min(W, start_pos+1)), W + arange(block_size)]`` row across all
-        block query rows with no causal triangle.
-
-        ``seq_lens_casual`` / ``req_pool_indices_repeated`` are the per-token (per draft
-        query) causal lengths and request indices laid out uniformly ``block_size`` per
-        request (the draft block forward uses a uniform-gamma TARGET_VERIFY layout). The
-        first block token of request r has ``seq_lens_casual = prefix_r + 1``, so the
-        committed window is the request's ``prefix_r`` slots; ``out_loc`` holds the
-        ``block_size`` block slots in full space, reshaped per request.
-
-        Returns ``(swa_page_indices [num_q, K], swa_topk_lengths [num_q])`` with ``K``
-        padded to a multiple of ``PAGE_INDEX_ALIGNED_SIZE`` (invalid slots ``-1``), shared
-        across the ``block_size`` query rows of each request. The FlashMLA kernel reads
-        only the first ``swa_topk_lengths[q]`` entries (no causal mask), so the ``-1``
-        padding is never attended.
-        """
         gather = ComputeDsparkWindowGather.execute(
             seq_lens_casual=seq_lens_casual,
             req_pool_indices_repeated=req_pool_indices_repeated,
@@ -2209,10 +2061,6 @@ class DeepseekV4AttnBackend(
             swa_window=SWA_WINDOW,
         )
 
-        # The window req_to_token gather, both full->SWA translates and the block-slot view
-        # that used to live here are fused into BuildDsparkSwaPageIndices (it reads the raw
-        # req_to_token / full_to_swa_index_mapping / out_loc tables directly), so the whole
-        # function is now window_gather + builder with no torch glue in between.
         swa_page_indices, swa_topk_lengths = BuildDsparkSwaPageIndices.execute(
             req_to_token=self.req_to_token,
             full_to_swa_mapping=self.token_to_kv_pool.full_to_swa_index_mapping,

@@ -58,9 +58,6 @@ def finalize_accept_lens(
     cap_trim_lens: torch.Tensor,
     prefix_lens: torch.Tensor,
 ) -> FinalizeAcceptLensResult:
-    # Faithful original worker-tail chain: commit_lens = correct_len + 1 (int32,
-    # the accept count incl. bonus), the request's new committed length, and the
-    # int32 cap-trim mirror for the batch result.
     commit_lens = correct_len.to(torch.int32) + 1
     new_seq_lens = prefix_lens + commit_lens.to(prefix_lens.dtype)
     return FinalizeAcceptLensResult(

@@ -19,10 +19,8 @@ PAGE_ALIGN = 64
 
 @pytest.mark.parametrize("bs", [1, 2, 3, 8, 64])
 def test_window_gather_triton_matches_torch(bs):
-    """triton compute_dspark_window_gather equals torch for prefix below and above the window."""
     device = torch.device("cuda")
     num_q = bs * BLOCK_SIZE
-    # seq_lens_casual spans small (prefix < window) and large (prefix >= window)
     seq_lens_casual = torch.randint(1, 300, (num_q,), dtype=torch.int32, device=device)
     req_pool_indices_repeated = torch.randint(
         0, 256, (num_q,), dtype=torch.int64, device=device
@@ -50,15 +48,11 @@ def test_window_gather_triton_matches_torch(bs):
 
 @pytest.mark.parametrize("bs", [1, 2, 3, 8, 64])
 def test_page_indices_triton_matches_torch(bs):
-    """triton build_dspark_swa_page_indices equals torch with the fused req_to_token + full->SWA gathers."""
     device = torch.device("cuda")
     num_q = bs * BLOCK_SIZE
     max_reqs = 300
     max_ctx = 400
     n_full = 50000
-    # offsets / invalid / context_lens must derive from one seq_lens (the real invariant):
-    # the fused kernel reads only the valid window suffix (k < context_len), which the
-    # left-pack guarantees is in-window only when the three come from the same prefix.
     seq_lens_casual = torch.randint(1, 300, (num_q,), dtype=torch.int32, device=device)
     req_pool_indices_repeated = torch.randint(
         0, max_reqs, (num_q,), dtype=torch.int64, device=device

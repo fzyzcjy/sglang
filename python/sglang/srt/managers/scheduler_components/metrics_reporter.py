@@ -139,10 +139,6 @@ class SchedulerMetricsReporter:
         self.spec_num_forward_ct = 0
         self.spec_total_num_accept_tokens = 0  # lifetime
         self.spec_total_num_forward_ct = 0
-        # DSpark confidence accumulators (per-log-interval):
-        # block accept = uncapped full-block accept incl bonus (exact only in
-        # CAP_ACCEPT); cap = scheduled verify window incl bonus slot (0 when no
-        # cap is scheduled, i.e. STATIC / non-DSpark).
         self.spec_num_block_accept_tokens = 0
         self.spec_num_cap_tokens = 0
 
@@ -760,10 +756,6 @@ class SchedulerMetricsReporter:
             spec_accept_rate = (
                 num_correct_drafts / total_draft_tokens if total_draft_tokens > 0 else 0
             )
-            # DSpark confidence averages per verify step (computed before the
-            # spec_num_forward_ct reset below): cap len = scheduled verify
-            # window incl bonus slot (0 when no cap, i.e. STATIC); block accept
-            # len = uncapped full-block accept, exact only in CAP_ACCEPT.
             spec_cap_length = (
                 self.spec_num_cap_tokens / self.spec_num_forward_ct
                 if self.spec_num_forward_ct > 0

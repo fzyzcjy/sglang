@@ -259,12 +259,6 @@ class ReqToTokenPool:
                 (self._alloc_size, max_context_len), dtype=torch.int32, device=device
             )
         self.free_slots = list(range(1, self._alloc_size))
-        # Per-slot occupancy generation (host): bumped each time a slot is assigned
-        # to a NEW request in alloc(). The DSpark confidence relay stamps each ring
-        # slot with the generation and compares it at budget time -- an exact
-        # same-request check that a recycled slot's confidence can never satisfy (the
-        # slot number alone is reused across requests, so it cannot identify one).
-        # Starts at 0 (never allocated); first alloc makes it >= 1.
         self.req_generation = torch.zeros(self._alloc_size, dtype=torch.int64)
 
     def write(self, indices, values):
@@ -297,8 +291,6 @@ class ReqToTokenPool:
         for r in reqs:
             if r.req_pool_idx is None:
                 r.req_pool_idx = select_index[offset]
-                # New occupancy of this slot -> bump its generation (reusing reqs
-                # keep their slot, so they keep their generation: same request).
                 self.req_generation[r.req_pool_idx] += 1
                 offset += 1
         return [r.req_pool_idx for r in reqs]

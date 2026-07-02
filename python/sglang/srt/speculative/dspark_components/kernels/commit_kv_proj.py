@@ -43,9 +43,6 @@ def commit_kv_proj(
     main_x: torch.Tensor,
     wkv_linears: list[torch.nn.Module],
 ) -> list[torch.Tensor]:
-    # Faithful original chain: one quantized-linear forward per stage. Every stage
-    # projects the SAME main_x, so on the fp8 path this re-quantizes the input and
-    # pays a full linear dispatch chain per stage.
     return [linear(main_x)[0] for linear in wkv_linears]
 
 
@@ -54,20 +51,6 @@ def commit_kv_proj_fused(
     main_x: torch.Tensor,
     wkv_linears: list[torch.nn.Module],
 ) -> list[torch.Tensor]:
-    # One GEMM over the stacked per-stage wkv weights replaces the num_stages
-    # quant + GEMM dispatch chains; the [N, head_dim] contiguous slices feed the
-    # per-stage pool writer. Not a triton kernel per se, but it is the
-    # launch-count-optimized impl behind the same toggle.
-    #
-    # Preferred path: stack the QUANTIZED blockwise-fp8 weights + scales along the
-    # output dim (valid when every stage's out_dim is a whole number of scale
-    # blocks) and call the same w8a8_block_fp8_linear the per-stage forward uses --
-    # one input quant + one deep_gemm, per-element math identical to the per-stage
-    # reference (each 128-row output block keeps its own scale; the input quant of
-    # the shared main_x is deterministic, so quantizing once == quantizing thrice).
-    # Fallback (unquantized / non-block layouts): one bf16 GEMM over dequantized
-    # stacked weights -- the weights are bit-exact copies of the quantized values,
-    # but the GEMM numerics differ slightly from deep_gemm.
     num_stages = len(wkv_linears)
     stacked = _stacked_wkv_weight(wkv_linears=wkv_linears)
 
@@ -97,8 +80,6 @@ class _StackedWkvWeight(msgspec.Struct):
 
 
 def _stacked_wkv_weight(*, wkv_linears: list[torch.nn.Module]) -> _StackedWkvWeight:
-    # Built once per model instance (weights are static post-load); keyed by the
-    # first linear's identity, mirroring the chain-verify buffer cache pattern.
     key = id(wkv_linears[0])
     cached = _STACKED_WEIGHT_CACHE.get(key)
     if cached is None:
@@ -139,8 +120,6 @@ def _dequant_linear_weight(linear: torch.nn.Module) -> torch.Tensor:
         f"unsupported wkv weight dtype {weight.dtype} for the fused commit kv proj; "
         f"set SGLANG_DSPARK_KERNEL_COMMIT_KV_PROJ=torch"
     )
-    # Blockwise fp8 scales sit on the standard 128x128 grid; deriving the block
-    # from the scale shape is ambiguous when a dim is not an exact multiple.
     block = 128
     scale = linear.weight_scale_inv
     out_dim, in_dim = weight.shape

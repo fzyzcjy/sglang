@@ -102,8 +102,6 @@ def _gather_row_bonus_kernel(
 
 
 def gather_row_bonus_triton(*, table: torch.Tensor, idx: torch.Tensor) -> torch.Tensor:
-    # bonus[b] = table[b, idx[b]] (the bonus token at the capped accept index) in one
-    # launch, replacing the arange + advanced-index gather.
     bs, cols = table.shape
     table = table.contiguous()
     idx = idx.contiguous()
@@ -121,8 +119,6 @@ def accept_greedy_triton(
     verify_num_draft_tokens: int,
     cutoff_layout: Optional[RaggedVerifyLayout] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    # Compose the existing argmax + compute_dflash + triton CapCorrectLen with a fused
-    # bonus gather (gather_row_bonus_triton) for the capped re-read.
     bs = candidates.shape[0]
     target_predict = torch.argmax(target_logits, dim=-1).view(
         bs, verify_num_draft_tokens

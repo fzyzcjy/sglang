@@ -51,11 +51,6 @@ def softmax_temp(
     temperatures: torch.Tensor,
     rows_per_request: int,
 ) -> torch.Tensor:
-    # Reference chain: float cast -> per-request temperature divide -> row softmax.
-    # ``logits`` is [num_rows, vocab] with num_rows = bs * rows_per_request (the row
-    # block of request r covers rows [r*rows_per_request, (r+1)*rows_per_request));
-    # ``temperatures`` is [bs] (or [bs, 1]) float. Replaces the un-fused
-    # repeat_interleave + div + softmax launch chain at the accept call sites.
     num_rows = logits.shape[0]
     bs = num_rows // rows_per_request
     assert (

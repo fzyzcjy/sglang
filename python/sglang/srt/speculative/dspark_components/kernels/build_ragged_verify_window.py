@@ -86,11 +86,6 @@ def build_ragged_verify_window(
     verify_num_draft_tokens: int,
     model_runner,
 ) -> RaggedVerifyWindow:
-    # Compact (real-N) verify window, sync-free: sized to the host-known padded
-    # graph_num_tokens (no verify_lens D2H; see compact_row_index). Request r contributes
-    # its [anchor, s_0..s_{ell_r-1}] = verify_len_r tokens; cache slots are over-allocated
-    # to the full gamma+1 block (plan section 6). Padding rows (valid False) get position
-    # 0 / slot 0 -- the runner's tail-zero contract (no stale KV slot / vocab id read).
     prefix_lens = batch.seq_lens
     verify_lens = layout.verify_lens.to(device=device, dtype=torch.int32)
     padded_total = layout.graph_num_tokens
@@ -98,15 +93,12 @@ def build_ragged_verify_window(
     req_id, within, valid = compact_row_index(
         verify_lens=verify_lens, padded_total=padded_total, device=device
     )
-    safe_req = req_id.clamp(max=bs - 1)  # sink req_id == bs on padding rows
+    safe_req = req_id.clamp(max=bs - 1)
     positions = torch.where(
         valid,
         prefix_lens.to(torch.int64)[safe_req] + within,
         torch.zeros_like(within),
     )
-    # Cache locs are written compactly (same ordering as req_id/within) into a bs*stride
-    # buffer; pad to graph_num_tokens and zero padding rows (also clears the
-    # [real_total, bs*stride) torch.empty tail).
     real_cache_loc = assign_extend_cache_locs_func(
         req_pool_indices=batch.req_pool_indices,
         req_to_token=model_runner.req_to_token_pool.req_to_token,
@@ -130,8 +122,6 @@ def build_ragged_verify_window(
         device=device,
     )
 
-    # Host verify seq_lens is NOT built here (keeps the window sync-free); the
-    # dense-backend host pre-add lives in the worker's _run_ragged_target_verify.
     return RaggedVerifyWindow(
         positions=positions,
         verify_cache_loc=verify_cache_loc,
@@ -157,7 +147,7 @@ def _ragged_finalize_kernel(
     mask = offs < n
     req = tl.load(req_ptr + offs, mask=mask, other=0)
     within = tl.load(within_ptr + offs, mask=mask, other=0)
-    valid = req < bs  # compact_row_index sets req == bs (within 0) on padding rows
+    valid = req < bs
     safe_req = tl.minimum(req, bs - 1)
     prefix = tl.load(prefix_ptr + safe_req, mask=mask, other=0)
     pos = tl.where(valid, prefix + within, 0)
@@ -179,9 +169,6 @@ def build_ragged_verify_window_triton(
     verify_num_draft_tokens: int,
     model_runner,
 ) -> RaggedVerifyWindow:
-    # Compose: compact_row_index_triton (mine) + assign_extend_cache_locs_func (existing
-    # triton) + compact_verify_ids_triton (mine), plus one finalize kernel that fuses the
-    # positions gather/add/where AND the cache-loc pad/where into a single launch.
     prefix_lens = batch.seq_lens
     verify_lens = layout.verify_lens.to(device=device, dtype=torch.int32)
     padded_total = layout.graph_num_tokens

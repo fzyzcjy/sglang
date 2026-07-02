@@ -69,15 +69,12 @@ def _dump_records(
 
 class TestDsparkDecisionDumper(CustomTestCase):
     def test_disabled_emits_nothing(self):
-        """Env flag off produces no DSPARK_DEBUG_MAIN_OUTPUT line."""
         self.assertEqual(_dump_records(enabled=False), [])
 
     def test_non_rank0_emits_nothing(self):
-        """Only rank 0 dumps, avoiding N-fold duplication under TP."""
         self.assertEqual(_dump_records(enabled=True, tp_rank=1), [])
 
     def test_enabled_dumps_global_and_per_request_decision(self):
-        """Enabled dump carries the global budget and each request's chosen verify_len + outcome."""
         confidence = torch.tensor([[0.9, 0.8, 0.5], [1.0, 0.0, 0.0]])
         records = _dump_records(
             enabled=True, confidence=confidence, verify_lens_cpu=[2, 4]
@@ -102,11 +99,9 @@ class TestDsparkDecisionDumper(CustomTestCase):
         self.assertEqual(first["cap_trim"], 0)
         self.assertEqual(first["draft_tokens"], [11, 12, 13])
         self.assertEqual(first["bonus_token"], 7)
-        # Second request had a draft the confidence cap dropped (cap_trim = 1).
         self.assertEqual(second["cap_trim"], 1)
 
     def test_survival_is_prefix_product_of_confidence(self):
-        """survival[k] equals the cumulative product of confidence[0..k] (the #3b invariant)."""
         confidence = torch.tensor([[0.9, 0.8, 0.5], [1.0, 0.5, 0.5]])
         record = _dump_records(
             enabled=True, confidence=confidence, verify_lens_cpu=[2, 4]
@@ -124,7 +119,6 @@ class TestDsparkDecisionDumper(CustomTestCase):
             )
 
     def test_none_confidence_omits_confidence_but_keeps_outcome(self):
-        """Head-less / static path dumps acc_len etc. but no confidence/survival fields."""
         record = _dump_records(enabled=True, confidence=None, verify_lens_cpu=[2, 4])[0]
         for entry in record["reqs"]:
             self.assertNotIn("confidence", entry)
@@ -132,7 +126,6 @@ class TestDsparkDecisionDumper(CustomTestCase):
             self.assertIn("acc_len", entry)
 
     def test_none_layout_falls_back_to_uniform_full_block(self):
-        """A None layout (static / cold-start) dumps verify_len == gamma+1 for every request."""
         record = _dump_records(enabled=True, confidence=None, verify_lens_cpu=None)[0]
         self.assertTrue(all(entry["verify_len"] == 4 for entry in record["reqs"]))
         self.assertEqual(record["num_verify_tokens"], 8)

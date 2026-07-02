@@ -1262,10 +1262,6 @@ class Scheduler(
             needs_confidence_relay=needs_confidence_relay,
         )
 
-        # Optional DSpark prepare hook: computes the verify budget K on host from the
-        # two-steps-prior relayed confidence (off-critical-path, overlap only). None
-        # for every other config -> run_batch's gated call is a no-op (one is-None
-        # check on the shared hot path; the DSpark budget logic lives in the worker).
         self._confidence_budget_prepare = None
         if (
             needs_confidence_relay
@@ -3217,9 +3213,6 @@ class Scheduler(
                 # Self-gates on batch.spec_info.future_indices; non-spec_v2
                 # no-ops (ForwardBatch.init_new lazily computes the sum).
                 self.future_map.resolve_seq_lens_cpu(batch)
-                # DSpark only: resolve the two-steps-prior confidence + compute the
-                # verify budget K on host here (overlaps the previous forward, zero
-                # fresh D2H). None for every other config.
                 if self._confidence_budget_prepare is not None:
                     self._confidence_budget_prepare(batch, self.future_map)
 

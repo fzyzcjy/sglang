@@ -68,9 +68,6 @@ class DSparkVerifyPlanner:
         self.server_args = server_args
         self.verify_num_draft_tokens = verify_num_draft_tokens
 
-        # Optional confidence head. The head and its host budget planner are inert
-        # (no buffers, no compute) when the draft model lacks a confidence head, so
-        # the a+b lossless decode path is unchanged.
         self._confidence_head = getattr(self.draft_model, "confidence_head", None)
 
         sts_path = server_args.speculative_dspark_confidence_sts_path
@@ -111,11 +108,6 @@ class DSparkVerifyPlanner:
                     sts_path,
                 )
 
-        # Ragged-verify mode and the host budget planner. The planner is inert (None)
-        # unless the mode is cap-accept/compact AND a confidence head is present, so
-        # the static-mode / no-head path is byte-identical to the static uniform-gamma
-        # worker. cap-accept runs the full bs*(gamma+1) window and only caps accept at
-        # per-request ell_r; compact (real-N) packs the verify window.
         self._ragged_verify_mode = read_ragged_verify_mode()
         self._schedule_cfg = DSparkScheduleConfig(gamma=self.gamma)
         self._budget_planner: Optional[HostConfidenceBudgetPlanner] = None
@@ -137,12 +129,6 @@ class DSparkVerifyPlanner:
             )
             online_profiler = None
             if envs.SGLANG_DSPARK_ENABLE_SPS_ONLINE_PROFILE.get():
-                # Rank-local online re-profiling: wall-clock timing is
-                # nondeterministic across ranks, but no cross-rank sync is needed
-                # -- verify_lens is broadcast from the group-local rank 0 (B1 in
-                # _schedule_verify_lens), so only that rank's table affects the
-                # schedule; peer ranks' tables drift harmlessly (their local
-                # verify_lens is overwritten by the broadcast).
                 online_profiler = OnlineSpsProfiler(
                     initial_table=sps_table,
                     rebuild_interval_steps=(
@@ -152,12 +138,6 @@ class DSparkVerifyPlanner:
                         envs.SGLANG_DSPARK_SPS_ONLINE_MIN_BIN_SAMPLES.get()
                     ),
                 )
-            # The async FutureMap relay supplies CONFIDENCE_RELAY_RING_LAG steps of
-            # lag under overlap: the deferred pinned ring reads an already-landed
-            # lag-RING_LAG slot (sync-free), so the relay itself is that many steps
-            # behind. Without overlap there is no relay, so the host carry supplies
-            # the full lag. Kept equal to overlap_utils.CONFIDENCE_RELAY_RING_LAG so
-            # carry_steps = total_lag - relay_lag_steps is correct.
             relay_lag_steps = (
                 0
                 if self.server_args.disable_overlap_schedule
@@ -185,10 +165,6 @@ class DSparkVerifyPlanner:
                     sps_table_source,
                     online_profiler is not None,
                 )
-                # The uninitialized flat table: lookup() is constant, so the budget
-                # degenerates to verify-all. Without online profiling nothing will
-                # ever refine it -- warn instead of the old startup raise, since
-                # verify-all is lossless and a valid (if gainless) operating point.
                 if is_uninitialized_sps_table(sps_table) and online_profiler is None:
                     logger.warning(
                         "DSpark SPS table is uninitialized (flat) and online "
@@ -199,11 +175,6 @@ class DSparkVerifyPlanner:
                     )
 
     def _require_prep_in_cuda_graph(self) -> None:
-        # B3: ragged-non-static DSpark requires the captured-graph prepare path so the
-        # verify metadata is built device-side at replay. With
-        # SGLANG_PREP_IN_CUDA_GRAPH=0 the replay path reads verify_lens_cpu per step on
-        # the critical path, which defeats the sync-free design; fail fast (mirror
-        # adaptive_unsupported_reason) rather than silently run the host-read path.
         if not envs.SGLANG_PREP_IN_CUDA_GRAPH.get():
             raise ValueError(
                 f"DSpark ragged-verify mode {self._ragged_verify_mode.value!r} "
@@ -237,8 +208,6 @@ class DSparkVerifyPlanner:
 
     @property
     def lag_steps(self) -> Optional[int]:
-        # The two-steps-prior causal lag the host budget planner applies (None when
-        # no scheduler runs, i.e. static / no-head). Advisory metadata for the dump.
         if self._budget_planner is None:
             return None
         return self._budget_planner.lag_steps
@@ -255,16 +224,6 @@ class DSparkVerifyPlanner:
         anchor_tokens: torch.Tensor,
         draft_tokens: torch.Tensor,
     ) -> Optional[torch.Tensor]:
-        # Confidence dispatch (capability seam, R9). With markov + sampling now in the
-        # worker, the model's own ``forward_head`` no longer runs, so a V4 draft
-        # instead exposes a ``compute_confidence`` hook evaluated at its correct tap
-        # (post-hc_head PRE-norm, stashed by the just-completed forward); the worker
-        # calls it with the anchor + the just-sampled draft tokens. Dense backbones
-        # expose no such hook, so the worker computes confidence from the post-norm
-        # ``draft_hidden`` exactly as before (byte-identical). Confidence is advisory
-        # only and off by default; losslessness never depends on it. Returns the
-        # current-step confidence ([bs, gamma], device) for the worker to sort on and
-        # publish into the relay -- no device ring is stashed here anymore.
         if self._confidence_head is None:
             return None
         compute_confidence_hook = getattr(self.draft_model, "compute_confidence", None)
@@ -287,19 +246,9 @@ class DSparkVerifyPlanner:
     def prepare_verify_budget(
         self, batch: ScheduleBatch, future_map: FutureMap
     ) -> None:
-        # Overlap prepare hook (scheduler run_batch window, next to
-        # resolve_seq_lens_cpu): pull the two-steps-prior confidence to host with no
-        # fresh D2H, run the pure-CPU greedy, and attach the budget K to the draft
-        # input the worker reads this step. Computed here so the host greedy overlaps
-        # the previous forward; the per-request GPU sort still runs in the forward.
         draft_input = batch.spec_info
         if self._budget_planner is None or draft_input is None:
             return
-        # Only decode steps feed the carry (the worker routes extend/prefill to
-        # _forward_prefill, which has no verify budget); advancing the carry on a
-        # prefill step would misalign the causal lag for the surrounding decodes.
-        # The prefill also breaks the online SPS profiler's consecutive-decode
-        # timing pair.
         if batch.forward_mode.is_extend() or batch.is_extend_in_batch:
             self._budget_planner.note_non_decode_step()
             return
@@ -309,9 +258,6 @@ class DSparkVerifyPlanner:
         )
 
     def note_non_decode_step(self) -> None:
-        # Worker-side pairing-break signal for the online SPS profiler: prefill
-        # steps bypass compute_budget on both feed paths, and under non-overlap
-        # there is no scheduler prepare hook to observe them.
         if self._budget_planner is not None:
             self._budget_planner.note_non_decode_step()
 
@@ -322,11 +268,6 @@ class DSparkVerifyPlanner:
         prefix_lens: torch.Tensor,
         req_pool_indices: torch.Tensor,
     ) -> Optional[int]:
-        # Non-overlap fallback: no relay, so snapshot this step's confidence to host
-        # synchronously (the non-overlap loop is already synchronous) and feed the same
-        # carry + greedy; the carry (relay_lag_steps=0) supplies the full lag. generation
-        # = each slot's current occupancy stamp for this step's confidence.
-        # (prefix_lens is vestigial now the guard uses generation, not the seq_len stamp.)
         del prefix_lens
         if self._budget_planner is None:
             return None
@@ -348,14 +289,9 @@ class DSparkVerifyPlanner:
         resolved: Optional[ResolvedConfidence],
         req_pool_indices_cpu: torch.Tensor,
     ) -> Optional[int]:
-        # None at cold start (nothing relayed yet) -> the worker falls back to the
-        # uniform verify-all layout, identical to the pre-relay startup behavior.
-        # No compute_budget stamp this step, so break the online profiler's pair.
         if resolved is None:
             self._budget_planner.note_non_decode_step()
             return None
-        # Each slot's CURRENT occupancy generation (host, no D2H) for the guard to
-        # compare against the relayed confidence's stamped generation.
         current_generation = self.model_runner.req_to_token_pool.req_generation[
             req_pool_indices_cpu.to(torch.int64)
         ]
@@ -378,10 +314,6 @@ class DSparkVerifyPlanner:
         budget: Optional[int],
         global_num_reqs: Optional[int] = None,
     ) -> Optional[RaggedVerifyLayout]:
-        # Gate: STATIC -> None (uniform path). CAP_ACCEPT/COMPACT build a ragged
-        # layout from the per-request verify_lens (GPU-sorted by the current-step
-        # confidence, sized by the relay-fed budget); COMPACT additionally token-keys
-        # the graph and scatter-packs the verify window.
         if self._ragged_verify_mode is RaggedVerifyMode.STATIC:
             return None
         verify_lens = self._schedule_verify_lens(
@@ -392,12 +324,6 @@ class DSparkVerifyPlanner:
             budget=budget,
         )
         if verify_lens is None:
-            # COMPACT token-keys the verify graph and captures it with a ragged
-            # layout, so a layout-less compact verify (confidence/budget not ready at
-            # startup / after reset) must still carry a degenerate uniform layout to
-            # hit the same token-keyed graph (C3); otherwise it would fall through to
-            # a bs-keyed replay key that the token-keyed graph dict never recorded.
-            # CAP_ACCEPT stays bs-keyed, so None is correct there.
             if self._ragged_verify_mode is RaggedVerifyMode.COMPACT:
                 return uniform_ragged_layout(
                     bs=len(req_pool_indices),
@@ -408,15 +334,7 @@ class DSparkVerifyPlanner:
                     tier_num_reqs=global_num_reqs,
                 )
             return None
-        # bs = verify_lens.shape[0] is tensor metadata (host, no D2H), so the grid gate
-        # and the bs-derived tier are computed without pulling verify_lens off the
-        # forward stream.
         bs = int(verify_lens.shape[0])
-        # Under DP the token-keyed graph tier must be identical on every rank (the
-        # captured graph holds a cross-DP MoE gather), so the exceeds-grid gate and the
-        # graph_num_tokens floor key off the DP-global max bs, not this rank's local bs.
-        # verify_lens itself stays local (device tensor). global_num_reqs is None (=> bs)
-        # without DP MoE sync.
         tier_num_reqs = bs if global_num_reqs is None else global_num_reqs
         if ragged_layout_exceeds_captured_grid(
             num_reqs=tier_num_reqs,
@@ -432,17 +350,10 @@ class DSparkVerifyPlanner:
         )
         capture_num_tokens = ragged_capture_num_tokens(model_runner=self.model_runner)
         if graph_num_tokens_floor > 0 and capture_num_tokens is not None:
-            # Sync-free device path (COMPACT + token-keyed graph): tier is bs-derived, so
-            # verify_lens stays on the forward stream. total <= bs*(gamma+1) == floor (each
-            # verify_len <= gamma+1), so round_up_grid(max(total,floor)) == round_up_grid(
-            # floor); downstream reads device verify_lens + graph_num_tokens, no D2H.
             graph_num_tokens = round_up_grid(graph_num_tokens_floor, capture_num_tokens)
             return RaggedVerifyLayout.from_verify_lens_device(
                 verify_lens=verify_lens, graph_num_tokens=graph_num_tokens
             )
-        # Eager / non-token-keyed fallback (cuda graph off, or non-COMPACT mode): the
-        # forward is already synchronous, so this host D2H is harmless -- and the eager
-        # `[total]` grid genuinely needs the exact total.
         verify_lens_cpu = verify_lens.to("cpu").tolist()
         grid = verify_layout_grid(
             verify_lens_cpu=verify_lens_cpu,
@@ -465,17 +376,6 @@ class DSparkVerifyPlanner:
         confidence: Optional[torch.Tensor],
         budget: Optional[int],
     ) -> Optional[torch.Tensor]:
-        # Derive per-request verify_lens (= 1 + ell_r) on the GPU from the current
-        # step's confidence (lag 0, the sort source) ranked/truncated to the relay-fed
-        # budget K (lag 2, the K source; paper §5.2's two distinct survival sources).
-        # Broadcast from rank 0 across the (attention) TP group for cross-rank shape
-        # consistency (B1). Returns None (-> uniform full block) before the relay /
-        # confidence is ready.
-        #
-        # Losslessness does NOT depend on either source: it is guaranteed by the
-        # accept-cap in _cap_correct_len (a torch.minimum that only shrinks accept),
-        # after which the bonus is re-read from the target's true distribution at the
-        # cap index. The split affects only scheduling quality, never correctness.
         if self._budget_planner is None or confidence is None or budget is None:
             return None
         verify_lens = ScheduleVerifyLensTopk.execute(
@@ -485,14 +385,7 @@ class DSparkVerifyPlanner:
         ).to(device=device, dtype=torch.int32)
 
         if envs.SGLANG_ENABLE_ASYNC_ASSERT.get():
-            # Gate hoisted to the call site: maybe_assert_async no-ops when the env
-            # is off, but the condition expression (cast + sub + sum + le, 4 launches
-            # per step) would still be evaluated here unconditionally.
             verify_lens_64 = verify_lens.to(torch.int64)
-            # Measure admitted extra against the effective floor max(min_verify_len,
-            # 1) so the anchor padding added by the lower-bound clamp is not
-            # miscounted as budget overflow when an explicit min_verify_len=0 is
-            # clamped up to 1 (B5).
             effective_floor = max(self._schedule_cfg.min_verify_len, 1)
             maybe_assert_async(
                 (verify_lens_64 - effective_floor).sum() <= budget,
@@ -500,8 +393,6 @@ class DSparkVerifyPlanner:
             )
 
         if envs.SGLANG_DSPARK_DEBUG_CONFIDENCE_PREFIX_SCHEDULER.get():
-            # Recomputed only on this debug path: the hot path folds the cumprod into
-            # ScheduleVerifyLensTopk and never materializes the survival keys.
             self._log_verify_lens_decision(
                 req_pool_indices=req_pool_indices,
                 prefix_lens=prefix_lens,
@@ -514,9 +405,6 @@ class DSparkVerifyPlanner:
             tp_size=self.server_args.tp_size
         )
         if group_size > 1:
-            # GroupCoordinator.broadcast maps the local src rank to a global rank via
-            # self.ranks[src], so passing src=0 broadcasts from the group-local rank 0
-            # (not a global rank) even when the group's ranks[0] != 0 (review A6).
             broadcast_group.broadcast(verify_lens, src=0)
 
         return verify_lens

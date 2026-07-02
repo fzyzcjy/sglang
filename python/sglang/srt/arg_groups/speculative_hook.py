@@ -246,16 +246,6 @@ def _handle_dflash(server_args: ServerArgs) -> None:
 
 
 def _target_checkpoint_bundles_dspark_draft(server_args: ServerArgs) -> bool:
-    """True iff the target checkpoint carries a bundled dsv4 DSpark draft head.
-
-    dsv4 DSpark checkpoints (e.g. ``DeepSeek-V4-Flash-DSpark``) are a superset of the base
-    model: they add the ``mtp.*`` draft weights and the ``dspark_*``-prefixed draft
-    hyperparameters (``dspark_block_size`` / ``dspark_markov_rank`` /
-    ``dspark_noise_token_id`` / ``dspark_target_layer_ids``) on the base config. Their
-    presence is the signal that the target and draft can share one repo / one download.
-    Dense DSpark drafts live in a separate ``*DSpark`` repo and carry none of these on the
-    target config, so this returns False for them.
-    """
     hf_config = server_args.get_model_config().hf_config
     return any(
         getattr(hf_config, key, None) is not None
@@ -273,12 +263,6 @@ def _handle_dspark(server_args: ServerArgs) -> None:
         raise ValueError("DSpark speculative decoding only supports CUDA device.")
 
     if server_args.enable_dp_attention:
-        # Narrow capability gate (see dp-attention impl plan). dp_lm_head is
-        # mandatory so the attached target lm_head is attention-TP sharded and the
-        # draft base-logits all-gather stays within the attention-TP group (a
-        # size-1 no-op returning the full vocab under pure DP). DeepEP / context
-        # parallel / a2a-mismatch are rejected; a MoE (dsv4) draft under DP is
-        # rejected at worker construction (the full-DP MoE path is not yet supported).
         if not server_args.enable_dp_lm_head:
             raise ValueError("DSpark with dp attention requires --enable-dp-lm-head.")
         if server_args.moe_a2a_backend != "none":
@@ -307,12 +291,6 @@ def _handle_dspark(server_args: ServerArgs) -> None:
         )
 
     if server_args.speculative_draft_model_path is None:
-        # A dsv4 DSpark checkpoint bundles the base target AND the mtp.* draft head in one
-        # repo (like DeepSeek MTP/NEXTN): the target loader skips all mtp.* weights and the
-        # DSpark draft loader consumes only mtp.*, so both can share one --model-path / one
-        # download. Detect the bundled draft by the dspark_* config fields and default the
-        # draft path to the model path. A plain target (dense DSpark, whose draft is a
-        # separate *DSpark repo) carries no such fields and still requires an explicit path.
         if _target_checkpoint_bundles_dspark_draft(server_args):
             server_args.speculative_draft_model_path = server_args.model_path
             server_args.speculative_draft_model_revision = server_args.revision
@@ -327,8 +305,6 @@ def _handle_dspark(server_args: ServerArgs) -> None:
                 "--speculative-draft-model-path."
             )
 
-    # DSpark does not use EAGLE-style num_steps/topk, but those still affect generic
-    # scheduler/KV accounting. Force them to 1.
     if server_args.speculative_num_steps is None:
         server_args.speculative_num_steps = 1
     elif int(server_args.speculative_num_steps) != 1:
@@ -347,9 +323,6 @@ def _handle_dspark(server_args: ServerArgs) -> None:
         )
         server_args.speculative_eagle_topk = 1
 
-    # Naming inversion vs DFLASH: the DSpark draft config `block_size` is gamma
-    # (number of proposed draft tokens); the verify window
-    # (= speculative_num_draft_tokens) is gamma + 1.
     gamma: Optional[int] = None
     if server_args.speculative_dspark_block_size is not None:
         if int(server_args.speculative_dspark_block_size) <= 0:

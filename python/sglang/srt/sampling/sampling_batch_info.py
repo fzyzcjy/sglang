@@ -31,7 +31,6 @@ class SamplingBatchInfo:
     # Whether all requests use greedy sampling
     is_all_greedy: bool
 
-    # Whether any request uses greedy sampling
     is_any_greedy: bool
 
     # Whether any requests use top_p sampling

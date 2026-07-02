@@ -9,9 +9,6 @@ from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 
 _KERNEL_IMPL = envs.SGLANG_DSPARK_KERNEL_COMPACT_LAYOUT.get()
 
-# Binary-search iteration count for the row->request searchsorted: fixed at 11 so a
-# single compiled kernel covers any bs up to 2^11 (>> max_running_requests). Extra
-# iterations after convergence are no-ops (the active mask is False).
 _SEARCH_NBITS = 11
 
 
@@ -100,17 +97,14 @@ def compact_verify_ids(
     layout: RaggedVerifyLayout,
     device: str,
 ) -> torch.Tensor:
-    # Pack [anchor, s_0..s_{ell_r-1}] per request into a compact graph_num_tokens-row
-    # tensor; padding tail (valid False) is zeroed. anchor = draft_block_ids[:, 0].
     req_id, within, valid = compact_row_index(
         verify_lens=layout.verify_lens,
         padded_total=layout.graph_num_tokens,
         device=device,
     )
     bs = layout.verify_lens.shape[0]
-    safe_req = req_id.clamp(max=bs - 1)  # sink req_id == bs on padding rows
+    safe_req = req_id.clamp(max=bs - 1)
     anchors = draft_block_ids[:, 0]
-    # within==0 -> anchor; else draft_tokens[:, within-1] (clamp masked at 0).
     drafts = draft_tokens[safe_req, (within - 1).clamp_min(0)]
     verify_ids = torch.where(within == 0, anchors[safe_req], drafts)
     verify_ids = torch.where(valid, verify_ids, torch.zeros_like(verify_ids))
@@ -123,26 +117,13 @@ def compact_row_index(
     padded_total: int,
     device,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    # (req_id, within, valid) for each row of a FIXED padded_total-row compact buffer.
-    #
-    # padded_total is the host-known, bs-derived graph_num_tokens (>= the real total
-    # sum(verify_lens)); the first real_total rows pack each request's window back to
-    # back, rows [real_total, padded_total) are padding. The old design sized the
-    # buffer to the exact host `total` via repeat_interleave(output_size=total), which
-    # forced the caller to D2H verify_lens off the forward stream first (one
-    # per-step cudaStreamSynchronize -- the very sync this removes). Here real_total is
-    # a DEVICE scalar (cumsum[-1]) compared against a host-sized arange, so the row->req
-    # map is built with NO compute-stream sync. Padding rows carry req_id == bs (a sink
-    # id the callers route to a discarded slot) and within == 0.
     verify_lens = verify_lens.to(device=device, dtype=torch.int64)
     bs = int(verify_lens.numel())
-    incl = torch.cumsum(verify_lens, dim=0)  # inclusive prefix sum, device [bs]
-    start = incl - verify_lens  # exclusive per-request start
-    real_total = incl[-1]  # DEVICE scalar; never read to host
+    incl = torch.cumsum(verify_lens, dim=0)
+    start = incl - verify_lens
+    real_total = incl[-1]
     row = torch.arange(padded_total, device=device, dtype=torch.int64)
-    valid = row < real_total  # device mask, no sync
-    # searchsorted(incl, row, right=True) is the owning request; rows >= real_total map
-    # to bs (past the last request) -> routed to the sink.
+    valid = row < real_total
     req_id = torch.searchsorted(incl, row, right=True)
     req_id = torch.where(valid, req_id, torch.full_like(req_id, bs))
     within = torch.where(
@@ -166,8 +147,7 @@ def _compact_row_index_kernel(
     offs = pid * BLOCK + tl.arange(0, BLOCK)
     mask = offs < n
     row = offs.to(tl.int64)
-    real_total = tl.load(incl_ptr + (bs - 1))  # incl[-1], device scalar, no host sync
-    # vectorized searchsorted(incl, row, right=True) == count of incl[j] <= row
+    real_total = tl.load(incl_ptr + (bs - 1))
     lo = tl.zeros([BLOCK], dtype=tl.int32)
     hi = tl.full([BLOCK], bs, dtype=tl.int32)
     for _ in range(NBITS):
@@ -179,7 +159,7 @@ def _compact_row_index_kernel(
         hi = tl.where(active & (~go_right), mid, hi)
     req = lo
     gidx = tl.maximum(req - 1, 0)
-    start = tl.load(incl_ptr + gidx, mask=mask, other=0)  # incl[req-1]
+    start = tl.load(incl_ptr + gidx, mask=mask, other=0)
     start = tl.where(req > 0, start, 0)
     valid = row < real_total
     within = tl.where(valid, row - start, 0)
@@ -195,9 +175,6 @@ def compact_row_index_triton(
     padded_total: int,
     device,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    # cumsum (1 launch) + one binary-search kernel (1 launch) replaces the
-    # searchsorted + arange + 2x where + clamp torch chain. real_total = incl[-1] is
-    # read inside the kernel (device), so no D2H sync is introduced.
     verify_lens = verify_lens.to(device=device, dtype=torch.int64).contiguous()
     bs = verify_lens.shape[0]
     incl = torch.cumsum(verify_lens, dim=0).contiguous()
@@ -229,7 +206,7 @@ def _compact_verify_ids_gather_kernel(
     mask = offs < n
     req = tl.load(req_ptr + offs, mask=mask, other=0)
     within = tl.load(within_ptr + offs, mask=mask, other=0)
-    valid = req < bs  # compact_row_index sets req == bs (and within == 0) on padding
+    valid = req < bs
     safe_req = tl.minimum(req, bs - 1)
     anchor = tl.load(draft_block_ids_ptr + safe_req * gamma, mask=mask, other=0)
     wcol = tl.maximum(within - 1, 0)
@@ -246,8 +223,6 @@ def compact_verify_ids_triton(
     layout: RaggedVerifyLayout,
     device: str,
 ) -> torch.Tensor:
-    # Compose the verified compact_row_index_triton with a fused gather: within==0 ->
-    # anchor (draft_block_ids[:, 0]), else draft_tokens[:, within-1]; padding -> 0.
     req, within, _valid = compact_row_index_triton(
         verify_lens=layout.verify_lens,
         padded_total=layout.graph_num_tokens,

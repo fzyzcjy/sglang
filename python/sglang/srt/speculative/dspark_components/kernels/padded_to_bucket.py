@@ -71,9 +71,6 @@ def pad_verify_lens_to_bucket(
         padded = torch.cat([padded, pad_block])
     else:
         padded = padded.clone()
-    # leftover = graph_num_tokens - sum(padded); a DEVICE scalar folded into the
-    # last (synthetic, or last real when padded_bs == bs) request. Kept on device
-    # so the pad introduces no compute-stream sync.
     leftover = graph_num_tokens - padded.to(torch.int64).sum()
     padded[-1] = (padded[-1].to(torch.int64) + leftover).to(torch.int32)
     return padded
@@ -95,8 +92,6 @@ def _padded_to_bucket_kernel(
     vl = tl.load(verify_lens_ptr + idx, mask=is_real, other=0).to(tl.int64)
     base = tl.where(is_real, vl, num_draft_tokens)
     base = tl.where(valid, base, 0)
-    # leftover (graph_num_tokens - sum of the padded lens) folds into the last slot,
-    # replacing the cat + device-scalar sum + in-place add torch chain.
     leftover = graph_num_tokens - tl.sum(base)
     is_last = idx == (padded_bs - 1)
     final = base + tl.where(is_last, leftover, 0)

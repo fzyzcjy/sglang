@@ -14,10 +14,6 @@ logger = logging.getLogger(__name__)
 
 
 class RaggedVerifyMode(str, Enum):
-    # Named by what the verify forward computes:
-    #   STATIC     — uniform gamma+1 block per request (default).
-    #   CAP_ACCEPT — full block, caps accept at per-request ell_r (lossless harness).
-    #   COMPACT    — only total = sum(1+ell_r) tokens (real-N, throughput gain).
     STATIC = "static"
     CAP_ACCEPT = "cap-accept"
     COMPACT = "compact"
@@ -72,10 +68,6 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
     graph_num_tokens: int
     extend_start_loc: torch.Tensor
     qo_indptr_device: torch.Tensor
-    # Host mirrors (real verify lens + their sum), populated only on the eager/host path
-    # (from_verify_lens). None on the sync-free device path (from_verify_lens_device, the
-    # per-step cuda-graph path): consumers there read device verify_lens + graph_num_tokens,
-    # never a host total. None == "device path, do not read host fields".
     verify_lens_cpu: Optional[list[int]] = None
     total_verify_tokens: Optional[int] = None
     qo_indptr_host: Optional[torch.Tensor] = None
@@ -85,10 +77,6 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
     max_kv_len: Optional[int] = None
 
     def __post_init__(self) -> None:
-        # Host-path validations only. On the device path (verify_lens_cpu None) they'd
-        # need a D2H; instead the anchor(>=1)/budget bounds are checked device-side
-        # (scheduler maybe_assert_async), and total <= graph_num_tokens holds by
-        # construction (round_up_grid(bs*(gamma+1)) >= sum verify_len, each <= gamma+1).
         if self.verify_lens_cpu is None:
             return
         if not self.verify_lens_cpu:
@@ -111,7 +99,6 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
 
     @property
     def bs(self) -> int:
-        # tensor.shape is host metadata (no D2H) -> safe when verify_lens_cpu is None.
         return int(self.verify_lens.shape[0])
 
     @classmethod
@@ -123,8 +110,6 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
         verify_lens_cpu: Optional[list[int]] = None,
         total_verify_tokens: Optional[int] = None,
     ) -> RaggedVerifyLayout:
-        # Build qo_indptr / extend_start_loc from a DEVICE verify_lens tensor (no host
-        # round trip). Host mirrors are passed through only on the eager/host path.
         from sglang.srt.speculative.dspark_components.kernels.qo_indptr import (
             BuildQoIndptr,
         )
@@ -164,9 +149,6 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
         verify_lens: torch.Tensor,
         graph_num_tokens: int,
     ) -> RaggedVerifyLayout:
-        # Sync-free: DEVICE verify_lens + host bs-derived graph_num_tokens, no host mirror
-        # (no verify_lens D2H). graph_num_tokens >= sum(verify_lens) holds -- caller passes
-        # round_up_grid(bs*(gamma+1)) and each verify_len <= gamma+1.
         return cls._assemble_device(
             verify_lens=verify_lens, graph_num_tokens=graph_num_tokens
         )
@@ -182,11 +164,6 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
     ) -> RaggedVerifyLayout:
         verify_lens_list = [int(v) for v in verify_lens_cpu]
         total_verify_tokens = sum(verify_lens_list)
-        # The token-keyed graph's bs-axis tensors are captured at a specific
-        # capture_bs whose uniform full block is graph_num_tokens. A batch whose
-        # real total rounds up to a smaller tier than bs * num_draft would select
-        # a graph with too few request slots, so the bucket is floored to the
-        # bs-derived full block (graph_num_tokens_floor) before rounding.
         bucket_input = max(total_verify_tokens, graph_num_tokens_floor)
         graph_num_tokens = round_up_grid(total=bucket_input, grid=grid)
 
@@ -213,26 +190,6 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
         )
 
     def padded_to_bucket(self, *, num_draft_tokens: int) -> RaggedVerifyLayout:
-        """Pad the layout to ``graph_num_tokens // num_draft_tokens`` requests
-        whose verify_lens sum to exactly ``graph_num_tokens`` (the padded-token
-        contract, §2.5).
-
-        Device-native: pads the device ``verify_lens`` directly (no host
-        ``verify_lens_cpu``), so it works on the sync-free layout. The token-keyed
-        graph is captured at a fixed capture_bs and a frozen
-        ``repeat_interleave(output_size=graph_num_tokens)``, so replay must feed a
-        layout with that many request slots and that many total tokens. The shortfall
-        lands entirely after every real request, which the runner discards:
-
-        - the appended synthetic requests (``padded_bs - bs`` of them) take a full
-          ``num_draft_tokens`` block each and reference reserved req-pool slot 0;
-        - any leftover is folded into the last entry's verify_len (device scalar, no
-          .item()), so even when ``padded_bs == bs`` the last real request's window is
-          extended into the discarded tail.
-
-        The worker's compact scatter keeps using the real (pre-pad) verify_lens, so
-        the extended/synthetic rows only add discarded tail rows.
-        """
         from sglang.srt.speculative.dspark_components.kernels.padded_to_bucket import (
             PaddedToBucket,
         )
@@ -252,14 +209,9 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
 
 
 class RaggedTargetVerifyGeometry(msgspec.Struct):
-    # Per-request variable-length verify geometry shared by every backend that
-    # serves a ragged (DSpark compact / real-N) verify forward.
     cache_seqlens_int32: torch.Tensor
     cu_seqlens_q: torch.Tensor
     cu_seqlens_k: torch.Tensor
-    # None on the sync-free device path (no host verify_lens to max over). The cuda-graph
-    # replay overrides max_seq_len_q with the frozen capture value before use, so it is
-    # only read on the eager host path, where verify_lens_cpu is populated.
     max_seq_len_q: Optional[int]
 
 
@@ -268,15 +220,6 @@ def build_ragged_target_verify_geometry(
     seq_lens: torch.Tensor,
     layout: RaggedVerifyLayout,
 ) -> RaggedTargetVerifyGeometry:
-    """Build the variable-length verify geometry from the prefix seq_lens + layout.
-
-    ``cache_seqlens`` is taken from the GPU ``seq_lens`` (which the worker's host
-    seq_lens_cpu pre-add never touches, so there is no double-add) plus the device
-    ``verify_lens``; ``cu_seqlens_q`` is the layout's qo_indptr (the variable
-    per-request query starts) and ``cu_seqlens_k`` is the exclusive cumsum of the
-    extended KV lengths. ``max_seq_len_q`` is the eager upper bound; the cuda-graph
-    replay overrides it with the frozen capture value.
-    """
     cache_seqlens_int32 = (seq_lens + layout.verify_lens).to(torch.int32)
     cu_seqlens_q = layout.qo_indptr_device.to(torch.int32)
     cu_seqlens_k = torch.nn.functional.pad(

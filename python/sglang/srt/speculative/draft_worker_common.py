@@ -60,11 +60,6 @@ def _load_draft_hf_config(*, draft_server_args: ServerArgs) -> Optional[Any]:
 
 
 def draft_is_deepseek_v4(*, server_args: ServerArgs) -> bool:
-    """Whether the DFlash/DSpark draft is a DeepSeek-V4 (MoE) draft vs a dense one.
-
-    Used to pick the DP-attention path: a dense draft runs replicated inside the
-    attention-TP context, while a DeepSeek-V4 MoE draft needs the full-DP MoE path.
-    """
     draft_hf_config = _load_draft_hf_config(draft_server_args=server_args)
     return draft_hf_config is not None and is_deepseek_v4(draft_hf_config)
 
@@ -114,13 +109,6 @@ def build_draft_tp_worker(
     target_model_config: Any,
     algo_label: str,
 ) -> DraftWorkerBundle:
-    """Build the separate draft ``TpModelWorker`` shared by DFlash and DSpark.
-
-    Encapsulates the draft server-args deepcopy, attention-backend resolution +
-    fallback, the global-server-args save/restore around construction, and the
-    ``draft_runner`` alias. Returns the constructed worker, its model runner, the
-    draft model, and the resolved attention backend.
-    """
     draft_server_args = deepcopy(server_args)
     draft_server_args.skip_tokenizer_init = True
     draft_backend = _resolve_draft_attention_backend(
@@ -162,11 +150,6 @@ def make_draft_input_v2(
     bonus_tokens: torch.Tensor,
     new_seq_lens: torch.Tensor,
 ) -> DFlashDraftInputV2:
-    """Build the cross-iteration draft relay state shared by DFlash and DSpark.
-
-    The legacy Eagle-shaped ``topk_p``/``topk_index``/``hidden_states`` fields are
-    unused (the relay carries only ``bonus_tokens`` + ``new_seq_lens``).
-    """
     bs = int(new_seq_lens.numel())
     device = bonus_tokens.device
     return DFlashDraftInputV2(
@@ -183,9 +166,6 @@ def make_draft_block_spec_info(
     draft_token_num: int,
     device: torch.device,
 ) -> DFlashVerifyInput:
-    """Build the sentinel draft-block ``DFlashVerifyInput`` carried into the draft
-    forward (only ``draft_token_num`` + capture mode matter; tensors come from the
-    ForwardBatch)."""
     return DFlashVerifyInput(
         draft_token=torch.empty((0,), dtype=torch.long, device=device),
         positions=torch.empty((0,), dtype=torch.int64, device=device),

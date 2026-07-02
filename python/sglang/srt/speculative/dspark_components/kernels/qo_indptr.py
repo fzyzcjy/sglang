@@ -32,10 +32,6 @@ class BuildQoIndptr:
 
 
 def build_qo_indptr(*, verify_lens: torch.Tensor) -> QoIndptrResult:
-    # Reference chain from RaggedVerifyLayout._assemble_device: int32 cumsum with a
-    # leading 0 (qo_indptr, [bs+1]) plus its exclusive prefix as a standalone tensor
-    # (extend_start_loc, [bs]). Both consumers (flash kernels / bs-axis buffer
-    # copy_) need distinct storage, hence the clone in the reference.
     verify_lens = verify_lens.to(torch.int32)
     cumsum = torch.cumsum(verify_lens, dim=0).to(torch.int32)
     zero = torch.zeros(1, dtype=torch.int32, device=verify_lens.device)

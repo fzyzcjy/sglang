@@ -19,7 +19,6 @@ def _cpu_metrics(gamma: int) -> PerPositionConfidenceMetrics:
 
 class TestPerPositionConfidenceMetrics(CustomTestCase):
     def test_perfectly_calibrated_has_low_ece(self):
-        """Constant survival matching the Bernoulli target rate gives ECE ~ 0."""
         torch.manual_seed(0)
         n = 40000
         survival = torch.full((n, 1), 0.3, dtype=torch.float64)
@@ -31,7 +30,6 @@ class TestPerPositionConfidenceMetrics(CustomTestCase):
         self.assertAlmostEqual(row["pred_mean"], 0.3, places=4)
 
     def test_overconfident_has_high_ece_and_pred_above_target(self):
-        """Survival far above the target rate yields large ECE and pred_mean > target_mean."""
         torch.manual_seed(0)
         n = 40000
         survival = torch.full((n, 1), 0.9, dtype=torch.float64)
@@ -43,7 +41,6 @@ class TestPerPositionConfidenceMetrics(CustomTestCase):
         self.assertGreater(row["pred_mean"], row["target_mean"])
 
     def test_separable_scores_give_auc_near_one(self):
-        """Positives with high survival and negatives with low survival give AUC ~ 1."""
         torch.manual_seed(0)
         n = 20000
         pos = torch.rand(n, 1) * 0.3 + 0.7
@@ -55,7 +52,6 @@ class TestPerPositionConfidenceMetrics(CustomTestCase):
         self.assertGreater(metrics.compute()[0]["auc"], 0.99)
 
     def test_random_scores_give_auc_near_half(self):
-        """Survival independent of the label gives AUC ~ 0.5."""
         torch.manual_seed(0)
         n = 40000
         survival = torch.rand(n, 1)
@@ -67,7 +63,6 @@ class TestPerPositionConfidenceMetrics(CustomTestCase):
         self.assertLess(auc, 0.55)
 
     def test_batched_update_matches_per_sample_update(self):
-        """A single [bs, gamma] update accumulates the same histograms as row-by-row updates."""
         torch.manual_seed(0)
         bs, gamma = 32, 5
         survival = torch.rand(bs, gamma)
@@ -100,7 +95,6 @@ class TestPerPositionConfidenceMetrics(CustomTestCase):
 
     @unittest.skipUnless(torch.cuda.is_available(), "needs CUDA")
     def test_on_device_accumulation_matches_cpu(self):
-        """Histograms accumulated on GPU reduce to the same metrics as the CPU reference."""
         torch.manual_seed(0)
         bs, gamma = 24, 4
         survival = torch.rand(bs, gamma)
@@ -140,28 +134,24 @@ class TestConfidenceMetricsProbe(CustomTestCase):
         )
 
     def test_disabled_env_is_noop(self):
-        """With the env off, maybe_observe never builds the metrics accumulator."""
         probe = ConfidenceMetricsProbe(gamma=4, verify_num_draft_tokens=5, tp_rank=0)
         self._observe(probe)
         self.assertIsNone(probe._metrics)
         self.assertEqual(probe._step_ct, 0)
 
     def test_non_rank0_is_noop(self):
-        """A non-zero tp_rank probe stays silent even when the env is enabled."""
         probe = ConfidenceMetricsProbe(gamma=4, verify_num_draft_tokens=5, tp_rank=1)
         with envs.SGLANG_DSPARK_DEBUG_CONFIDENCE_METRICS.override(True):
             self._observe(probe)
         self.assertIsNone(probe._metrics)
 
     def test_missing_confidence_head_is_noop(self):
-        """carries_confidence=False skips accumulation."""
         probe = ConfidenceMetricsProbe(gamma=4, verify_num_draft_tokens=5, tp_rank=0)
         with envs.SGLANG_DSPARK_DEBUG_CONFIDENCE_METRICS.override(True):
             self._observe(probe, carries_confidence=False)
         self.assertIsNone(probe._metrics)
 
     def test_compact_mode_warns_once_and_skips(self):
-        """Compact mode never accumulates and warns exactly once."""
         probe = ConfidenceMetricsProbe(gamma=4, verify_num_draft_tokens=5, tp_rank=0)
         with envs.SGLANG_DSPARK_DEBUG_CONFIDENCE_METRICS.override(True):
             self._observe(probe, is_compact_mode=True)
@@ -171,7 +161,6 @@ class TestConfidenceMetricsProbe(CustomTestCase):
         self.assertEqual(probe._step_ct, 0)
 
     def test_enabled_path_accumulates_and_prints(self):
-        """The enabled full-window path builds metrics and reaches the print branch."""
         probe = ConfidenceMetricsProbe(
             gamma=4, verify_num_draft_tokens=5, tp_rank=0, print_every=2
         )

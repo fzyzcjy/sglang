@@ -60,24 +60,10 @@ def scatter_compact_to_strided(
     fill_value: float,
     verify_num_draft_tokens: int,
 ) -> torch.Tensor:
-    # compact->strided scatter (infra section 12.E). compact is [graph_num_tokens, dim];
-    # scatter to the [bs*(gamma+1), dim] strided layout accept/inject expect (request i
-    # owns rows [i*stride, i*stride+verify_len_i); intra-request pad = fill_value, kept
-    # out of commit by the accept cap -> lossless). The compact padding tail (valid False)
-    # routes to a throwaway sink row that the [:bs*stride] return drops, so the output is
-    # shape/semantics-identical to the old real-N scatter -- accept/inject stay unchanged.
     stride = verify_num_draft_tokens
     bs = layout.verify_lens.shape[0]
     dim = compact.shape[1]
     device = compact.device
-    # Under DP attention the compact verify input is padded up to the dp_gather
-    # buffer (global_num_tokens = bs * draft_token_num >= graph_num_tokens), so the
-    # target returns trailing pad rows past graph_num_tokens. index_copy_ requires
-    # source rows == index rows (= graph_num_tokens from compact_row_index), so trim
-    # compact first: the extra pad tokens are causal-after the real tokens and their
-    # output is discarded (lossless); a no-op without DP (compact is already
-    # graph_num_tokens rows). The triton impl needs no trim -- its gather only reads
-    # rows [start_i, start_i + verify_len_i), never past graph_num_tokens.
     compact = compact[: layout.graph_num_tokens]
     strided = torch.full(
         (bs * stride + 1, dim), fill_value, dtype=compact.dtype, device=device
@@ -116,9 +102,6 @@ def _scatter_compact_to_strided_kernel(
     start_i = tl.load(start_ptr + i)
     d = dblk * BLOCK_D + tl.arange(0, BLOCK_D)
     dmask = d < dim
-    # Inverse of the scatter: out[i*stride + w] = compact[start_i + w] iff w < verify_len_i
-    # (request i packs its window contiguously at compact rows [start_i, start_i+vl_i));
-    # else fill_value. Gather (one read per out row) -> no scatter races.
     in_range = w < vl_i
     src = tl.where(in_range, start_i + w, 0)
     val = tl.load(compact_ptr + src * dim + d, mask=dmask & in_range, other=0)

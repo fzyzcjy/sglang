@@ -1,6 +1,3 @@
-"""Basic sanity with DSPARK spec decoding on Qwen3-14B. Mirrors
-test_basic_sanity_dflash.py with the DSPARK path active (overlap scheduling on by
-default)."""
 
 import os
 import unittest
@@ -26,7 +23,6 @@ DRAFT_MODEL = "deepseek-ai/dspark_qwen3_14b_block7"
 
 
 def _checkpoints_available(*model_paths: str) -> bool:
-    """True only if every model has a local HF snapshot (cached and launchable)."""
     for path in model_paths:
         if os.path.isdir(path):
             continue
@@ -52,20 +48,12 @@ class TestBasicSanityDSpark(
 
     fwd_occupancy_threshold = 60
     fwd_occupancy_max_new_tokens = 4096
-    # DSpark accepts a semi-AR block per verify, so its accept length runs well
-    # above EAGLE3's; keep a safe lower bound here.
     fwd_occupancy_acc_length_threshold: float = 2.0
 
     gsm8k_num_questions = 200
     gsm8k_accuracy_thres = 0.80
     gsm8k_accept_length_thres = 2.0
 
-    # Set explicitly: the B200 auto-default falls back to flashinfer for DSpark
-    # (the trtllm_mha gate checks speculative_eagle_topk, which DSpark only forces
-    # to 1 after the backend is resolved). Note: trtllm_mha bumps page_size to 64,
-    # and the per-step seq_lens_cpu sync is NOT yet removed -- the draft runner
-    # still uses flashinfer, and needs_cpu_seq_lens is OR-ed over all spec-v2
-    # backends.
     attention_backend = "trtllm_mha"
     draft_attention_backend = "fa4"
 
@@ -91,10 +79,6 @@ class TestBasicSanityDSpark(
                 "DSPARK",
                 "--speculative-draft-model-path",
                 DRAFT_MODEL,
-                # compact ragged-verify enables the scheduler; with no
-                # --speculative-dspark-sps-table-path it runs on the uninitialized
-                # flat (verify-all) table, so the sanity server launches without an
-                # offline profiling artifact.
                 "--cuda-graph-max-bs-decode",
                 "4",
                 "--mem-fraction-static",

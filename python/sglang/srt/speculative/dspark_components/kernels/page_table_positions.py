@@ -74,12 +74,6 @@ def build_page_table_positions(
     page_size: int,
     swa_window: int,
 ) -> PageTablePositionsResult:
-    # Reference chain from make_core_attn_metadata's per-token scalar prep:
-    # int32 seq lens, positions = lens - 1, the strided page-table gather
-    # (req_to_token[rp, 0:max_seq_len:page_size] // page_size, int32), and the causal
-    # SWA topk clamp. swa_topk_lengths is only meaningful on the causal
-    # (non-dspark-draft-block) path; the draft block caller ignores it (its lengths
-    # come from BuildDsparkSwaPageIndices).
     seq_lens_casual = seq_lens_casual.to(torch.int32)
     positions_casual = seq_lens_casual - 1
     page_table = req_to_token[

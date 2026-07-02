@@ -1280,8 +1280,6 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         # padding
         self.input_ids = self._pad_tensor_to_size(self.input_ids, num_tokens)
         self.req_pool_indices = self._pad_tensor_to_size(self.req_pool_indices, bs)
-        # Spec-decoding verify/draft batches carry no LoRA (lora_ids stays None);
-        # padding is a no-op there. Only extend when the batch actually has lora_ids.
         if self.lora_ids is not None:
             self.lora_ids.extend((bs - len(self.lora_ids)) * [None])
 
@@ -1391,10 +1389,6 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         bs = self.batch_size
 
         if self.spec_info is not None:
-            # DSpark's draft block proposer runs its forward in TARGET_VERIFY mode with
-            # capture_hidden_mode=NULL and consumes only hidden_states, so
-            # next_token_logits stays None. Guard the DP MLP-sync trim so it is a no-op
-            # for such batches (a real target verify carries a tensor and still trims).
             if self.forward_mode.is_decode():  # draft
                 num_tokens = self.hidden_states_backup.shape[0]
                 self.positions = self.positions[:num_tokens]

@@ -28,11 +28,7 @@ def accept_draft_tokens(
     verify_num_draft_tokens: int,
     cutoff_layout: Optional[RaggedVerifyLayout] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    # Per-request accept (greedy argmax-match vs rejection sampling), dispatched
-    # by batch composition. Both rules are lossless. The third return is the
-    # per-request cap_trim_lens (correct drafts the confidence cap dropped).
     greedy_mask = draft_block.greedy_mask
-    # All-greedy fast path. is_all_greedy is host-side, so the branch is sync-free.
     all_greedy = sampling_info is None or sampling_info.is_all_greedy
     if all_greedy:
         return AcceptGreedy.execute(
@@ -47,7 +43,6 @@ def accept_draft_tokens(
         temperatures=draft_block.temperatures,
         rows_per_request=gamma_rows,
     ).view(bs, gamma_rows, vocab)
-    # All-sampling fast path: no greedy rows -> only the chain kernel (host-side, sync-free).
     if not sampling_info.is_any_greedy:
         return AcceptSampling.execute(
             candidates=candidates,
@@ -59,7 +54,6 @@ def accept_draft_tokens(
             verify_num_draft_tokens=verify_num_draft_tokens,
             cutoff_layout=cutoff_layout,
         )
-    # Mixed: run both rules and select per row by greedy_mask.
     greedy_len, greedy_bonus, greedy_trim = AcceptGreedy.execute(
         candidates=candidates,
         target_logits=target_logits,

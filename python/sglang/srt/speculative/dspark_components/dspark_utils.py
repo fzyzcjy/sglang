@@ -14,13 +14,6 @@ SUPPORTED_DSPARK_MARKOV_HEAD_TYPES = ("vanilla", "gated", "rnn")
 
 
 class DSparkLengthContract(msgspec.Struct, frozen=True):
-    """Length contract for DSpark semi-AR static verify (plan ``§2``).
-
-    ``gamma`` is the number of proposed draft tokens (DeepSpec ``block_size``).
-    The draft block is exactly ``gamma`` slots ``[anchor, mask×(gamma-1)]`` and
-    every slot is sampled (serial Markov), producing ``s_0..s_{gamma-1}``. The
-    verify window is ``gamma + 1`` tokens ``[anchor, s_0..s_{gamma-1}]``.
-    """
 
     gamma: int
 
@@ -104,22 +97,6 @@ def _get_dspark_config(config: Any) -> dict:
 
 
 def parse_dspark_draft_config(*, draft_hf_config: Any) -> DSparkDraftConfig:
-    """Parse DSpark draft config fields from an HF config/dict.
-
-    Reuses the DFlash parser for the shared backbone/context fields (the DSpark
-    draft backbone is DFlash-shaped) and adds the Markov-head fields. The HF
-    ``block_size`` field is interpreted as ``gamma`` (number of draft positions),
-    not the verify window. Confidence-head fields are intentionally ignored: the
-    static-verify MVP does not build/load/use the confidence head (plan ``§0``).
-
-    Two checkpoint conventions are accepted. Dense DSpark drafts carry unprefixed
-    keys (``block_size``, ``markov_rank``, ``markov_head_type``, ``mask_token_id``,
-    ``target_layer_ids``) plus a dedicated ``*DSpark`` architecture. dsv4 DSpark
-    drafts (arch ``DeepseekV4ForCausalLM``) carry the same fields ``dspark_``-prefixed
-    on the base config (``dspark_block_size``, ``dspark_markov_rank``,
-    ``dspark_noise_token_id`` as the mask token, ``dspark_target_layer_ids``) and
-    build the dedicated ``DSparkV4MarkovHead``, so ``markov_head_type`` is implicit.
-    """
     base = parse_dflash_draft_config(draft_hf_config=draft_hf_config)
 
     dspark_cfg = _get_dspark_config(draft_hf_config)

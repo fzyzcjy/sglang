@@ -23,14 +23,12 @@ register_cpu_ci(est_time=20, suite="base-a-test-cpu")
 
 class TestApplySts(CustomTestCase):
     def test_default_buffer_is_identity_sigmoid(self):
-        """apply_sts with the default scalar-1.0 buffer equals a bare sigmoid."""
         head = DSparkConfidenceHead(hidden_size=8, markov_rank=4, with_markov=False)
         confidence_raw = torch.randn(3, 5) * 9.0
         out = head.apply_sts(confidence_raw)
         self.assertTrue(torch.equal(out, torch.sigmoid(confidence_raw.float())))
 
     def test_per_position_temperature_scales_each_column(self):
-        """A loaded [gamma] temperature buffer applies sigmoid(raw / T) per position."""
         head = DSparkConfidenceHead(hidden_size=8, markov_rank=4, with_markov=False)
         temperatures = torch.tensor([0.5, 1.0, 2.0, 4.0, 0.25])
         head.sts_temperatures = temperatures
@@ -40,7 +38,6 @@ class TestApplySts(CustomTestCase):
         self.assertTrue(torch.equal(out, expected))
 
     def test_apply_sts_stashes_raw_logit(self):
-        """apply_sts stores the pre-temperature raw logit for the collection tap."""
         head = DSparkConfidenceHead(hidden_size=8, markov_rank=4, with_markov=False)
         confidence_raw = torch.randn(2, 5)
         head.apply_sts(confidence_raw)
@@ -49,7 +46,6 @@ class TestApplySts(CustomTestCase):
 
 class TestDSparkStsCalibration(CustomTestCase):
     def test_json_round_trip_preserves_fields(self):
-        """to_json followed by from_json reproduces an equal calibration."""
         calibration = DSparkStsCalibration(
             temperatures=[1.5, 2.0, 0.5],
             dataset="shards.*.pt",
@@ -65,19 +61,16 @@ class TestDSparkStsCalibration(CustomTestCase):
         self.assertEqual(restored.ece_after, calibration.ece_after)
 
     def test_rejects_empty_temperatures(self):
-        """__post_init__ rejects an empty temperatures list."""
         with self.assertRaises(ValueError):
             DSparkStsCalibration(temperatures=[])
 
     def test_rejects_non_positive_temperature(self):
-        """__post_init__ rejects a non-positive temperature entry."""
         with self.assertRaises(ValueError):
             DSparkStsCalibration(temperatures=[1.0, 0.0, 2.0])
         with self.assertRaises(ValueError):
             DSparkStsCalibration(temperatures=[1.0, -0.5])
 
     def test_load_from_path_reads_written_file(self):
-        """load_sts_calibration_from_path reads back a written calibration JSON."""
         calibration = DSparkStsCalibration(temperatures=[1.0, 2.5], num_samples=7)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "calib.json"
@@ -89,7 +82,6 @@ class TestDSparkStsCalibration(CustomTestCase):
 
 class TestExpectedCalibrationError(CustomTestCase):
     def test_perfectly_calibrated_probs_have_low_ece(self):
-        """ECE is near zero when predicted probs match the Bernoulli target rate."""
         torch.manual_seed(0)
         probs = torch.full((20000,), 0.3, dtype=torch.float64)
         targets = (torch.rand(20000) < 0.3).to(torch.float64)
@@ -97,7 +89,6 @@ class TestExpectedCalibrationError(CustomTestCase):
         self.assertLess(ece, 0.02)
 
     def test_overconfident_probs_have_high_ece(self):
-        """ECE is large when predicted probs are far from the target rate."""
         probs = torch.full((20000,), 0.95, dtype=torch.float64)
         targets = torch.full((20000,), 0.3, dtype=torch.float64)
         ece = expected_calibration_error(probs=probs, targets=targets, num_bins=15)
@@ -106,7 +97,6 @@ class TestExpectedCalibrationError(CustomTestCase):
 
 class TestFitStsTemperatures(CustomTestCase):
     def test_recovers_scale_and_reduces_ece(self):
-        """Fitting overconfident logits recovers T ~ scale and lowers mean ECE."""
         torch.manual_seed(0)
         num_samples, gamma, scale = 60000, 4, 2.5
         base_logit = torch.tensor([2.0, 1.2, 0.8, 0.4])
@@ -134,7 +124,6 @@ class TestFitStsTemperatures(CustomTestCase):
 
 class TestStsDataRecorder(CustomTestCase):
     def test_builds_prefix_mask_and_writes_shard(self):
-        """The recorder turns num_correct_drafts into a prefix mask and writes a shard."""
         gamma = 4
         confidence_raw = torch.randn(4, gamma)
         num_correct_drafts = torch.tensor([0, 2, 4, 1], dtype=torch.int32)

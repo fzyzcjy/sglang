@@ -26,15 +26,6 @@ def uniform_ragged_layout(
     model_runner,
     tier_num_reqs: Optional[int] = None,
 ) -> Optional[RaggedVerifyLayout]:
-    # The degenerate uniform layout (verify_lens = [gamma+1] * bs) that a
-    # layout-less compact verify carries so it hits the same token-keyed graph
-    # the real ragged batch does (C3). Geometry matches the static full block.
-    # A batch too large for any captured tier gets no layout and falls to the
-    # bs-keyed eager path instead of crashing round_up_grid.
-    # Under DP the captured token-keyed graph holds a cross-DP MoE gather, so the
-    # tier (exceeds-grid gate + graph_num_tokens floor) must key off the DP-global
-    # max bs (tier_num_reqs), identical on every rank, while verify_lens stay this
-    # rank's local bs. tier_num_reqs is None (falls back to bs) without DP.
     tier_num_reqs = bs if tier_num_reqs is None else tier_num_reqs
     if ragged_layout_exceeds_captured_grid(
         num_reqs=tier_num_reqs,
@@ -63,13 +54,6 @@ def uniform_ragged_layout(
 
 
 def verify_lens_broadcast_group(*, tp_size: int) -> tuple:
-    # Cross-rank shape consistency: rank 0's verify_lens is broadcast to its
-    # peers. Under DP-attention each attention-TP group owns a different request
-    # shard, so the broadcast MUST stay inside get_attention_tp_group() (mirror
-    # sampler.py) -- broadcasting across the full TP group would overwrite peer
-    # shards' verify_lens and desync the now layout-/token-count-affecting
-    # schedule (H2). Without DP-attention the TP group is correct. Returns the
-    # group and its world size; size <= 1 means no broadcast is needed.
     if is_dp_attention_enabled():
         return get_attention_tp_group(), get_attention_tp_size()
     return get_tp_group(), tp_size
@@ -81,8 +65,6 @@ def verify_layout_grid(
     ragged_verify_mode: RaggedVerifyMode,
     model_runner,
 ) -> list[int]:
-    # COMPACT aligns the grid to the decode runner's token buckets so
-    # graph_num_tokens lands on a captured tier; else [total] suffices.
     total = sum(verify_lens_cpu)
     if ragged_verify_mode is not RaggedVerifyMode.COMPACT:
         return [total]
@@ -99,12 +81,6 @@ def verify_layout_graph_num_tokens_floor(
     verify_num_draft_tokens: int,
     model_runner,
 ) -> int:
-    # The token-keyed capture grid {b * num_draft : b in capture_bs} ties each
-    # token tier to one capture_bs, whose graph captured exactly b request
-    # slots. A batch whose real total rounds up to a tier with fewer slots than
-    # num_reqs would not fit, so floor the bucket to this batch's bs-derived
-    # full block. Zero (no floor) when no token-keyed graph exists, where the
-    # bucket is the real total run eager.
     if (
         ragged_verify_mode is not RaggedVerifyMode.COMPACT
         or ragged_capture_num_tokens(model_runner=model_runner) is None
@@ -114,12 +90,6 @@ def verify_layout_graph_num_tokens_floor(
 
 
 def ragged_capture_num_tokens(*, model_runner) -> Optional[list[int]]:
-    # The decode runner owns the token-keyed capture grid (Plan B). Read it so
-    # graph_num_tokens = round_up_grid(total, capture_num_tokens) selects a
-    # captured graph. Returns None when no token-keyed graph exists (e.g.
-    # cuda-graph disabled or an eager runner without ragged capture), in which
-    # case full runs eager on exactly `total`. The runner type is polymorphic
-    # (graph runner vs eager runner), so ragged_verify_mode may be absent.
     runner = model_runner.decode_cuda_graph_runner
     if runner is None or not getattr(runner, "ragged_verify_mode", False):
         return None
@@ -132,14 +102,6 @@ def ragged_layout_exceeds_captured_grid(
     verify_num_draft_tokens: int,
     model_runner,
 ) -> bool:
-    # The token-keyed capture grid tops out at capture_num_tokens[-1] ==
-    # max_capture_bs * (gamma+1). graph_num_tokens is floored to this batch's
-    # bs-derived full block (num_reqs * verify_num_draft_tokens), so a batch
-    # with num_reqs > max_capture_bs would drive round_up_grid past its max
-    # tier and raise in from_verify_lens -- BEFORE the runner's
-    # _can_run_ragged_verify_graph eager-fallback gate can run. Skip the ragged
-    # layout for such a batch so the verify falls through to the bs-keyed eager
-    # path (which rejects bs > max_bs). Inert for num_reqs <= max_capture_bs.
     capture_num_tokens = ragged_capture_num_tokens(model_runner=model_runner)
     if capture_num_tokens is None:
         return False
