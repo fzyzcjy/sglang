@@ -32,6 +32,7 @@ from sglang.srt.speculative.dspark_components.dspark_verify import (
 )
 from sglang.srt.speculative.dspark_components.kernels.schedule_verify_lens_topk import (
     ScheduleVerifyLensTopk,
+    compute_sort_survival,
 )
 from sglang.srt.speculative.ragged_verify import (
     RaggedVerifyLayout,
@@ -416,9 +417,8 @@ class DSparkVerifyPlanner:
         # cap index. The split affects only scheduling quality, never correctness.
         if self._budget_planner is None or confidence is None or budget is None:
             return None
-        sort_survival = torch.cumprod(confidence.to(torch.float32), dim=1)
         verify_lens = ScheduleVerifyLensTopk.execute(
-            survival_probs=sort_survival,
+            confidence=confidence,
             budget=budget,
             cfg=self._schedule_cfg,
         ).to(device=device, dtype=torch.int32)
@@ -434,11 +434,13 @@ class DSparkVerifyPlanner:
         )
 
         if envs.SGLANG_DSPARK_DEBUG_CONFIDENCE_PREFIX_SCHEDULER.get():
+            # Recomputed only on this debug path: the hot path folds the cumprod into
+            # ScheduleVerifyLensTopk and never materializes the survival keys.
             self._log_verify_lens_decision(
                 req_pool_indices=req_pool_indices,
                 prefix_lens=prefix_lens,
                 budget=budget,
-                sort_survival=sort_survival,
+                sort_survival=compute_sort_survival(confidence),
                 verify_lens=verify_lens,
             )
 
