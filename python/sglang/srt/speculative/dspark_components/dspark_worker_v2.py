@@ -11,6 +11,7 @@ from sglang.srt.managers.scheduler import GenerationBatchResult
 from sglang.srt.managers.tp_worker import TpModelWorker
 from sglang.srt.model_executor.forward_batch_info import (
     CaptureHiddenMode,
+    ForwardMode,
     compute_position,
 )
 from sglang.srt.server_args import ServerArgs
@@ -59,6 +60,7 @@ from sglang.srt.speculative.dspark_components.dspark_utils import (
 )
 from sglang.srt.speculative.dspark_components.dspark_verify import (
     alloc_verify_window,
+    uniform_ragged_layout,
 )
 from sglang.srt.speculative.dspark_components.dspark_verify_epilogue import (
     CommitInjectCtx,
@@ -73,6 +75,7 @@ from sglang.srt.speculative.dspark_components.kernels.build_out_tokens import (
 from sglang.srt.speculative.dspark_components.kernels.finalize_accept_lens import (
     FinalizeAcceptLens,
 )
+from sglang.srt.speculative.ragged_verify import RaggedVerifyMode
 from sglang.srt.speculative.spec_utils import draft_tp_context
 from sglang.srt.utils import get_available_gpu_memory, is_cuda
 
@@ -482,19 +485,65 @@ class DSparkWorkerV2(BaseSpecWorker):
         return batch_output
 
     def _run_idle_verify_participation(self, batch: ScheduleBatch) -> None:
+        """Under DP attention an idle attention-DP group must still run the target
+        verify forward so it joins the target's dp_gather collective; otherwise busy
+        groups hang. The dummy DFlashVerifyInput carries draft_token_num ==
+        verify_num_draft_tokens so get_spec_adjusted_global_num_tokens scales
+        global_num_tokens by the same factor as a busy verify -> matching dp buffer
+        length across ranks. The forward output is discarded (no real requests).
+
+        Under compact ragged verify the busy groups replay the token-keyed graph
+        (their verify carries a ragged_verify_layout). The idle group MUST select the
+        SAME graph, else it replays the bs-keyed graph while busy replays the
+        token-keyed one -> two distinct captured graphs whose baked dp_gather
+        collectives can never rendezvous -> hang. So carry the same uniform layout the
+        planner builds for a layout-less compact step, floored to the DP-global tier
+        (0 local reqs -> the graph pads it out). None outside compact / when DP metadata
+        is absent, keeping static / cap-accept on the shared bs-keyed path."""
         if self._verify_epilogue is not None:
             # Disarm the captured commit write and mask the scatter: an idle
             # replay carries stale req_pool / commit buffers and must not
             # mutate the draft KV pool.
             self._verify_epilogue.begin_step(None, armed=False)
+        idle_layout = self._idle_verify_ragged_layout(batch)
+        # The token-keyed graph's buffer fill pairs the captured token-width
+        # buffers against these inputs, so the idle dummies must span the
+        # layout's token count (all rows are padding aimed at pool slot 0).
+        num_dummy_tokens = (
+            idle_layout.graph_num_tokens if idle_layout is not None else 0
+        )
         verify_input = DFlashVerifyInput(
-            draft_token=torch.empty((0,), dtype=torch.int64, device=self.device),
-            positions=torch.empty((0,), dtype=torch.int64, device=self.device),
+            draft_token=torch.zeros(
+                (num_dummy_tokens,), dtype=torch.int64, device=self.device
+            ),
+            positions=torch.zeros(
+                (num_dummy_tokens,), dtype=torch.int64, device=self.device
+            ),
             draft_token_num=self.verify_num_draft_tokens,
             custom_mask=None,
             capture_hidden_mode=CaptureHiddenMode.FULL,
+            ragged_verify_layout=idle_layout,
         )
-        batch.out_cache_loc = torch.empty((0,), dtype=torch.int64, device=self.device)
+        batch.out_cache_loc = torch.zeros(
+            (num_dummy_tokens,), dtype=torch.int64, device=self.device
+        )
+        if idle_layout is not None:
+            # The captured per-request buffers span the tier's slot count; the
+            # idle batch must present matching dummy rows (padding at req 0).
+            num_dummy_slots = int(idle_layout.verify_lens.numel())
+            batch.seq_lens = torch.ones(
+                (num_dummy_slots,), dtype=torch.int64, device=self.device
+            )
+            batch.req_pool_indices = torch.zeros(
+                (num_dummy_slots,), dtype=torch.int64, device=self.device
+            )
+            batch.seq_lens_cpu = torch.ones((num_dummy_slots,), dtype=torch.int64)
+            batch.seq_lens_sum = num_dummy_slots
+            # The token-keyed graph was captured as TARGET_VERIFY; an IDLE
+            # forward batch materializes zero tokens (empty positions) and
+            # cannot rendezvous with it. The dummies above make the idle rank
+            # a well-formed all-padding verify batch.
+            batch.forward_mode = ForwardMode.TARGET_VERIFY
         verify_forward_batch, _ = verify_input.prepare_for_verify(
             batch, self.target_worker
         )
@@ -503,6 +552,29 @@ class DSparkWorkerV2(BaseSpecWorker):
             forward_batch=verify_forward_batch,
             is_verify=True,
             skip_attn_backend_init=True,
+        )
+
+    def _idle_verify_ragged_layout(self, batch: ScheduleBatch):
+        # Build the SAME degenerate uniform layout the compact token-keyed graph is
+        # captured with, sized to the DP-global tier so the idle verify keys the exact
+        # same graph as the busy compact verify. The tier holds max(global bs) padded
+        # requests, so the layout carries that many uniform verify_lens (a 0-request
+        # layout is rejected; the idle rank's real tokens are 0 and the graph pads them
+        # out). Only compact uses the token-keyed graph -- static / cap-accept stay on
+        # the shared bs-keyed path (return None). None too when DP metadata is absent or
+        # the tier exceeds the captured grid (uniform_ragged_layout returns None, and the
+        # busy side falls back to the same bs-keyed path).
+        if batch.global_num_tokens is None or not self._verify_planner.is_compact_mode:
+            return None
+        global_bs = max(batch.global_num_tokens)
+        if global_bs <= 0:
+            return None
+        return uniform_ragged_layout(
+            bs=global_bs,
+            device=self.device,
+            verify_num_draft_tokens=self.verify_num_draft_tokens,
+            ragged_verify_mode=RaggedVerifyMode.COMPACT,
+            model_runner=self.model_runner,
         )
 
     def _decode_idle_result(
