@@ -51,24 +51,6 @@ def commit_kv_proj_fused(
     main_x: torch.Tensor,
     wkv_linears: list[torch.nn.Module],
 ) -> list[torch.Tensor]:
-    # One GEMM over the stacked per-stage wkv weights replaces the num_stages
-    # quant + GEMM dispatch chains; the [N, head_dim] contiguous slices feed the
-    # per-stage pool writer. Not a triton kernel per se, but it is the
-    # launch-count-optimized impl behind the same toggle.
-    #
-    # Preferred path: stack the QUANTIZED blockwise-fp8 weights + scales along the
-    # output dim (valid when every stage's out_dim is a whole number of scale
-    # blocks) and call the same w8a8_block_fp8_linear the per-stage forward uses --
-    # one input quant + one deep_gemm, per-element math identical to the per-stage
-    # reference (each 128-row output block keeps its own scale; the input quant of
-    # the shared main_x is deterministic, so quantizing once == quantizing thrice).
-    # Fallback (unquantized / non-block layouts): one bf16 GEMM over dequantized
-    # stacked weights -- the weights are bit-exact copies of the quantized values,
-    # but the GEMM numerics differ slightly from deep_gemm.
-    #
-    # deep_gemm wants the weight scale mn-major (sf.stride(-2) == 1); _stacked_wkv_weight
-    # rebuilds the cat'd scale into that layout so the fused GEMM runs on Blackwell as
-    # well as Hopper (verified numerically equal to the per-stage path on both).
     num_stages = len(wkv_linears)
     stacked = _stacked_wkv_weight(wkv_linears=wkv_linears)
 
@@ -148,9 +130,6 @@ def _build_stacked_wkv_weight(
             scale = torch.cat(
                 [linear.weight_scale_inv for linear in wkv_linears], dim=0
             )
-            # deep_gemm wants the weight scale mn-major (sf.stride(-2) == 1); a plain
-            # contiguous cat is row-major (stride(-2) == in_blocks). Rebuild the last
-            # two dims column-major so stride(-2) == 1 without changing values.
             if scale.dim() >= 2 and scale.stride(-2) != 1:
                 scale = scale.transpose(-2, -1).contiguous().transpose(-2, -1)
             return _StackedWkvWeight(weight=weight, fp8_scale=scale)

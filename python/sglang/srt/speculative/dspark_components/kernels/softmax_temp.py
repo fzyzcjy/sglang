@@ -158,11 +158,6 @@ def softmax_temp_flashinfer(
     temperatures: torch.Tensor,
     rows_per_request: int,
 ) -> torch.Tensor:
-    # flashinfer.sampling.softmax is a fused online safe-softmax with per-row temperature
-    # scaling. Its CUDA binding is fp32-only, 2D, contiguous, and applies 1/temperature
-    # inside the kernel, so pass raw (undivided) logits plus the actual per-row temperature.
-    # For the accept-path [num_rows, vocab] shape (few rows, huge vocab) it splits the vocab
-    # across many blocks, unlike the one-block-per-row torch/triton impls here.
     if _flashinfer_softmax is None:
         raise RuntimeError(
             "SGLANG_DSPARK_KERNEL_SOFTMAX_TEMP=flashinfer requires flashinfer.sampling.softmax, "

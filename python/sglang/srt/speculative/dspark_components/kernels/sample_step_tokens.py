@@ -9,8 +9,6 @@ from sglang.srt.environ import envs
 _KERNEL_IMPL = envs.SGLANG_DSPARK_KERNEL_SAMPLE_STEP_TOKENS.get()
 
 _BLOCK_V = 1024
-# Triton forbids reading a bare module-global from inside @jit; wrap the sentinel as a
-# tl.constexpr so the argmax kernels can reference it directly (host code never reads it).
 _IDX_SENTINEL = tl.constexpr(2147483647)
 
 
@@ -78,10 +76,6 @@ def sample_step_tokens(
     greedy_mask: torch.Tensor,
     exp_noise: torch.Tensor,
 ) -> torch.Tensor:
-    # Byte-identical to the pre-kernel fast_sampling path, but consumes the caller's
-    # injected exp_noise instead of drawing it (the draw stays in the caller to keep the
-    # torch RNG stream unchanged). Gumbel-max: argmax(softmax(s) / Exp(1)) ~ Categorical.
-    # greedy rows get noise 1 so argmax(probs / 1) == argmax(logits).
     probs = torch.softmax(step_logits.float() / temperatures[:, None], dim=-1)
     noise = torch.where(greedy_mask[:, None], 1.0, exp_noise)
     return probs.div_(noise).argmax(dim=-1)
@@ -101,10 +95,6 @@ def _online_partial_kernel(
     n_tiles,
     BLOCK_V: tl.constexpr,
 ):
-    # Single vocab pass per tile (fuses the old row_max + argmax partials): emit this
-    # tile's max of s = logits/T, plus its best ratio-space key + smallest-index argmax
-    # measured RELATIVE to the tile max. The combine kernel rescales tile keys to the
-    # global row max, so a two-pass global-max exp is never needed.
     row = tl.program_id(0)
     tile = tl.program_id(1)
     offs = tile * BLOCK_V + tl.arange(0, BLOCK_V)
@@ -118,12 +108,9 @@ def _online_partial_kernel(
     greedy = tl.load(greedy_mask_ptr + row) != 0
     noise = tl.load(exp_noise_ptr + row * V + offs, mask=mask, other=1.0)
     denom = tl.where(greedy, 1.0, noise)
-    # Ratio-space key relative to the tile max: exp underflow -> 0 excludes far-tail tokens
-    # exactly like fp32 softmax; the normalization constant Z is dropped (argmax-invariant).
     key = tl.exp(s - tile_max) / denom
     key = tl.where(mask, key, -1.0)
     tile_best = tl.max(key, axis=0)
-    # Tie-break to the smaller index (match torch.argmax): min over indices at the max.
     idx = tl.where(key == tile_best, offs, _IDX_SENTINEL)
     tl.store(tile_max_ptr + row * n_tiles + tile, tile_max)
     tl.store(partial_key_ptr + row * n_tiles + tile, tile_best)
@@ -139,9 +126,6 @@ def _online_combine_kernel(
     n_tiles,
     BLOCK_TILES: tl.constexpr,
 ):
-    # Rescale each tile's best key from its tile max to the global row max
-    # (exp(tile_max - global_max)), recovering exp(s - global_max)/denom bit-for-bit up to
-    # fp rounding, then take the global argmax with smallest-index tie-break across tiles.
     row = tl.program_id(0)
     offs = tl.arange(0, BLOCK_TILES)
     mask = offs < n_tiles
@@ -167,13 +151,6 @@ def sample_step_tokens_triton(
     greedy_mask: torch.Tensor,
     exp_noise: torch.Tensor,
 ) -> torch.Tensor:
-    # Ratio-space online argmax in two kernels (fused from the old four): a per-tile pass
-    # that emits (tile_max, best key rel tile_max, best idx) and a combine that rescales to
-    # the global row max and takes the global argmax. Never materializes probs / key over the
-    # full vocab and parallelizes along vocab (bs=1 still fills the SMs), replacing the
-    # batch-dim softmax + argmax reductions that idle the SMs at bs=1. Reads step_logits at
-    # its own row stride so the caller's cropped view (full[..., :vocab] of the gathered
-    # padded logits) is consumed in place -- no .contiguous() crop copy per step.
     bs, V = step_logits.shape
     device = step_logits.device
     assert step_logits.stride(1) == 1, "step_logits rows must be contiguous"

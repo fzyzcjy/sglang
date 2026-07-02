@@ -9,8 +9,6 @@ requires_cuda = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="triton kernel needs CUDA"
 )
 
-# tp=4 committed-token agreement and the gsm8k accuracy + accept-length e2e gate run
-# REMOTE (need multi-GPU / a live server); see the design doc, not implemented here.
 
 
 @requires_cuda

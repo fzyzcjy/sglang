@@ -8,9 +8,6 @@ from sglang.srt.layers.vocab_parallel_embedding import (
     vocab_range_from_global_vocab_size,
 )
 
-# Head construction (needs the distributed parallel state), true tp=4 committed-token
-# agreement / no-deadlock, and the gsm8k accuracy + accept-length e2e gate all run REMOTE
-# (multi-GPU / a live server); these CPU tests cover the load-bearing math instead.
 
 
 def _lm_head_partition(vocab: int, tp_size: int) -> tuple[int, int]:
@@ -30,8 +27,6 @@ def test_bf16_project_bias_stays_close_to_fp32_and_is_fp32(bs: int, vocab: int) 
     rank = 512
     latent = torch.randn(bs, rank, dtype=torch.bfloat16)
     weight_bf16 = torch.randn(vocab, rank, dtype=torch.bfloat16)
-    # The fp32-stored checkpoint weight is a bf16 value zero-padded to fp32, so the fp32
-    # reference and the bf16 read see bit-identical weights; only the output rounding differs.
     weight_fp32 = weight_bf16.float()
 
     fp32_bias = F.linear(latent.float(), weight_fp32)
@@ -51,8 +46,6 @@ def test_sharded_corrected_logits_equal_full_vocab(tp_size: int, vocab: int) -> 
 
     latent = torch.randn(bs, rank)
     weight_full = torch.randn(vocab, rank)
-    # base_full_padded is the concatenation of the per-rank lm_head shards ([*, per_partition]
-    # each); padding columns beyond the org vocab are arbitrary and get cropped away.
     base_full_padded = torch.randn(bs, num_padded)
 
     full_bias = F.linear(latent, weight_full)

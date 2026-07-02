@@ -29,10 +29,6 @@ class BuildStepLocal:
 
 
 def build_step_local(*, bias: torch.Tensor, base_local: torch.Tensor) -> torch.Tensor:
-    # Byte-identical to the sharded step's pad+add tail: right-pad the per-rank markov bias
-    # (org-vocab width) up to the partition width with zeros, upcast to fp32, and add the
-    # per-rank base logits. base_local is already fp32; bias may be bf16 (fused gemv) or
-    # fp32 -- upcast matches the old ``F.linear(...).float()`` on the bf16 path bit-for-bit.
     per_partition = base_local.shape[-1]
     pad = per_partition - bias.shape[-1]
     padded = (

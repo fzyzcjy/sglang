@@ -40,10 +40,6 @@ def test_triton_matches_torch_probs(bs, rows_per_request, vocab, dtype):
 
     assert got.dtype == ref.dtype == torch.float32
     assert got.shape == ref.shape
-    # The triton 3-pass streaming softmax and torch's reduction sum in a different
-    # order, so over a 129k-vocab fp32 row a handful of probabilities differ by a
-    # few ulp (observed ~1.6e-6 abs / 1.6e-5 rel on Blackwell). Keep the bound tight
-    # enough to catch a real error but above pure reduction-order noise.
     torch.testing.assert_close(got, ref, rtol=1e-4, atol=1e-6)
     torch.testing.assert_close(
         got.sum(dim=-1), torch.ones_like(got.sum(dim=-1)), rtol=1e-5, atol=1e-5
@@ -90,8 +86,6 @@ def test_flashinfer_matches_torch_probs(rows_per_request, vocab, dtype):
 
     assert got.dtype == ref.dtype == torch.float32
     assert got.shape == ref.shape
-    # Looser than the triton tol: flashinfer reduces the vocab in a different (split) order,
-    # so fp32 rounding diverges slightly more than the single-pass torch reference.
     torch.testing.assert_close(got, ref, rtol=1e-4, atol=2e-6)
     torch.testing.assert_close(
         got.sum(dim=-1), torch.ones_like(got.sum(dim=-1)), rtol=1e-5, atol=1e-5

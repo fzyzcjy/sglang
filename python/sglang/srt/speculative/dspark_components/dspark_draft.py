@@ -108,26 +108,7 @@ def sample_draft_block(
     else:
 
         def sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:
-            # Per-row mixed sampling: greedy rows take argmax, sampling rows draw
-            # from the temperature-scaled softmax, so a mixed batch keeps each
-            # request's own draft distribution. With at least one sampling row this
-            # matches the all-sampling RNG draw count (one draw per step), so the
-            # all-sampling path stays byte-identical.
             if fast_sampling:
-                # Reference Gumbel-max trick: argmax(probs / Exp(1)) ~ Categorical(probs),
-                # one fused pass with no full-vocab CDF and no D2H sync, unlike
-                # torch.multinomial. Setting greedy rows' noise to 1 makes their
-                # argmax(probs / 1) == argmax(probs) == argmax(logits) (softmax is
-                # monotone), so this single argmax also yields the greedy token and
-                # the separate greedy torch.argmax(step_logits) drops out (the P1
-                # argmax in the profile). The exponential_ draw stays here (elementwise,
-                # cheap) so the per-step RNG count is unchanged: empty_like(step_logits,
-                # fp32) has the same shape/dtype/count as the old empty_like(probs) draw,
-                # keeping downstream accept coins byte-identical. The kernel then does the
-                # softmax + argmax reductions (deleted from this path), consuming the noise.
-                # Contiguous [bs, vocab] draw (not empty_like: step_logits is now the
-                # strided full[..., :vocab] view). numel is unchanged, so the RNG stream --
-                # and the downstream accept coins -- stay byte-identical.
                 exp_noise = torch.empty(
                     step_logits.shape, dtype=torch.float32, device=step_logits.device
                 ).exponential_(1)

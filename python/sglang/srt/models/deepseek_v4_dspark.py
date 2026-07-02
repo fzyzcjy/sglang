@@ -345,8 +345,6 @@ class DSparkV4MarkovHead(nn.Module):
         self.markov_w2 = nn.Linear(
             self.markov_rank, self.vocab_size, bias=False, dtype=markov_w2_dtype
         )
-        # Set by ``configure_tp_shard`` from the attached lm_head when the shard flag is on;
-        # None means the replicated (unsharded) path.
         self._tp_shard: Optional[MarkovW2ShardGeometry] = None
 
     def configure_tp_shard(self, *, lm_head: nn.Module) -> None:
@@ -403,9 +401,6 @@ class DSparkV4MarkovHead(nn.Module):
     ) -> torch.Tensor:
         weight = self.markov_w2.weight if weight is None else weight
         if self._opt_markov_w2_bf16:
-            # Heavy work in bf16 (read the bf16 weight, bf16xbf16 matmul with tensor-core
-            # fp32 accumulation), then upcast the small [*, vocab] bias back to fp32 so the
-            # corrected-logits / accept side stays fp32 like the lm_head base logits.
             return F.linear(latent_states.to(weight.dtype), weight).float()
         return F.linear(latent_states.float(), weight)
 
@@ -447,18 +442,12 @@ class DSparkV4MarkovHead(nn.Module):
         weight_local = self.markov_w2.weight[
             shard.org_vocab_start : shard.org_vocab_end
         ]
-        # gemv only (no .float() upcast on the bf16 path): BuildStepLocal fuses the upcast
-        # into its pad+add, so bias stays bf16 here and is read + upcast bit-identically in
-        # the kernel. F.linear (the gemv) and the all_gather below are deliberately untouched.
         if self._opt_markov_w2_bf16:
             bias = F.linear(latent.to(weight_local.dtype), weight_local)
         else:
             bias = F.linear(latent.float(), weight_local)
         step_local = BuildStepLocal.execute(bias=bias, base_local=base_local)
         if shard.tp_size > 1:
-            # Reuse the attn-TP group so the collective is a no-op (size-1) under DP
-            # attention -- a gather on the full TP group here would deadlock against the
-            # idle DP groups that never enter the serial markov loop.
             full = get_attention_tp_group().all_gather(step_local, dim=-1)
         else:
             full = step_local
@@ -835,9 +824,6 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         else:
             local_logits = torch.matmul(x.to(weight.dtype), weight.T)
         if self._opt_markov_w2_tp_shard:
-            # Leave the base logits sharded (this rank's [*, per_partition] vocab slice):
-            # the markov head adds its per-rank bias then all-gathers the corrected logits
-            # per step over the attn-TP group. Gathering here as well would double-gather.
             return local_logits
         return gather_and_crop_vocab(local_logits, self.lm_head)
 
