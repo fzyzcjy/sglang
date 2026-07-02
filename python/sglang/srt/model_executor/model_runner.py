@@ -400,6 +400,12 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         self.spec_algorithm = SpeculativeAlgorithm.from_string(
             server_args.speculative_algorithm
         )
+        # Spec-decode capture hooks, assigned by the spec worker before this
+        # runner's graphs capture: draft_sampler runs inside the DRAFT decode
+        # graph (DFlash / DSpark greedy proposal), spec_capture_epilogue inside
+        # the TARGET verify graph (DSpark post-verify chain). None -> eager.
+        self.draft_sampler = None
+        self.spec_capture_epilogue = None
         self.page_size = server_args.page_size
         self.req_to_token_pool = req_to_token_pool
         self.token_to_kv_pool_allocator = token_to_kv_pool_allocator

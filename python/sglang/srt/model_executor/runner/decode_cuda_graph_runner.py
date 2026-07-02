@@ -935,7 +935,7 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
                     forward_batch,
                     **kwargs,
                 )
-                draft_sampler = getattr(self.model_runner, "draft_sampler", None)
+                draft_sampler = self.model_runner.draft_sampler
                 if draft_sampler is not None:
                     # Must be captured here, or replay leaves a stale output buffer
                     # the worker would read as valid tokens -- fail loudly instead.
@@ -948,9 +948,7 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
                             "hidden_states to capture into the graph."
                         )
                     draft_sampler(out.hidden_states, forward_batch.input_ids)
-                verify_epilogue = getattr(
-                    self.model_runner, "dspark_verify_epilogue", None
-                )
+                verify_epilogue = self.model_runner.spec_capture_epilogue
                 if (
                     verify_epilogue is not None
                     and self.ragged_verify_mode

@@ -264,7 +264,7 @@ class DSparkWorkerV2(BaseSpecWorker):
                 device=self.device,
                 commit_injector=self._kv_injector,
             )
-            self.model_runner.dspark_verify_epilogue = self._verify_epilogue
+            self.model_runner.spec_capture_epilogue = self._verify_epilogue
 
         self._verify_executor = TargetVerifyExecutor(
             target_worker=self.target_worker,
