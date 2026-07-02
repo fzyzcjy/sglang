@@ -242,15 +242,20 @@ class DSparkVerifyPlanner:
         draft_hidden: Optional[torch.Tensor],
         anchor_tokens: torch.Tensor,
         draft_tokens: torch.Tensor,
+        confidence_tap: Optional[torch.Tensor] = None,
     ) -> Optional[torch.Tensor]:
         if self._confidence_head is None:
             return None
         compute_confidence_hook = getattr(self.draft_model, "compute_confidence", None)
         if compute_confidence_hook is not None:
+            assert (
+                confidence_tap is not None
+            ), "dsv4 compute_confidence needs the compute_base_logits tap"
             with torch.inference_mode():
                 return compute_confidence_hook(
                     anchor_tokens=anchor_tokens,
                     sampled_tokens=draft_tokens,
+                    x_post_hc=confidence_tap,
                 )
         assert draft_hidden is not None
         return compute_confidence(

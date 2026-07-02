@@ -695,15 +695,10 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         self.lm_head: Optional[nn.Module] = None
         self._use_fp32_lm_head = envs.SGLANG_DSPARK_FP32_LM_HEAD.get()
         self._opt_markov_w2_tp_shard = envs.SGLANG_DSPARK_OPT_MARKOV_W2_TP_SHARD.get()
-        self._last_confidence: Optional[torch.Tensor] = None
-        self._x_post_hc: Optional[torch.Tensor] = None
 
     @property
     def enable_confidence_head(self) -> bool:
         return self.confidence_head is not None
-
-    def last_confidence(self) -> Optional[torch.Tensor]:
-        return self._last_confidence
 
     def attach_shared_modules(
         self, *, embed_tokens: nn.Module, lm_head: nn.Module
@@ -788,8 +783,8 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
             hc_eps=self.hc_eps,
         )
 
-    def compute_base_logits(self, x: torch.Tensor) -> torch.Tensor:
-        """Base logits from the draft backbone hidden: hc_head -> norm -> lm_head gather.
+    def compute_base_logits(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Base logits + confidence tap from the draft backbone hidden.
 
         Collapses the mHC draft hidden through the last stage's hc_head (PRE-norm), then
         applies ``norm`` and the target's local-vocab lm_head matmul, all-gathers to the
@@ -800,15 +795,14 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         When ``SGLANG_DSPARK_OPT_MARKOV_W2_TP_SHARD`` is on, the base logits are returned
         SHARDED (this rank's ``[*, per_partition]`` vocab slice, no gather); the markov head
         adds its per-rank bias and does the attn-TP all-gather per step instead.
-        This is the SOLE base-logit producer: ``forward`` no longer computes them, and the
-        post-hc_head PRE-norm tap is stashed on ``self._x_post_hc`` HERE for
-        ``compute_confidence`` (the worker calls this before ``compute_confidence``, so the
-        stash is fresh). The worker calls this on the raw forward hidden and feeds the
-        result to the shared Markov loop.
+        This is the SOLE base-logit producer: ``forward`` no longer computes them. Returns
+        ``(base_logits, confidence_tap)``: the post-hc_head PRE-norm tap feeds
+        ``compute_confidence`` explicitly (no cross-call stash -- a stashed attr would
+        alias the capture-time buffer of whichever bs tier captured last).
         """
+
         x_post_hc = self.collapse_hc_head(x)
-        self._x_post_hc = x_post_hc
-        return self._logits_from_x_post_hc(x_post_hc)
+        return self._logits_from_x_post_hc(x_post_hc), x_post_hc
 
     def _logits_from_x_post_hc(self, x_post_hc: torch.Tensor) -> torch.Tensor:
         if self.lm_head is None:
@@ -832,18 +826,13 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         *,
         anchor_tokens: torch.Tensor,
         sampled_tokens: torch.Tensor,
+        x_post_hc: torch.Tensor,
     ) -> Optional[torch.Tensor]:
         confidence_head = self.confidence_head
         if confidence_head is None:
-            self._last_confidence = None
             return None
-        if self._x_post_hc is None:
-            raise RuntimeError(
-                "compute_confidence requires compute_base_logits to run first "
-                "(the post-hc_head tap is stashed there)."
-            )
         bs = int(anchor_tokens.shape[0])
-        x_post_hc = self._x_post_hc.view(bs, self.gamma, -1)
+        x_post_hc = x_post_hc.view(bs, self.gamma, -1)
         if confidence_head.with_markov:
             prev_seq = torch.cat(
                 [anchor_tokens.view(-1, 1), sampled_tokens[:, : self.gamma - 1]], dim=1
@@ -856,7 +845,6 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         maybe_detect_in_closed_range(
             confidence, 0.0, 1.0, "DSpark confidence must lie in [0, 1]."
         )
-        self._last_confidence = confidence
         return confidence
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]) -> None:

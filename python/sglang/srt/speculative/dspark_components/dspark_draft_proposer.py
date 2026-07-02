@@ -79,6 +79,7 @@ class DraftBlockProposer:
         draft_sampler = self._draft_sampler
         all_greedy = sampling_info is None or sampling_info.is_all_greedy
         folded_confidence = None
+        confidence_tap = None
         folded = False
         if draft_sampler is not None and fwd.can_run_graph and all_greedy:
             folded = True
@@ -102,9 +103,10 @@ class DraftBlockProposer:
                 folded_confidence = draft_sampler.confidence_out[:bs]
         else:
             with self._base_logits_context():
-                base_logits = self.draft_model.compute_base_logits(fwd.raw_hidden).view(
-                    bs, self.gamma, -1
+                base_logits, confidence_tap = self.draft_model.compute_base_logits(
+                    fwd.raw_hidden
                 )
+                base_logits = base_logits.view(bs, self.gamma, -1)
             draft_block = sample_draft_block(
                 base_logits=base_logits,
                 anchor_tokens=draft_block_ids[:, 0],
@@ -118,6 +120,7 @@ class DraftBlockProposer:
             draft_block=draft_block,
             draft_hidden=fwd.draft_hidden_3d,
             confidence=folded_confidence,
+            confidence_tap=confidence_tap,
             folded=folded,
         )
 

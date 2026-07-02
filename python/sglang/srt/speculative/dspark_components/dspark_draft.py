@@ -40,9 +40,8 @@ class DsparkDraftSampler:
 
     def __call__(self, hidden_states, input_ids):
         bs = hidden_states.shape[0] // self.gamma
-        base_logits = self.model.compute_base_logits(hidden_states).view(
-            bs, self.gamma, -1
-        )
+        base_logits, confidence_tap = self.model.compute_base_logits(hidden_states)
+        base_logits = base_logits.view(bs, self.gamma, -1)
         anchor = input_ids.view(bs, self.gamma)[:, 0]
         draft_tokens, _ = self.markov_head.sample_block(
             base_logits,
@@ -56,6 +55,7 @@ class DsparkDraftSampler:
                 draft_hidden=hidden_states.view(bs, self.gamma, -1),
                 anchor_tokens=anchor,
                 draft_tokens=draft_tokens,
+                confidence_tap=confidence_tap,
             )
             self.confidence_out[:bs].copy_(confidence)
 

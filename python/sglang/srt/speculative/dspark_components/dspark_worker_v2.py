@@ -584,6 +584,7 @@ class DSparkWorkerV2(BaseSpecWorker):
                 draft_hidden=proposal.draft_hidden,
                 anchor_tokens=draft_block_ids[:, 0],
                 draft_tokens=draft_tokens,
+                confidence_tap=proposal.confidence_tap,
             )
 
         verify_token_budget = self._resolve_verify_token_budget(
@@ -713,19 +714,24 @@ class DSparkWorkerV2(BaseSpecWorker):
             )
         logits_output.hidden_states = None
 
-        self._maybe_record_sts_collect(
-            verify_ids_2d=verify_ids_2d,
-            target_logits=logits_output.next_token_logits,
-            bs=bs,
-        )
-        self._confidence_probe.maybe_observe(
-            carries_confidence=self._verify_planner.carries_confidence,
-            is_compact_mode=self._verify_planner.is_compact_mode,
-            confidence_raw=self._verify_planner.last_confidence_raw,
-            verify_ids_2d=verify_ids_2d,
-            target_logits=logits_output.next_token_logits,
-            bs=bs,
-        )
+        if not proposal.folded:
+            # Raw-confidence taps read the head's last eager stash; on a folded
+            # step that stash aliases a capture-time buffer of whichever bs
+            # tier captured last (cross-tier stale), so the debug taps skip
+            # folded steps instead of recording silently wrong values.
+            self._maybe_record_sts_collect(
+                verify_ids_2d=verify_ids_2d,
+                target_logits=logits_output.next_token_logits,
+                bs=bs,
+            )
+            self._confidence_probe.maybe_observe(
+                carries_confidence=self._verify_planner.carries_confidence,
+                is_compact_mode=self._verify_planner.is_compact_mode,
+                confidence_raw=self._verify_planner.last_confidence_raw,
+                verify_ids_2d=verify_ids_2d,
+                target_logits=logits_output.next_token_logits,
+                bs=bs,
+            )
         self._decision_dumper.maybe_dump(
             forward_ct=batch.forward_iter,
             bs=bs,

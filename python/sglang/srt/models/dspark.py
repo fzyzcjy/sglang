@@ -379,7 +379,12 @@ class DSparkDraftMixin:
         del embed_tokens
         self.lm_head = lm_head
 
-    def compute_base_logits(self, hidden: torch.Tensor) -> torch.Tensor:
+    def compute_base_logits(
+        self, hidden: torch.Tensor
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+        # Returns (base_logits, confidence_tap). The dense draft has no hc
+        # tap (its confidence consumes the post-norm draft_hidden directly),
+        # so the tap slot is None; dsv4 returns its post-hc_head PRE-norm tap.
         if self.lm_head is None:
             raise ValueError(
                 "DSpark dense draft requires the target lm_head "
@@ -390,7 +395,7 @@ class DSparkDraftMixin:
             hidden = hidden.to(weight.dtype)
         local_logits = torch.matmul(hidden, weight.T)
         base_logits = gather_and_crop_vocab(local_logits, self.lm_head)
-        return base_logits
+        return base_logits, None
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
         markov_weights = []
