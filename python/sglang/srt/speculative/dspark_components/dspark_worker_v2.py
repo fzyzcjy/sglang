@@ -465,6 +465,9 @@ class DSparkWorkerV2(BaseSpecWorker):
             )
 
         if batch.forward_mode.is_extend() or batch.is_extend_in_batch:
+            # Break the online SPS profiler's consecutive-decode timing pair
+            # (under non-overlap no scheduler prepare hook sees this prefill).
+            self._verify_planner.note_non_decode_step()
             return self._forward_prefill(batch, on_publish)
 
         return self._forward_decode(batch, on_publish)

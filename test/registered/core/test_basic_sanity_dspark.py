@@ -91,11 +91,10 @@ class TestBasicSanityDSpark(
                 "DSPARK",
                 "--speculative-draft-model-path",
                 DRAFT_MODEL,
-                # compact ragged-verify enables the scheduler, which requires an SPS
-                # cost table; the flat "const" (verify-all) table lets the sanity
-                # server launch without an offline profiling artifact.
-                "--speculative-dspark-sps-table-path",
-                "const",
+                # compact ragged-verify enables the scheduler; with no
+                # --speculative-dspark-sps-table-path it runs on the uninitialized
+                # flat (verify-all) table, so the sanity server launches without an
+                # offline profiling artifact.
                 "--cuda-graph-max-bs-decode",
                 "4",
                 "--mem-fraction-static",

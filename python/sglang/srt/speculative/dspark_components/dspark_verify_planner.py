@@ -19,6 +19,10 @@ from sglang.srt.speculative.dspark_components.dspark_scheduler import (
     HostConfidenceBudgetPlanner,
     build_sps_cost_table,
 )
+from sglang.srt.speculative.dspark_components.dspark_sps_table import (
+    OnlineSpsProfiler,
+    is_uninitialized_sps_table,
+)
 from sglang.srt.speculative.dspark_components.dspark_sts_table import (
     load_sts_calibration_from_path,
 )
@@ -131,6 +135,23 @@ class DSparkVerifyPlanner:
                 server_args=self.server_args,
                 verify_num_draft_tokens=self.verify_num_draft_tokens,
             )
+            online_profiler = None
+            if envs.SGLANG_DSPARK_ENABLE_SPS_ONLINE_PROFILE.get():
+                # Rank-local online re-profiling: wall-clock timing is
+                # nondeterministic across ranks, but no cross-rank sync is needed
+                # -- verify_lens is broadcast from the group-local rank 0 (B1 in
+                # _schedule_verify_lens), so only that rank's table affects the
+                # schedule; peer ranks' tables drift harmlessly (their local
+                # verify_lens is overwritten by the broadcast).
+                online_profiler = OnlineSpsProfiler(
+                    initial_table=sps_table,
+                    rebuild_interval_steps=(
+                        envs.SGLANG_DSPARK_SPS_ONLINE_REBUILD_INTERVAL.get()
+                    ),
+                    min_bin_samples=(
+                        envs.SGLANG_DSPARK_SPS_ONLINE_MIN_BIN_SAMPLES.get()
+                    ),
+                )
             # The async FutureMap relay supplies CONFIDENCE_RELAY_RING_LAG steps of
             # lag under overlap: the deferred pinned ring reads an already-landed
             # lag-RING_LAG slot (sync-free), so the relay itself is that many steps
@@ -147,15 +168,35 @@ class DSparkVerifyPlanner:
                 cfg=self._schedule_cfg,
                 model_runner=self.model_runner,
                 relay_lag_steps=relay_lag_steps,
+                online_profiler=online_profiler,
+                log_table_swaps=tp_rank == 0,
             )
             if tp_rank == 0:
+                sps_table_source = (
+                    self.server_args.speculative_dspark_sps_table_path
+                    or "uninitialized"
+                )
                 logger.info(
                     "DSpark ragged-verify scheduler enabled (mode=%s, lag=%d, "
-                    "relay_lag=%d).",
+                    "relay_lag=%d, sps_table=%s, online_sps_profile=%s).",
                     self._ragged_verify_mode.value,
                     self._budget_planner.lag_steps,
                     relay_lag_steps,
+                    sps_table_source,
+                    online_profiler is not None,
                 )
+                # The uninitialized flat table: lookup() is constant, so the budget
+                # degenerates to verify-all. Without online profiling nothing will
+                # ever refine it -- warn instead of the old startup raise, since
+                # verify-all is lossless and a valid (if gainless) operating point.
+                if is_uninitialized_sps_table(sps_table) and online_profiler is None:
+                    logger.warning(
+                        "DSpark SPS table is uninitialized (flat) and online "
+                        "profiling is disabled: the verify budget degenerates to "
+                        "verify-all (zero scheduling gain). Pass a profiled "
+                        "--speculative-dspark-sps-table-path or set "
+                        "SGLANG_DSPARK_ENABLE_SPS_ONLINE_PROFILE=1."
+                    )
 
     def _require_prep_in_cuda_graph(self) -> None:
         # B3: ragged-non-static DSpark requires the captured-graph prepare path so the
@@ -257,12 +298,22 @@ class DSparkVerifyPlanner:
         # Only decode steps feed the carry (the worker routes extend/prefill to
         # _forward_prefill, which has no verify budget); advancing the carry on a
         # prefill step would misalign the causal lag for the surrounding decodes.
+        # The prefill also breaks the online SPS profiler's consecutive-decode
+        # timing pair.
         if batch.forward_mode.is_extend() or batch.is_extend_in_batch:
+            self._budget_planner.note_non_decode_step()
             return
         resolved = future_map.resolve_confidence_cpu(batch)
         draft_input.verify_token_budget = self._budget_from_resolved(
             resolved=resolved, req_pool_indices_cpu=batch.req_pool_indices_cpu
         )
+
+    def note_non_decode_step(self) -> None:
+        # Worker-side pairing-break signal for the online SPS profiler: prefill
+        # steps bypass compute_budget on both feed paths, and under non-overlap
+        # there is no scheduler prepare hook to observe them.
+        if self._budget_planner is not None:
+            self._budget_planner.note_non_decode_step()
 
     def compute_budget_sync(
         self,
@@ -299,7 +350,9 @@ class DSparkVerifyPlanner:
     ) -> Optional[int]:
         # None at cold start (nothing relayed yet) -> the worker falls back to the
         # uniform verify-all layout, identical to the pre-relay startup behavior.
+        # No compute_budget stamp this step, so break the online profiler's pair.
         if resolved is None:
+            self._budget_planner.note_non_decode_step()
             return None
         # Each slot's CURRENT occupancy generation (host, no D2H) for the guard to
         # compare against the relayed confidence's stamped generation.
