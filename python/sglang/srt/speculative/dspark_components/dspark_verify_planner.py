@@ -115,7 +115,9 @@ class DSparkVerifyPlanner:
         self._ragged_verify_mode = read_ragged_verify_mode()
         self._schedule_cfg = DSparkScheduleConfig(gamma=self.gamma)
         self._budget_planner: Optional[HostConfidenceBudgetPlanner] = None
-        self._dynamic_graph_tier = False
+        self._dynamic_graph_tier: Optional[bool] = None
+        self._dynamic_tier_rank_consistent = False
+        self._log_resolved_tier = tp_rank == 0
         if self._ragged_verify_mode is not RaggedVerifyMode.STATIC:
             if self._confidence_head is None:
                 raise ValueError(
@@ -167,11 +169,11 @@ class DSparkVerifyPlanner:
             # budget is a deterministic function of the TP-replicated
             # confidence, hence rank-consistent without communication.
             # Backends whose verify kernels reject the decoupled pad layouts
-            # capture coupled tiers only, so the tier stays pinned for them.
-            self._dynamic_graph_tier = (
-                ragged_capture_slots_decoupled(model_runner=self.model_runner)
-                and not is_dp_attention_enabled()
-                and not (online_profiler is not None and self.server_args.tp_size > 1)
+            # capture coupled tiers only, so the tier stays pinned for them;
+            # that check resolves lazily at the first schedule (the attention
+            # backend does not exist yet when this planner is constructed).
+            self._dynamic_tier_rank_consistent = not is_dp_attention_enabled() and not (
+                online_profiler is not None and self.server_args.tp_size > 1
             )
             if tp_rank == 0:
                 sps_table_source = (
@@ -187,7 +189,11 @@ class DSparkVerifyPlanner:
                     relay_lag_steps,
                     sps_table_source,
                     online_profiler is not None,
-                    "dynamic" if self._dynamic_graph_tier else "pinned",
+                    (
+                        "dynamic-if-backend-decoupled"
+                        if self._dynamic_tier_rank_consistent
+                        else "pinned"
+                    ),
                 )
                 if is_uninitialized_sps_table(sps_table) and online_profiler is None:
                     logger.warning(
@@ -328,6 +334,22 @@ class DSparkVerifyPlanner:
             )
         )
 
+    def _resolve_dynamic_graph_tier(self) -> bool:
+        # Lazy: the attention backend is attached to the model runner after
+        # this planner is constructed, so its decoupled-capture capability can
+        # only be read once scheduling starts.
+        if self._dynamic_graph_tier is None:
+            self._dynamic_graph_tier = (
+                self._dynamic_tier_rank_consistent
+                and ragged_capture_slots_decoupled(model_runner=self.model_runner)
+            )
+            if self._log_resolved_tier:
+                logger.info(
+                    "DSpark verify graph tier resolved: %s.",
+                    "dynamic" if self._dynamic_graph_tier else "pinned",
+                )
+        return self._dynamic_graph_tier
+
     def schedule_layout(
         self,
         *,
@@ -362,7 +384,7 @@ class DSparkVerifyPlanner:
         tier_num_reqs = bs if global_num_reqs is None else global_num_reqs
         # None keeps the legacy pinned tier round_up(bs * (gamma+1)); a host
         # budget selects the budget-sized tier round_up(bs + budget).
-        tier_budget = budget if self._dynamic_graph_tier else None
+        tier_budget = budget if self._resolve_dynamic_graph_tier() else None
         if ragged_layout_exceeds_captured_grid(
             num_reqs=tier_num_reqs,
             verify_num_draft_tokens=self.verify_num_draft_tokens,
