@@ -1,15 +1,27 @@
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import msgspec
 import torch
 
 from sglang.srt.environ import envs
+from sglang.srt.model_executor.runner import get_is_capture_mode
+
+logger = logging.getLogger(__name__)
 
 _KERNEL_IMPL = envs.SGLANG_DSPARK_KERNEL_COMMIT_KV_PROJ.get()
 
 _STACKED_WEIGHT_CACHE: dict[int, _StackedWkvWeight] = {}
+
+# Per-weight verdict for the stacked fast path: True = verified numerically equal
+# to the per-stage reference (use it), False = the fused GEMM raised or diverged on
+# this platform (fall back to per-stage). Unset = not yet probed. The stacked fp8
+# scale layout deepgemm wants (sf.stride(-2) == 1, mn-major/UE8M0 on Blackwell) is
+# not reproducible by a plain cat, so we prove equivalence once against the
+# per-stage path before trusting the fusion instead of assuming it holds.
+_FUSED_USABLE: dict[int, bool] = {}
 
 
 class CommitKvProj:
@@ -47,6 +59,69 @@ def commit_kv_proj(
 
 
 def commit_kv_proj_fused(
+    *,
+    main_x: torch.Tensor,
+    wkv_linears: list[torch.nn.Module],
+) -> list[torch.Tensor]:
+    # One GEMM over the stacked per-stage wkv weights replaces the num_stages
+    # quant + GEMM dispatch chains; the [N, head_dim] contiguous slices feed the
+    # per-stage pool writer. Not a triton kernel per se, but it is the
+    # launch-count-optimized impl behind the same toggle.
+    #
+    # Preferred path: stack the QUANTIZED blockwise-fp8 weights + scales along the
+    # output dim (valid when every stage's out_dim is a whole number of scale
+    # blocks) and call the same w8a8_block_fp8_linear the per-stage forward uses --
+    # one input quant + one deep_gemm, per-element math identical to the per-stage
+    # reference (each 128-row output block keeps its own scale; the input quant of
+    # the shared main_x is deterministic, so quantizing once == quantizing thrice).
+    # Fallback (unquantized / non-block layouts): one bf16 GEMM over dequantized
+    # stacked weights -- the weights are bit-exact copies of the quantized values,
+    # but the GEMM numerics differ slightly from deep_gemm.
+    #
+    # deep_gemm requires the weight scale in an mn-major / UE8M0-packed layout
+    # (sf.stride(-2) == 1) that a plain cat of the per-stage scales cannot rebuild
+    # on Blackwell, so the fused result is proven equal to the per-stage reference
+    # once per weight (cached in _FUSED_USABLE); any deep_gemm assertion or numeric
+    # divergence falls the layer back to the always-correct per-stage path.
+    key = id(wkv_linears[0])
+    if _FUSED_USABLE.get(key) is False:
+        return commit_kv_proj(main_x=main_x, wkv_linears=wkv_linears)
+
+    # The one-time verify below calls torch.allclose, which syncs to the host; that
+    # is illegal inside cuda-graph capture. Until the layer is proven, stay on the
+    # per-stage path during capture so the captured graph never depends on an
+    # unverified fusion; the verdict gets set on the first eager (prefill) call.
+    if _FUSED_USABLE.get(key) is None and get_is_capture_mode():
+        return commit_kv_proj(main_x=main_x, wkv_linears=wkv_linears)
+
+    try:
+        fused = _stacked_commit_kv_proj(main_x=main_x, wkv_linears=wkv_linears)
+    except Exception:
+        logger.warning(
+            "commit_kv_proj fused GEMM failed; falling back to the per-stage path",
+            exc_info=True,
+        )
+        _FUSED_USABLE[key] = False
+        return commit_kv_proj(main_x=main_x, wkv_linears=wkv_linears)
+
+    if _FUSED_USABLE.get(key) is None:
+        reference = commit_kv_proj(main_x=main_x, wkv_linears=wkv_linears)
+        matches = all(
+            torch.allclose(f, r, rtol=1e-2, atol=1e-2)
+            for f, r in zip(fused, reference)
+        )
+        _FUSED_USABLE[key] = matches
+        if not matches:
+            logger.warning(
+                "commit_kv_proj fused GEMM diverged from the per-stage reference; "
+                "falling back to the per-stage path"
+            )
+            return reference
+
+    return fused
+
+
+def _stacked_commit_kv_proj(
     *,
     main_x: torch.Tensor,
     wkv_linears: list[torch.nn.Module],
@@ -130,7 +205,12 @@ def _build_stacked_wkv_weight(
             scale = torch.cat(
                 [linear.weight_scale_inv for linear in wkv_linears], dim=0
             )
-            return _StackedWkvWeight(weight=weight, fp8_scale=scale.contiguous())
+            # deep_gemm wants the weight scale mn-major (sf.stride(-2) == 1); a plain
+            # contiguous cat is row-major (stride(-2) == in_blocks). Rebuild the last
+            # two dims column-major so stride(-2) == 1 without changing values.
+            if scale.dim() >= 2 and scale.stride(-2) != 1:
+                scale = scale.transpose(-2, -1).contiguous().transpose(-2, -1)
+            return _StackedWkvWeight(weight=weight, fp8_scale=scale)
     weight = torch.cat(
         [_dequant_linear_weight(linear) for linear in wkv_linears], dim=0
     )
