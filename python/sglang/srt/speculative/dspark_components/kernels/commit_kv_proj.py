@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from typing import Optional
+
+import msgspec
 import torch
 
 from sglang.srt.environ import envs
 
 _KERNEL_IMPL = envs.SGLANG_DSPARK_KERNEL_COMMIT_KV_PROJ.get()
 
-_STACKED_WEIGHT_CACHE: dict[int, torch.Tensor] = {}
+_STACKED_WEIGHT_CACHE: dict[int, "_StackedWkvWeight"] = {}
 
 
 class CommitKvProj:
@@ -51,16 +54,36 @@ def commit_kv_proj_fused(
     main_x: torch.Tensor,
     wkv_linears: list[torch.nn.Module],
 ) -> list[torch.Tensor]:
-    # One bf16 GEMM over the stacked (dequantized) per-stage wkv weights replaces
-    # the num_stages quant + fp8 GEMM dispatch chains; the [N, head_dim] contiguous
-    # slices feed the per-stage pool writer. Not a triton kernel per se (the GEMM is
-    # cuBLAS), but it is the launch-count-optimized impl behind the same toggle.
-    # NOTE vs the fp8 reference: the dequantized bf16 weights are bit-exact copies
-    # of the quantized values, and skipping the per-step input quantization only
-    # removes a rounding step, but the GEMM numerics differ slightly from deep_gemm.
-    weight = _stacked_wkv_weight(wkv_linears=wkv_linears)
-    kv_all = torch.nn.functional.linear(main_x, weight)
+    # One GEMM over the stacked per-stage wkv weights replaces the num_stages
+    # quant + GEMM dispatch chains; the [N, head_dim] contiguous slices feed the
+    # per-stage pool writer. Not a triton kernel per se, but it is the
+    # launch-count-optimized impl behind the same toggle.
+    #
+    # Preferred path: stack the QUANTIZED blockwise-fp8 weights + scales along the
+    # output dim (valid when every stage's out_dim is a whole number of scale
+    # blocks) and call the same w8a8_block_fp8_linear the per-stage forward uses --
+    # one input quant + one deep_gemm, per-element math identical to the per-stage
+    # reference (each 128-row output block keeps its own scale; the input quant of
+    # the shared main_x is deterministic, so quantizing once == quantizing thrice).
+    # Fallback (unquantized / non-block layouts): one bf16 GEMM over dequantized
+    # stacked weights -- the weights are bit-exact copies of the quantized values,
+    # but the GEMM numerics differ slightly from deep_gemm.
     num_stages = len(wkv_linears)
+    stacked = _stacked_wkv_weight(wkv_linears=wkv_linears)
+
+    if stacked.fp8_scale is not None:
+        quant_method = wkv_linears[0].quant_method
+        kv_all = quant_method.w8a8_block_fp8_linear(
+            input=main_x,
+            weight=stacked.weight,
+            block_size=quant_method.quant_config.weight_block_size,
+            weight_scale=stacked.fp8_scale,
+            input_scale=None,
+            bias=None,
+        )
+    else:
+        kv_all = torch.nn.functional.linear(main_x, stacked.weight)
+
     head_dim = kv_all.shape[-1] // num_stages
     return [
         kv_all[:, i * head_dim : (i + 1) * head_dim].contiguous()
@@ -68,17 +91,44 @@ def commit_kv_proj_fused(
     ]
 
 
-def _stacked_wkv_weight(*, wkv_linears: list[torch.nn.Module]) -> torch.Tensor:
+class _StackedWkvWeight(msgspec.Struct):
+    weight: torch.Tensor
+    fp8_scale: Optional[torch.Tensor]
+
+
+def _stacked_wkv_weight(*, wkv_linears: list[torch.nn.Module]) -> _StackedWkvWeight:
     # Built once per model instance (weights are static post-load); keyed by the
     # first linear's identity, mirroring the chain-verify buffer cache pattern.
     key = id(wkv_linears[0])
     cached = _STACKED_WEIGHT_CACHE.get(key)
     if cached is None:
-        cached = torch.cat(
-            [_dequant_linear_weight(linear) for linear in wkv_linears], dim=0
-        )
+        cached = _build_stacked_wkv_weight(wkv_linears=wkv_linears)
         _STACKED_WEIGHT_CACHE[key] = cached
     return cached
+
+
+def _build_stacked_wkv_weight(
+    *, wkv_linears: list[torch.nn.Module]
+) -> _StackedWkvWeight:
+    first = wkv_linears[0]
+    quant_method = first.quant_method
+    block_quant = hasattr(quant_method, "block_quant") and quant_method.block_quant
+    if block_quant and hasattr(quant_method, "w8a8_block_fp8_linear"):
+        block_out = quant_method.quant_config.weight_block_size[0]
+        if all(
+            linear.weight.dtype == torch.float8_e4m3fn
+            and linear.weight.shape[0] % block_out == 0
+            for linear in wkv_linears
+        ):
+            weight = torch.cat([linear.weight for linear in wkv_linears], dim=0)
+            scale = torch.cat(
+                [linear.weight_scale_inv for linear in wkv_linears], dim=0
+            )
+            return _StackedWkvWeight(weight=weight, fp8_scale=scale.contiguous())
+    weight = torch.cat(
+        [_dequant_linear_weight(linear) for linear in wkv_linears], dim=0
+    )
+    return _StackedWkvWeight(weight=weight, fp8_scale=None)
 
 
 def _dequant_linear_weight(linear: torch.nn.Module) -> torch.Tensor:
