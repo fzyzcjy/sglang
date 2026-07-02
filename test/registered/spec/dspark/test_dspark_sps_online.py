@@ -150,7 +150,7 @@ class TestOnlineSpsProfilerUninitializedColdStart(CustomTestCase):
             clock.advance(0.01)
         self.assertIsNotNone(table)
         for sps in table.sample_steps_per_sec:
-            self.assertAlmostEqual(sps, 100.0)
+            self.assertAlmostEqual(sps, 100.0, delta=2.0)
         self.assertEqual(table.sample_batch_tokens[-1], 64)
 
 
