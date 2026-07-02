@@ -293,6 +293,14 @@ class Envs:
     SGLANG_DSPARK_FP32_LM_HEAD = EnvBool(False)
     SGLANG_DSPARK_FAST_SAMPLING = EnvBool(True)
     SGLANG_DSPARK_ENABLE_MULTI_STREAM = EnvBool(True)
+    # DSpark hot-op kernel impl selectors ("triton" | "torch"), one per extracted kernel
+    # file under speculative/dspark_components/kernels/. Default "triton" is the optimized
+    # path; set the matching var to "torch" for the reference impl (e.g. while a triton
+    # kernel is unimplemented, or to A/B a suspected kernel bug against torch).
+    # SGLANG_DSPARK_KERNEL_SOFTMAX_TEMP additionally accepts "flashinfer" (fused online
+    # safe-softmax via flashinfer.sampling.softmax; splits the huge vocab across blocks,
+    # unlike the one-block-per-row triton kernel). Non-byte-identical vs torch/triton, so
+    # the default stays "triton" until an e2e no-regression run clears the switch.
     SGLANG_DSPARK_KERNEL_SCATTER = EnvStr("triton")
     SGLANG_DSPARK_KERNEL_RAGGED_WINDOW = EnvStr("triton")
     SGLANG_DSPARK_KERNEL_SCHEDULE_TOPK = EnvStr("triton")
