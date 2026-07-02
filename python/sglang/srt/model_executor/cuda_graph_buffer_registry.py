@@ -30,8 +30,6 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
-import logging
-
 import torch
 
 from sglang.srt.model_executor.input_buffers import share_input_buffer
@@ -39,8 +37,6 @@ from sglang.srt.model_executor.input_buffers import share_input_buffer
 if TYPE_CHECKING:
     from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 
-
-logger = logging.getLogger(__name__)
 
 _has_foreach_copy = hasattr(torch, "_foreach_copy_")
 
@@ -453,13 +449,6 @@ class CudaGraphBufferRegistry:
                     dst = slot.buffer
                 else:
                     dst = slot.buffer[:raw_n]
-            if dst.shape[:1] != src.shape[:1]:
-                logger.error(
-                    "fill_from shape mismatch on slot %r: dst %s vs src %s",
-                    slot.name,
-                    tuple(dst.shape),
-                    tuple(src.shape),
-                )
             # foreach_copy_ requires same-device tensors per call — bucket
             # by device.
             if dst.device.type == "cpu":
