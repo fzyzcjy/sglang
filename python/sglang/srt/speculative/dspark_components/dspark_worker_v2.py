@@ -265,15 +265,33 @@ class DSparkWorkerV2(BaseSpecWorker):
             and not server_args.disable_cuda_graph
         ):
             # Dense-draft (qwen/gemma) compact verify under DP + cuda graph is not yet
-            # supported and would deadlock: on a step with both busy and idle DP groups,
-            # the busy target verify replays the token-keyed compact graph (its baked
-            # dp_gather requires every rank to contribute the padded tier), but an idle
-            # group cannot produce that tier-sized packed geometry (it has 0 real tokens),
-            # and forcing the busy side eager hits the trtllm_mha backend's incomplete
-            # eager compact-verify path (max_q_len assert). Fail fast with actionable
-            # guidance rather than hang. Eager (--disable-cuda-graph) is verified lossless;
-            # the dsv4 (MoE) draft keeps cuda graph (its draft/verify are full-DP and the
-            # idle path already matches).
+            # supported: it deadlocks, and every fix attempted so far hits a separate
+            # backend-layer gap. Fail fast at startup with actionable guidance instead of
+            # a 300s watchdog hang. Concretely, the troubles hit (see the dp-attn journal
+            # 2026-07-02 for full py-spy traces):
+            #  1. On a step with both busy and idle DP groups, the busy target verify
+            #     replays the token-keyed COMPACT graph while the idle group's dummy
+            #     verify (a layout-less DFlashVerifyInput) replays the bs-keyed graph.
+            #     These are two distinct captured CUDA graphs whose baked dp_gather
+            #     collectives can never rendezvous -> the target-verify collective
+            #     deadlocks (2 ranks wedged in a matmul, 2 parked at recv_requests).
+            #  2. Making the idle group also take the token-keyed graph fails: the
+            #     token-keyed graph's dp_gather requires every rank to contribute the
+            #     padded tier, but an idle group has 0 real tokens and cannot be shaped
+            #     into that compact-packed tier geometry (a 0-request RaggedVerifyLayout
+            #     is rejected; a global-bs padded layout then mismatches at buffer fill,
+            #     `_foreach_copy size 8 vs 0`).
+            #  3. Forcing the whole step eager on a mixed busy/idle step instead hits the
+            #     trtllm_mha backend's incomplete eager compact-verify path
+            #     (`assert max_q_len is not None`) -- compact was designed to build its
+            #     verify metadata inside the graph capture, so its eager path is a stub
+            #     when a graph exists.
+            # A real fix needs backend work (let an idle group join the tier-padded
+            # token-keyed graph, or complete trtllm_mha's eager compact metadata as the
+            # mixed-step fallback). Until then: eager (--disable-cuda-graph) is verified
+            # lossless (gsm8k 0.94, acc_len ~5.4). The dsv4 (MoE) draft is unaffected --
+            # its draft AND verify are full-DP and their idle participation already
+            # matches the busy geometry, so it keeps cuda graph under DP.
             raise ValueError(
                 "DSpark dense-draft compact verify under --enable-dp-attention does not "
                 "yet support cuda graph (idle DP groups cannot join the token-keyed "
