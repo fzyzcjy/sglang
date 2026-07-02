@@ -16,7 +16,6 @@ from sglang.srt.model_executor.forward_batch_info import (
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
 from sglang.srt.speculative.dflash_info import DFlashVerifyInput
-from sglang.srt.speculative.ragged_verify import RaggedVerifyMode
 from sglang.srt.speculative.dflash_info_v2 import DFlashDraftInputV2
 from sglang.srt.speculative.dflash_utils import (
     compute_dflash_correct_drafts_and_bonus,
@@ -75,6 +74,7 @@ from sglang.srt.speculative.dspark_components.kernels.build_out_tokens import (
 from sglang.srt.speculative.dspark_components.kernels.finalize_accept_lens import (
     FinalizeAcceptLens,
 )
+from sglang.srt.speculative.ragged_verify import RaggedVerifyMode
 from sglang.srt.speculative.spec_utils import draft_tp_context
 from sglang.srt.utils import get_available_gpu_memory, is_cuda
 
