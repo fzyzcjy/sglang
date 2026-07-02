@@ -61,6 +61,7 @@ from sglang.srt.speculative.dspark_components.dspark_verify import (
     alloc_verify_window,
 )
 from sglang.srt.speculative.dspark_components.dspark_verify_epilogue import (
+    CommitInjectCtx,
     DsparkVerifyEpilogue,
 )
 from sglang.srt.speculative.dspark_components.dspark_verify_planner import (
@@ -263,7 +264,14 @@ class DSparkWorkerV2(BaseSpecWorker):
                 max_bs=max(server_args.cuda_graph_config.decode.bs),
                 verify_num_draft_tokens=self.verify_num_draft_tokens,
                 device=self.device,
-                commit_injector=self._kv_injector,
+                commit_ctx=CommitInjectCtx(
+                    draft_model=self.draft_model,
+                    block_pos_offsets=self._block_pos_offsets,
+                    resolve_pool=lambda: self.draft_model_runner.token_to_kv_pool,
+                    resolve_req_to_token=lambda: (
+                        self.model_runner.req_to_token_pool.req_to_token
+                    ),
+                ),
             )
             self.model_runner.capture_tail_hooks.append(
                 self._verify_epilogue.capture_hook
