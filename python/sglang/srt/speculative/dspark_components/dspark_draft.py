@@ -10,11 +10,6 @@ from sglang.srt.speculative.dspark_components.kernels.sample_step_tokens import 
     SampleStepTokens,
 )
 
-# ADHOC-SHAPE-PRINT (workflow ii, revert after capture)
-from sglang.srt.debug_utils.dumper import get_tensor_info as _gti
-
-_ADHOC_SAMPLE_PRINTS = [0]
-
 
 def greedy_step_sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:
     del step_idx
@@ -136,14 +131,6 @@ def sample_draft_block(
                 exp_noise = torch.empty(
                     step_logits.shape, dtype=torch.float32, device=step_logits.device
                 ).exponential_(1)
-                if _ADHOC_SAMPLE_PRINTS[0] < 24:  # ADHOC-SHAPE-PRINT
-                    _ADHOC_SAMPLE_PRINTS[0] += 1
-                    print(
-                        f"[SHAPE][sample #{_ADHOC_SAMPLE_PRINTS[0]}] "
-                        f"step_logits stride={tuple(step_logits.stride())} contig={step_logits.is_contiguous()} {_gti(step_logits)} || "
-                        f"exp_noise {_gti(exp_noise)} || temps {_gti(temperatures)} || greedy {_gti(greedy_mask)}",
-                        flush=True,
-                    )
                 return SampleStepTokens.execute(
                     step_logits=step_logits,
                     temperatures=temperatures,
