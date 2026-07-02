@@ -6,7 +6,7 @@ import torch
 from sglang.srt.speculative.dspark_components.dspark_scheduler import (
     DSparkScheduleConfig,
     compute_verify_token_budget,
-    schedule_verify_lens_topk,
+    schedule_verify_lens_topk_from_survival,
 )
 from sglang.srt.speculative.dspark_components.dspark_sps_table import SpsCostTable
 from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
@@ -116,7 +116,7 @@ def schedule_verify_lens_topk_vanilla(
 # Every property test below runs against both the production function and the
 # vanilla reference (parameterized via subTest), so the readable reference is held
 # to exactly the same contract.
-_TOPK_IMPLS = (schedule_verify_lens_topk, schedule_verify_lens_topk_vanilla)
+_TOPK_IMPLS = (schedule_verify_lens_topk_from_survival, schedule_verify_lens_topk_vanilla)
 
 
 def _for_each_impl(test_method):

@@ -59,7 +59,17 @@ def schedule_verify_lens_topk(
     budget: int,
     cfg: DSparkScheduleConfig,
 ) -> torch.Tensor:
-    survival_probs = compute_sort_survival(confidence)
+    return schedule_verify_lens_topk_from_survival(
+        survival_probs=compute_sort_survival(confidence), budget=budget, cfg=cfg
+    )
+
+
+def schedule_verify_lens_topk_from_survival(
+    *,
+    survival_probs: torch.Tensor,
+    budget: int,
+    cfg: DSparkScheduleConfig,
+) -> torch.Tensor:
     # GPU-native sort (no per-element D2H). survival_probs is the CURRENT step's
     # confidence cumprod (lag 0, on the forward stream); budget is a host int (the
     # relay-fed K). Everything below runs device-side so the captured graph can

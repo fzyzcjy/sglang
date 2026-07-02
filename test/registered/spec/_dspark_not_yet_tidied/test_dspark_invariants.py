@@ -5,7 +5,7 @@ import torch
 from sglang.srt.speculative.dspark_components.dspark_scheduler import (
     DSparkScheduleConfig,
     compute_verify_token_budget,
-    schedule_verify_lens_topk,
+    schedule_verify_lens_topk_from_survival,
 )
 from sglang.srt.speculative.dspark_components.dspark_sps_table import SpsCostTable
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -37,7 +37,7 @@ def _verify_lens(
     budget = compute_verify_token_budget(
         history_survival_probs=two_steps_prior_k_survival, sps_table=sps_table, cfg=cfg
     )
-    return schedule_verify_lens_topk(
+    return schedule_verify_lens_topk_from_survival(
         survival_probs=sort_survival, budget=budget, cfg=cfg
     )
 
@@ -170,7 +170,7 @@ class TestNonAnticipatingBudgetAllocation(CustomTestCase):
         )
         survival = _survival_from_confidence(confidence)
         cfg = DSparkScheduleConfig(gamma=3, min_verify_len=1)
-        verify_lens = schedule_verify_lens_topk(
+        verify_lens = schedule_verify_lens_topk_from_survival(
             survival_probs=survival, budget=2, cfg=cfg
         )
         self.assertGreater(
@@ -186,7 +186,7 @@ class TestNonAnticipatingBudgetAllocation(CustomTestCase):
         survival = _survival_from_confidence(confidence)
         cfg = DSparkScheduleConfig(gamma=5, min_verify_len=1)
         budget = 4
-        verify_lens = schedule_verify_lens_topk(
+        verify_lens = schedule_verify_lens_topk_from_survival(
             survival_probs=survival, budget=budget, cfg=cfg
         )
         extra = int((verify_lens.to(torch.int64) - cfg.min_verify_len).sum().item())
@@ -199,8 +199,8 @@ class TestNonAnticipatingBudgetAllocation(CustomTestCase):
             torch.full((3, 4), 0.8, dtype=torch.float32)
         )
         cfg = DSparkScheduleConfig(gamma=4, min_verify_len=1)
-        first = schedule_verify_lens_topk(survival_probs=survival, budget=5, cfg=cfg)
-        second = schedule_verify_lens_topk(survival_probs=survival, budget=5, cfg=cfg)
+        first = schedule_verify_lens_topk_from_survival(survival_probs=survival, budget=5, cfg=cfg)
+        second = schedule_verify_lens_topk_from_survival(survival_probs=survival, budget=5, cfg=cfg)
         self.assertTrue(torch.equal(first, second))
         extra = int((first.to(torch.int64) - cfg.min_verify_len).sum().item())
         self.assertEqual(extra, 5)

@@ -9,7 +9,7 @@ from sglang.srt.speculative.dspark_components.dspark_scheduler import (
     HostConfidenceBudgetPlanner,
     _value_independent_descending_order,
     compute_verify_token_budget,
-    schedule_verify_lens_topk,
+    schedule_verify_lens_topk_from_survival,
 )
 from sglang.srt.speculative.dspark_components.dspark_sps_table import SpsCostTable
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -224,7 +224,7 @@ class TestDeviceSortEquivalence(CustomTestCase):
         survival = torch.cumprod(
             torch.full((3, gamma), 0.5, dtype=torch.float32), dim=1
         )
-        verify_lens = schedule_verify_lens_topk(
+        verify_lens = schedule_verify_lens_topk_from_survival(
             survival_probs=survival, budget=0, cfg=cfg
         )
         self.assertTrue(bool((verify_lens >= 1).all()))
@@ -237,7 +237,7 @@ class TestDeviceSortEquivalence(CustomTestCase):
             torch.full((5, gamma), 0.9, dtype=torch.float32), dim=1
         )
         budget = 3
-        verify_lens = schedule_verify_lens_topk(
+        verify_lens = schedule_verify_lens_topk_from_survival(
             survival_probs=survival, budget=budget, cfg=cfg
         ).to(torch.int64)
         admitted = int((verify_lens - 1).sum())
