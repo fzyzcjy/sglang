@@ -258,6 +258,29 @@ class DSparkWorkerV2(BaseSpecWorker):
             server_args=self.server_args,
             verify_num_draft_tokens=self.verify_num_draft_tokens,
         )
+        if (
+            server_args.enable_dp_attention
+            and not self._draft_is_moe
+            and self._verify_planner.is_compact_mode
+            and not server_args.disable_cuda_graph
+        ):
+            # Dense-draft (qwen/gemma) compact verify under DP + cuda graph is not yet
+            # supported and would deadlock: on a step with both busy and idle DP groups,
+            # the busy target verify replays the token-keyed compact graph (its baked
+            # dp_gather requires every rank to contribute the padded tier), but an idle
+            # group cannot produce that tier-sized packed geometry (it has 0 real tokens),
+            # and forcing the busy side eager hits the trtllm_mha backend's incomplete
+            # eager compact-verify path (max_q_len assert). Fail fast with actionable
+            # guidance rather than hang. Eager (--disable-cuda-graph) is verified lossless;
+            # the dsv4 (MoE) draft keeps cuda graph (its draft/verify are full-DP and the
+            # idle path already matches).
+            raise ValueError(
+                "DSpark dense-draft compact verify under --enable-dp-attention does not "
+                "yet support cuda graph (idle DP groups cannot join the token-keyed "
+                "compact graph). Re-run with --disable-cuda-graph (eager is lossless), "
+                "or use SGLANG_RAGGED_VERIFY_MODE=static. The dsv4 (MoE) draft supports "
+                "cuda graph under DP."
+            )
         self._kv_injector = TargetHiddenKvInjector(
             draft_model=self.draft_model,
             draft_model_runner=self.draft_model_runner,
