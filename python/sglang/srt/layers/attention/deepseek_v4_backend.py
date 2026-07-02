@@ -620,6 +620,7 @@ class DeepseekV4AttnBackend(
         self.hisparse_coordinator = model_runner.hisparse_coordinator
         self.req_to_token = model_runner.req_to_token_pool.req_to_token
         self.MAX_SEQ_LEN_FOR_CAPTURE = self.req_to_token.shape[1]
+        self.max_context_len = model_runner.model_config.context_len
 
         assert isinstance(self.token_to_kv_pool, DeepSeekV4TokenToKVPool)
         self.c4_topk = getattr(
