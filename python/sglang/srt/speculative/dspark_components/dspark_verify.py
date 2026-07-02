@@ -80,12 +80,19 @@ def verify_layout_graph_num_tokens_floor(
     ragged_verify_mode: RaggedVerifyMode,
     verify_num_draft_tokens: int,
     model_runner,
+    verify_token_budget: Optional[int] = None,
 ) -> int:
     if (
         ragged_verify_mode is not RaggedVerifyMode.COMPACT
         or ragged_capture_num_tokens(model_runner=model_runner) is None
     ):
         return 0
+    if verify_token_budget is not None:
+        # Budget-tiered floor: every request verifies at least the anchor and
+        # the top-k allocator hands out at most `budget` tokens above it, so
+        # num_reqs + budget upper-bounds the packed total. Both terms live on
+        # the host, so the tier choice stays sync-free (no D2H on verify_lens).
+        return num_reqs + verify_token_budget
     return num_reqs * verify_num_draft_tokens
 
 
@@ -96,16 +103,32 @@ def ragged_capture_num_tokens(*, model_runner) -> Optional[list[int]]:
     return runner.capture_num_tokens
 
 
+def ragged_capture_max_slots(*, model_runner) -> Optional[int]:
+    runner = model_runner.decode_cuda_graph_runner
+    if runner is None or not getattr(runner, "ragged_verify_mode", False):
+        return None
+    return runner.max_bs
+
+
 def ragged_layout_exceeds_captured_grid(
     *,
     num_reqs: int,
     verify_num_draft_tokens: int,
     model_runner,
+    tier_tokens_hint: Optional[int] = None,
 ) -> bool:
     capture_num_tokens = ragged_capture_num_tokens(model_runner=model_runner)
     if capture_num_tokens is None:
         return False
-    return num_reqs * verify_num_draft_tokens > capture_num_tokens[-1]
+    max_slots = ragged_capture_max_slots(model_runner=model_runner)
+    if max_slots is not None and num_reqs > max_slots:
+        return True
+    tier_tokens = (
+        tier_tokens_hint
+        if tier_tokens_hint is not None
+        else num_reqs * verify_num_draft_tokens
+    )
+    return tier_tokens > capture_num_tokens[-1]
 
 
 def alloc_verify_window(

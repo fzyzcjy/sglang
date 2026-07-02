@@ -4,6 +4,7 @@ from typing import Optional
 import torch
 
 from sglang.srt.environ import envs
+from sglang.srt.layers.dp_attention import is_dp_attention_enabled
 from sglang.srt.managers.overlap_utils import (
     CONFIDENCE_RELAY_RING_LAG,
     FutureMap,
@@ -113,6 +114,7 @@ class DSparkVerifyPlanner:
         self._ragged_verify_mode = read_ragged_verify_mode()
         self._schedule_cfg = DSparkScheduleConfig(gamma=self.gamma)
         self._budget_planner: Optional[HostConfidenceBudgetPlanner] = None
+        self._dynamic_graph_tier = False
         if self._ragged_verify_mode is not RaggedVerifyMode.STATIC:
             if self._confidence_head is None:
                 raise ValueError(
@@ -153,6 +155,19 @@ class DSparkVerifyPlanner:
                 online_profiler=online_profiler,
                 log_table_swaps=tp_rank == 0,
             )
+            # Budget-tiered graph selection: replay the tier round_up(bs +
+            # budget) instead of the pinned round_up(bs * (gamma+1)), so a
+            # trimmed budget buys a cheaper captured graph. The tier must be
+            # identical on every rank of the graph's collective group, and the
+            # budget is a rank-local host int, so two cases pin to the legacy
+            # tier until a cross-rank tier-agreement channel lands: dp-attn
+            # ranks see different (bs, budget), and online SPS tables are
+            # rank-local so tp>1 budgets diverge. With a shared table the
+            # budget is a deterministic function of the TP-replicated
+            # confidence, hence rank-consistent without communication.
+            self._dynamic_graph_tier = not is_dp_attention_enabled() and not (
+                online_profiler is not None and self.server_args.tp_size > 1
+            )
             if tp_rank == 0:
                 sps_table_source = (
                     self.server_args.speculative_dspark_sps_table_path
@@ -160,12 +175,14 @@ class DSparkVerifyPlanner:
                 )
                 logger.info(
                     "DSpark ragged-verify scheduler enabled (mode=%s, lag=%d, "
-                    "relay_lag=%d, sps_table=%s, online_sps_profile=%s).",
+                    "relay_lag=%d, sps_table=%s, online_sps_profile=%s, "
+                    "graph_tier=%s).",
                     self._ragged_verify_mode.value,
                     self._budget_planner.lag_steps,
                     relay_lag_steps,
                     sps_table_source,
                     online_profiler is not None,
+                    "dynamic" if self._dynamic_graph_tier else "pinned",
                 )
                 if is_uninitialized_sps_table(sps_table) and online_profiler is None:
                     logger.warning(
@@ -338,10 +355,16 @@ class DSparkVerifyPlanner:
             return None
         bs = int(verify_lens.shape[0])
         tier_num_reqs = bs if global_num_reqs is None else global_num_reqs
+        # None keeps the legacy pinned tier round_up(bs * (gamma+1)); a host
+        # budget selects the budget-sized tier round_up(bs + budget).
+        tier_budget = budget if self._dynamic_graph_tier else None
         if ragged_layout_exceeds_captured_grid(
             num_reqs=tier_num_reqs,
             verify_num_draft_tokens=self.verify_num_draft_tokens,
             model_runner=self.model_runner,
+            tier_tokens_hint=(
+                None if tier_budget is None else tier_num_reqs + tier_budget
+            ),
         ):
             return None
         graph_num_tokens_floor = verify_layout_graph_num_tokens_floor(
@@ -349,6 +372,7 @@ class DSparkVerifyPlanner:
             ragged_verify_mode=self._ragged_verify_mode,
             verify_num_draft_tokens=self.verify_num_draft_tokens,
             model_runner=self.model_runner,
+            verify_token_budget=tier_budget,
         )
         capture_num_tokens = ragged_capture_num_tokens(model_runner=self.model_runner)
         if graph_num_tokens_floor > 0 and capture_num_tokens is not None:
