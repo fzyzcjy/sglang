@@ -3,8 +3,10 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from sglang.srt.speculative.dspark_components.dspark_sps_table import (
+from sglang.srt.speculative.dspark_components.dspark_sps_online import (
     OnlineSpsProfiler,
+)
+from sglang.srt.speculative.dspark_components.dspark_sps_table import (
     SpsCostTable,
     build_batch_size_sweep,
     load_sps_table_from_path,

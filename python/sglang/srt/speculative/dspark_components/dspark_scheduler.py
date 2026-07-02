@@ -8,8 +8,10 @@ import torch
 
 from sglang.srt.environ import envs
 from sglang.srt.server_args import ServerArgs
-from sglang.srt.speculative.dspark_components.dspark_sps_table import (
+from sglang.srt.speculative.dspark_components.dspark_sps_online import (
     OnlineSpsProfiler,
+)
+from sglang.srt.speculative.dspark_components.dspark_sps_table import (
     SpsCostTable,
     build_uninitialized_sps_table,
     load_sps_table_from_path,

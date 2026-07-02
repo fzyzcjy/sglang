@@ -19,8 +19,10 @@ from sglang.srt.speculative.dspark_components.dspark_scheduler import (
     HostConfidenceBudgetPlanner,
     build_sps_cost_table,
 )
-from sglang.srt.speculative.dspark_components.dspark_sps_table import (
+from sglang.srt.speculative.dspark_components.dspark_sps_online import (
     OnlineSpsProfiler,
+)
+from sglang.srt.speculative.dspark_components.dspark_sps_table import (
     is_uninitialized_sps_table,
 )
 from sglang.srt.speculative.dspark_components.dspark_sts_table import (
