@@ -329,11 +329,6 @@ class DSparkAttention(MqaAttentionBase):
                 )
             q = self._compute_q(hidden_states, positions, q_out=q_out)
             current_stream.wait_stream(stream_kv)
-            # Sentinel like the target's multi-stream path (deepseek_v4.py forward):
-            # with save_kv_cache=False the backend never reads k/v (only the `k is v`
-            # assert), so pass the main-stream q instead of letting the alt-stream kv
-            # escape its stream context.
-            attn_k = q
         else:
             kv = self.kv_proj_only(hidden_states)
             self._store_block_kv(
@@ -344,7 +339,6 @@ class DSparkAttention(MqaAttentionBase):
                 pool=pool,
             )
             q = self._compute_q(hidden_states, positions, q_out=q_out)
-            attn_k = kv
 
         if q_padded is not None:
             q = q_padded
@@ -357,8 +351,8 @@ class DSparkAttention(MqaAttentionBase):
         # rank's local slice, zero-padded to _PAD_NUM_HEADS when the heads are.
         o = attn_backend.forward(
             q=q,
-            k=attn_k,
-            v=attn_k,
+            k=kv,
+            v=kv,
             layer=self.attn,
             forward_batch=forward_batch,
             compress_ratio=0,
