@@ -585,10 +585,11 @@ def cli_main() -> None:
         "--max-batch-tokens",
         type=int,
         default=None,
-        help="Override the table's max_batch_tokens (clamp bound). Defaults to "
-        "the largest swept batch size. Set this to production "
-        "max_running_requests * (gamma + 1) so lookups above the largest sample "
-        "clamp to the last probe.",
+        help="Override the table's max_batch_tokens metadata (defaults to the "
+        "largest swept batch size). Advisory record of the intended production "
+        "ceiling, e.g. max_running_requests * (gamma + 1); it does not change "
+        "lookup behavior -- any B above the largest probe clamps to the last "
+        "probe's SPS either way.",
     )
     parser.add_argument(
         "--repeats",

@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 class SpsCostTable(msgspec.Struct, frozen=True):
     sample_batch_tokens: list[int]
     sample_steps_per_sec: list[float]
+    # Advisory metadata: the production ceiling the profile was built for
+    # (e.g. max_running_requests * (gamma + 1)). lookup() never reads it --
+    # B above the largest probe clamps to the last SPS regardless. Validated
+    # >= largest probe so it cannot contradict the probes.
     max_batch_tokens: int
 
     def __post_init__(self) -> None:
@@ -34,6 +38,11 @@ class SpsCostTable(msgspec.Struct, frozen=True):
             )
 
     def lookup(self, batch_tokens: int) -> float:
+        # Floor B to the largest probe <= B (step-function, no interpolation;
+        # preserves hardware cliffs). Between probes this returns the pre-cliff
+        # (higher) SPS -- a slight OPTIMISTIC bias, opposite to the profiler's
+        # conservative KV-history approximation, so keep probes dense near
+        # cliffs. Out-of-range B clamps to the first/last probe.
         idx = bisect.bisect_right(self.sample_batch_tokens, batch_tokens) - 1
         idx = max(0, min(idx, len(self.sample_batch_tokens) - 1))
         return self.sample_steps_per_sec[idx]

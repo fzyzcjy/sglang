@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import torch
 
+from sglang.srt.environ import envs
 from sglang.srt.speculative.dflash_info_v2 import DFlashDraftInputV2
 from sglang.srt.speculative.draft_worker_common import make_draft_input_v2
 from sglang.srt.speculative.dspark_components.dspark_info import DraftBlockResult
@@ -87,6 +88,7 @@ def sample_draft_block(
     # Python bool on sampling_info) so this branch draws no GPU sync. No
     # sampling_info -> all-greedy fast path (argmax only, no RNG draw).
     any_sampling = sampling_info is not None and not sampling_info.is_all_greedy
+    fast_sampling = envs.SGLANG_DSPARK_FAST_SAMPLING.get()
 
     if sampling_info is None:
         temperatures = torch.ones(bs, dtype=torch.float32, device=device)
@@ -105,16 +107,28 @@ def sample_draft_block(
     else:
 
         def sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:
-            # Per-row mixed sampling: greedy rows take argmax, sampling rows
-            # draw from the temperature-scaled softmax. torch.where selects per
-            # row so a mixed batch keeps each request's own draft distribution.
-            # With at least one sampling row this matches the all-sampling RNG
-            # draw count (one multinomial per step), so the all-sampling path
-            # stays byte-identical.
-            argmax_tokens = torch.argmax(step_logits, dim=-1)
+            # Per-row mixed sampling: greedy rows take argmax, sampling rows draw
+            # from the temperature-scaled softmax, so a mixed batch keeps each
+            # request's own draft distribution. With at least one sampling row this
+            # matches the all-sampling RNG draw count (one draw per step), so the
+            # all-sampling path stays byte-identical.
             probs = torch.softmax(step_logits.float() / temperatures[:, None], dim=-1)
-            sampled_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)
-            return torch.where(greedy_mask, argmax_tokens, sampled_tokens)
+            if fast_sampling:
+                # Reference Gumbel-max trick: argmax(probs / Exp(1)) ~ Categorical(probs),
+                # one fused pass with no full-vocab CDF and no D2H sync, unlike
+                # torch.multinomial. Setting greedy rows' noise to 1 makes their
+                # argmax(probs / 1) == argmax(probs) == argmax(logits) (softmax is
+                # monotone), so this single argmax also yields the greedy token and
+                # the separate greedy torch.argmax(step_logits) drops out (the P1
+                # argmax in the profile). exponential_ still fills every row, so the
+                # per-step draw count is unchanged; greedy rows discard their noise.
+                noise = torch.empty_like(probs).exponential_(1)
+                noise = torch.where(greedy_mask[:, None], 1.0, noise)
+                return probs.div_(noise).argmax(dim=-1)
+            else:
+                argmax_tokens = torch.argmax(step_logits, dim=-1)
+                sampled_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)
+                return torch.where(greedy_mask, argmax_tokens, sampled_tokens)
 
     draft_tokens, corrected_logits = markov_head.sample_block(
         base_logits,
