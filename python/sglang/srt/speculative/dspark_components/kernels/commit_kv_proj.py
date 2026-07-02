@@ -107,8 +107,7 @@ def commit_kv_proj_fused(
     if _FUSED_USABLE.get(key) is None:
         reference = commit_kv_proj(main_x=main_x, wkv_linears=wkv_linears)
         matches = all(
-            torch.allclose(f, r, rtol=1e-2, atol=1e-2)
-            for f, r in zip(fused, reference)
+            torch.allclose(f, r, rtol=1e-2, atol=1e-2) for f, r in zip(fused, reference)
         )
         _FUSED_USABLE[key] = matches
         if not matches:
