@@ -367,7 +367,7 @@ class DSparkWorkerV2(BaseSpecWorker):
                     self.draft_model_runner.capture_tail_hooks.append(
                         make_draft_sampler_capture_hook(self._draft_sampler)
                     )
-                self._proposer._draft_sampler = self._draft_sampler
+                self._proposer.attach_draft_sampler(self._draft_sampler)
             self._draft_worker.init_cuda_graphs(
                 capture_decode_cuda_graph=capture_decode_cuda_graph
             )
