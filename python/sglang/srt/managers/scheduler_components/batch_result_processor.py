@@ -542,12 +542,21 @@ class SchedulerBatchResultProcessor:
         result.num_correct_drafts = sum(accept_lens) - len(batch.reqs)
         result.num_correct_drafts_per_req_cpu = [x - 1 for x in accept_lens]
 
-        # Per-request correct drafts the DSpark confidence cap trimmed (CAP_ACCEPT
-        # only; None for non-DSpark workers, all-zero for STATIC/COMPACT).
-        cap_trim_lens = (
-            result.cap_trim_lens.tolist() if result.cap_trim_lens is not None else None
+        # DSpark per-request lens (None for non-DSpark workers):
+        # block_accept_lens — uncapped full-block accept incl bonus (exact only
+        # in CAP_ACCEPT; == accept_lens in STATIC/COMPACT).
+        # cap_lens — confidence-scheduled verify window incl the bonus slot
+        # (None when no cap is scheduled, i.e. STATIC).
+        block_accept_lens = (
+            result.block_accept_lens.tolist()
+            if result.block_accept_lens is not None
+            else None
         )
-        result.num_cap_trim_drafts = sum(cap_trim_lens) if cap_trim_lens else 0
+        result.num_block_accept_tokens = (
+            sum(block_accept_lens) if block_accept_lens else 0
+        )
+        cap_lens = result.cap_lens.tolist() if result.cap_lens is not None else None
+        result.num_cap_tokens = sum(cap_lens) if cap_lens else 0
 
         # Feed the adaptive controller now that accept_lens is on CPU,
         # instead of doing a synchronous GPU→CPU copy in the worker hot path.
@@ -586,8 +595,10 @@ class SchedulerBatchResultProcessor:
                 req.spec_num_correct_drafts += num_correct_drafts
                 req.update_spec_correct_drafts_histogram(num_correct_drafts)
 
-                if cap_trim_lens is not None:
-                    req.spec_num_cap_trim_drafts += cap_trim_lens[i]
+                if block_accept_lens is not None:
+                    req.spec_num_block_accept_tokens += block_accept_lens[i]
+                if cap_lens is not None:
+                    req.spec_num_cap_tokens += cap_lens[i]
 
             predict_tokens.append(accept_tokens)
 
@@ -668,7 +679,8 @@ class SchedulerBatchResultProcessor:
             self.metrics_reporter.update_spec_metrics(
                 batch.batch_size(),
                 result.num_correct_drafts,
-                result.num_cap_trim_drafts,
+                num_block_accept_tokens=result.num_block_accept_tokens,
+                num_cap_tokens=result.num_cap_tokens,
             )
         if self.server_args.enable_metrics:
             self.metrics_collector.increment_decode_cuda_graph_pass(

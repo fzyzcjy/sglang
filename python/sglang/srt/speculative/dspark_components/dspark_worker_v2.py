@@ -563,7 +563,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             logits_output=None,
             next_token_ids=torch.empty((0,), dtype=torch.int64, device=self.device),
             accept_lens=torch.empty((0,), dtype=torch.int32, device=self.device),
-            cap_trim_lens=torch.empty((0,), dtype=torch.int32, device=self.device),
+            block_accept_lens=torch.empty((0,), dtype=torch.int32, device=self.device),
             next_draft_input=next_draft_input,
             can_run_cuda_graph=False,
             speculative_num_draft_tokens=int(self.verify_num_draft_tokens),
@@ -772,7 +772,12 @@ class DSparkWorkerV2(BaseSpecWorker):
             logits_output=logits_output,
             next_token_ids=out_tokens.reshape(-1),
             accept_lens=commit_lens,
-            cap_trim_lens=cap_trim_lens.to(torch.int32),
+            # Uncapped full-block accept incl bonus; cap_trim_lens is 0 outside
+            # CAP_ACCEPT so this equals commit_lens there.
+            block_accept_lens=commit_lens + cap_trim_lens.to(torch.int32),
+            cap_lens=(
+                layout.verify_lens.to(torch.int32) if layout is not None else None
+            ),
             can_run_cuda_graph=can_run_cuda_graph,
             next_draft_input=next_draft_input,
             speculative_num_draft_tokens=int(self.verify_num_draft_tokens),
