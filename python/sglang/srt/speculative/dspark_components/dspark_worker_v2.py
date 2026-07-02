@@ -483,9 +483,10 @@ class DSparkWorkerV2(BaseSpecWorker):
 
     def _run_idle_verify_participation(self, batch: ScheduleBatch) -> None:
         if self._verify_epilogue is not None:
-            # Disarm the captured commit write: an idle replay carries stale
-            # req_pool / commit buffers and must not mutate the draft KV pool.
-            self._verify_epilogue.set_inject_gate(False)
+            # Disarm the captured commit write and mask the scatter: an idle
+            # replay carries stale req_pool / commit buffers and must not
+            # mutate the draft KV pool.
+            self._verify_epilogue.begin_step(None, armed=False)
         verify_input = DFlashVerifyInput(
             draft_token=torch.empty((0,), dtype=torch.int64, device=self.device),
             positions=torch.empty((0,), dtype=torch.int64, device=self.device),
@@ -652,12 +653,13 @@ class DSparkWorkerV2(BaseSpecWorker):
         epilogue = self._verify_executor.verify_epilogue
         folded_accept = fold_eligible and run_compact and can_run_cuda_graph
         if folded_accept:
-            correct_len = epilogue.correct_len_buf[:bs]
-            bonus = epilogue.bonus_buf[:bs]
-            cap_trim_lens = epilogue.cap_trim_lens_buf[:bs]
-            commit_lens = epilogue.commit_lens_buf[:bs]
-            new_seq_lens = epilogue.new_seq_lens_buf[:bs]
-            out_tokens = epilogue.out_tokens_buf[:bs]
+            accept = epilogue.read_accept(bs)
+            correct_len = accept.correct_len
+            bonus = accept.bonus
+            cap_trim_lens = accept.cap_trim_lens
+            commit_lens = accept.commit_lens
+            new_seq_lens = accept.new_seq_lens
+            out_tokens = accept.out_tokens
         else:
             correct_len, bonus, cap_trim_lens = accept_draft_tokens(
                 candidates=verify_ids_2d,

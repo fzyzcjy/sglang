@@ -207,12 +207,10 @@ class TargetVerifyExecutor:
             model_runner=self.model_runner,
         )
         if self.verify_epilogue is not None:
-            # Feed the in-graph scatter's static verify_lens pre-replay
-            # (harmless on an eager-fallback step). inject_gate arms the
-            # captured commit KV write; disarmed replays collapse it to a
-            # no-op and the worker eager-injects.
-            self.verify_epilogue.fill_verify_lens(layout.verify_lens)
-            self.verify_epilogue.set_inject_gate(inject_gate)
+            # Sole pre-replay feed of the epilogue's static inputs (harmless
+            # on an eager-fallback step); armed gates the captured commit
+            # write, disarmed replays collapse it to a no-op.
+            self.verify_epilogue.begin_step(layout.verify_lens, armed=inject_gate)
         target_verify = self._run_ragged(
             batch=batch,
             layout=layout,

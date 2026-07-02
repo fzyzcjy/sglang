@@ -34,6 +34,17 @@ class CommitInjectCtx(msgspec.Struct):
     resolve_req_to_token: object
 
 
+class AcceptOuts(msgspec.Struct):
+    # Folded-path accept results: [bs] slices of the epilogue's static buffers,
+    # valid until the next verify replay overwrites them (stream-ordered).
+    correct_len: torch.Tensor
+    bonus: torch.Tensor
+    cap_trim_lens: torch.Tensor
+    commit_lens: torch.Tensor
+    new_seq_lens: torch.Tensor
+    out_tokens: torch.Tensor
+
+
 class _VerifyLensCutoff(msgspec.Struct):
     # Duck-typed stand-in for RaggedVerifyLayout inside the capture: CapCorrectLen
     # reads only .verify_lens, and the real layout's tensors are capture-local
@@ -149,8 +160,32 @@ class DsparkVerifyEpilogue:
             bs=num_tokens // runner.num_tokens_per_bs,
         )
 
-    def set_inject_gate(self, live: bool) -> None:
-        self.inject_gate_buf.fill_(1 if live else 0)
+    def begin_step(self, verify_lens, armed: bool) -> None:
+        """Sole pre-replay write entry: feed the static verify_lens input and
+        arm / disarm the captured commit write. EVERY replay path must come
+        through here first -- a disarmed replay collapses the commit write to
+        a no-op and the worker eager-injects instead. verify_lens=None (idle
+        participation) zeroes the whole buffer so the scatter is fully masked.
+        """
+        if verify_lens is None:
+            self.verify_lens_buf.zero_()
+        else:
+            # The zeroed tail keeps padded-tier rows out of the scatter.
+            bs = verify_lens.shape[0]
+            self.verify_lens_buf[:bs].copy_(verify_lens)
+            if bs < self.max_bs:
+                self.verify_lens_buf[bs:].zero_()
+        self.inject_gate_buf.fill_(1 if armed else 0)
+
+    def read_accept(self, bs: int) -> AcceptOuts:
+        return AcceptOuts(
+            correct_len=self.correct_len_buf[:bs],
+            bonus=self.bonus_buf[:bs],
+            cap_trim_lens=self.cap_trim_lens_buf[:bs],
+            commit_lens=self.commit_lens_buf[:bs],
+            new_seq_lens=self.new_seq_lens_buf[:bs],
+            out_tokens=self.out_tokens_buf[:bs],
+        )
 
     @property
     def folds_commit(self) -> bool:
@@ -161,13 +196,6 @@ class DsparkVerifyEpilogue:
             return False
         pool = self.commit_ctx.resolve_pool()
         return hasattr(pool, "set_swa_key_buffer_radix_fused_norm_rope")
-
-    def fill_verify_lens(self, verify_lens: torch.Tensor) -> None:
-        # The zeroed tail keeps padded-tier rows out of the scatter.
-        bs = verify_lens.shape[0]
-        self.verify_lens_buf[:bs].copy_(verify_lens)
-        if bs < self.max_bs:
-            self.verify_lens_buf[bs:].zero_()
 
     def _ensure_out(self, name: str, compact: torch.Tensor) -> torch.Tensor:
         buf = getattr(self, name)
