@@ -12,6 +12,12 @@ import msgspec
 logger = logging.getLogger(__name__)
 
 
+def floor_probe_index(edges: list[int], batch_tokens: int) -> int:
+    # Tensor mirror: dspark_scheduler._lookup_sps_tensor (keep in sync).
+    idx = bisect.bisect_right(edges, batch_tokens) - 1
+    return max(0, min(idx, len(edges) - 1))
+
+
 class SpsCostTable(msgspec.Struct, frozen=True):
     sample_batch_tokens: list[int]
     sample_steps_per_sec: list[float]
@@ -37,9 +43,9 @@ class SpsCostTable(msgspec.Struct, frozen=True):
             )
 
     def lookup(self, batch_tokens: int) -> float:
-        idx = bisect.bisect_right(self.sample_batch_tokens, batch_tokens) - 1
-        idx = max(0, min(idx, len(self.sample_batch_tokens) - 1))
-        return self.sample_steps_per_sec[idx]
+        return self.sample_steps_per_sec[
+            floor_probe_index(self.sample_batch_tokens, batch_tokens)
+        ]
 
     def to_json(self) -> str:
         return msgspec.json.encode(self).decode("utf-8")
@@ -188,8 +194,7 @@ class OnlineSpsProfiler:
         return len(self._bin_edges)
 
     def _bin_index(self, batch_tokens: int) -> int:
-        idx = bisect.bisect_right(self._bin_edges, batch_tokens) - 1
-        return max(0, min(idx, len(self._bin_edges) - 1))
+        return floor_probe_index(self._bin_edges, batch_tokens)
 
     def _rebuild(self) -> Optional[SpsCostTable]:
         measured: list[Optional[float]] = [
