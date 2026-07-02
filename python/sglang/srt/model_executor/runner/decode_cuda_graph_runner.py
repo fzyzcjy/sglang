@@ -452,16 +452,11 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         # Token tier T carries S = min(T, max_bs) request slots (every row
         # holds at least the anchor token, and the static per-request buffers
         # top out at max_bs). Decoupling S from T is what lets a small verify
-        # budget replay a tier below bs*(gamma+1). FORCE_UNIFORM_CAPTURE and
-        # backends whose verify kernels reject the decoupled pad layouts keep
-        # the legacy S = T/(gamma+1) coupling (uniform stride-(gamma+1)
-        # geometry stays self-consistent, replay tier stays pinned).
+        # budget replay a tier below bs*(gamma+1). FORCE_UNIFORM_CAPTURE keeps
+        # the legacy S = T/(gamma+1) coupling (it captures with no ragged
+        # layout, so the uniform stride-(gamma+1) geometry must stay
+        # self-consistent).
         if envs.SGLANG_TEST_RAGGED_VERIFY_FORCE_UNIFORM_CAPTURE.get():
-            return num_tokens // self.num_tokens_per_bs
-        if not (
-            self.attn_backend.supports_decoupled_ragged_capture
-            or envs.SGLANG_TEST_RAGGED_VERIFY_FORCE_DECOUPLED_CAPTURE.get()
-        ):
             return num_tokens // self.num_tokens_per_bs
         return min(num_tokens, self.max_bs)
 

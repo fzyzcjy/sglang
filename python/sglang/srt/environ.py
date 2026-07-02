@@ -731,9 +731,6 @@ class Envs:
     SGLANG_RAGGED_VERIFY_MODE = EnvStr("static")
     SGLANG_DSPARK_CONFIDENCE_RELAY_LAG_STEPS = EnvInt(2)
     SGLANG_TEST_RAGGED_VERIFY_FORCE_UNIFORM_CAPTURE = EnvBool(False)
-    # Debug override: capture decoupled (slots, tokens) ragged tiers even when
-    # the attention backend does not declare support (crash repro / bring-up).
-    SGLANG_TEST_RAGGED_VERIFY_FORCE_DECOUPLED_CAPTURE = EnvBool(False)
     # Skip draft_extend while adaptive spec is at steps=0 (drafting disabled).
     # Saves the per-step draft forward, but the draft KV goes stale: an upshift
     # back to steps>0 starts from a cold draft state (low accept until it recovers).

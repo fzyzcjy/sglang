@@ -5,7 +5,6 @@ from typing import Optional
 import torch
 
 from sglang.srt.distributed import get_tp_group
-from sglang.srt.environ import envs
 from sglang.srt.layers.dp_attention import (
     get_attention_tp_group,
     get_attention_tp_size,
@@ -112,13 +111,6 @@ def ragged_capture_max_slots(*, model_runner) -> Optional[int]:
     if runner is None or not getattr(runner, "ragged_verify_mode", False):
         return None
     return runner.max_bs
-
-
-def ragged_capture_slots_decoupled(*, model_runner) -> bool:
-    if envs.SGLANG_TEST_RAGGED_VERIFY_FORCE_DECOUPLED_CAPTURE.get():
-        return True
-    backend = getattr(model_runner, "attn_backend", None)
-    return bool(getattr(backend, "supports_decoupled_ragged_capture", False))
 
 
 def ragged_layout_exceeds_captured_grid(
