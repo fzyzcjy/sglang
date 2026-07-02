@@ -126,6 +126,36 @@ def test_triton_tie_break_straddles_block_boundary():
     assert tokens.item() == 1000
 
 
+@requires_cuda
+@pytest.mark.parametrize("padded", [130048, 129536])
+def test_triton_reads_strided_cropped_view_without_contiguous(padded):
+    """A non-contiguous full[..., :vocab] view yields the same tokens as its contiguous copy."""
+    torch.manual_seed(3)
+    device = torch.device("cuda")
+    bs, vocab = 2, 129280
+    full = torch.randn(bs, padded, device=device) * 4.0
+    view = full[:, :vocab]
+    assert view.stride(0) == padded and not view.is_contiguous()
+    temperatures = torch.rand(bs, device=device) + 0.5
+    greedy_mask = torch.tensor([True, False], device=device)
+    exp_noise = torch.empty(bs, vocab, dtype=torch.float32, device=device).exponential_(
+        1
+    )
+    got_view = SampleStepTokens.triton(
+        step_logits=view,
+        temperatures=temperatures,
+        greedy_mask=greedy_mask,
+        exp_noise=exp_noise,
+    )
+    got_contig = SampleStepTokens.triton(
+        step_logits=view.contiguous(),
+        temperatures=temperatures,
+        greedy_mask=greedy_mask,
+        exp_noise=exp_noise,
+    )
+    assert torch.equal(got_view, got_contig)
+
+
 def test_fresh_noise_drawn_each_call():
     """Two consecutive exp_noise draws differ, guarding the wiring against caching a single draw."""
     torch.manual_seed(7)

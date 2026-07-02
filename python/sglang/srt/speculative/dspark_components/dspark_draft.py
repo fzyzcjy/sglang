@@ -125,8 +125,11 @@ def sample_draft_block(
                 # fp32) has the same shape/dtype/count as the old empty_like(probs) draw,
                 # keeping downstream accept coins byte-identical. The kernel then does the
                 # softmax + argmax reductions (deleted from this path), consuming the noise.
-                exp_noise = torch.empty_like(
-                    step_logits, dtype=torch.float32
+                # Contiguous [bs, vocab] draw (not empty_like: step_logits is now the
+                # strided full[..., :vocab] view). numel is unchanged, so the RNG stream --
+                # and the downstream accept coins -- stay byte-identical.
+                exp_noise = torch.empty(
+                    step_logits.shape, dtype=torch.float32, device=step_logits.device
                 ).exponential_(1)
                 return SampleStepTokens.execute(
                     step_logits=step_logits,

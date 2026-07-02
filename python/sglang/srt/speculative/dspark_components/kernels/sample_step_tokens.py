@@ -93,6 +93,7 @@ def _row_max_partial_kernel(
     temperatures_ptr,
     partial_max_ptr,
     V,
+    stride_row,
     n_tiles,
     BLOCK_V: tl.constexpr,
 ):
@@ -100,9 +101,9 @@ def _row_max_partial_kernel(
     tile = tl.program_id(1)
     offs = tile * BLOCK_V + tl.arange(0, BLOCK_V)
     mask = offs < V
-    logits = tl.load(logits_ptr + row * V + offs, mask=mask, other=float("-inf")).to(
-        tl.float32
-    )
+    logits = tl.load(
+        logits_ptr + row * stride_row + offs, mask=mask, other=float("-inf")
+    ).to(tl.float32)
     temperature = tl.load(temperatures_ptr + row)
     s = logits / temperature
     tl.store(partial_max_ptr + row * n_tiles + tile, tl.max(s, axis=0))
@@ -134,6 +135,7 @@ def _argmax_partial_kernel(
     partial_key_ptr,
     partial_idx_ptr,
     V,
+    stride_row,
     n_tiles,
     BLOCK_V: tl.constexpr,
 ):
@@ -141,9 +143,9 @@ def _argmax_partial_kernel(
     tile = tl.program_id(1)
     offs = tile * BLOCK_V + tl.arange(0, BLOCK_V)
     mask = offs < V
-    logits = tl.load(logits_ptr + row * V + offs, mask=mask, other=float("-inf")).to(
-        tl.float32
-    )
+    logits = tl.load(
+        logits_ptr + row * stride_row + offs, mask=mask, other=float("-inf")
+    ).to(tl.float32)
     temperature = tl.load(temperatures_ptr + row)
     row_max = tl.load(row_max_ptr + row)
     s = logits / temperature
@@ -192,10 +194,13 @@ def sample_step_tokens_triton(
 ) -> torch.Tensor:
     # Ratio-space two-stage argmax. Never materializes probs / key over the full vocab
     # and parallelizes both reductions along vocab (bs=1 still fills the SMs), replacing
-    # the batch-dim softmax + argmax reductions that idle the SMs at bs=1.
+    # the batch-dim softmax + argmax reductions that idle the SMs at bs=1. Reads step_logits
+    # at its own row stride so the caller's cropped view (full[..., :vocab] of the gathered
+    # padded logits) is consumed in place -- no .contiguous() crop copy per step.
     bs, V = step_logits.shape
     device = step_logits.device
-    step_logits = step_logits.contiguous()
+    assert step_logits.stride(1) == 1, "step_logits rows must be contiguous"
+    stride_row = step_logits.stride(0)
     temperatures = temperatures.to(torch.float32).contiguous()
     greedy_mask = greedy_mask.to(torch.int32).contiguous()
     exp_noise = exp_noise.to(torch.float32).contiguous()
@@ -213,7 +218,7 @@ def sample_step_tokens_triton(
     row_grid = (bs,)
 
     _row_max_partial_kernel[tile_grid](
-        step_logits, temperatures, partial_max, V, n_tiles, BLOCK_V=_BLOCK_V
+        step_logits, temperatures, partial_max, V, stride_row, n_tiles, BLOCK_V=_BLOCK_V
     )
     _row_max_combine_kernel[row_grid](
         partial_max, row_max, n_tiles, BLOCK_TILES=block_tiles
@@ -227,6 +232,7 @@ def sample_step_tokens_triton(
         partial_key,
         partial_idx,
         V,
+        stride_row,
         n_tiles,
         BLOCK_V=_BLOCK_V,
     )

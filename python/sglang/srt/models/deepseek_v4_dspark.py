@@ -41,6 +41,9 @@ from sglang.srt.runtime_context import get_parallel
 from sglang.srt.speculative.dspark_components.dspark_utils import (
     parse_dspark_draft_config,
 )
+from sglang.srt.speculative.dspark_components.kernels.build_step_local import (
+    BuildStepLocal,
+)
 from sglang.srt.speculative.dspark_components.kernels.commit_kv_proj import (
     CommitKvProj,
 )
@@ -444,11 +447,14 @@ class DSparkV4MarkovHead(nn.Module):
         weight_local = self.markov_w2.weight[
             shard.org_vocab_start : shard.org_vocab_end
         ]
-        bias = self.project_bias(latent, weight=weight_local)
-        pad = shard.num_embeddings_per_partition - bias.shape[-1]
-        if pad > 0:
-            bias = F.pad(bias, (0, pad))
-        step_local = base_local + bias
+        # gemv only (no .float() upcast on the bf16 path): BuildStepLocal fuses the upcast
+        # into its pad+add, so bias stays bf16 here and is read + upcast bit-identically in
+        # the kernel. F.linear (the gemv) and the all_gather below are deliberately untouched.
+        if self._opt_markov_w2_bf16:
+            bias = F.linear(latent.to(weight_local.dtype), weight_local)
+        else:
+            bias = F.linear(latent.float(), weight_local)
+        step_local = BuildStepLocal.execute(bias=bias, base_local=base_local)
         if shard.tp_size > 1:
             # Reuse the attn-TP group so the collective is a no-op (size-1) under DP
             # attention -- a gather on the full TP group here would deadlock against the
