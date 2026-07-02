@@ -187,38 +187,32 @@ class DSparkAttention(MqaAttentionBase):
         # gated by the model-level env checks, so None here means overlap off.
         self.alt_streams = alt_streams
         self._multi_stream_bs_limit = 128 if is_blackwell_supported() else 64
-        self._attn_sink_padded: Optional[torch.Tensor] = None
+        # The base pre-sets _attn_sink_local to the raw parameter at attn_tp_size == 1;
+        # the draft's cache is the PADDED local slice (see _local_attn_sink), so force
+        # the lazy post-weight-load build in every tp configuration.
+        self._attn_sink_local = None
 
     def kv_proj_only(self, x: torch.Tensor) -> torch.Tensor:
         kv, _ = self.wkv(x)
         return kv
 
     def _local_attn_sink(self) -> torch.Tensor:
-        if self.attn_tp_size == 1:
-            return self.attn_sink
+        """This rank's attn_sink slice, zero-padded to _PAD_NUM_HEADS when the draft
+        pads its q heads. Built once on the first forward (post weight load), exactly
+        the target's ``_attn_sink_local`` build in ``MQALayer.forward``: a per-call
+        rebuild would replay a fill + copy per stage in the draft decode graph. Zero
+        padding (not garbage) is required, unlike the q padding: the kernel reads the
+        sink for every head it runs.
+        """
         if self._attn_sink_local is None:
             rank = self.attn_tp_rank
-            self._attn_sink_local = self.attn_sink[
-                rank * self.n_local_heads : (rank + 1) * self.n_local_heads
-            ].contiguous()
+            num_heads = self.n_local_heads
+            sink = self.attn_sink.new_zeros(max(num_heads, _PAD_NUM_HEADS))
+            sink[:num_heads] = self.attn_sink[
+                rank * num_heads : (rank + 1) * num_heads
+            ]
+            self._attn_sink_local = sink
         return self._attn_sink_local
-
-    def _padded_attn_sink(self) -> torch.Tensor:
-        """Local attn_sink padded to _PAD_NUM_HEADS, built once post weight load.
-
-        Zero padding (not garbage) is required here, unlike the q padding: the sink is
-        per-head data the kernel reads for every head it runs. A per-forward rebuild
-        would replay a fill + copy per stage in the draft decode graph (mirrors the
-        target's build-once ``_attn_sink_local``).
-        """
-        attn_sink = self._local_attn_sink()
-        if self.n_local_heads >= _PAD_NUM_HEADS:
-            return attn_sink
-        if self._attn_sink_padded is None:
-            sink_padded = attn_sink.new_zeros(_PAD_NUM_HEADS)
-            sink_padded[: self.n_local_heads] = attn_sink
-            self._attn_sink_padded = sink_padded
-        return self._attn_sink_padded
 
     def _store_block_kv(
         self,
@@ -350,7 +344,7 @@ class DSparkAttention(MqaAttentionBase):
 
         if q_padded is not None:
             q = q_padded
-        attn_sink = self._padded_attn_sink()
+        attn_sink = self._local_attn_sink()
 
         # Drive the production sparse backend: it reads the NON-CAUSAL full-block SWA
         # metadata built in make_core_attn_metadata (is_dspark_draft branch) and runs
