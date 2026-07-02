@@ -77,35 +77,40 @@ def build_commit_inject_layout(
     commit_lens: torch.Tensor,
     stride: int,
 ) -> CommitInjectLayoutResult:
-    # Reference chain for the MLA commit-inject layout. Row (r, c) of the verify
-    # window (c in [0, stride)) covers the request's already-allocated slot
-    # req_to_token[req_pool_indices[r], prefix_lens[r] + c]; that full-space loc is
-    # translated to the SWA ring (full_to_swa_mapping gather) and masked to -1 for
-    # the non-committed columns c >= commit_lens[r] (the fused-norm-rope writer
-    # skips out_loc < 0, keeping the write fixed-shape / sync-free -- no
+    # Faithful original chain from inject_ragged/inject_target_hidden/_inject_mla:
+    # assign_extend_cache_locs gathers the verify window's already-allocated
+    # full-space slots req_to_token[req_pool_indices[r], prefix_lens[r] + c]; they
+    # are translated to the SWA ring (full_to_swa_index_mapping gather) and masked
+    # to -1 for the non-committed columns c >= commit_lens[r] (the fused-norm-rope
+    # writer skips out_loc < 0, keeping the write fixed-shape / sync-free -- no
     # masked-select D2H). positions[r*stride + c] = prefix_lens[r] +
     # block_pos_offsets[c] are the absolute rope positions of the window rows.
-    # Replaces the assign_extend_cache_locs launch + translate + arange/lt/
-    # full_like/where + positions add/reshape glue in inject_ragged/_inject_mla.
+    from sglang.srt.speculative.triton_ops.cache_locs import (
+        assign_extend_cache_locs_func,
+    )
+
     bs = req_pool_indices.shape[0]
     device = req_pool_indices.device
 
-    positions = prefix_lens.to(torch.int64)[:, None] + block_pos_offsets.to(
-        torch.int64
-    )[None, :stride]
-    cache_loc = req_to_token[req_pool_indices.to(torch.int64)[:, None], positions].to(
-        torch.int64
-    )
+    positions_2d = prefix_lens.unsqueeze(1) + block_pos_offsets[:stride]
+    positions = positions_2d.reshape(-1).to(dtype=torch.int64)
+
+    cache_loc = assign_extend_cache_locs_func(
+        req_pool_indices=req_pool_indices,
+        req_to_token=req_to_token,
+        start_offset=prefix_lens,
+        end_offset=prefix_lens + stride,
+        batch_size=bs,
+        draft_token_num=stride,
+        device=device,
+    ).to(dtype=torch.int64)
     swa_loc = full_to_swa_mapping[cache_loc].to(torch.int32)
 
     col = torch.arange(stride, device=device).view(1, -1)
-    committed = col < commit_lens.to(torch.int64).view(-1, 1)
+    committed = (col < commit_lens.to(torch.long).view(-1, 1)).reshape(-1)
     swa_loc = torch.where(committed, swa_loc, torch.full_like(swa_loc, -1))
 
-    return CommitInjectLayoutResult(
-        swa_loc=swa_loc.reshape(bs * stride),
-        positions=positions.reshape(bs * stride),
-    )
+    return CommitInjectLayoutResult(swa_loc=swa_loc, positions=positions)
 
 
 @triton.jit
