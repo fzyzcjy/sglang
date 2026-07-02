@@ -10,6 +10,9 @@ from sglang.srt.speculative.dspark_components.kernels.accept_greedy import Accep
 from sglang.srt.speculative.dspark_components.kernels.accept_sampling import (
     AcceptSampling,
 )
+from sglang.srt.speculative.dspark_components.kernels.mixed_accept_select import (
+    SelectMixedAccept,
+)
 from sglang.srt.speculative.dspark_components.kernels.softmax_temp import SoftmaxTemp
 from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 
@@ -73,11 +76,13 @@ def accept_draft_tokens(
         verify_num_draft_tokens=verify_num_draft_tokens,
         cutoff_layout=cutoff_layout,
     )
-    correct_len = torch.where(
-        greedy_mask, greedy_len.to(sampling_len.dtype), sampling_len
+    selected = SelectMixedAccept.execute(
+        greedy_mask=greedy_mask,
+        greedy_len=greedy_len,
+        greedy_bonus=greedy_bonus,
+        greedy_trim=greedy_trim,
+        sampling_len=sampling_len,
+        sampling_bonus=sampling_bonus,
+        sampling_trim=sampling_trim,
     )
-    bonus = torch.where(greedy_mask, greedy_bonus, sampling_bonus)
-    cap_trim_lens = torch.where(
-        greedy_mask, greedy_trim.to(sampling_trim.dtype), sampling_trim
-    )
-    return correct_len, bonus, cap_trim_lens
+    return selected.correct_len, selected.bonus, selected.cap_trim_lens
