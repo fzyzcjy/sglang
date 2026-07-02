@@ -50,11 +50,11 @@ from sglang.srt.models.dspark import (
     run_markov_block,
 )
 from sglang.srt.runtime_context import get_parallel
-from sglang.srt.speculative.dspark_components.kernels.commit_kv_proj import (
-    CommitKvProj,
-)
 from sglang.srt.speculative.dspark_components.dspark_utils import (
     parse_dspark_draft_config,
+)
+from sglang.srt.speculative.dspark_components.kernels.commit_kv_proj import (
+    CommitKvProj,
 )
 from sglang.srt.speculative.ragged_verify import (
     RaggedVerifyMode,
