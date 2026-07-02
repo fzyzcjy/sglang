@@ -303,8 +303,8 @@ class Envs:
     # base logits sharded and all-gathering the per-step corrected logits over the
     # attention-TP group (deadlock-safe under DP attention, where that group is size-1 and
     # the shard is a no-op); off: replicated full-vocab markov_w2.
-    SGLANG_DSPARK_OPT_MARKOV_W2_BF16 = EnvBool(False)
-    SGLANG_DSPARK_OPT_MARKOV_W2_TP_SHARD = EnvBool(False)
+    SGLANG_DSPARK_OPT_MARKOV_W2_BF16 = EnvBool(True)
+    SGLANG_DSPARK_OPT_MARKOV_W2_TP_SHARD = EnvBool(True)
     # ENABLE_MULTI_STREAM on (default): the dsv4 draft stages overlap independent
     # branches on alt cuda streams (attention KV-store vs Q projection; MoE shared vs
     # routed experts), capture-mode only, mirroring the target's
