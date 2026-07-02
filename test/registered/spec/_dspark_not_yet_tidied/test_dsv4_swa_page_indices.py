@@ -7,6 +7,8 @@ from sglang.srt.layers.attention.deepseek_v4_backend import (
     PAGE_INDEX_ALIGNED_SIZE,
     SWA_WINDOW,
     DeepseekV4AttnBackend,
+)
+from sglang.srt.speculative.dspark_components.kernels.dspark_swa_page_indices import (
     _compact_dspark_window_then_block,
     build_dspark_swa_page_indices,
     compute_dspark_window_gather,
@@ -86,6 +88,8 @@ class TestBuildDsparkSwaPageIndicesPlumbing(CustomTestCase):
                 block_swa_locs=block,
                 context_lens=context,
                 block_size=block_size,
+                swa_window=SWA_WINDOW,
+                page_index_aligned_size=PAGE_INDEX_ALIGNED_SIZE,
             )
             exp_indices, exp_topk = _oracle_build_page_indices(
                 window_swa_locs=window,
@@ -113,6 +117,8 @@ class TestBuildDsparkSwaPageIndicesPlumbing(CustomTestCase):
             block_swa_locs=block,
             context_lens=context,
             block_size=block_size,
+            swa_window=SWA_WINDOW,
+            page_index_aligned_size=PAGE_INDEX_ALIGNED_SIZE,
         )
         for q in range(page_indices.shape[0]):
             t = int(topk[q])
@@ -130,6 +136,8 @@ class TestBuildDsparkSwaPageIndicesPlumbing(CustomTestCase):
             block_swa_locs=block,
             context_lens=context,
             block_size=block_size,
+            swa_window=SWA_WINDOW,
+            page_index_aligned_size=PAGE_INDEX_ALIGNED_SIZE,
         )
         target_width = ceil_align(SWA_WINDOW + block_size, PAGE_INDEX_ALIGNED_SIZE)
         self.assertEqual(target_width, SWA_WINDOW + block_size)
@@ -149,6 +157,8 @@ class TestBuildDsparkSwaPageIndicesPlumbing(CustomTestCase):
             block_swa_locs=block,
             context_lens=context,
             block_size=block_size,
+            swa_window=SWA_WINDOW,
+            page_index_aligned_size=PAGE_INDEX_ALIGNED_SIZE,
         )
         for r, cl in enumerate(context_lens):
             block_rows = page_indices[r * block_size : (r + 1) * block_size]
@@ -168,6 +178,8 @@ class TestBuildDsparkSwaPageIndicesPlumbing(CustomTestCase):
             block_swa_locs=block,
             context_lens=context,
             block_size=block_size,
+            swa_window=SWA_WINDOW,
+            page_index_aligned_size=PAGE_INDEX_ALIGNED_SIZE,
         )
         exp_indices, exp_topk = _oracle_build_page_indices(
             window_swa_locs=window,
@@ -188,6 +200,8 @@ class TestBuildDsparkSwaPageIndicesPlumbing(CustomTestCase):
                 block_swa_locs=torch.zeros((2, block_size), dtype=torch.int32),
                 context_lens=torch.zeros(2, dtype=torch.int32),
                 block_size=block_size,
+                swa_window=SWA_WINDOW,
+                page_index_aligned_size=PAGE_INDEX_ALIGNED_SIZE,
             )
 
     def test_block_wrong_shape_raises(self):
@@ -199,6 +213,8 @@ class TestBuildDsparkSwaPageIndicesPlumbing(CustomTestCase):
                 block_swa_locs=torch.zeros((2, block_size + 1), dtype=torch.int32),
                 context_lens=torch.zeros(2, dtype=torch.int32),
                 block_size=block_size,
+                swa_window=SWA_WINDOW,
+                page_index_aligned_size=PAGE_INDEX_ALIGNED_SIZE,
             )
 
 
@@ -218,6 +234,7 @@ class TestCompactWindowThenBlockContract(CustomTestCase):
             context_lens=torch.tensor(context_lens, dtype=torch.int32),
             target_width=target_width,
             block_size=block_size,
+            swa_window=SWA_WINDOW,
         )
 
     def test_left_pack_gathers_last_context_entries(self):
@@ -477,6 +494,7 @@ class TestComputeDsparkWindowGather(CustomTestCase):
             seq_lens_casual=seq_lens_casual,
             req_pool_indices_repeated=req_pool,
             block_size=block_size,
+            swa_window=SWA_WINDOW,
         )
         _, context, offsets, invalid = _oracle_window_gather(
             seq_lens_casual=seq_lens_casual, block_size=block_size
@@ -507,6 +525,7 @@ class TestComputeDsparkWindowGather(CustomTestCase):
             seq_lens_casual=seq_lens_casual,
             req_pool_indices_repeated=req_pool,
             block_size=block_size,
+            swa_window=SWA_WINDOW,
         )
         self.assertTrue(
             torch.equal(
@@ -525,6 +544,7 @@ class TestComputeDsparkWindowGather(CustomTestCase):
             seq_lens_casual=seq_lens_casual,
             req_pool_indices_repeated=req_pool,
             block_size=block_size,
+            swa_window=SWA_WINDOW,
         )
         arange = torch.arange(SWA_WINDOW, dtype=torch.int64)
         for r, prefix in enumerate(prefixes):
@@ -544,6 +564,7 @@ class TestComputeDsparkWindowGather(CustomTestCase):
                 seq_lens_casual=seq_lens_casual,
                 req_pool_indices_repeated=req_pool,
                 block_size=block_size,
+                swa_window=SWA_WINDOW,
             )
             expected = (prefix - SWA_WINDOW + arange).clamp(min=0)
             self.assertTrue(torch.equal(gather.offsets[0], expected), msg=f"{prefix=}")
@@ -562,6 +583,7 @@ class TestComputeDsparkWindowGather(CustomTestCase):
             seq_lens_casual=seq_lens_casual,
             req_pool_indices_repeated=req_pool,
             block_size=block_size,
+            swa_window=SWA_WINDOW,
         )
         self.assertEqual(gather.bs, 1)
         self.assertEqual(gather.num_q, block_size)
@@ -578,6 +600,7 @@ class TestComputeDsparkWindowGather(CustomTestCase):
                 seq_lens_casual=seq_lens_casual,
                 req_pool_indices_repeated=req_pool,
                 block_size=block_size,
+                swa_window=SWA_WINDOW,
             )
 
 

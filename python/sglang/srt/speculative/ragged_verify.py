@@ -233,26 +233,16 @@ class RaggedVerifyLayout(msgspec.Struct, frozen=True):
         The worker's compact scatter keeps using the real (pre-pad) verify_lens, so
         the extended/synthetic rows only add discarded tail rows.
         """
-        padded_bs = self.graph_num_tokens // num_draft_tokens
-        assert padded_bs >= self.bs, (
-            f"padded_bs {padded_bs} < bs {self.bs}: graph_num_tokens "
-            f"{self.graph_num_tokens} cannot hold this batch's requests"
+        from sglang.srt.speculative.dspark_components.kernels.padded_to_bucket import (
+            PaddedToBucket,
         )
-        device = self.verify_lens.device
-        num_pad_reqs = padded_bs - self.bs
-        padded = self.verify_lens.to(torch.int32)
-        if num_pad_reqs > 0:
-            pad_block = torch.full(
-                (num_pad_reqs,), num_draft_tokens, dtype=torch.int32, device=device
-            )
-            padded = torch.cat([padded, pad_block])
-        else:
-            padded = padded.clone()
-        # leftover = graph_num_tokens - sum(padded); a DEVICE scalar folded into the
-        # last (synthetic, or last real when padded_bs == bs) request. Kept on device
-        # so the pad introduces no compute-stream sync.
-        leftover = self.graph_num_tokens - padded.to(torch.int64).sum()
-        padded[-1] = (padded[-1].to(torch.int64) + leftover).to(torch.int32)
+
+        padded = PaddedToBucket.execute(
+            verify_lens=self.verify_lens,
+            graph_num_tokens=self.graph_num_tokens,
+            bs=self.bs,
+            num_draft_tokens=num_draft_tokens,
+        )
 
         return RaggedVerifyLayout._assemble_device(
             verify_lens=padded,
