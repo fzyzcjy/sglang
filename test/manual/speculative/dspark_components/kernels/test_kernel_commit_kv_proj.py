@@ -17,6 +17,8 @@ NUM_STAGES = 3
 
 
 class _Bf16Linear(torch.nn.Module):
+    quant_method = None
+
     def __init__(self, weight: torch.Tensor) -> None:
         super().__init__()
         self.weight = weight
