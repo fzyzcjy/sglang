@@ -15,13 +15,19 @@ def greedy_step_sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tenso
 
 class DsparkDraftSampler:
 
-    def __init__(self, *, model, gamma, max_bs, device, confidence_fn=None):
+    def __init__(self, *, model, gamma, max_bs, device, confidence_fn=None, out=None):
         self.model = model
         self.markov_head = model.markov_head
         self.gamma = int(gamma)
-        self.out = torch.empty(
-            (int(max_bs) * self.gamma,), dtype=torch.int64, device=device
-        )
+        # An external ``out`` (the verify epilogue's draft_tokens_buf) makes the
+        # verify graph read the same stable memory the draft graph writes.
+        if out is not None:
+            assert out.shape == (int(max_bs) * self.gamma,) and out.dtype == torch.int64
+            self.out = out
+        else:
+            self.out = torch.empty(
+                (int(max_bs) * self.gamma,), dtype=torch.int64, device=device
+            )
         self.confidence_fn = confidence_fn
         self.confidence_out = (
             torch.empty((int(max_bs), self.gamma), dtype=torch.float32, device=device)

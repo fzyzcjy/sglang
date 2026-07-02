@@ -963,10 +963,14 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
                     # into the token-keyed verify graph. NULL-hidden initial
                     # captures are skipped -- the first real verify forces a
                     # FULL recapture (recapture_if_needed) and only that graph
-                    # ever replays a verify.
+                    # ever replays a verify. input_ids carries the compact
+                    # verify-window tokens (in-graph candidates rebuild);
+                    # seq_lens stays at the prefix (the accept finalize input).
                     verify_epilogue(
                         compact_logits=out.next_token_logits,
                         compact_hidden=out.hidden_states,
+                        input_ids=forward_batch.input_ids,
+                        seq_lens=forward_batch.seq_lens,
                         bs=num_tokens // self.num_tokens_per_bs,
                     )
                 return out

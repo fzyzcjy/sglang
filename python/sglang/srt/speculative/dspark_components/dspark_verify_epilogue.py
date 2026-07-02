@@ -2,19 +2,43 @@ from __future__ import annotations
 
 from typing import Optional
 
+import msgspec
 import torch
 
+from sglang.srt.speculative.dspark_components.kernels.accept_greedy import (
+    accept_greedy_triton,
+)
+from sglang.srt.speculative.dspark_components.kernels.build_out_tokens import (
+    BuildOutTokens,
+)
+from sglang.srt.speculative.dspark_components.kernels.finalize_accept_lens import (
+    finalize_accept_lens_triton,
+)
 from sglang.srt.speculative.dspark_components.kernels.scatter_compact_to_strided import (
     scatter_compact_to_strided_into,
 )
 
 
+class _VerifyLensCutoff(msgspec.Struct):
+    # Duck-typed stand-in for RaggedVerifyLayout inside the capture: CapCorrectLen
+    # reads only .verify_lens, and the real layout's tensors are capture-local
+    # (dead addresses at replay) while this one wraps the epilogue's static buffer.
+    verify_lens: torch.Tensor
+
+
 class DsparkVerifyEpilogue:
-    """Compact->strided post-verify scatter, captured inside the token-keyed
-    verify graph right after the target forward. The worker reads the static out
-    buffers post-replay instead of launching the eager scatter; downstream accept
-    / adjustments / inject are unchanged. RNG-free, so it applies to every
-    compact replay regardless of sampling composition.
+    """Post-verify chain captured inside the token-keyed verify graph, right
+    after the target forward:
+
+    1. compact ``[graph_num_tokens, dim]`` logits / hidden scattered to the
+       ``[bs*(gamma+1), dim]`` strided layout (static out buffers) -- RNG-free,
+       valid for every compact replay;
+    2. the GREEDY accept chain (candidates rebuild -> argmax-match + cap ->
+       finalize -> out tokens) into static [max_bs] buffers. The worker reads
+       these only when the step is all-greedy, the draft fold ran this step,
+       and the sampling-info logits adjustments are a no-op (the in-graph
+       accept sees UNADJUSTED logits); else it eager-accepts on the same
+       strided static buffers.
 
     Capture invariants:
     - verify_lens comes from the epilogue's OWN static buffer (worker fills it
@@ -22,17 +46,50 @@ class DsparkVerifyEpilogue:
       i.e. dead addresses at replay. The scatter bounds every read by
       verify_lens (<= stride each), so a stale tail cannot index out of the
       compact rows.
-    - Out buffers are lazily allocated on the first warmup call (capture_one
-      warms up twice before capturing), never in the graph memory pool.
+    - Candidates are rebuilt in-graph by scattering the compact ``input_ids``
+      with fill 0. Rows past a request's verify_len differ from the eager
+      candidates (0 vs the real unverified draft), but the cap clamps
+      correct_len to verify_len - 1 on both paths and the bonus is re-gathered
+      at the capped index, so the committed result is identical.
+    - ``draft_tokens_buf`` is allocated HERE (before the target graphs capture)
+      and shared as ``DsparkDraftSampler.out``: the draft graph WRITES and the
+      verify graph READS the same stable memory (draft replay precedes verify
+      replay on the stream).
+    - Model-dim (vocab / hidden) out buffers are lazily allocated on the first
+      warmup call (capture_one warms up twice before capturing), never in the
+      graph memory pool; [max_bs] buffers are eager in __init__.
     """
 
     def __init__(self, *, max_bs: int, verify_num_draft_tokens: int, device) -> None:
         self.max_bs = int(max_bs)
         self.stride = int(verify_num_draft_tokens)
+        self.gamma = self.stride - 1
         # Filled by the worker pre-replay; zero-init keeps a pre-fill idle
         # replay bounded.
         self.verify_lens_buf = torch.zeros(
             (self.max_bs,), dtype=torch.int64, device=device
+        )
+        # Written by the draft graph (DsparkDraftSampler.out aliases this),
+        # read by the verify graph's BuildOutTokens.
+        self.draft_tokens_buf = torch.zeros(
+            (self.max_bs * self.gamma,), dtype=torch.int64, device=device
+        )
+        # Accept-chain outs, read by the worker on the folded path.
+        self.correct_len_buf = torch.zeros(
+            (self.max_bs,), dtype=torch.int64, device=device
+        )
+        self.bonus_buf = torch.zeros((self.max_bs,), dtype=torch.int64, device=device)
+        self.cap_trim_lens_buf = torch.zeros(
+            (self.max_bs,), dtype=torch.int32, device=device
+        )
+        self.commit_lens_buf = torch.zeros(
+            (self.max_bs,), dtype=torch.int32, device=device
+        )
+        self.new_seq_lens_buf = torch.zeros(
+            (self.max_bs,), dtype=torch.int64, device=device
+        )
+        self.out_tokens_buf = torch.zeros(
+            (self.max_bs, self.stride), dtype=torch.int64, device=device
         )
         # [max_bs*stride, dim], allocated on the first warmup call.
         self.strided_logits: Optional[torch.Tensor] = None
@@ -70,6 +127,8 @@ class DsparkVerifyEpilogue:
         *,
         compact_logits: torch.Tensor,
         compact_hidden: torch.Tensor,
+        input_ids: torch.Tensor,
+        seq_lens: torch.Tensor,
         bs: int,
     ) -> None:
         # bs is the padded capture-tier bs; the worker re-slices to the real
@@ -77,10 +136,11 @@ class DsparkVerifyEpilogue:
         logits_out = self._ensure_out("strided_logits", compact_logits)
         hidden_out = self._ensure_out("strided_hidden", compact_hidden)
         verify_lens = self.verify_lens_buf[:bs]
+        strided_logits = logits_out[: bs * self.stride]
         scatter_compact_to_strided_into(
             compact=compact_logits,
             verify_lens=verify_lens,
-            out=logits_out[: bs * self.stride],
+            out=strided_logits,
             stride=self.stride,
             fill_value=0.0,
         )
@@ -91,3 +151,43 @@ class DsparkVerifyEpilogue:
             stride=self.stride,
             fill_value=0.0,
         )
+
+        # Greedy accept chain. Intermediates (candidates, correct_len, ...) are
+        # graph-internal (pool) tensors; only the final copies land in the
+        # static out buffers.
+        candidates = torch.zeros(
+            (bs * self.stride, 1), dtype=input_ids.dtype, device=input_ids.device
+        )
+        scatter_compact_to_strided_into(
+            compact=input_ids.view(-1, 1),
+            verify_lens=verify_lens,
+            out=candidates,
+            stride=self.stride,
+            # Integer fill: the triton tl.where must not promote the int token
+            # lane to fp32 (a float fill scalar would).
+            fill_value=0,
+        )
+        correct_len, bonus, cap_trim_lens = accept_greedy_triton(
+            candidates=candidates.view(bs, self.stride),
+            target_logits=strided_logits,
+            verify_num_draft_tokens=self.stride,
+            cutoff_layout=_VerifyLensCutoff(verify_lens=verify_lens),
+        )
+        finalized = finalize_accept_lens_triton(
+            correct_len=correct_len,
+            cap_trim_lens=cap_trim_lens,
+            prefix_lens=seq_lens[:bs],
+        )
+        out_tokens = BuildOutTokens.execute(
+            draft_tokens=self.draft_tokens_buf[: bs * self.gamma].view(bs, self.gamma),
+            correct_len=correct_len,
+            bonus=bonus,
+            verify_num_draft_tokens=self.stride,
+            gamma=self.gamma,
+        )
+        self.correct_len_buf[:bs].copy_(correct_len)
+        self.bonus_buf[:bs].copy_(bonus)
+        self.cap_trim_lens_buf[:bs].copy_(cap_trim_lens.to(torch.int32))
+        self.commit_lens_buf[:bs].copy_(finalized.commit_lens)
+        self.new_seq_lens_buf[:bs].copy_(finalized.new_seq_lens)
+        self.out_tokens_buf[:bs].copy_(out_tokens.view(bs, self.stride))

@@ -107,6 +107,28 @@ def resolve_dflash_verify_mask_policy(attn_backend: Any) -> tuple[str, bool]:
     return backend_name, (backend_name not in _DFLASH_VERIFY_SKIP_CUSTOM_MASK_BACKENDS)
 
 
+def verify_logits_adjustments_are_noop(sampling_info) -> bool:
+    """True iff apply_dflash_verify_logits_adjustments would leave logits
+    untouched (mirror of its activation conditions). Gate for the in-graph
+    greedy accept fold, which sees UNADJUSTED logits and is only
+    byte-equivalent to the eager path when the adjustments are a no-op.
+    """
+    if sampling_info is None:
+        return True
+    if sampling_info.has_custom_logit_processor:
+        return False
+    if getattr(sampling_info, "acc_linear_penalties", None) is not None:
+        return False
+    penalizer = getattr(sampling_info, "penalizer_orchestrator", None)
+    if penalizer is not None and penalizer.is_required:
+        return False
+    if getattr(sampling_info, "vocab_mask", None) is not None:
+        return False
+    if getattr(sampling_info, "logit_bias", None) is not None:
+        return False
+    return True
+
+
 def apply_dflash_verify_logits_adjustments(
     *,
     next_token_logits: torch.Tensor,

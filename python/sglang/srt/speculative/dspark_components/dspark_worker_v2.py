@@ -19,6 +19,7 @@ from sglang.srt.speculative.dflash_info import DFlashVerifyInput
 from sglang.srt.speculative.dflash_info_v2 import DFlashDraftInputV2
 from sglang.srt.speculative.dflash_utils import (
     compute_dflash_correct_drafts_and_bonus,
+    verify_logits_adjustments_are_noop,
 )
 from sglang.srt.speculative.draft_worker_common import (
     build_block_pos_offsets,
@@ -384,6 +385,13 @@ class DSparkWorkerV2(BaseSpecWorker):
                 if self._verify_planner.carries_confidence
                 else None
             ),
+            # Share the verify epilogue's draft-token buffer so the verify graph's
+            # in-graph BuildOutTokens reads the drafts the draft graph just wrote.
+            out=(
+                self._verify_epilogue.draft_tokens_buf
+                if self._verify_epilogue is not None
+                else None
+            ),
         )
 
     def clear_cache_pool(self):
@@ -608,31 +616,53 @@ class DSparkWorkerV2(BaseSpecWorker):
         logits_output = target_verify.logits_output
         can_run_cuda_graph = target_verify.can_run_cuda_graph
 
-        correct_len, bonus, cap_trim_lens = accept_draft_tokens(
-            candidates=verify_ids_2d,
-            target_logits=logits_output.next_token_logits,
-            draft_block=draft_block,
-            sampling_info=sampling_info,
-            draft_input=draft_input,
-            gamma=self.gamma,
-            verify_num_draft_tokens=self.verify_num_draft_tokens,
-            cutoff_layout=layout,
+        # In-graph accept read path: requires the draft fold this step
+        # (proposal.folded -> draft_tokens_buf fresh, all-greedy), a token-keyed
+        # graph replay, and no-op logits adjustments (the captured accept saw
+        # unadjusted logits). Else the eager chain reads the same strided
+        # static buffers, byte-identical.
+        epilogue = self._verify_executor.verify_epilogue
+        folded_accept = (
+            epilogue is not None
+            and proposal.folded
+            and run_compact
+            and can_run_cuda_graph
+            and verify_logits_adjustments_are_noop(sampling_info)
         )
+        if folded_accept:
+            correct_len = epilogue.correct_len_buf[:bs]
+            bonus = epilogue.bonus_buf[:bs]
+            cap_trim_lens = epilogue.cap_trim_lens_buf[:bs]
+            commit_lens = epilogue.commit_lens_buf[:bs]
+            new_seq_lens = epilogue.new_seq_lens_buf[:bs]
+            out_tokens = epilogue.out_tokens_buf[:bs]
+        else:
+            correct_len, bonus, cap_trim_lens = accept_draft_tokens(
+                candidates=verify_ids_2d,
+                target_logits=logits_output.next_token_logits,
+                draft_block=draft_block,
+                sampling_info=sampling_info,
+                draft_input=draft_input,
+                gamma=self.gamma,
+                verify_num_draft_tokens=self.verify_num_draft_tokens,
+                cutoff_layout=layout,
+            )
 
-        finalized = FinalizeAcceptLens.execute(
-            correct_len=correct_len,
-            cap_trim_lens=cap_trim_lens,
-            prefix_lens=prefix_lens,
-        )
-        commit_lens = finalized.commit_lens
-        new_seq_lens = finalized.new_seq_lens
-        out_tokens = BuildOutTokens.execute(
-            draft_tokens=draft_tokens,
-            correct_len=correct_len,
-            bonus=bonus,
-            verify_num_draft_tokens=self.verify_num_draft_tokens,
-            gamma=self.gamma,
-        )
+            finalized = FinalizeAcceptLens.execute(
+                correct_len=correct_len,
+                cap_trim_lens=cap_trim_lens,
+                prefix_lens=prefix_lens,
+            )
+            commit_lens = finalized.commit_lens
+            new_seq_lens = finalized.new_seq_lens
+            cap_trim_lens = finalized.cap_trim_lens
+            out_tokens = BuildOutTokens.execute(
+                draft_tokens=draft_tokens,
+                correct_len=correct_len,
+                bonus=bonus,
+                verify_num_draft_tokens=self.verify_num_draft_tokens,
+                gamma=self.gamma,
+            )
         if on_publish is not None:
             if confidence is not None:
                 on_publish(
@@ -694,7 +724,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             logits_output=logits_output,
             next_token_ids=out_tokens.reshape(-1),
             accept_lens=commit_lens,
-            block_accept_lens=commit_lens + finalized.cap_trim_lens,
+            block_accept_lens=commit_lens + cap_trim_lens,
             cap_lens=(
                 layout.verify_lens.to(torch.int32) if layout is not None else None
             ),

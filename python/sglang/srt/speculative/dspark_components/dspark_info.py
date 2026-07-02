@@ -40,3 +40,7 @@ class DraftProposal(msgspec.Struct, frozen=True):
     draft_block: DraftBlockResult
     draft_hidden: Optional[torch.Tensor]
     confidence: Optional[torch.Tensor] = None
+    # True iff this proposal came from the captured greedy draft graph, i.e.
+    # the sampler's draft-token buffer holds THIS step's drafts (gate for the
+    # verify-graph accept fold, which reads that buffer in-graph).
+    folded: bool = False

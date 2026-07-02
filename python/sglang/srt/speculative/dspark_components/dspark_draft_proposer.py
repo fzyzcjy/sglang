@@ -74,7 +74,9 @@ class DraftBlockProposer:
         draft_sampler = self._draft_sampler
         all_greedy = sampling_info is None or sampling_info.is_all_greedy
         folded_confidence = None
+        folded = False
         if draft_sampler is not None and fwd.can_run_graph and all_greedy:
+            folded = True
             if sampling_info is None:
                 temperatures = torch.ones(bs, dtype=torch.float32, device=device)
             else:
@@ -111,6 +113,7 @@ class DraftBlockProposer:
             draft_block=draft_block,
             draft_hidden=fwd.draft_hidden_3d,
             confidence=folded_confidence,
+            folded=folded,
         )
 
     def run_idle_participation(self, batch: ScheduleBatch) -> None:
