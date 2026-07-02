@@ -69,6 +69,9 @@ from sglang.srt.speculative.dspark_components.kernels.dspark_swa_page_indices im
     BuildDsparkSwaPageIndices,
     ComputeDsparkWindowGather,
 )
+from sglang.srt.speculative.dspark_components.kernels.page_table_positions import (
+    BuildPageTablePositions,
+)
 from sglang.srt.speculative.eagle_utils import per_step_draft_out_cache_loc
 from sglang.srt.speculative.ragged_verify import (
     RaggedVerifyMode,
@@ -2124,9 +2127,22 @@ class DeepseekV4AttnBackend(
     ) -> DSV4AttnMetadata:
         assert self.swa_page_size == SWA_WINDOW
 
-        seq_lens_casual = seq_lens_casual.to(torch.int32)
+        # One launch for the per-token scalar prep + page-table gather (int32 lens,
+        # positions = lens - 1, req_to_token strided page gather // page_size, causal
+        # SWA clamp) that used to be 5-6 separate torch ops here. The dspark draft
+        # branch ignores the clamp output (its lengths come from
+        # BuildDsparkSwaPageIndices).
+        prep = BuildPageTablePositions.execute(
+            req_to_token=req_to_token,
+            req_pool_indices_repeated=req_pool_indices_repeated,
+            seq_lens_casual=seq_lens_casual,
+            max_seq_len=max_seq_len,
+            page_size=self.page_size,
+            swa_window=SWA_WINDOW,
+        )
+        seq_lens_casual = prep.seq_lens_casual
 
-        raw_positions = seq_lens_casual - 1
+        raw_positions = prep.positions_casual
         if dspark_block_size is not None:
             # NON-CAUSAL full-block draft index (R1 / Step 1b): every gamma block query of
             # a request shares the whole committed window + the whole draft block, no
@@ -2161,12 +2177,9 @@ class DeepseekV4AttnBackend(
             swa_page_indices = _pad_last_dim(
                 swa_page_indices, multiples_of=PAGE_INDEX_ALIGNED_SIZE
             )
-            swa_topk_lengths = torch.clamp(seq_lens_casual, max=SWA_WINDOW)
+            swa_topk_lengths = prep.swa_topk_lengths
 
-        page_table = req_to_token[
-            req_pool_indices_repeated, : max_seq_len : self.page_size
-        ]
-        page_table = (page_table // self.page_size).to(torch.int32)
+        page_table = prep.page_table
 
         core_attn_metadata = DSV4AttnMetadata(
             page_size=self.page_size,
