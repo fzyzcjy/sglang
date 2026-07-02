@@ -281,6 +281,7 @@ class _GenerationStreamAccumulator:
     spec_num_block_accept_tokens: list = field(default_factory=list)
     spec_num_cap_tokens: list = field(default_factory=list)
     spec_correct_drafts_histogram: list = field(default_factory=list)
+    spec_cap_lens_histogram: list = field(default_factory=list)
     retraction_counts: list = field(default_factory=list)
     output_hidden_states: Optional[list] = None
     routed_experts: Optional[list] = None
@@ -411,6 +412,7 @@ class _GenerationStreamAccumulator:
             self.spec_num_block_accept_tokens.append(req.spec_num_block_accept_tokens)
             self.spec_num_cap_tokens.append(req.spec_num_cap_tokens)
             self.spec_correct_drafts_histogram.append(req.spec_correct_drafts_histogram)
+            self.spec_cap_lens_histogram.append(req.spec_cap_lens_histogram)
 
         if self.return_logprob:
             if (
@@ -523,6 +525,7 @@ class _GenerationStreamAccumulator:
             spec_num_block_accept_tokens=self.spec_num_block_accept_tokens,
             spec_num_cap_tokens=self.spec_num_cap_tokens,
             spec_correct_drafts_histogram=self.spec_correct_drafts_histogram,
+            spec_cap_lens_histogram=self.spec_cap_lens_histogram,
             time_stats=wrap_as_pickle(self.time_stats),
             finished_reasons=self.finished_reasons,
             decoded_texts=self.decoded_texts,

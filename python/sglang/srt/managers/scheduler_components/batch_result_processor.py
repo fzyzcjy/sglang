@@ -594,6 +594,7 @@ class SchedulerBatchResultProcessor:
                     req.spec_num_block_accept_tokens += block_accept_lens[i]
                 if cap_lens is not None:
                     req.spec_num_cap_tokens += cap_lens[i]
+                    req.update_spec_cap_lens_histogram(cap_lens[i])
 
             predict_tokens.append(accept_tokens)
 
