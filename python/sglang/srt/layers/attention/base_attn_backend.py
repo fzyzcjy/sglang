@@ -43,6 +43,12 @@ class AttentionBackend(ABC):
     decode_attention_backend_str: Optional[str] = None
 
     supports_ragged_verify_graph: bool = False
+    # Whether the backend's verify kernel chain tolerates the decoupled
+    # (slots, tokens) ragged capture: replayed pad layouts may then contain
+    # 0-length rows and slack rows longer than the verify window. Backends
+    # that keep the legacy slots == tokens/(gamma+1) coupling replay the
+    # pinned round_up(bs*(gamma+1)) tier only.
+    supports_decoupled_ragged_capture: bool = False
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         """Eager entry point. Default = ``_out_graph(fb) + _in_graph(fb)``.

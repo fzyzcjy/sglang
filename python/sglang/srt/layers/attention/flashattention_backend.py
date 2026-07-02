@@ -214,6 +214,7 @@ class FlashAttentionBackend(AttentionBackend):
     """
 
     supports_ragged_verify_graph: bool = True
+    supports_decoupled_ragged_capture: bool = True
 
     def __init__(
         self,

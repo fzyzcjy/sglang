@@ -85,6 +85,7 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
     needs_cpu_seq_lens: bool = False
 
     supports_ragged_verify_graph: bool = True
+    supports_decoupled_ragged_capture: bool = True
 
     def __init__(
         self,

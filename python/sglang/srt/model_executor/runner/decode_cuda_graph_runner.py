@@ -280,6 +280,17 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             else None
         )
         self._ragged_graph_size = 0
+        if self.ragged_verify_mode and (
+            self.enable_two_batch_overlap or model_runner.server_args.enable_lora
+        ):
+            # Their capture-time helpers derive per-request segments from the
+            # uniform slots*(gamma+1) stride, which the decoupled ragged
+            # capture no longer satisfies.
+            raise ValueError(
+                "DSpark compact ragged verify does not support "
+                "two-batch-overlap or LoRA; disable SGLANG_RAGGED_VERIFY_MODE "
+                "or the conflicting feature."
+            )
 
         # If returning hidden states is enabled, set initial capture hidden mode to full to avoid double-capture on startup
         if model_runner.server_args.enable_return_hidden_states:
@@ -441,10 +452,13 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         # Token tier T carries S = min(T, max_bs) request slots (every row
         # holds at least the anchor token, and the static per-request buffers
         # top out at max_bs). Decoupling S from T is what lets a small verify
-        # budget replay a tier below bs*(gamma+1). FORCE_UNIFORM_CAPTURE keeps
-        # the legacy S = T/(gamma+1) coupling (it captures with no ragged
-        # layout, so the uniform stride-8 geometry must stay self-consistent).
+        # budget replay a tier below bs*(gamma+1). FORCE_UNIFORM_CAPTURE and
+        # backends whose verify kernels reject the decoupled pad layouts keep
+        # the legacy S = T/(gamma+1) coupling (uniform stride-(gamma+1)
+        # geometry stays self-consistent, replay tier stays pinned).
         if envs.SGLANG_TEST_RAGGED_VERIFY_FORCE_UNIFORM_CAPTURE.get():
+            return num_tokens // self.num_tokens_per_bs
+        if not self.attn_backend.supports_decoupled_ragged_capture:
             return num_tokens // self.num_tokens_per_bs
         return min(num_tokens, self.max_bs)
 
@@ -483,6 +497,11 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         )
         if ragged_layout is not None:
             return self._can_run_ragged_verify_graph(forward_batch, ragged_layout)
+        if self.ragged_verify_mode and forward_batch.forward_mode.is_target_verify():
+            # A layout-less TARGET_VERIFY must not replay: in ragged mode the
+            # per-bs attention metadata is keyed by capture slot counts, not
+            # capture_bs, and its geometry is the ragged capture layout's.
+            return False
 
         if (
             self.require_mlp_tp_gather

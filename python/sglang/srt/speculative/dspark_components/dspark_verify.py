@@ -92,7 +92,10 @@ def verify_layout_graph_num_tokens_floor(
         # the top-k allocator hands out at most `budget` tokens above it, so
         # num_reqs + budget upper-bounds the packed total. Both terms live on
         # the host, so the tier choice stays sync-free (no D2H on verify_lens).
-        return num_reqs + verify_token_budget
+        # The clamp pins the invariant that a budget tier never exceeds the
+        # legacy pinned tier (the packed total is also bounded by the full
+        # verify window).
+        return min(num_reqs + verify_token_budget, num_reqs * verify_num_draft_tokens)
     return num_reqs * verify_num_draft_tokens
 
 
@@ -108,6 +111,11 @@ def ragged_capture_max_slots(*, model_runner) -> Optional[int]:
     if runner is None or not getattr(runner, "ragged_verify_mode", False):
         return None
     return runner.max_bs
+
+
+def ragged_capture_slots_decoupled(*, model_runner) -> bool:
+    backend = getattr(model_runner, "attn_backend", None)
+    return bool(getattr(backend, "supports_decoupled_ragged_capture", False))
 
 
 def ragged_layout_exceeds_captured_grid(

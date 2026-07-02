@@ -31,6 +31,7 @@ from sglang.srt.speculative.dspark_components.dspark_sts_table import (
 )
 from sglang.srt.speculative.dspark_components.dspark_verify import (
     ragged_capture_num_tokens,
+    ragged_capture_slots_decoupled,
     ragged_layout_exceeds_captured_grid,
     uniform_ragged_layout,
     verify_layout_graph_num_tokens_floor,
@@ -165,8 +166,12 @@ class DSparkVerifyPlanner:
             # rank-local so tp>1 budgets diverge. With a shared table the
             # budget is a deterministic function of the TP-replicated
             # confidence, hence rank-consistent without communication.
-            self._dynamic_graph_tier = not is_dp_attention_enabled() and not (
-                online_profiler is not None and self.server_args.tp_size > 1
+            # Backends whose verify kernels reject the decoupled pad layouts
+            # capture coupled tiers only, so the tier stays pinned for them.
+            self._dynamic_graph_tier = (
+                ragged_capture_slots_decoupled(model_runner=self.model_runner)
+                and not is_dp_attention_enabled()
+                and not (online_profiler is not None and self.server_args.tp_size > 1)
             )
             if tp_rank == 0:
                 sps_table_source = (
@@ -363,7 +368,12 @@ class DSparkVerifyPlanner:
             verify_num_draft_tokens=self.verify_num_draft_tokens,
             model_runner=self.model_runner,
             tier_tokens_hint=(
-                None if tier_budget is None else tier_num_reqs + tier_budget
+                None
+                if tier_budget is None
+                else min(
+                    tier_num_reqs + tier_budget,
+                    tier_num_reqs * self.verify_num_draft_tokens,
+                )
             ),
         ):
             return None

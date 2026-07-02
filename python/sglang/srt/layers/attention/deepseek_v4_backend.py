@@ -589,6 +589,10 @@ class DeepseekV4AttnBackend(
 ):
     use_captured_forward_metadata_for_breakable_cuda_graph: bool = True
     supports_ragged_verify_graph: bool = True
+    # The dsv4 indexer/compressor verify chain hits illegal memory accesses on
+    # the decoupled pad layouts (0-length rows are new to it); keep the legacy
+    # coupled capture until that kernel chain is audited for them.
+    supports_decoupled_ragged_capture: bool = False
     needs_cpu_seq_lens: bool = False
 
     def __init__(
