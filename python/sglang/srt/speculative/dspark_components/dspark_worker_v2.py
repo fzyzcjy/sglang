@@ -16,6 +16,7 @@ from sglang.srt.model_executor.forward_batch_info import (
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
 from sglang.srt.speculative.dflash_info import DFlashVerifyInput
+from sglang.srt.speculative.ragged_verify import RaggedVerifyMode
 from sglang.srt.speculative.dflash_info_v2 import DFlashDraftInputV2
 from sglang.srt.speculative.dflash_utils import (
     compute_dflash_correct_drafts_and_bonus,
@@ -59,6 +60,7 @@ from sglang.srt.speculative.dspark_components.dspark_utils import (
 )
 from sglang.srt.speculative.dspark_components.dspark_verify import (
     alloc_verify_window,
+    uniform_ragged_layout,
 )
 from sglang.srt.speculative.dspark_components.dspark_verify_epilogue import (
     CommitInjectCtx,
@@ -523,22 +525,26 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
 
     def _idle_verify_ragged_layout(self, batch: ScheduleBatch):
-        # Reuse the planner's layout-less compact fallback so the idle verify keys the
-        # exact same token-keyed graph tier as the busy compact verify. confidence/budget
-        # are None (no real requests), so schedule_layout returns the uniform
-        # graph_num_tokens layout for compact and None for static / cap-accept; the tier
-        # is floored to the DP-global max bs (max(batch.global_num_tokens)), identical on
-        # every rank.
-        if batch.global_num_tokens is None:
+        # Build the SAME degenerate uniform layout the compact token-keyed graph is
+        # captured with, sized to the DP-global tier so the idle verify keys the exact
+        # same graph as the busy compact verify. The tier holds max(global bs) padded
+        # requests, so the layout carries that many uniform verify_lens (a 0-request
+        # layout is rejected; the idle rank's real tokens are 0 and the graph pads them
+        # out). Only compact uses the token-keyed graph -- static / cap-accept stay on
+        # the shared bs-keyed path (return None). None too when DP metadata is absent or
+        # the tier exceeds the captured grid (uniform_ragged_layout returns None, and the
+        # busy side falls back to the same bs-keyed path).
+        if batch.global_num_tokens is None or not self._verify_planner.is_compact_mode:
             return None
-        empty = torch.empty((0,), dtype=torch.int64, device=self.device)
-        return self._verify_planner.schedule_layout(
-            req_pool_indices=empty,
-            prefix_lens=empty,
+        global_bs = max(batch.global_num_tokens)
+        if global_bs <= 0:
+            return None
+        return uniform_ragged_layout(
+            bs=global_bs,
             device=self.device,
-            confidence=None,
-            budget=None,
-            global_num_reqs=max(batch.global_num_tokens),
+            verify_num_draft_tokens=self.verify_num_draft_tokens,
+            ragged_verify_mode=RaggedVerifyMode.COMPACT,
+            model_runner=self.model_runner,
         )
 
     def _decode_idle_result(
