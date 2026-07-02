@@ -519,6 +519,24 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         if forward_batch.replace_embeds is not None:
             return False
 
+        # Mixed busy/idle DP step under compact ragged verify: a busy group carries a
+        # ragged_verify_layout and would replay the token-keyed graph, but an idle group
+        # runs a layout-less dummy verify that would replay the bs-keyed graph -- two
+        # distinct captured graphs whose baked dp_gather collectives can never rendezvous
+        # -> deadlock. Any rank contributing 0 tokens makes some group idle; this is
+        # visible identically on every rank via the all-gathered global_num_tokens, so all
+        # ranks fall back to eager together (only the mixed step; all-busy steps keep the
+        # graph). Scoped to the target verify runner (the draft runner never carries a
+        # ragged layout -- its busy/idle forwards are both bs-keyed and already consistent).
+        if (
+            self.ragged_verify_mode
+            and self.require_mlp_tp_gather
+            and not self.model_runner.is_draft_worker
+            and forward_batch.global_num_tokens_cpu is not None
+            and min(forward_batch.global_num_tokens_cpu) == 0
+        ):
+            return False
+
         ragged_layout = (
             self._ragged_verify_layout(forward_batch)
             if self.ragged_verify_mode
