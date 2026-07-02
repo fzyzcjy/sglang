@@ -505,15 +505,27 @@ class DSparkWorkerV2(BaseSpecWorker):
             # mutate the draft KV pool.
             self._verify_epilogue.begin_step(None, armed=False)
         idle_layout = self._idle_verify_ragged_layout(batch)
+        # The token-keyed graph's buffer fill pairs the captured token-width
+        # buffers against these inputs, so the idle dummies must span the
+        # layout's token count (all rows are padding aimed at pool slot 0).
+        num_dummy_tokens = (
+            idle_layout.graph_num_tokens if idle_layout is not None else 0
+        )
         verify_input = DFlashVerifyInput(
-            draft_token=torch.empty((0,), dtype=torch.int64, device=self.device),
-            positions=torch.empty((0,), dtype=torch.int64, device=self.device),
+            draft_token=torch.zeros(
+                (num_dummy_tokens,), dtype=torch.int64, device=self.device
+            ),
+            positions=torch.zeros(
+                (num_dummy_tokens,), dtype=torch.int64, device=self.device
+            ),
             draft_token_num=self.verify_num_draft_tokens,
             custom_mask=None,
             capture_hidden_mode=CaptureHiddenMode.FULL,
             ragged_verify_layout=idle_layout,
         )
-        batch.out_cache_loc = torch.empty((0,), dtype=torch.int64, device=self.device)
+        batch.out_cache_loc = torch.zeros(
+            (num_dummy_tokens,), dtype=torch.int64, device=self.device
+        )
         verify_forward_batch, _ = verify_input.prepare_for_verify(
             batch, self.target_worker
         )
