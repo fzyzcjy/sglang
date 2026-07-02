@@ -1,0 +1,135 @@
+import pytest
+import torch
+
+from sglang.srt.speculative.dspark_components.kernels.sample_step_tokens import (
+    SampleStepTokens,
+)
+
+requires_cuda = pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="triton kernel needs CUDA"
+)
+
+# tp=4 committed-token agreement and the gsm8k accuracy + accept-length e2e gate run
+# REMOTE (need multi-GPU / a live server); see the design doc, not implemented here.
+
+
+@requires_cuda
+@pytest.mark.parametrize("bs", [1, 3])
+@pytest.mark.parametrize("vocab", [5003, 130000])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_triton_matches_torch_with_injected_noise(bs, vocab, dtype):
+    """Given the same injected exp_noise, triton ratio-space argmax equals the torch reference elementwise."""
+    torch.manual_seed(0)
+    device = torch.device("cuda")
+    step_logits = (torch.randn(bs, vocab, device=device) * 4.0).to(dtype)
+    temperatures = torch.rand(bs, device=device) + 0.5
+    greedy_mask = (torch.arange(bs, device=device) % 2) == 0
+    exp_noise = torch.empty(bs, vocab, dtype=torch.float32, device=device).exponential_(
+        1
+    )
+    ref = SampleStepTokens.torch(
+        step_logits=step_logits,
+        temperatures=temperatures,
+        greedy_mask=greedy_mask,
+        exp_noise=exp_noise,
+    )
+    got = SampleStepTokens.triton(
+        step_logits=step_logits,
+        temperatures=temperatures,
+        greedy_mask=greedy_mask,
+        exp_noise=exp_noise,
+    )
+    assert torch.equal(got, ref)
+
+
+def test_dropping_softmax_normalization_is_argmax_invariant():
+    """Dropping softmax's Z is argmax-invariant: argmax(softmax(s)/e) == argmax(exp(s-m)/e)."""
+    torch.manual_seed(0)
+    bs, vocab = 3, 512
+    step_logits = torch.randn(bs, vocab) * 5.0
+    temperatures = torch.tensor([1.0, 0.7, 1.3])
+    s = step_logits / temperatures[:, None]
+    exp_noise = torch.empty(bs, vocab).exponential_(1)
+    softmax_argmax = (torch.softmax(s, dim=-1) / exp_noise).argmax(dim=-1)
+    row_max = s.max(dim=-1, keepdim=True).values
+    ratio_argmax = (torch.exp(s - row_max) / exp_noise).argmax(dim=-1)
+    assert torch.equal(softmax_argmax, ratio_argmax)
+
+
+def test_underflow_token_not_selected_in_ratio_space():
+    """A token whose logit gap underflows exp(s-m) to 0 is never selected, even given tiny noise."""
+    vocab = 8
+    step_logits = torch.zeros(1, vocab)
+    step_logits[0, 3] = -300.0
+    exp_noise = torch.ones(1, vocab)
+    exp_noise[0, 3] = 1e-30
+    s = step_logits
+    row_max = s.max(dim=-1, keepdim=True).values
+    ratio_argmax = (torch.exp(s - row_max) / exp_noise).argmax(dim=-1)
+    assert ratio_argmax.item() != 3
+    assert torch.softmax(s, dim=-1)[0, 3].item() == 0.0
+
+
+def test_greedy_rows_pick_argmax_logits_regardless_of_noise():
+    """greedy_mask rows return argmax(step_logits) for any exp_noise (noise forced to 1)."""
+    torch.manual_seed(1)
+    bs, vocab = 4, 256
+    step_logits = torch.randn(bs, vocab)
+    temperatures = torch.rand(bs) + 0.5
+    greedy_mask = torch.tensor([True, False, True, False])
+    exp_noise = torch.empty(bs, vocab).exponential_(1)
+    tokens = SampleStepTokens.torch(
+        step_logits=step_logits,
+        temperatures=temperatures,
+        greedy_mask=greedy_mask,
+        exp_noise=exp_noise,
+    )
+    expected = torch.argmax(step_logits, dim=-1)
+    assert torch.equal(tokens[greedy_mask], expected[greedy_mask])
+
+
+def test_tie_break_picks_smallest_index_on_equal_greedy_logits():
+    """Equal max logits on a greedy row resolve to the smallest index (match torch.argmax)."""
+    vocab = 16
+    step_logits = torch.zeros(1, vocab)
+    step_logits[0, 3] = 5.0
+    step_logits[0, 9] = 5.0
+    temperatures = torch.tensor([1.0])
+    greedy_mask = torch.tensor([True])
+    exp_noise = torch.empty(1, vocab).exponential_(1)
+    tokens = SampleStepTokens.torch(
+        step_logits=step_logits,
+        temperatures=temperatures,
+        greedy_mask=greedy_mask,
+        exp_noise=exp_noise,
+    )
+    assert tokens.item() == 3
+
+
+@requires_cuda
+def test_triton_tie_break_straddles_block_boundary():
+    """A max-key tie straddling a BLOCK_V boundary resolves to the smallest index in stage-2 combine."""
+    device = torch.device("cuda")
+    vocab = 2050
+    step_logits = torch.zeros(1, vocab, device=device)
+    step_logits[0, 1000] = 5.0
+    step_logits[0, 1100] = 5.0
+    temperatures = torch.tensor([1.0], device=device)
+    greedy_mask = torch.tensor([True], device=device)
+    exp_noise = torch.ones(1, vocab, device=device)
+    tokens = SampleStepTokens.triton(
+        step_logits=step_logits,
+        temperatures=temperatures,
+        greedy_mask=greedy_mask,
+        exp_noise=exp_noise,
+    )
+    assert tokens.item() == 1000
+
+
+def test_fresh_noise_drawn_each_call():
+    """Two consecutive exp_noise draws differ, guarding the wiring against caching a single draw."""
+    torch.manual_seed(7)
+    shape = (2, 128)
+    first = torch.empty(shape, dtype=torch.float32).exponential_(1)
+    second = torch.empty(shape, dtype=torch.float32).exponential_(1)
+    assert not torch.equal(first, second)
