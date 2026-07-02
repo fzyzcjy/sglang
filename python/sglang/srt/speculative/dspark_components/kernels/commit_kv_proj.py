@@ -102,6 +102,31 @@ def _build_stacked_wkv_weight(
             for linear in wkv_linears
         ):
             weight = torch.cat([linear.weight for linear in wkv_linears], dim=0)
+            if wkv_linears[0].weight_scale_inv.dtype == torch.int32:
+                # Blackwell deepgemm path: per-stage scales are UE8M0-packed,
+                # mn-major TMA-aligned tensors (stride(-2) == 1). torch.cat of
+                # those silently yields a ROW-major tensor that fails deepgemm's
+                # `sf.stride(-2) == 1` layout assert at the first forward. Stack
+                # at the un-packed fp32 [N/128, K/128] block grid instead, then
+                # re-apply the packing transform for the stacked mn (numerically
+                # exact: each 128-row block keeps its own scale, and the inverse
+                # self-checks round-trip consistency at startup).
+                from sglang.srt.layers.quantization.fp8_utils import (
+                    inverse_transform_scale_ue8m0,
+                    transform_scale_ue8m0,
+                )
+
+                sf_fp32 = torch.cat(
+                    [
+                        inverse_transform_scale_ue8m0(
+                            linear.weight_scale_inv, mn=linear.weight.shape[0]
+                        )
+                        for linear in wkv_linears
+                    ],
+                    dim=0,
+                )
+                scale = transform_scale_ue8m0(sf_fp32, mn=weight.shape[0])
+                return _StackedWkvWeight(weight=weight, fp8_scale=scale)
             scale = torch.cat(
                 [linear.weight_scale_inv for linear in wkv_linears], dim=0
             )
