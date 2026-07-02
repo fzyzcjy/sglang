@@ -458,7 +458,10 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         # geometry stays self-consistent, replay tier stays pinned).
         if envs.SGLANG_TEST_RAGGED_VERIFY_FORCE_UNIFORM_CAPTURE.get():
             return num_tokens // self.num_tokens_per_bs
-        if not self.attn_backend.supports_decoupled_ragged_capture:
+        if not (
+            self.attn_backend.supports_decoupled_ragged_capture
+            or envs.SGLANG_TEST_RAGGED_VERIFY_FORCE_DECOUPLED_CAPTURE.get()
+        ):
             return num_tokens // self.num_tokens_per_bs
         return min(num_tokens, self.max_bs)
 
@@ -1204,19 +1207,35 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             if self.model_runner.device_timer
             else contextlib.nullcontext()
         )
+        # Publish a read-done event for the WAR barrier: a cuda-graph forward
+        # normally finishes its shared req_to_token / SWA reads at the
+        # pre-replay snapshot (page tables built in load_batch), so plain
+        # DECODE and DFLASH TARGET_VERIFY both qualify. Backends that rebuild
+        # attention metadata INSIDE the captured graph (in-graph page-table
+        # build, e.g. dsv4) keep reading req_to_token through the replay, so
+        # their verify read-done point moves to post-replay -- a pre-replay
+        # record would let the next iteration's over-allocation writes race
+        # the replaying graph's reads.
+        publish_read_done = forward_batch.forward_mode.is_decode() or (
+            forward_batch.forward_mode.is_target_verify()
+            and self.model_runner.spec_algorithm.is_dflash_or_dspark()
+        )
+        read_done_post_replay = (
+            publish_read_done
+            and forward_batch.forward_mode.is_target_verify()
+            and self.attn_backend.use_captured_forward_metadata_for_breakable_cuda_graph
+        )
         with timer_ctx, self.backend.replay_session():
             self.load_batch(forward_batch, pp_proxy_tensors)
-            # Publish a read-done event for the WAR barrier: a cuda-graph forward
-            # finishes its shared req_to_token / SWA reads at this pre-replay
-            # snapshot, so plain DECODE and DFLASH TARGET_VERIFY both qualify.
-            if forward_batch.forward_mode.is_decode() or (
-                forward_batch.forward_mode.is_target_verify()
-                and self.model_runner.spec_algorithm.is_dflash_or_dspark()
-            ):
+            if publish_read_done and not read_done_post_replay:
                 read_done = self.device_module.Event()
                 read_done.record()
                 self.model_runner.war_fastpath_read_done_event = read_done
             output = self.backend.replay(self._replay_graph_key, forward_batch)
+            if read_done_post_replay:
+                read_done = self.device_module.Event()
+                read_done.record()
+                self.model_runner.war_fastpath_read_done_event = read_done
 
         if isinstance(output, LogitsProcessorOutput):
             if self.is_dllm:
