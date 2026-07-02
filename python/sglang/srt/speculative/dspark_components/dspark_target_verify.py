@@ -159,8 +159,16 @@ class TargetVerifyExecutor:
         seq_lens_cpu_backup = batch.seq_lens_cpu
         seq_lens_sum_backup = batch.seq_lens_sum
         if seq_lens_cpu_backup is not None:
+            # The graph fast path builds the layout device-side
+            # (verify_lens_cpu is None); pay a one-off D2H only when a CPU
+            # mirror is actually being maintained (e.g. overlap disabled).
+            verify_lens_cpu = (
+                layout.verify_lens_cpu
+                if layout.verify_lens_cpu is not None
+                else layout.verify_lens.cpu().tolist()
+            )
             batch.seq_lens_cpu = seq_lens_cpu_backup + torch.tensor(
-                layout.verify_lens_cpu, dtype=seq_lens_cpu_backup.dtype
+                verify_lens_cpu, dtype=seq_lens_cpu_backup.dtype
             )
             batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
 
