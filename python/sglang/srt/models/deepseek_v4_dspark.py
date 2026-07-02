@@ -57,7 +57,7 @@ from sglang.srt.speculative.ragged_verify import (
     RaggedVerifyMode,
     read_ragged_verify_mode,
 )
-from sglang.srt.utils import add_prefix
+from sglang.srt.utils import add_prefix, is_blackwell_supported
 from sglang.srt.utils.async_probe import maybe_detect_in_closed_range
 
 logger = logging.getLogger(__name__)
@@ -145,6 +145,7 @@ class DSparkAttention(MqaAttentionBase):
         layer_id: int,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
+        alt_streams: Optional[List[torch.cuda.Stream]] = None,
     ) -> None:
         super().__init__(
             config,
@@ -180,6 +181,11 @@ class DSparkAttention(MqaAttentionBase):
         )
 
         self._use_fast_kernel = envs.SGLANG_DSPARK_FAST_KERNEL.get()
+        # Alt streams for the capture-mode KV/Q overlap in forward (mirrors
+        # MQALayer._forward_prepare_multi_stream's stream_kv). Creation is already
+        # gated by the model-level env checks, so None here means overlap off.
+        self.alt_streams = alt_streams
+        self._multi_stream_bs_limit = 128 if is_blackwell_supported() else 64
 
     def kv_proj_only(self, x: torch.Tensor) -> torch.Tensor:
         kv, _ = self.wkv(x)
@@ -456,18 +462,23 @@ class DSparkV4Stage(DeepseekV4DecoderLayer):
         num_target_layers: int,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
+        alt_streams: Optional[List[torch.cuda.Stream]] = None,
     ) -> None:
         # is_nextn disables the MoE hash topk (config.num_hash_layers gates it on the
         # target's first layers by layer_id). The draft uses draft-local layer ids
         # (0..num_stages-1), which would otherwise be misread as those hash layers; the
         # draft gate is the normal noaux_tc gate (its checkpoint carries gate.bias), so
         # force the non-hash path like NextN. It only affects this MoE construction.
+        # alt_streams flows to the base __init__ so the MoE gets its dual-stream
+        # alt_stream (shared experts overlap gate+routed under capture) and to
+        # _build_self_attn for the draft attention's KV/Q overlap.
         super().__init__(
             config=config,
             layer_id=layer_id,
             quant_config=quant_config,
             prefix=prefix,
             is_nextn=True,
+            alt_streams=alt_streams,
         )
         self.stage_id = stage_id
         self.dim = config.hidden_size
@@ -504,12 +515,13 @@ class DSparkV4Stage(DeepseekV4DecoderLayer):
         alt_streams: Optional[List[torch.cuda.Stream]],
         compress_ratio_override: Optional[int],
     ) -> nn.Module:
-        del alt_streams, compress_ratio_override
+        del compress_ratio_override
         return DSparkAttention(
             config=config,
             layer_id=layer_id,
             quant_config=quant_config,
             prefix=prefix,
+            alt_streams=alt_streams,
         )
 
     def _hc_pre_block(
@@ -620,6 +632,17 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
 
         self.start_layer = 0
         self.end_layer = self.num_stages
+        # One shared alt stream is enough: within a stage the attention KV/Q fork joins
+        # before the MoE starts, so the two overlap sites never run concurrently
+        # (the target's MQALayer and MoE share alt_streams[0] the same way).
+        use_multi_stream = (
+            envs.SGLANG_OPT_USE_MULTI_STREAM_OVERLAP.get()
+            and envs.SGLANG_DSPARK_ENABLE_MULTI_STREAM.get()
+            and torch.cuda.is_available()
+        )
+        self.alt_streams: Optional[List[torch.cuda.Stream]] = (
+            [torch.cuda.Stream()] if use_multi_stream else None
+        )
         self.stages = nn.ModuleList(
             [
                 DSparkV4Stage(
@@ -630,6 +653,7 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
                     num_target_layers=self.num_target_features,
                     quant_config=quant_config,
                     prefix=add_prefix(f"stages.{stage_id}", prefix),
+                    alt_streams=self.alt_streams,
                 )
                 for stage_id in range(self.num_stages)
             ]

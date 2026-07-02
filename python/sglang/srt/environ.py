@@ -298,6 +298,12 @@ class Envs:
     SGLANG_DSPARK_FAST_KERNEL = EnvBool(True)
     SGLANG_DSPARK_FP32_LM_HEAD = EnvBool(False)
     SGLANG_DSPARK_FAST_SAMPLING = EnvBool(True)
+    # ENABLE_MULTI_STREAM on (default): the dsv4 draft stages overlap independent
+    # branches on alt cuda streams (attention KV-store vs Q projection; MoE shared vs
+    # routed experts), capture-mode only, mirroring the target's
+    # SGLANG_OPT_USE_MULTI_STREAM_OVERLAP machinery. Both this and the global
+    # OPT_USE_MULTI_STREAM_OVERLAP gate must be on; off falls back to the serial draft.
+    SGLANG_DSPARK_ENABLE_MULTI_STREAM = EnvBool(True)
     # DSpark hot-op kernel impl selectors ("triton" | "torch"), one per extracted kernel
     # file under speculative/dspark_components/kernels/. Default "triton" is the optimized
     # path; set the matching var to "torch" for the reference impl (e.g. while a triton
