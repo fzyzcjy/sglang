@@ -527,7 +527,16 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         if ragged_layout is not None:
             return self._can_run_ragged_verify_graph(forward_batch, ragged_layout)
 
-        if self.require_mlp_tp_gather:
+        # A batch without DP metadata under require_mlp_tp_gather is a per-rank-local
+        # forward that does not participate in DP MLP sync (the DSpark dense draft runs
+        # replicated in the attn-TP context and deliberately carries no
+        # global_num_tokens; prepare_mlp_sync_batch is likewise keyed on metadata
+        # presence), so key its graph on the local bs. Target batches always carry
+        # metadata under DP.
+        if (
+            self.require_mlp_tp_gather
+            and forward_batch.global_num_tokens_cpu is not None
+        ):
             cuda_graph_bs = (
                 max(forward_batch.global_num_tokens_cpu) // self.num_tokens_per_bs
                 if self.model_runner.spec_algorithm.is_eagle()
@@ -1180,7 +1189,12 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             padded_num_tokens = graph_size_key
         else:
             raw_num_token = raw_bs * self.num_tokens_per_bs
-            if self.require_mlp_tp_gather:
+            # Same metadata-presence key as can_run_graph: a metadata-less batch (DSpark
+            # dense draft attn-TP island) replays on its local bs bucket.
+            if (
+                self.require_mlp_tp_gather
+                and forward_batch.global_num_tokens_cpu is not None
+            ):
                 max_num_tokens = max(forward_batch.global_num_tokens_cpu)
                 max_batch_size = (
                     max_num_tokens / self.num_tokens_per_bs
