@@ -263,8 +263,6 @@ class DsparkVerifyEpilogue:
             verify_lens=verify_lens,
             out=candidates,
             stride=self.stride,
-            # Integer fill: the triton tl.where must not promote the int token
-            # lane to fp32 (a float fill scalar would).
             fill_value=0,
         )
         correct_len, bonus, cap_trim_lens = accept_greedy_triton(

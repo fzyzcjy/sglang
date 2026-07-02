@@ -123,6 +123,10 @@ def scatter_compact_to_strided_into(
     stays a graph-internal intermediate.
     """
     dim = compact.shape[1]
+    # Normalize the fill scalar to the out dtype family: triton specializes on
+    # the scalar's python type, and a float fill in an integer-lane kernel
+    # would promote the tl.where to fp32.
+    fill_value = float(fill_value) if out.dtype.is_floating_point else int(fill_value)
     compact = compact.contiguous()
     verify_lens = verify_lens.to(dtype=torch.int64).contiguous()
     start = (torch.cumsum(verify_lens, dim=0) - verify_lens).contiguous()
