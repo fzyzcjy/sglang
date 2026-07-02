@@ -33,6 +33,7 @@ from sglang.srt.layers.vocab_parallel_embedding import VocabParallelEmbedding
 from sglang.srt.mem_cache.deepseek_v4_memory_pool import DeepSeekV4TokenToKVPool
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_executor.forward_context import get_token_to_kv_pool
+from sglang.srt.model_executor.runner import get_is_capture_mode
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models.dbrx import ReplicatedLinear
 from sglang.srt.models.deepseek_v4 import (
@@ -265,15 +266,42 @@ class DSparkAttention(MqaAttentionBase):
         attn_backend = get_attn_backend()
         rd = self.rope_head_dim
 
-        kv = self.kv_proj_only(hidden_states)
-        self._store_block_kv(
-            kv=kv,
-            positions=positions,
-            forward_batch=forward_batch,
-            attn_backend=attn_backend,
-            pool=pool,
+        # KV-store chain (wkv -> fused norm/rope/pool-write) and Q chain (wq_a ->
+        # q_norm -> wq_b -> fused q norm rope) both depend only on hidden_states; the
+        # join point is the backend forward (needs q + the KV already in the pool).
+        # Capture-mode only, like MQALayer._forward_prepare_multi_stream: the fork/join
+        # is recorded into the draft cuda graph as event deps (zero replay CPU cost),
+        # while eager runs keep the serial order.
+        enable_multi_stream = (
+            self.alt_streams is not None
+            and get_is_capture_mode()
+            and hidden_states.shape[0] <= self._multi_stream_bs_limit
         )
-        q = self._compute_q(hidden_states, positions)
+        if enable_multi_stream:
+            current_stream = torch.cuda.current_stream()
+            stream_kv = self.alt_streams[0]
+            stream_kv.wait_stream(current_stream)
+            with torch.cuda.stream(stream_kv):
+                kv = self.kv_proj_only(hidden_states)
+                self._store_block_kv(
+                    kv=kv,
+                    positions=positions,
+                    forward_batch=forward_batch,
+                    attn_backend=attn_backend,
+                    pool=pool,
+                )
+            q = self._compute_q(hidden_states, positions)
+            current_stream.wait_stream(stream_kv)
+        else:
+            kv = self.kv_proj_only(hidden_states)
+            self._store_block_kv(
+                kv=kv,
+                positions=positions,
+                forward_batch=forward_batch,
+                attn_backend=attn_backend,
+                pool=pool,
+            )
+            q = self._compute_q(hidden_states, positions)
         attn_sink = self._local_attn_sink()
 
         # Pad the per-rank query heads (and attn_sink) up to the kernel's supported h_q
