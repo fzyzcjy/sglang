@@ -125,9 +125,9 @@ def sample_draft_block(
                 # fp32) has the same shape/dtype/count as the old empty_like(probs) draw,
                 # keeping downstream accept coins byte-identical. The kernel then does the
                 # softmax + argmax reductions (deleted from this path), consuming the noise.
-                exp_noise = torch.empty_like(step_logits, dtype=torch.float32).exponential_(
-                    1
-                )
+                exp_noise = torch.empty_like(
+                    step_logits, dtype=torch.float32
+                ).exponential_(1)
                 return SampleStepTokens.execute(
                     step_logits=step_logits,
                     temperatures=temperatures,
