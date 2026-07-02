@@ -897,8 +897,18 @@ class DeepseekV4AttnBackend(
             )
             self._ensure_verify_bs_buffers()
             if ragged_layout is None:
-                self.extend_seq_lens_buffer[:bs].fill_(
-                    self.speculative_num_draft_tokens
+                # Token-keyed verify graphs capture S >= bs request slots; a
+                # layout-less replay must scrub ALL captured rows, or stale
+                # trimmed layouts from earlier compact replays leak into the
+                # in-graph compress planner (freed req_pool rows -> -1 swa
+                # mappings -> illegal address in the indexer store).
+                self.extend_seq_lens_buffer.fill_(self.speculative_num_draft_tokens)
+                torch.arange(
+                    0,
+                    self.extend_start_loc_buffer.numel()
+                    * self.speculative_num_draft_tokens,
+                    self.speculative_num_draft_tokens,
+                    out=self.extend_start_loc_buffer,
                 )
                 extend_seq_lens = self.extend_seq_lens_buffer[:bs]
                 extend_start_loc = None
