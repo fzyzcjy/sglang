@@ -261,9 +261,9 @@ class DraftBlockProposer:
         device = self.draft_model_runner.device
         forward_batch.global_num_tokens_cpu = gnt
         forward_batch.global_num_tokens_for_logprob_cpu = gnt_logprob
-        forward_batch.global_num_tokens_gpu = torch.tensor(
-            gnt, dtype=torch.int64
-        ).to(device, non_blocking=True)
+        forward_batch.global_num_tokens_gpu = torch.tensor(gnt, dtype=torch.int64).to(
+            device, non_blocking=True
+        )
         forward_batch.global_num_tokens_for_logprob_gpu = torch.tensor(
             gnt_logprob, dtype=torch.int64
         ).to(device, non_blocking=True)
