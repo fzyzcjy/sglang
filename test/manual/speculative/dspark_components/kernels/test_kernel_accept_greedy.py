@@ -6,7 +6,6 @@ from sglang.srt.speculative.dspark_components.kernels.accept_greedy import (
     accept_greedy_triton,
     gather_row_bonus_triton,
 )
-from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 
 pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="triton kernel needs CUDA"
@@ -24,21 +23,18 @@ def test_accept_greedy_triton_matches_torch(bs, with_cutoff):
     target_logits = torch.randn(bs * T, V, device=device)
     cutoff = None
     if with_cutoff:
-        verify_lens = torch.randint(1, T + 1, (bs,), dtype=torch.int32, device=device)
-        cutoff = RaggedVerifyLayout.from_verify_lens_device(
-            verify_lens=verify_lens, graph_num_tokens=bs * T
-        )
+        cutoff = torch.randint(1, T + 1, (bs,), dtype=torch.int32, device=device)
     cl_r, b_r, tr_r = accept_greedy(
         candidates=candidates,
         target_logits=target_logits,
         verify_num_draft_tokens=T,
-        cutoff_layout=cutoff,
+        cutoff_verify_lens=cutoff,
     )
     cl_g, b_g, tr_g = accept_greedy_triton(
         candidates=candidates,
         target_logits=target_logits,
         verify_num_draft_tokens=T,
-        cutoff_layout=cutoff,
+        cutoff_verify_lens=cutoff,
     )
     assert torch.equal(cl_g, cl_r)
     assert torch.equal(b_g, b_r)
