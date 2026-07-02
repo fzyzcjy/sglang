@@ -9,7 +9,9 @@ from sglang.srt.environ import envs
 _KERNEL_IMPL = envs.SGLANG_DSPARK_KERNEL_SAMPLE_STEP_TOKENS.get()
 
 _BLOCK_V = 1024
-_IDX_SENTINEL = 2147483647
+# Triton forbids reading a bare module-global from inside @jit; wrap the sentinel as a
+# tl.constexpr so the argmax kernels can reference it directly (host code never reads it).
+_IDX_SENTINEL = tl.constexpr(2147483647)
 
 
 class SampleStepTokens:
