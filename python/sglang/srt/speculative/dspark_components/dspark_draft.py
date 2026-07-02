@@ -92,6 +92,7 @@ def sample_draft_block(
         )
 
     if not any_sampling:
+
         def sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:
             return torch.argmax(step_logits, dim=-1)
 

@@ -5,7 +5,6 @@ import torch
 from sglang.srt.utils.async_probe import maybe_detect_in_closed_range
 
 
-
 def build_markov_embed_stack(
     *,
     anchor_tokens: torch.Tensor,
