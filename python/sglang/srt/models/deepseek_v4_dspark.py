@@ -33,6 +33,7 @@ from sglang.srt.layers.vocab_parallel_embedding import VocabParallelEmbedding
 from sglang.srt.mem_cache.deepseek_v4_memory_pool import DeepSeekV4TokenToKVPool
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_executor.forward_context import get_token_to_kv_pool
+from sglang.srt.model_executor.runner import get_is_capture_mode
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models.dbrx import ReplicatedLinear
 from sglang.srt.models.deepseek_v4 import (
@@ -60,7 +61,7 @@ from sglang.srt.speculative.ragged_verify import (
     RaggedVerifyMode,
     read_ragged_verify_mode,
 )
-from sglang.srt.utils import add_prefix
+from sglang.srt.utils import add_prefix, is_blackwell_supported
 from sglang.srt.utils.async_probe import maybe_detect_in_closed_range
 
 logger = logging.getLogger(__name__)
@@ -148,6 +149,7 @@ class DSparkAttention(MqaAttentionBase):
         layer_id: int,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
+        alt_streams: Optional[List[torch.cuda.Stream]] = None,
     ) -> None:
         super().__init__(
             config,
@@ -183,19 +185,34 @@ class DSparkAttention(MqaAttentionBase):
         )
 
         self._use_fast_kernel = envs.SGLANG_DSPARK_FAST_KERNEL.get()
+        # Alt streams for the capture-mode KV/Q overlap in forward (mirrors
+        # MQALayer._forward_prepare_multi_stream's stream_kv). Creation is already
+        # gated by the model-level env checks, so None here means overlap off.
+        self.alt_streams = alt_streams
+        self._multi_stream_bs_limit = 128 if is_blackwell_supported() else 64
 
     def kv_proj_only(self, x: torch.Tensor) -> torch.Tensor:
         kv, _ = self.wkv(x)
         return kv
 
     def _local_attn_sink(self) -> torch.Tensor:
+        """This rank's attn_sink slice, zero-padded to _PAD_NUM_HEADS when the draft
+        pads its q heads. Built once on the first forward (post weight load), exactly
+        the target's ``_attn_sink_local`` build in ``MQALayer.forward``: a per-call
+        rebuild would replay a fill + copy per stage in the draft decode graph. Zero
+        padding (not garbage) is required, unlike the q padding: the kernel reads the
+        sink for every head it runs.
+        """
         if self.attn_tp_size == 1:
+            # n_heads == 64 needs no padding at tp=1 (q does not pad either); returning
+            # the parameter itself keeps it alias-fresh across weight reloads.
             return self.attn_sink
         if self._attn_sink_local is None:
             rank = self.attn_tp_rank
-            self._attn_sink_local = self.attn_sink[
-                rank * self.n_local_heads : (rank + 1) * self.n_local_heads
-            ].contiguous()
+            num_heads = self.n_local_heads
+            sink = self.attn_sink.new_zeros(max(num_heads, _PAD_NUM_HEADS))
+            sink[:num_heads] = self.attn_sink[rank * num_heads : (rank + 1) * num_heads]
+            self._attn_sink_local = sink
         return self._attn_sink_local
 
     def _store_block_kv(
@@ -226,21 +243,30 @@ class DSparkAttention(MqaAttentionBase):
             positions=positions,
         )
 
-    def _compute_q(self, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+    def _compute_q(
+        self,
+        x: torch.Tensor,
+        positions: torch.Tensor,
+        q_out: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """Project the draft block hidden to per-head queries with rmsnorm + rope.
 
         Returns ``[num_queries, n_local_heads, head_dim]`` (flat over bs * block_size).
         Fast path (``SGLANG_DSPARK_FAST_KERNEL`` on) drives the production fused
         rmsnorm-self + RoPE kernel (``fused_q_norm_rope``, the same one
         ``MQALayer._compute_q_b`` uses; same layout from ``MqaAttentionBase``). Slow path
-        is the eager reference float rsqrt + complex ``apply_rotary_emb``.
+        is the eager reference float rsqrt + complex ``apply_rotary_emb``. When ``q_out``
+        is given (the caller's padded-q slice, possibly strided -- the fused kernel
+        writes strided like ``_compute_q_b``), the result lands there directly, saving
+        the padded-copy launch.
         """
         q, _ = self.wq_a(x)
         q = self.q_norm(q)
         q, _ = self.wq_b(q)
         q = q.view(-1, self.n_local_heads, self.head_dim)
         if self._use_fast_kernel:
-            q_out = torch.empty_like(q)
+            if q_out is None:
+                q_out = torch.empty_like(q)
             fused_q_norm_rope(q, q_out, self.eps, self.freqs_cis, positions)
             return q_out
         else:
@@ -248,6 +274,9 @@ class DSparkAttention(MqaAttentionBase):
                 q.float().square().mean(-1, keepdim=True) + self.eps
             ).to(q.dtype)
             apply_rotary_emb(q[..., -self.rope_head_dim :], self.freqs_cis[positions])
+            if q_out is not None:
+                q_out.copy_(q)
+                return q_out
             return q
 
     def forward(
@@ -262,32 +291,67 @@ class DSparkAttention(MqaAttentionBase):
         attn_backend = get_attn_backend()
         rd = self.rope_head_dim
 
-        kv = self.kv_proj_only(hidden_states)
-        self._store_block_kv(
-            kv=kv,
-            positions=positions,
-            forward_batch=forward_batch,
-            attn_backend=attn_backend,
-            pool=pool,
+        # KV-store chain (wkv -> fused norm/rope/pool-write) and Q chain (wq_a ->
+        # q_norm -> wq_b -> fused q norm rope) both depend only on hidden_states; the
+        # join point is the backend forward (needs q + the KV already in the pool).
+        # Capture-mode only, like MQALayer._forward_prepare_multi_stream: the fork/join
+        # is recorded into the draft cuda graph as event deps (zero replay CPU cost),
+        # while eager runs keep the serial order.
+        enable_multi_stream = (
+            self.alt_streams is not None
+            and get_is_capture_mode()
+            and hidden_states.shape[0] <= self._multi_stream_bs_limit
         )
-        q = self._compute_q(hidden_states, positions)
-        attn_sink = self._local_attn_sink()
 
         # Pad the per-rank query heads (and attn_sink) up to the kernel's supported h_q
-        # like MQALayer and slice the output heads back afterward.
+        # like MQALayer and slice the output heads back afterward. new_empty, not
+        # new_zeros: only [:, :n_local_heads] is written and each head's attention is
+        # independent, so the garbage padded heads only yield garbage output heads that
+        # are sliced away (mirrors the target's non-gfx942 q_padded). _compute_q writes
+        # straight into the padded slice, dropping the per-forward memset + copy.
+        q_padded: Optional[torch.Tensor] = None
+        q_out: Optional[torch.Tensor] = None
         if self.n_local_heads < _PAD_NUM_HEADS:
-            q_padded = q.new_zeros(q.shape[0], _PAD_NUM_HEADS, self.head_dim)
-            q_padded[:, : self.n_local_heads, :] = q
+            q_padded = hidden_states.new_empty(
+                hidden_states.shape[0], _PAD_NUM_HEADS, self.head_dim
+            )
+            q_out = q_padded[:, : self.n_local_heads, :]
+
+        if enable_multi_stream:
+            current_stream = torch.cuda.current_stream()
+            stream_kv = self.alt_streams[0]
+            stream_kv.wait_stream(current_stream)
+            with torch.cuda.stream(stream_kv):
+                kv = self.kv_proj_only(hidden_states)
+                self._store_block_kv(
+                    kv=kv,
+                    positions=positions,
+                    forward_batch=forward_batch,
+                    attn_backend=attn_backend,
+                    pool=pool,
+                )
+            q = self._compute_q(hidden_states, positions, q_out=q_out)
+            current_stream.wait_stream(stream_kv)
+        else:
+            kv = self.kv_proj_only(hidden_states)
+            self._store_block_kv(
+                kv=kv,
+                positions=positions,
+                forward_batch=forward_batch,
+                attn_backend=attn_backend,
+                pool=pool,
+            )
+            q = self._compute_q(hidden_states, positions, q_out=q_out)
+
+        if q_padded is not None:
             q = q_padded
-            sink_padded = attn_sink.new_zeros(_PAD_NUM_HEADS)
-            sink_padded[: self.n_local_heads] = attn_sink
-            attn_sink = sink_padded
+        attn_sink = self._local_attn_sink()
 
         # Drive the production sparse backend: it reads the NON-CAUSAL full-block SWA
         # metadata built in make_core_attn_metadata (is_dspark_draft branch) and runs
         # flash_mla over the real SWA key buffer. The KV store is already done above, so
         # save_kv_cache=False (mirrors MQALayer's non-fused path). attn_sink is this
-        # rank's local slice.
+        # rank's local slice, zero-padded to _PAD_NUM_HEADS when the heads are.
         o = attn_backend.forward(
             q=q,
             k=kv,
@@ -459,18 +523,23 @@ class DSparkV4Stage(DeepseekV4DecoderLayer):
         num_target_layers: int,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
+        alt_streams: Optional[List[torch.cuda.Stream]] = None,
     ) -> None:
         # is_nextn disables the MoE hash topk (config.num_hash_layers gates it on the
         # target's first layers by layer_id). The draft uses draft-local layer ids
         # (0..num_stages-1), which would otherwise be misread as those hash layers; the
         # draft gate is the normal noaux_tc gate (its checkpoint carries gate.bias), so
         # force the non-hash path like NextN. It only affects this MoE construction.
+        # alt_streams flows to the base __init__ so the MoE gets its dual-stream
+        # alt_stream (shared experts overlap gate+routed under capture) and to
+        # _build_self_attn for the draft attention's KV/Q overlap.
         super().__init__(
             config=config,
             layer_id=layer_id,
             quant_config=quant_config,
             prefix=prefix,
             is_nextn=True,
+            alt_streams=alt_streams,
         )
         self.stage_id = stage_id
         self.dim = config.hidden_size
@@ -507,12 +576,13 @@ class DSparkV4Stage(DeepseekV4DecoderLayer):
         alt_streams: Optional[List[torch.cuda.Stream]],
         compress_ratio_override: Optional[int],
     ) -> nn.Module:
-        del alt_streams, compress_ratio_override
+        del compress_ratio_override
         return DSparkAttention(
             config=config,
             layer_id=layer_id,
             quant_config=quant_config,
             prefix=prefix,
+            alt_streams=alt_streams,
         )
 
     def _hc_pre_block(
@@ -623,6 +693,17 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
 
         self.start_layer = 0
         self.end_layer = self.num_stages
+        # One shared alt stream is enough: within a stage the attention KV/Q fork joins
+        # before the MoE starts, so the two overlap sites never run concurrently
+        # (the target's MQALayer and MoE share alt_streams[0] the same way).
+        use_multi_stream = (
+            envs.SGLANG_OPT_USE_MULTI_STREAM_OVERLAP.get()
+            and envs.SGLANG_DSPARK_ENABLE_MULTI_STREAM.get()
+            and torch.cuda.is_available()
+        )
+        self.alt_streams: Optional[List[torch.cuda.Stream]] = (
+            [torch.cuda.Stream()] if use_multi_stream else None
+        )
         self.stages = nn.ModuleList(
             [
                 DSparkV4Stage(
@@ -633,6 +714,7 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
                     num_target_layers=self.num_target_features,
                     quant_config=quant_config,
                     prefix=add_prefix(f"stages.{stage_id}", prefix),
+                    alt_streams=self.alt_streams,
                 )
                 for stage_id in range(self.num_stages)
             ]
