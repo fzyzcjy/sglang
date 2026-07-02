@@ -197,6 +197,8 @@ class OnlineSpsProfiler:
         return floor_probe_index(self._bin_edges, batch_tokens)
 
     def _rebuild(self) -> Optional[SpsCostTable]:
+        # Bin edges are already sorted and unique, so profile_sps_table's
+        # sort/dedup/validation would be pure per-rebuild overhead.
         measured: list[Optional[float]] = [
             (
                 1.0 / statistics.median(samples)
