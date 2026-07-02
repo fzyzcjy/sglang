@@ -1,10 +1,12 @@
 import logging
+from contextlib import nullcontext
 from typing import Optional
 
 import torch
 
 from sglang.srt.distributed import get_tp_group
 from sglang.srt.environ import envs
+from sglang.srt.layers.dp_attention import get_attention_tp_group
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.managers.scheduler import GenerationBatchResult
 from sglang.srt.managers.tp_worker import TpModelWorker
@@ -14,6 +16,7 @@ from sglang.srt.model_executor.forward_batch_info import (
 )
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
+from sglang.srt.speculative.dflash_info import DFlashVerifyInput
 from sglang.srt.speculative.dflash_info_v2 import DFlashDraftInputV2
 from sglang.srt.speculative.dflash_utils import (
     compute_dflash_correct_drafts_and_bonus,
@@ -21,6 +24,7 @@ from sglang.srt.speculative.dflash_utils import (
 from sglang.srt.speculative.draft_worker_common import (
     build_block_pos_offsets,
     build_draft_tp_worker,
+    draft_is_deepseek_v4,
     make_draft_block_spec_info,
 )
 from sglang.srt.speculative.dspark_components.dspark_accept import (
@@ -64,6 +68,7 @@ from sglang.srt.speculative.dspark_components.kernels.build_out_tokens import (
 from sglang.srt.speculative.dspark_components.kernels.finalize_accept_lens import (
     FinalizeAcceptLens,
 )
+from sglang.srt.speculative.spec_utils import draft_tp_context
 from sglang.srt.utils import get_available_gpu_memory, is_cuda
 
 logger = logging.getLogger(__name__)
@@ -111,19 +116,47 @@ class DSparkWorkerV2(BaseSpecWorker):
         self.page_size = server_args.page_size
         self.device = target_worker.device
 
-        # Draft runner (separate KV cache + attention backend), shared with DFlash.
-        bundle = build_draft_tp_worker(
-            server_args=server_args,
-            gpu_id=gpu_id,
-            tp_rank=tp_rank,
-            dp_rank=dp_rank,
-            moe_ep_rank=moe_ep_rank,
-            attn_cp_rank=attn_cp_rank,
-            moe_dp_rank=moe_dp_rank,
-            nccl_port=nccl_port,
-            target_model_config=target_worker.model_runner.model_config,
-            algo_label="DSPARK",
+        # DP-attention path selection. A dense (qwen/gemma) draft runs replicated
+        # inside the attention-TP context (EAGLE3-style): the patched _TP makes its
+        # RowParallelLinear reduce and base-logits all-gather size-1 no-ops, so it is
+        # per-DP-rank tp=attn_tp and never joins a cross-DP collective. A DeepSeek-V4
+        # (MoE) draft cannot use this (draft_tp_context does not patch attn_dp_size, so
+        # the MoE gather stays on) and instead runs full-DP: it keeps the full DP
+        # context and its _run_ffn goes through the shared parent MoE-DP gather, fed by
+        # the draft-side DP metadata (dp_moe_sync below). Target forwards always stay
+        # OUTSIDE the dense attention-TP context.
+        self._draft_is_moe = draft_is_deepseek_v4(server_args=server_args)
+        self._draft_dp_context_enabled = (
+            server_args.enable_dp_attention and not self._draft_is_moe
         )
+        attn_tp_size = server_args.tp_size // max(server_args.dp_size, 1)
+        if server_args.enable_dp_attention and self._draft_is_moe and attn_tp_size > 1:
+            # MoE draft under DP runs full-DP pure-TP-MoE (a2a="none"): its _run_ffn
+            # goes through the shared parent MoE-DP gather (dp_moe_sync). That path is
+            # only correct when attn_tp == 1 (dp_size == tp_size); with attn_tp > 1 the
+            # unequal per-rank verify batch corrupts the attn-TP all-reduce (design doc
+            # 9.1). MXFP4 experts have no DeepEP runner, so DeepEP-EP is not an option.
+            # Fail fast on the known-broken attn_tp > 1 case instead of silent garbage.
+            raise ValueError(
+                "DSpark + dp attention with a DeepSeek-V4 (MoE) draft requires "
+                "attn_tp == 1 (set --dp-size == --tp). attn_tp > 1 corrupts the "
+                "MoE-under-DP all-reduce."
+            )
+
+        # Draft runner (separate KV cache + attention backend), shared with DFlash.
+        with self._draft_context():
+            bundle = build_draft_tp_worker(
+                server_args=server_args,
+                gpu_id=gpu_id,
+                tp_rank=tp_rank,
+                dp_rank=dp_rank,
+                moe_ep_rank=moe_ep_rank,
+                attn_cp_rank=attn_cp_rank,
+                moe_dp_rank=moe_dp_rank,
+                nccl_port=nccl_port,
+                target_model_config=target_worker.model_runner.model_config,
+                algo_label="DSPARK",
+            )
         self._draft_worker = bundle.draft_worker
         self.draft_model_runner = bundle.draft_model_runner
         self.draft_model = bundle.draft_model
@@ -228,6 +261,47 @@ class DSparkWorkerV2(BaseSpecWorker):
             server_args=self.server_args,
             verify_num_draft_tokens=self.verify_num_draft_tokens,
         )
+        if (
+            server_args.enable_dp_attention
+            and not self._draft_is_moe
+            and self._verify_planner.is_compact_mode
+            and not server_args.disable_cuda_graph
+        ):
+            # Dense-draft (qwen/gemma) compact verify under DP + cuda graph is not yet
+            # supported: it deadlocks, and every fix attempted so far hits a separate
+            # backend-layer gap. Fail fast at startup with actionable guidance instead of
+            # a 300s watchdog hang. Concretely, the troubles hit (see the dp-attn journal
+            # 2026-07-02 for full py-spy traces):
+            #  1. On a step with both busy and idle DP groups, the busy target verify
+            #     replays the token-keyed COMPACT graph while the idle group's dummy
+            #     verify (a layout-less DFlashVerifyInput) replays the bs-keyed graph.
+            #     These are two distinct captured CUDA graphs whose baked dp_gather
+            #     collectives can never rendezvous -> the target-verify collective
+            #     deadlocks (2 ranks wedged in a matmul, 2 parked at recv_requests).
+            #  2. Making the idle group also take the token-keyed graph fails: the
+            #     token-keyed graph's dp_gather requires every rank to contribute the
+            #     padded tier, but an idle group has 0 real tokens and cannot be shaped
+            #     into that compact-packed tier geometry (a 0-request RaggedVerifyLayout
+            #     is rejected; a global-bs padded layout then mismatches at buffer fill,
+            #     `_foreach_copy size 8 vs 0`).
+            #  3. Forcing the whole step eager on a mixed busy/idle step instead hits the
+            #     trtllm_mha backend's incomplete eager compact-verify path
+            #     (`assert max_q_len is not None`) -- compact was designed to build its
+            #     verify metadata inside the graph capture, so its eager path is a stub
+            #     when a graph exists.
+            # A real fix needs backend work (let an idle group join the tier-padded
+            # token-keyed graph, or complete trtllm_mha's eager compact metadata as the
+            # mixed-step fallback). Until then: eager (--disable-cuda-graph) is verified
+            # lossless (gsm8k 0.94, acc_len ~5.4). The dsv4 (MoE) draft is unaffected --
+            # its draft AND verify are full-DP and their idle participation already
+            # matches the busy geometry, so it keeps cuda graph under DP.
+            raise ValueError(
+                "DSpark dense-draft compact verify under --enable-dp-attention does not "
+                "yet support cuda graph (idle DP groups cannot join the token-keyed "
+                "compact graph). Re-run with --disable-cuda-graph (eager is lossless), "
+                "or use SGLANG_RAGGED_VERIFY_MODE=static. The dsv4 (MoE) draft supports "
+                "cuda graph under DP."
+            )
         self._kv_injector = TargetHiddenKvInjector(
             draft_model=self.draft_model,
             draft_model_runner=self.draft_model_runner,
@@ -242,6 +316,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             gamma=self.gamma,
             mask_token_id=self._mask_token_id,
             draft_block_spec_info=self._draft_block_spec_info,
+            dp_moe_sync=self._draft_is_moe and server_args.enable_dp_attention,
         )
         self._verify_executor = TargetVerifyExecutor(
             target_worker=self.target_worker,
@@ -300,6 +375,14 @@ class DSparkWorkerV2(BaseSpecWorker):
             raise AttributeError(name)
         return getattr(self.target_worker, name)
 
+    def _draft_context(self):
+        """Patch the TP group to the attention-TP group while running the dense draft
+        under DP attention (construction / backend + graph init / draft forward), so
+        the draft is per-DP-rank tp=attn_tp. No-op otherwise."""
+        if self._draft_dp_context_enabled:
+            return draft_tp_context(get_attention_tp_group())
+        return nullcontext()
+
     def alloc_memory_pool(
         self,
         memory_pool_config=None,
@@ -313,11 +396,13 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
 
     def init_attention_backends(self):
-        self._draft_worker.init_attention_backends()
+        with self._draft_context():
+            self._draft_worker.init_attention_backends()
 
     def init_cuda_graphs(self):
         # Greedy proposal folds into the draft cuda graph via the draft_sampler hook;
-        # sampling batches fall back to eager. tp=1 only.
+        # sampling batches fall back to eager. Under DP attention the draft graph is
+        # captured inside the attention-TP context (per-DP-rank tp=attn_tp).
         capture_decode_cuda_graph = not self.server_args.disable_cuda_graph
         if is_cuda() and capture_decode_cuda_graph:
             available_mem = get_available_gpu_memory(self.device, self.gpu_id)
@@ -328,14 +413,15 @@ class DSparkWorkerV2(BaseSpecWorker):
                     "memory is available after target backend initialization.",
                     available_mem,
                 )
-        if capture_decode_cuda_graph:
-            # Must run before capture so the draft graph folds the sampler in.
-            self._draft_sampler = self._maybe_build_draft_sampler()
-            self.draft_model_runner.draft_sampler = self._draft_sampler
-            self._proposer._draft_sampler = self._draft_sampler
-        self._draft_worker.init_cuda_graphs(
-            capture_decode_cuda_graph=capture_decode_cuda_graph
-        )
+        with self._draft_context():
+            if capture_decode_cuda_graph:
+                # Must run before capture so the draft graph folds the sampler in.
+                self._draft_sampler = self._maybe_build_draft_sampler()
+                self.draft_model_runner.draft_sampler = self._draft_sampler
+                self._proposer._draft_sampler = self._draft_sampler
+            self._draft_worker.init_cuda_graphs(
+                capture_decode_cuda_graph=capture_decode_cuda_graph
+            )
 
     def _maybe_build_draft_sampler(self):
         def _eager(reason):
@@ -386,6 +472,16 @@ class DSparkWorkerV2(BaseSpecWorker):
     def _forward_prefill(
         self, batch: ScheduleBatch, on_publish
     ) -> GenerationBatchResult:
+        if batch.forward_mode.is_idle():
+            # Global-extend step with a locally idle attention-DP group (routed here
+            # because is_extend_in_batch is the global max). Run a target idle forward
+            # (coefficient 1, matching the busy extend, spec_info left unscaled) to join
+            # the target dp_gather, then return an empty result.
+            if self.server_args.enable_dp_attention:
+                batch.capture_hidden_mode = CaptureHiddenMode.FULL
+                self.target_worker.forward_batch_generation(batch)
+            return self._decode_idle_result(on_publish=on_publish)
+
         batch.capture_hidden_mode = CaptureHiddenMode.FULL
         batch_output = self.target_worker.forward_batch_generation(batch)
         logits_output = batch_output.logits_output
@@ -430,6 +526,31 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
         return batch_output
 
+    def _run_idle_verify_participation(self, batch: ScheduleBatch) -> None:
+        """Under DP attention an idle attention-DP group must still run the target
+        verify forward so it joins the target's dp_gather collective; otherwise busy
+        groups hang. The dummy DFlashVerifyInput carries draft_token_num ==
+        verify_num_draft_tokens so get_spec_adjusted_global_num_tokens scales
+        global_num_tokens by the same factor as a busy verify -> matching dp buffer
+        length across ranks. The forward output is discarded (no real requests)."""
+        verify_input = DFlashVerifyInput(
+            draft_token=torch.empty((0,), dtype=torch.int64, device=self.device),
+            positions=torch.empty((0,), dtype=torch.int64, device=self.device),
+            draft_token_num=self.verify_num_draft_tokens,
+            custom_mask=None,
+            capture_hidden_mode=CaptureHiddenMode.FULL,
+        )
+        batch.out_cache_loc = torch.empty((0,), dtype=torch.int64, device=self.device)
+        verify_forward_batch, _ = verify_input.prepare_for_verify(
+            batch, self.target_worker
+        )
+        self.target_worker.forward_batch_generation(
+            batch=None,
+            forward_batch=verify_forward_batch,
+            is_verify=True,
+            skip_attn_backend_init=True,
+        )
+
     def _decode_idle_result(
         self,
         *,
@@ -464,6 +585,12 @@ class DSparkWorkerV2(BaseSpecWorker):
             )
 
         if batch.forward_mode.is_idle():
+            if self.server_args.enable_dp_attention:
+                # dsv4 (MoE) draft gathers across DP, so the idle group must join the
+                # draft dp_gather too (propose then verify, matching the busy order).
+                if self._draft_is_moe:
+                    self._proposer.run_idle_participation(batch)
+                self._run_idle_verify_participation(batch)
             return self._decode_idle_result(on_publish=on_publish)
 
         batch.seq_lens.record_stream(
@@ -485,15 +612,16 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
 
         sampling_info = batch.sampling_info
-        proposal = self._proposer.propose(
-            batch=batch,
-            draft_input=draft_input,
-            verify_window=verify_window,
-            bs=bs,
-            device=device,
-            target_model=target_model,
-            sampling_info=sampling_info,
-        )
+        with self._draft_context():
+            proposal = self._proposer.propose(
+                batch=batch,
+                draft_input=draft_input,
+                verify_window=verify_window,
+                bs=bs,
+                device=device,
+                target_model=target_model,
+                sampling_info=sampling_info,
+            )
         draft_block_ids = proposal.draft_block_ids
         draft_block = proposal.draft_block
         draft_tokens = draft_block.draft_tokens
@@ -515,12 +643,24 @@ class DSparkWorkerV2(BaseSpecWorker):
             prefix_lens=prefix_lens,
         )
 
+        # dsv4 (MoE) draft under DP: the compact verify's token-keyed cuda graph holds a
+        # cross-DP MoE gather, so every rank must select the same graph tier. Feed the
+        # planner the DP-global max bs (already all-gathered on batch.global_num_tokens,
+        # per-rank decode bs) so the tier floors to it uniformly. None off this path.
+        global_num_reqs = (
+            max(batch.global_num_tokens)
+            if self._draft_is_moe
+            and self.server_args.enable_dp_attention
+            and batch.global_num_tokens is not None
+            else None
+        )
         layout = self._verify_planner.schedule_layout(
             req_pool_indices=batch.req_pool_indices,
             prefix_lens=prefix_lens,
             device=device,
             confidence=confidence,
             budget=verify_token_budget,
+            global_num_reqs=global_num_reqs,
         )
         run_compact = self._verify_planner.should_run_compact(layout=layout)
 

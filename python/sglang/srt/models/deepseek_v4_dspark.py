@@ -372,7 +372,15 @@ class DSparkAttention(MqaAttentionBase):
         else:
             apply_rotary_emb(o[..., -rd:], self.freqs_cis[positions], inverse=True)
 
-        o = o.view(o.shape[0], self.n_local_groups, -1)
+        # Compute the per-group dim explicitly instead of -1: the idle-DP participation
+        # forward runs 0 tokens, and view(0, n_local_groups, -1) is ambiguous (0 = 0 *
+        # n_local_groups * anything) so torch refuses to infer it. Explicit dims are a
+        # no-op change for the normal N>0 path.
+        o = o.view(
+            o.shape[0],
+            self.n_local_groups,
+            o.shape[1] * o.shape[2] // self.n_local_groups,
+        )
         wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
         if self._use_fast_kernel:
             # bf16 wo_a einsum, mirroring the production MQALayer else-path
@@ -382,7 +390,7 @@ class DSparkAttention(MqaAttentionBase):
             o = torch.einsum("bgd,grd->bgr", o, wo_a)
         else:
             o = torch.einsum("bgd,grd->bgr", o.float(), wo_a.float()).to(q.dtype)
-        out, _ = self.wo_b(o.reshape(o.shape[0], -1))
+        out, _ = self.wo_b(o.reshape(o.shape[0], o.shape[1] * o.shape[2]))
         return out
 
 
@@ -625,14 +633,22 @@ class DSparkV4Stage(DeepseekV4DecoderLayer):
             x, self.hc_ffn_fn, self.hc_ffn_scale, self.hc_ffn_base
         )
         x = self.post_attention_layernorm(x)
-        x = self._run_ffn(x)
+        x = self._run_ffn(x, forward_batch)
         x = self._hc_post_block(x, residual, post, comb)
         return x
 
-    def _run_ffn(self, x: torch.Tensor) -> torch.Tensor:
+    def _run_ffn(self, x: torch.Tensor, forward_batch: ForwardBatch) -> torch.Tensor:
+        # Route the draft MoE through the parent's shared MoE-DP path so it does the
+        # same dp_gather -> experts -> combine as the target under dp attention. The hc
+        # dim is already collapsed by hc_pre, so x is [bs*gamma, dim] (DP token count is
+        # bs*gamma). input_ids* are None: the draft has the hash gate off (is_nextn), so
+        # the parent's gather never consumes them. Byte-identical without DP (attn_dp==1
+        # skips the gather and self.mlp ignores forward_batch on the forward_normal path).
         shape = x.shape
         x = x.reshape(-1, self.dim)
-        y = self.mlp(x)
+        y = self._run_moe_ffn_dp_sync(
+            x, forward_batch, input_ids=None, input_ids_global=None
+        )
         return y.view(shape)
 
 

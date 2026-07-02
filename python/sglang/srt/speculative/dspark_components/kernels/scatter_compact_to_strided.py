@@ -70,6 +70,15 @@ def scatter_compact_to_strided(
     bs = layout.verify_lens.shape[0]
     dim = compact.shape[1]
     device = compact.device
+    # Under DP attention the compact verify input is padded up to the dp_gather
+    # buffer (global_num_tokens = bs * draft_token_num >= graph_num_tokens), so the
+    # target returns trailing pad rows past graph_num_tokens. index_copy_ requires
+    # source rows == index rows (= graph_num_tokens from compact_row_index), so trim
+    # compact first: the extra pad tokens are causal-after the real tokens and their
+    # output is discarded (lossless); a no-op without DP (compact is already
+    # graph_num_tokens rows). The triton impl needs no trim -- its gather only reads
+    # rows [start_i, start_i + verify_len_i), never past graph_num_tokens.
+    compact = compact[: layout.graph_num_tokens]
     strided = torch.full(
         (bs * stride + 1, dim), fill_value, dtype=compact.dtype, device=device
     )

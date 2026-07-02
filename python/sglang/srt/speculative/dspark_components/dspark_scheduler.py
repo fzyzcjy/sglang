@@ -67,17 +67,33 @@ def compute_verify_token_budget(
     candidates_sorted = torch.sort(candidates, descending=True).values
     prefix_sum = torch.cumsum(candidates_sorted, dim=0)
 
-    best_extra = 0
-    best_theta = float("-inf")
-    for extra in range(candidates_sorted.numel() + 1):
-        top_sum = float(prefix_sum[extra - 1]) if extra > 0 else 0.0
-        tau_star = num_requests + top_sum
-        theta = tau_star * sps_table.lookup(num_requests + extra)
-        if theta > best_theta:
-            best_theta = theta
-            best_extra = extra
+    # Vectorized greedy: theta(extra) = tau_star(extra) * SPS(bs + extra) for
+    # every extra in [0, num_candidates] in one tensor pass (runs per decode
+    # step on the host planner; a per-extra python loop would pay O(bs*gamma)
+    # float() + bisect). tau_star at extra=0 is the bare num_requests. float64
+    # throughout == the python-double reference loop bit-for-bit; argmax picks
+    # the first maximal index, so the smallest extra wins a theta tie.
+    tau_star = num_requests + torch.cat(
+        [torch.zeros(1, dtype=torch.float64), prefix_sum]
+    )
+    batch_tokens = num_requests + torch.arange(tau_star.numel(), dtype=torch.int64)
+    theta = tau_star * _lookup_sps_tensor(
+        sps_table=sps_table, batch_tokens=batch_tokens
+    )
+    return int(torch.argmax(theta))
 
-    return best_extra
+
+def _lookup_sps_tensor(
+    *, sps_table: SpsCostTable, batch_tokens: torch.Tensor
+) -> torch.Tensor:
+    # Tensor mirror of SpsCostTable.lookup's floor + clamp contract:
+    # bucketize(right=True) == bisect_right, then clamp out-of-range to the
+    # first/last probe. Keep in sync with SpsCostTable.lookup.
+    probes = torch.tensor(sps_table.sample_batch_tokens, dtype=torch.int64)
+    sps = torch.tensor(sps_table.sample_steps_per_sec, dtype=torch.float64)
+    idx = torch.bucketize(batch_tokens, probes, right=True) - 1
+    idx = idx.clamp_(0, probes.numel() - 1)
+    return sps[idx]
 
 
 class HostConfidenceBudgetPlanner:
