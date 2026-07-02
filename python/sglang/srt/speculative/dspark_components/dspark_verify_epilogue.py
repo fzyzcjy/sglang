@@ -200,25 +200,25 @@ class DsparkVerifyEpilogue:
         pool = self.commit_ctx.resolve_pool()
         return hasattr(pool, "set_swa_key_buffer_radix_fused_norm_rope")
 
-    def _ensure_out(self, name: str, compact: torch.Tensor) -> torch.Tensor:
-        buf = getattr(self, name)
+    def _ensure_out(
+        self, buf: Optional[torch.Tensor], compact: torch.Tensor
+    ) -> torch.Tensor:
         if (
-            buf is None
-            or buf.dtype != compact.dtype
-            or buf.shape[1] != compact.shape[1]
+            buf is not None
+            and buf.dtype == compact.dtype
+            and buf.shape[1] == compact.shape[1]
         ):
-            assert not torch.cuda.is_current_stream_capturing(), (
-                "DsparkVerifyEpilogue output buffers must be allocated during "
-                "warmup, not inside graph capture (pool memory is unreadable "
-                "post-replay)."
-            )
-            buf = torch.empty(
-                (self.max_bs * self.stride, compact.shape[1]),
-                dtype=compact.dtype,
-                device=compact.device,
-            )
-            setattr(self, name, buf)
-        return buf
+            return buf
+        assert not torch.cuda.is_current_stream_capturing(), (
+            "DsparkVerifyEpilogue output buffers must be allocated during "
+            "warmup, not inside graph capture (pool memory is unreadable "
+            "post-replay)."
+        )
+        return torch.empty(
+            (self.max_bs * self.stride, compact.shape[1]),
+            dtype=compact.dtype,
+            device=compact.device,
+        )
 
     def __call__(
         self,
@@ -232,25 +232,33 @@ class DsparkVerifyEpilogue:
     ) -> None:
         # bs is the padded capture-tier bs; the worker re-slices to the real
         # bs post-replay.
-        logits_out = self._ensure_out("strided_logits", compact_logits)
-        hidden_out = self._ensure_out("strided_hidden", compact_hidden)
+        self.strided_logits = self._ensure_out(self.strided_logits, compact_logits)
+        self.strided_hidden = self._ensure_out(self.strided_hidden, compact_hidden)
         verify_lens = self.verify_lens_buf[:bs]
-        strided_logits = logits_out[: bs * self.stride]
+        self._scatter(compact_logits, compact_hidden, verify_lens, bs)
+        commit_lens = self._accept(input_ids, seq_lens, verify_lens, bs)
+        if self.folds_commit:
+            self._commit_inject(
+                commit_lens, verify_lens, seq_lens, req_pool_indices, bs
+            )
+
+    def _scatter(self, compact_logits, compact_hidden, verify_lens, bs: int) -> None:
         scatter_compact_to_strided_into(
             compact=compact_logits,
             verify_lens=verify_lens,
-            out=strided_logits,
+            out=self.strided_logits[: bs * self.stride],
             stride=self.stride,
             fill_value=0.0,
         )
         scatter_compact_to_strided_into(
             compact=compact_hidden,
             verify_lens=verify_lens,
-            out=hidden_out[: bs * self.stride],
+            out=self.strided_hidden[: bs * self.stride],
             stride=self.stride,
             fill_value=0.0,
         )
 
+    def _accept(self, input_ids, seq_lens, verify_lens, bs: int) -> torch.Tensor:
         # Greedy accept chain. Intermediates (candidates, correct_len, ...) are
         # graph-internal (pool) tensors; only the final copies land in the
         # static out buffers.
@@ -268,7 +276,7 @@ class DsparkVerifyEpilogue:
         )
         correct_len, bonus, cap_trim_lens = accept_greedy_triton(
             candidates=candidates.view(bs, self.stride),
-            target_logits=strided_logits,
+            target_logits=self.strided_logits[: bs * self.stride],
             verify_num_draft_tokens=self.stride,
             cutoff_layout=_VerifyLensCutoff(verify_lens=verify_lens),
         )
@@ -290,32 +298,35 @@ class DsparkVerifyEpilogue:
         self.commit_lens_buf[:bs].copy_(finalized.commit_lens)
         self.new_seq_lens_buf[:bs].copy_(finalized.new_seq_lens)
         self.out_tokens_buf[:bs].copy_(out_tokens.view(bs, self.stride))
+        return finalized.commit_lens
 
-        if self.folds_commit:
-            # Commit KV inject in-graph (mirrors inject_ragged's MLA branch).
-            # min(commit, verify_lens) zeroes the padded-tier rows (their
-            # req_pool / prefix buffer rows are stale and must never write);
-            # a real row's commit_lens <= verify_lens already, so the min is a
-            # no-op there. The gate collapses non-fold replays to all -1.
-            ctx = self.commit_ctx
-            pool = ctx.resolve_pool()
-            gated_commit_lens = (
-                torch.minimum(finalized.commit_lens, verify_lens.to(torch.int32))
-                * self.inject_gate_buf
+    def _commit_inject(
+        self, commit_lens, verify_lens, seq_lens, req_pool_indices, bs: int
+    ) -> None:
+        # Commit KV inject in-graph (mirrors inject_ragged's MLA branch).
+        # min(commit, verify_lens) zeroes the padded-tier rows (their
+        # req_pool / prefix buffer rows are stale and must never write);
+        # a real row's commit_lens <= verify_lens already, so the min is a
+        # no-op there. The gate collapses non-fold replays to all -1.
+        ctx = self.commit_ctx
+        pool = ctx.resolve_pool()
+        gated_commit_lens = (
+            torch.minimum(commit_lens, verify_lens.to(torch.int32))
+            * self.inject_gate_buf
+        )
+        inject_layout = BuildCommitInjectLayout.execute(
+            req_pool_indices=req_pool_indices,
+            req_to_token=ctx.resolve_req_to_token(),
+            prefix_lens=seq_lens[:bs],
+            block_pos_offsets=ctx.block_pos_offsets[: self.stride],
+            full_to_swa_mapping=pool.full_to_swa_index_mapping,
+            commit_lens=gated_commit_lens,
+            stride=self.stride,
+        )
+        with torch.inference_mode():
+            ctx.draft_model.write_target_hidden_kv(
+                main_hidden=self.strided_hidden[: bs * self.stride],
+                swa_loc=inject_layout.swa_loc,
+                positions=inject_layout.positions,
+                pool=pool,
             )
-            inject_layout = BuildCommitInjectLayout.execute(
-                req_pool_indices=req_pool_indices,
-                req_to_token=ctx.resolve_req_to_token(),
-                prefix_lens=seq_lens[:bs],
-                block_pos_offsets=ctx.block_pos_offsets[: self.stride],
-                full_to_swa_mapping=pool.full_to_swa_index_mapping,
-                commit_lens=gated_commit_lens,
-                stride=self.stride,
-            )
-            with torch.inference_mode():
-                ctx.draft_model.write_target_hidden_kv(
-                    main_hidden=hidden_out[: bs * self.stride],
-                    swa_loc=inject_layout.swa_loc,
-                    positions=inject_layout.positions,
-                    pool=pool,
-                )
