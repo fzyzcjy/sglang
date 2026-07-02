@@ -151,13 +151,16 @@ class DsparkVerifyEpilogue:
             or out.hidden_states is None
         ):
             return
+        # batch_size is the capture slot count S, decoupled from the token
+        # tier (S = min(num_tokens, max_bs)), so num_tokens // (gamma+1) no
+        # longer recovers it.
         self(
             compact_logits=out.next_token_logits,
             compact_hidden=out.hidden_states,
             input_ids=forward_batch.input_ids,
             seq_lens=forward_batch.seq_lens,
             req_pool_indices=forward_batch.req_pool_indices,
-            bs=num_tokens // runner.num_tokens_per_bs,
+            bs=forward_batch.batch_size,
         )
 
     def begin_step(self, verify_lens, armed: bool) -> None:

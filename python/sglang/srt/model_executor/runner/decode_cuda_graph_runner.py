@@ -437,6 +437,17 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             return None
         return getattr(spec_info, "ragged_verify_layout", None)
 
+    def _ragged_capture_slots(self, num_tokens: int) -> int:
+        # Token tier T carries S = min(T, max_bs) request slots (every row
+        # holds at least the anchor token, and the static per-request buffers
+        # top out at max_bs). Decoupling S from T is what lets a small verify
+        # budget replay a tier below bs*(gamma+1). FORCE_UNIFORM_CAPTURE keeps
+        # the legacy S = T/(gamma+1) coupling (it captures with no ragged
+        # layout, so the uniform stride-8 geometry must stay self-consistent).
+        if envs.SGLANG_TEST_RAGGED_VERIFY_FORCE_UNIFORM_CAPTURE.get():
+            return num_tokens // self.num_tokens_per_bs
+        return min(num_tokens, self.max_bs)
+
     def _capture_ragged_verify_layout(self, num_tokens: int):
         if not self.ragged_verify_mode:
             return None
@@ -444,16 +455,18 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             return None
         if envs.SGLANG_TEST_RAGGED_VERIFY_FORCE_UNIFORM_CAPTURE.get():
             return None
-        from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
-
-        assert num_tokens % self.num_tokens_per_bs == 0, (
-            f"ragged-verify capture bucket {num_tokens=} must be an exact multiple of "
-            f"{self.num_tokens_per_bs=} to recover bs"
+        from sglang.srt.speculative.ragged_verify import (
+            RaggedVerifyLayout,
+            build_capture_verify_lens,
         )
-        bs = num_tokens // self.num_tokens_per_bs
-        return RaggedVerifyLayout.uniform(
-            bs=bs,
+
+        verify_lens_cpu = build_capture_verify_lens(
+            num_tokens=num_tokens,
+            num_slots=self._ragged_capture_slots(num_tokens),
             num_draft_tokens=self.num_tokens_per_bs,
+        )
+        return RaggedVerifyLayout.from_verify_lens(
+            verify_lens_cpu=verify_lens_cpu,
             device=self.device,
             grid=self.capture_num_tokens,
         )
@@ -545,12 +558,13 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         if not self.attn_backend.supports_ragged_verify_graph:
             return False
 
-        admission_tokens = (
-            ragged_layout.graph_num_tokens
-            if self.require_mlp_tp_gather
-            else forward_batch.batch_size * self.num_tokens_per_bs
-        )
-        is_tokens_supported = admission_tokens <= self.capture_num_tokens[-1]
+        # The layout's tier is authoritative (budget-tiered layouts sit below
+        # bs*(gamma+1)); the slot check guards raw_bs against the tier's
+        # captured request capacity.
+        admission_tokens = ragged_layout.graph_num_tokens
+        is_tokens_supported = admission_tokens <= self.capture_num_tokens[
+            -1
+        ] and forward_batch.batch_size <= self._ragged_capture_slots(admission_tokens)
 
         is_dp_supported = (
             forward_batch.can_run_dp_cuda_graph if self.require_mlp_sync else True
@@ -630,17 +644,22 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         self,
         size: int,
         stream_idx: Optional[int] = None,
+        num_tokens: Optional[int] = None,
     ):
         """Build the dummy decode ForwardBatch for capture at size (=bs),
         populate static input buffers, choose the active attn backend, and
         optionally build pp_proxy_tensors.
+
+        num_tokens defaults to the uniform bs * num_tokens_per_bs; ragged
+        verify capture passes the decoupled (slots, tier tokens) pair.
 
         Returns (forward_batch, attn_backend, pp_proxy_tensors);
         pp_proxy_tensors is None unless pp_size > 1.
         """
         bs = size
         buffers: DecodeInputBuffers = self.buffers
-        num_tokens = bs * self.num_tokens_per_bs
+        if num_tokens is None:
+            num_tokens = bs * self.num_tokens_per_bs
 
         # Registry-owned FB-shared slots come through the registry (which
         # shares physical storage with self.buffers via source=...); the rest
@@ -873,8 +892,10 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         stream_idx: Optional[int] = None,
         variant_label: Optional[str] = None,
     ):
-        bs = size
-        num_tokens = bs * self.num_tokens_per_bs
+        num_tokens = size * self.num_tokens_per_bs
+        # Ragged verify decouples request slots from the token tier: the tier
+        # keys the graph, the slots bound how many requests it can hold.
+        bs = self._ragged_capture_slots(num_tokens) if self.ragged_verify_mode else size
 
         # Sanity-check: --debug-cuda-graph requires breakable backend.
         if self.model_runner.server_args.debug_cuda_graph:
@@ -883,7 +904,7 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             ), "Breakable CUDA graph is required for --debug-cuda-graph"
 
         forward_batch, attn_backend, pp_proxy_tensors = self.capture_prepare(
-            size, stream_idx=stream_idx
+            bs, stream_idx=stream_idx, num_tokens=num_tokens
         )
 
         # All setup hooks below read get_attn_backend() (TboForwardBatchPreparer,
@@ -1051,15 +1072,16 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
 
         if is_ragged:
             raw_num_token = ragged_layout.graph_num_tokens
-            graph_size_key = self._ragged_graph_num_tokens(
-                max(raw_num_token, raw_bs * self.num_tokens_per_bs)
-            )
+            graph_size_key = self._ragged_graph_num_tokens(raw_num_token)
             assert graph_size_key == ragged_layout.graph_num_tokens, (
                 f"ragged verify tier mismatch: runner tier {graph_size_key} != "
                 f"layout graph_num_tokens {ragged_layout.graph_num_tokens}"
             )
-            bs = graph_size_key // self.num_tokens_per_bs
-            assert bs >= raw_bs, f"ragged padded bs {bs} < raw_bs {raw_bs}"
+            bs = self._ragged_capture_slots(graph_size_key)
+            assert bs >= raw_bs, (
+                f"ragged capture slots {bs} (tier {graph_size_key}) < raw_bs "
+                f"{raw_bs}; the planner must reject this batch before replay"
+            )
             padded_num_tokens = graph_size_key
         else:
             raw_num_token = raw_bs * self.num_tokens_per_bs
