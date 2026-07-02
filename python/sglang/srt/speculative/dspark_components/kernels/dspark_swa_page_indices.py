@@ -431,7 +431,9 @@ def _swa_page_indices_kernel(
     in_window = k < cl
     src_col = tl.minimum(tl.maximum((swa_window - cl) + k, 0), swa_window - 1)
     wmask = kmask & in_window
-    off = tl.load(offsets_ptr + i * swa_window + src_col, mask=wmask, other=0).to(tl.int64)
+    off = tl.load(offsets_ptr + i * swa_window + src_col, mask=wmask, other=0).to(
+        tl.int64
+    )
     win_full = tl.load(req_to_token_ptr + rp * rt_stride + off, mask=wmask, other=0).to(
         tl.int64
     )
