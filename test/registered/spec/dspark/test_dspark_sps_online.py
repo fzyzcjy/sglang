@@ -2,6 +2,7 @@ import unittest
 
 from sglang.srt.speculative.dspark_components.dspark_sps_online import (
     OnlineSpsProfiler,
+    _pava_non_increasing,
 )
 from sglang.srt.speculative.dspark_components.dspark_sps_table import (
     SpsCostTable,
@@ -63,13 +64,13 @@ class TestOnlineSpsProfilerSampling(CustomTestCase):
         table = None
         for _ in range(10):
             table = profiler.observe_step(batch_tokens=20)
-            clock.advance(0.01)
+            clock.advance(0.002)
         self.assertIsNotNone(table)
         self.assertEqual(table.sample_batch_tokens, [8, 16, 32, 64])
-        self.assertAlmostEqual(table.lookup(20), 100.0)
+        self.assertAlmostEqual(table.lookup(20), 500.0)
         self.assertEqual(table.lookup(8), 1000.0)
-        self.assertEqual(table.lookup(32), 500.0)
-        self.assertEqual(table.lookup(64), 480.0)
+        self.assertAlmostEqual(table.lookup(32), 500.0, delta=1.0)
+        self.assertAlmostEqual(table.lookup(64), 480.0, delta=1.0)
         self.assertEqual(table.max_batch_tokens, 128)
 
     def test_rebuild_tick_with_no_measured_bin_returns_none(self):
@@ -86,12 +87,12 @@ class TestOnlineSpsProfilerSampling(CustomTestCase):
         profiler, clock = _make_online_profiler(
             rebuild_interval_steps=2, min_bin_samples=1
         )
-        profiler.observe_step(batch_tokens=8)
+        profiler.observe_step(batch_tokens=64)
         clock.advance(0.01)
-        table = profiler.observe_step(batch_tokens=64)
+        table = profiler.observe_step(batch_tokens=8)
         self.assertIsNotNone(table)
-        self.assertAlmostEqual(table.lookup(8), 100.0)
-        self.assertEqual(table.lookup(64), 480.0)
+        self.assertAlmostEqual(table.lookup(64), 100.0)
+        self.assertEqual(table.lookup(8), 1000.0)
 
     def test_note_non_decode_step_breaks_the_pair(self):
         profiler, clock = _make_online_profiler(
@@ -151,6 +152,50 @@ class TestOnlineSpsProfilerUninitializedColdStart(CustomTestCase):
         for sps in table.sample_steps_per_sec:
             self.assertAlmostEqual(sps, 100.0)
         self.assertEqual(table.sample_batch_tokens[-1], 64)
+
+
+class TestOnlineSpsTableMonotonic(CustomTestCase):
+    def test_pava_projects_sawtooth_onto_non_increasing_sequence(self):
+        """A noisy sawtooth series becomes non-increasing with its total mass preserved."""
+        values = [100.0, 80.0, 90.0, 40.0, 60.0]
+        smoothed = _pava_non_increasing(values)
+        self.assertEqual(smoothed, sorted(smoothed, reverse=True))
+        self.assertAlmostEqual(sum(smoothed), sum(values))
+
+    def test_pava_keeps_already_non_increasing_series_unchanged(self):
+        """An already non-increasing series passes through PAVA untouched."""
+        values = [100.0, 90.0, 90.0, 10.0]
+        self.assertEqual(_pava_non_increasing(values), values)
+
+    def test_rebuilt_table_is_non_increasing_when_bins_measure_a_sawtooth(self):
+        """Online-rebuilt tables stay monotone even if a larger-B bin measures faster steps."""
+        profiler, clock = _make_online_profiler(
+            rebuild_interval_steps=10, min_bin_samples=3
+        )
+        table = None
+        for _ in range(10):
+            profiler.observe_step(batch_tokens=16)
+            clock.advance(0.01)
+        for _ in range(10):
+            table = profiler.observe_step(batch_tokens=32)
+            clock.advance(0.005)
+        self.assertIsNotNone(table)
+        sps = table.sample_steps_per_sec
+        self.assertEqual(sps, sorted(sps, reverse=True))
+
+    def test_rebuilt_table_has_no_zero_slope_plateau(self):
+        """Online-rebuilt tables are strictly decreasing so the budget argmax never sees a free plateau."""
+        profiler, clock = _make_online_profiler(
+            rebuild_interval_steps=10, min_bin_samples=3
+        )
+        table = None
+        for _ in range(10):
+            table = profiler.observe_step(batch_tokens=20)
+            clock.advance(0.002)
+        self.assertIsNotNone(table)
+        sps = table.sample_steps_per_sec
+        for earlier, later in zip(sps, sps[1:]):
+            self.assertLess(later, earlier)
 
 
 if __name__ == "__main__":
