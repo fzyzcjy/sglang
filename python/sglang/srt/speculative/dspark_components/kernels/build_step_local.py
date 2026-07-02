@@ -35,7 +35,9 @@ def build_step_local(*, bias: torch.Tensor, base_local: torch.Tensor) -> torch.T
     # fp32 -- upcast matches the old ``F.linear(...).float()`` on the bf16 path bit-for-bit.
     per_partition = base_local.shape[-1]
     pad = per_partition - bias.shape[-1]
-    padded = F.pad(bias.to(torch.float32), (0, pad)) if pad > 0 else bias.to(torch.float32)
+    padded = (
+        F.pad(bias.to(torch.float32), (0, pad)) if pad > 0 else bias.to(torch.float32)
+    )
     return base_local + padded
 
 
