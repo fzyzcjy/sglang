@@ -356,7 +356,7 @@ class DSparkAttention(MqaAttentionBase):
         # metadata built in make_core_attn_metadata (is_dspark_draft branch) and runs
         # flash_mla over the real SWA key buffer. The KV store is already done above, so
         # save_kv_cache=False (mirrors MQALayer's non-fused path). attn_sink is this
-        # rank's local slice.
+        # rank's local slice, zero-padded to _PAD_NUM_HEADS when the heads are.
         o = attn_backend.forward(
             q=q,
             k=kv,
