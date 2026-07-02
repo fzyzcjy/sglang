@@ -29,7 +29,6 @@ from sglang.srt.speculative.draft_worker_common import (
 )
 from sglang.srt.speculative.dspark_components.dspark_accept import (
     accept_draft_tokens,
-    build_out_tokens,
 )
 from sglang.srt.speculative.dspark_components.dspark_confidence_metrics import (
     ConfidenceMetricsProbe,
@@ -62,6 +61,9 @@ from sglang.srt.speculative.dspark_components.dspark_verify import (
 )
 from sglang.srt.speculative.dspark_components.dspark_verify_planner import (
     DSparkVerifyPlanner,
+)
+from sglang.srt.speculative.dspark_components.kernels.build_out_tokens import (
+    BuildOutTokens,
 )
 from sglang.srt.speculative.spec_utils import draft_tp_context
 from sglang.srt.utils import get_available_gpu_memory, is_cuda
@@ -656,7 +658,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
 
         commit_lens = correct_len.to(torch.int32) + 1
-        out_tokens = build_out_tokens(
+        out_tokens = BuildOutTokens.execute(
             draft_tokens=draft_tokens,
             correct_len=correct_len,
             bonus=bonus,

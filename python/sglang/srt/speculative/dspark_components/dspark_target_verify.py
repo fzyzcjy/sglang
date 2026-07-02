@@ -19,8 +19,12 @@ from sglang.srt.speculative.dspark_components.dspark_kv_inject import (
 )
 from sglang.srt.speculative.dspark_components.dspark_verify import (
     apply_logits_adjustments_strided,
-    build_ragged_verify_window,
-    scatter_compact_to_strided,
+)
+from sglang.srt.speculative.dspark_components.kernels.build_ragged_verify_window import (
+    BuildRaggedVerifyWindow,
+)
+from sglang.srt.speculative.dspark_components.kernels.scatter_compact_to_strided import (
+    ScatterCompactToStrided,
 )
 from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 
@@ -228,7 +232,7 @@ class TargetVerifyExecutor:
         # are filled with 0 and never enter the commit decision (accept is capped
         # to ell_r). Returns the result with strided logits/hidden in place, plus
         # the strided hidden for the ragged KV injection.
-        ragged_window = build_ragged_verify_window(
+        ragged_window = BuildRaggedVerifyWindow.execute(
             batch=batch,
             layout=layout,
             draft_block_ids=draft_block_ids,
@@ -247,7 +251,7 @@ class TargetVerifyExecutor:
         logits_output = target_verify.logits_output
 
         compact_logits = logits_output.next_token_logits
-        strided_logits = scatter_compact_to_strided(
+        strided_logits = ScatterCompactToStrided.execute(
             compact=compact_logits,
             layout=layout,
             fill_value=0.0,
@@ -263,7 +267,7 @@ class TargetVerifyExecutor:
         compact_hidden = logits_output.hidden_states
         if compact_hidden is None:
             raise RuntimeError("DSpark verify requires target hidden states, got None.")
-        hidden_strided = scatter_compact_to_strided(
+        hidden_strided = ScatterCompactToStrided.execute(
             compact=compact_hidden,
             layout=layout,
             fill_value=0.0,

@@ -5,6 +5,8 @@ import torch
 from sglang.srt.layers.attention.deepseek_v4_backend import (
     SWA_WINDOW,
     build_block_seq_lens_casual,
+)
+from sglang.srt.speculative.dspark_components.kernels.dspark_swa_page_indices import (
     compute_dspark_window_gather,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -51,6 +53,7 @@ class TestBuildBlockSeqLensCasual(CustomTestCase):
             seq_lens_casual=seq_lens_casual,
             req_pool_indices_repeated=torch.zeros(bs * block_size, dtype=torch.int32),
             block_size=block_size,
+            swa_window=SWA_WINDOW,
         )
         self.assertTrue(
             torch.equal(gather.context_lens, torch.clamp(prefixes, max=SWA_WINDOW))
