@@ -93,9 +93,11 @@ class TestPaddedRaggedVerifyGeometry(CustomTestCase):
             graph_num_tokens_floor=24,
         )
         self.assertEqual(raw.graph_num_tokens, 32)
-        padded = raw.padded_to_bucket(num_draft_tokens=8)
+        padded = raw.padded_to_bucket(padded_bs=4)
         self.assertEqual(padded.bs, 4)
-        self.assertEqual(padded.verify_lens_cpu, [8, 1, 3, 20])
+        # padded layouts carry device verify_lens only (verify_lens_cpu stays
+        # None -- the pad happens on-device, sync-free).
+        self.assertEqual(padded.verify_lens.tolist(), [8, 1, 3, 20])
         self.assertEqual(padded.qo_indptr_device.tolist(), [0, 8, 9, 12, 32])
         seq_lens = torch.tensor([10, 20, 30, 1], dtype=torch.int32)
         geometry = build_ragged_target_verify_geometry(seq_lens=seq_lens, layout=padded)
@@ -110,9 +112,50 @@ class TestPaddedRaggedVerifyGeometry(CustomTestCase):
             grid=[8, 16, 32, 64],
             graph_num_tokens_floor=24,
         )
-        padded = raw.padded_to_bucket(num_draft_tokens=8)
+        padded = raw.padded_to_bucket(padded_bs=4)
         self.assertEqual(int(padded.qo_indptr_device[-1]), padded.graph_num_tokens)
         self.assertEqual(padded.qo_indptr_device.numel(), padded.bs + 1)
+
+    def test_padded_layout_decoupled_slots_spread_slack(self):
+        # Capture slots decoupled from the token tier: 6 slots on a 32-token
+        # tier spread the 20-token slack evenly over the 3 pad rows.
+        raw = RaggedVerifyLayout.from_verify_lens(
+            verify_lens_cpu=[8, 1, 3],
+            device=_DEVICE,
+            grid=[8, 16, 32, 64],
+            graph_num_tokens_floor=24,
+        )
+        padded = raw.padded_to_bucket(padded_bs=6)
+        self.assertEqual(padded.bs, 6)
+        self.assertEqual(padded.verify_lens.tolist(), [8, 1, 3, 7, 7, 6])
+        self.assertEqual(int(padded.qo_indptr_device[-1]), 32)
+
+    def test_padded_layout_budget_tier_below_uniform(self):
+        # Budget-sized tier round_up(bs + budget) sits BELOW bs*(gamma+1):
+        # 3 reqs on a 16-token tier, no pad slot -> slack rides on the last
+        # real row (its real tokens stay front-aligned, pads are discarded).
+        raw = RaggedVerifyLayout.from_verify_lens(
+            verify_lens_cpu=[8, 1, 3],
+            device=_DEVICE,
+            grid=[8, 16, 32, 64],
+        )
+        self.assertEqual(raw.graph_num_tokens, 16)
+        padded = raw.padded_to_bucket(padded_bs=3)
+        self.assertEqual(padded.verify_lens.tolist(), [8, 1, 7])
+        self.assertEqual(int(padded.qo_indptr_device[-1]), 16)
+
+    def test_padded_layout_zero_len_pad_rows(self):
+        # More pad slots than slack tokens -> trailing pad rows are 0-length
+        # (empty varlen segments), and the row sum still fills the tier.
+        raw = RaggedVerifyLayout.from_verify_lens(
+            verify_lens_cpu=[8, 8],
+            device=_DEVICE,
+            grid=[8, 16, 32, 64],
+        )
+        self.assertEqual(raw.graph_num_tokens, 16)
+        padded = raw.padded_to_bucket(padded_bs=8)
+        self.assertEqual(padded.verify_lens.tolist(), [8, 8, 0, 0, 0, 0, 0, 0])
+        self.assertEqual(int(padded.qo_indptr_device[-1]), 16)
 
 
 class TestNegativeSeamGeometry(CustomTestCase):
@@ -146,6 +189,116 @@ class TestNegativeSeamGeometry(CustomTestCase):
         )
         self.assertEqual(geometry.cu_seqlens_q.tolist(), [0, 8, 16, 24])
         self.assertEqual(geometry.max_seq_len_q, 8)
+
+
+class TestCaptureVerifyLens(CustomTestCase):
+    def test_small_tier_one_token_rows(self):
+        from sglang.srt.speculative.ragged_verify import build_capture_verify_lens
+
+        lens = build_capture_verify_lens(num_tokens=8, num_slots=8, num_draft_tokens=8)
+        self.assertEqual(lens, [1] * 8)
+
+    def test_large_tier_spreads_within_window(self):
+        from sglang.srt.speculative.ragged_verify import build_capture_verify_lens
+
+        lens = build_capture_verify_lens(
+            num_tokens=1024, num_slots=128, num_draft_tokens=8
+        )
+        self.assertEqual(sum(lens), 1024)
+        self.assertEqual(lens, [8] * 128)
+
+    def test_uneven_tier_rows_stay_legal(self):
+        from sglang.srt.speculative.ragged_verify import build_capture_verify_lens
+
+        lens = build_capture_verify_lens(num_tokens=24, num_slots=5, num_draft_tokens=8)
+        self.assertEqual(sum(lens), 24)
+        self.assertTrue(all(1 <= v <= 8 for v in lens))
+
+    def test_rejects_overpacked_tier(self):
+        from sglang.srt.speculative.ragged_verify import build_capture_verify_lens
+
+        with self.assertRaises(ValueError):
+            build_capture_verify_lens(num_tokens=64, num_slots=4, num_draft_tokens=8)
+        with self.assertRaises(ValueError):
+            build_capture_verify_lens(num_tokens=4, num_slots=8, num_draft_tokens=8)
+
+
+class _FakeRaggedRunner(types.SimpleNamespace):
+    pass
+
+
+def _fake_model_runner(capture_num_tokens, max_bs):
+    runner = _FakeRaggedRunner(
+        ragged_verify_mode=True,
+        capture_num_tokens=capture_num_tokens,
+        max_bs=max_bs,
+    )
+    return types.SimpleNamespace(decode_cuda_graph_runner=runner)
+
+
+class TestBudgetTierSelection(CustomTestCase):
+    def test_floor_uses_budget_upper_bound(self):
+        from sglang.srt.speculative.dspark_components.dspark_verify import (
+            verify_layout_graph_num_tokens_floor,
+        )
+        from sglang.srt.speculative.ragged_verify import RaggedVerifyMode
+
+        model_runner = _fake_model_runner([8, 16, 1024], max_bs=128)
+        floor = verify_layout_graph_num_tokens_floor(
+            num_reqs=100,
+            ragged_verify_mode=RaggedVerifyMode.COMPACT,
+            verify_num_draft_tokens=8,
+            model_runner=model_runner,
+            verify_token_budget=50,
+        )
+        self.assertEqual(floor, 150)
+        pinned = verify_layout_graph_num_tokens_floor(
+            num_reqs=100,
+            ragged_verify_mode=RaggedVerifyMode.COMPACT,
+            verify_num_draft_tokens=8,
+            model_runner=model_runner,
+        )
+        self.assertEqual(pinned, 800)
+
+    def test_exceeds_gate_checks_slots_and_tier(self):
+        from sglang.srt.speculative.dspark_components.dspark_verify import (
+            ragged_layout_exceeds_captured_grid,
+        )
+
+        model_runner = _fake_model_runner([8, 16, 1024], max_bs=128)
+        # More requests than captured slots -> rejected even with a tiny tier.
+        self.assertTrue(
+            ragged_layout_exceeds_captured_grid(
+                num_reqs=129,
+                verify_num_draft_tokens=8,
+                model_runner=model_runner,
+                tier_tokens_hint=200,
+            )
+        )
+        # Budget tier within the grid readmits a bs whose pinned tier bursts it.
+        self.assertFalse(
+            ragged_layout_exceeds_captured_grid(
+                num_reqs=128,
+                verify_num_draft_tokens=8,
+                model_runner=model_runner,
+                tier_tokens_hint=512,
+            )
+        )
+        # Pinned hint (None) keeps the legacy num_reqs * (gamma+1) gate.
+        self.assertFalse(
+            ragged_layout_exceeds_captured_grid(
+                num_reqs=128,
+                verify_num_draft_tokens=8,
+                model_runner=model_runner,
+            )
+        )
+        self.assertTrue(
+            ragged_layout_exceeds_captured_grid(
+                num_reqs=128,
+                verify_num_draft_tokens=9,
+                model_runner=model_runner,
+            )
+        )
 
 
 class TestSwaPaddedSlotGuard(CustomTestCase):
