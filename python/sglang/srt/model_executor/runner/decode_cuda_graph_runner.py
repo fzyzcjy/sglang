@@ -971,6 +971,7 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
                         compact_hidden=out.hidden_states,
                         input_ids=forward_batch.input_ids,
                         seq_lens=forward_batch.seq_lens,
+                        req_pool_indices=forward_batch.req_pool_indices,
                         bs=num_tokens // self.num_tokens_per_bs,
                     )
                 return out

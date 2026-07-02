@@ -11,6 +11,9 @@ from sglang.srt.speculative.dspark_components.kernels.accept_greedy import (
 from sglang.srt.speculative.dspark_components.kernels.build_out_tokens import (
     BuildOutTokens,
 )
+from sglang.srt.speculative.dspark_components.kernels.commit_inject_layout import (
+    BuildCommitInjectLayout,
+)
 from sglang.srt.speculative.dspark_components.kernels.finalize_accept_lens import (
     finalize_accept_lens_triton,
 )
@@ -60,10 +63,26 @@ class DsparkVerifyEpilogue:
       graph memory pool; [max_bs] buffers are eager in __init__.
     """
 
-    def __init__(self, *, max_bs: int, verify_num_draft_tokens: int, device) -> None:
+    def __init__(
+        self,
+        *,
+        max_bs: int,
+        verify_num_draft_tokens: int,
+        device,
+        commit_injector=None,
+    ) -> None:
         self.max_bs = int(max_bs)
         self.stride = int(verify_num_draft_tokens)
         self.gamma = self.stride - 1
+        # TargetHiddenKvInjector when the commit KV write folds in-graph
+        # (MLA pool only); pool refs resolve lazily at capture time (pools are
+        # allocated after worker __init__, before capture).
+        self.commit_injector = commit_injector
+        # 1 -> the captured commit write is live this replay; 0 -> every
+        # swa_loc collapses to -1 and the fused writer skips all rows. Pool
+        # writes are SIDE EFFECTS: a sampling / non-fold step must not let the
+        # captured write mutate the draft KV (the worker eager-injects).
+        self.inject_gate_buf = torch.zeros((1,), dtype=torch.int32, device=device)
         # Filled by the worker pre-replay; zero-init keeps a pre-fill idle
         # replay bounded.
         self.verify_lens_buf = torch.zeros(
@@ -94,6 +113,19 @@ class DsparkVerifyEpilogue:
         # [max_bs*stride, dim], allocated on the first warmup call.
         self.strided_logits: Optional[torch.Tensor] = None
         self.strided_hidden: Optional[torch.Tensor] = None
+
+    def set_inject_gate(self, live: bool) -> None:
+        self.inject_gate_buf.fill_(1 if live else 0)
+
+    @property
+    def folds_commit(self) -> bool:
+        # Only the MLA single-latent pool has the masked (-1-skipping) fused
+        # writer the captured commit relies on; the dense MHA prefix-valid
+        # write stays eager.
+        if self.commit_injector is None:
+            return False
+        pool = self.commit_injector.draft_model_runner.token_to_kv_pool
+        return hasattr(pool, "set_swa_key_buffer_radix_fused_norm_rope")
 
     def fill_verify_lens(self, verify_lens: torch.Tensor) -> None:
         # The zeroed tail keeps padded-tier rows out of the scatter.
@@ -129,6 +161,7 @@ class DsparkVerifyEpilogue:
         compact_hidden: torch.Tensor,
         input_ids: torch.Tensor,
         seq_lens: torch.Tensor,
+        req_pool_indices: torch.Tensor,
         bs: int,
     ) -> None:
         # bs is the padded capture-tier bs; the worker re-slices to the real
@@ -191,3 +224,32 @@ class DsparkVerifyEpilogue:
         self.commit_lens_buf[:bs].copy_(finalized.commit_lens)
         self.new_seq_lens_buf[:bs].copy_(finalized.new_seq_lens)
         self.out_tokens_buf[:bs].copy_(out_tokens.view(bs, self.stride))
+
+        if self.folds_commit:
+            # Commit KV inject in-graph (mirrors inject_ragged's MLA branch).
+            # min(commit, verify_lens) zeroes the padded-tier rows (their
+            # req_pool / prefix buffer rows are stale and must never write);
+            # a real row's commit_lens <= verify_lens already, so the min is a
+            # no-op there. The gate collapses non-fold replays to all -1.
+            injector = self.commit_injector
+            pool = injector.draft_model_runner.token_to_kv_pool
+            gated_commit_lens = (
+                torch.minimum(finalized.commit_lens, verify_lens.to(torch.int32))
+                * self.inject_gate_buf
+            )
+            inject_layout = BuildCommitInjectLayout.execute(
+                req_pool_indices=req_pool_indices,
+                req_to_token=injector.model_runner.req_to_token_pool.req_to_token,
+                prefix_lens=seq_lens[:bs],
+                block_pos_offsets=injector._block_pos_offsets[: self.stride],
+                full_to_swa_mapping=pool.full_to_swa_index_mapping,
+                commit_lens=gated_commit_lens,
+                stride=self.stride,
+            )
+            with torch.inference_mode():
+                injector.draft_model.write_target_hidden_kv(
+                    main_hidden=hidden_out[: bs * self.stride],
+                    swa_loc=inject_layout.swa_loc,
+                    positions=inject_layout.positions,
+                    pool=pool,
+                )

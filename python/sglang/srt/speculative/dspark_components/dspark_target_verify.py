@@ -194,6 +194,7 @@ class TargetVerifyExecutor:
         bs: int,
         device: str,
         sampling_info,
+        inject_gate: bool = False,
     ) -> tuple[TargetVerifyResult, torch.Tensor]:
         ragged_window = BuildRaggedVerifyWindow.execute(
             batch=batch,
@@ -207,8 +208,11 @@ class TargetVerifyExecutor:
         )
         if self.verify_epilogue is not None:
             # Feed the in-graph scatter's static verify_lens pre-replay
-            # (harmless on an eager-fallback step).
+            # (harmless on an eager-fallback step). inject_gate arms the
+            # captured commit KV write; disarmed replays collapse it to a
+            # no-op and the worker eager-injects.
             self.verify_epilogue.fill_verify_lens(layout.verify_lens)
+            self.verify_epilogue.set_inject_gate(inject_gate)
         target_verify = self._run_ragged(
             batch=batch,
             layout=layout,

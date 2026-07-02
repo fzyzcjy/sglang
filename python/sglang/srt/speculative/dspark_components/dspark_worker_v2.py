@@ -262,6 +262,7 @@ class DSparkWorkerV2(BaseSpecWorker):
                 max_bs=max(server_args.cuda_graph_config.decode.bs),
                 verify_num_draft_tokens=self.verify_num_draft_tokens,
                 device=self.device,
+                commit_injector=self._kv_injector,
             )
             self.model_runner.dspark_verify_epilogue = self._verify_epilogue
 
@@ -467,6 +468,10 @@ class DSparkWorkerV2(BaseSpecWorker):
         return batch_output
 
     def _run_idle_verify_participation(self, batch: ScheduleBatch) -> None:
+        if self._verify_epilogue is not None:
+            # Disarm the captured commit write: an idle replay carries stale
+            # req_pool / commit buffers and must not mutate the draft KV pool.
+            self._verify_epilogue.set_inject_gate(False)
         verify_input = DFlashVerifyInput(
             draft_token=torch.empty((0,), dtype=torch.int64, device=self.device),
             positions=torch.empty((0,), dtype=torch.int64, device=self.device),
@@ -594,6 +599,14 @@ class DSparkWorkerV2(BaseSpecWorker):
             [draft_block_ids[:, :1], draft_tokens], dim=1
         ).contiguous()
 
+        # Pre-replay fold eligibility (everything except can_run_cuda_graph,
+        # known only post-forward): gates the captured commit KV write and, with
+        # can_run_cuda_graph, the accept-buffer read below.
+        fold_eligible = (
+            self._verify_executor.verify_epilogue is not None
+            and proposal.folded
+            and verify_logits_adjustments_are_noop(sampling_info)
+        )
         if run_compact:
             target_verify, hidden_strided = self._verify_executor.run_compact(
                 batch=batch,
@@ -603,6 +616,7 @@ class DSparkWorkerV2(BaseSpecWorker):
                 bs=bs,
                 device=device,
                 sampling_info=sampling_info,
+                inject_gate=fold_eligible,
             )
         else:
             target_verify = self._verify_executor.run_non_compact(
@@ -622,13 +636,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         # unadjusted logits). Else the eager chain reads the same strided
         # static buffers, byte-identical.
         epilogue = self._verify_executor.verify_epilogue
-        folded_accept = (
-            epilogue is not None
-            and proposal.folded
-            and run_compact
-            and can_run_cuda_graph
-            and verify_logits_adjustments_are_noop(sampling_info)
-        )
+        folded_accept = fold_eligible and run_compact and can_run_cuda_graph
         if folded_accept:
             correct_len = epilogue.correct_len_buf[:bs]
             bonus = epilogue.bonus_buf[:bs]
@@ -673,16 +681,20 @@ class DSparkWorkerV2(BaseSpecWorker):
             else:
                 on_publish(new_seq_lens)
 
-        self._verify_executor.commit_hidden(
-            batch=batch,
-            layout=layout,
-            hidden_strided=hidden_strided,
-            verify_window=verify_window,
-            logits_output=logits_output,
-            commit_lens=commit_lens,
-            bs=bs,
-            run_compact=run_compact,
-        )
+        # The captured commit write already injected the committed KV when the
+        # folded (armed) graph replayed; anything else eager-injects as before.
+        folded_commit = folded_accept and epilogue.folds_commit
+        if not folded_commit:
+            self._verify_executor.commit_hidden(
+                batch=batch,
+                layout=layout,
+                hidden_strided=hidden_strided,
+                verify_window=verify_window,
+                logits_output=logits_output,
+                commit_lens=commit_lens,
+                bs=bs,
+                run_compact=run_compact,
+            )
         logits_output.hidden_states = None
 
         self._maybe_record_sts_collect(
