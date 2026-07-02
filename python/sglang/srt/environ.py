@@ -292,6 +292,24 @@ class Envs:
     SGLANG_DSPARK_FAST_KERNEL = EnvBool(True)
     SGLANG_DSPARK_FP32_LM_HEAD = EnvBool(False)
     SGLANG_DSPARK_FAST_SAMPLING = EnvBool(True)
+    # dsv4 markov_w2 GEMV (apply_step_logits) perf toggles, each independently A/B-able so a
+    # regression can be bisected to one optimization. Both default off (baseline untouched).
+    # OPT_MARKOV_W2_BF16 on: store + read markov_w2 in bf16 (the checkpoint is bf16 anyway,
+    # fp32 storage just zero-pads and doubles the HBM read), bf16xbf16 matmul (tensor-core
+    # fp32 accumulation) with the bias upcast back to fp32 on the logits side -- the same
+    # "heavy bf16 matmul, light fp32 logits" split lm_head uses; off: fp32 weight + matmul.
+    # OPT_MARKOV_W2_TP_SHARD on: shard the markov_w2 GEMV over the vocab dim across the
+    # attention-TP ranks aligned to the lm_head partition (each rank reads 1/tp), keeping the
+    # base logits sharded and all-gathering the per-step corrected logits over the
+    # attention-TP group (deadlock-safe under DP attention, where that group is size-1 and
+    # the shard is a no-op); off: replicated full-vocab markov_w2.
+    SGLANG_DSPARK_OPT_MARKOV_W2_BF16 = EnvBool(False)
+    SGLANG_DSPARK_OPT_MARKOV_W2_TP_SHARD = EnvBool(False)
+    # ENABLE_MULTI_STREAM on (default): the dsv4 draft stages overlap independent
+    # branches on alt cuda streams (attention KV-store vs Q projection; MoE shared vs
+    # routed experts), capture-mode only, mirroring the target's
+    # SGLANG_OPT_USE_MULTI_STREAM_OVERLAP machinery. Both this and the global
+    # OPT_USE_MULTI_STREAM_OVERLAP gate must be on; off falls back to the serial draft.
     SGLANG_DSPARK_ENABLE_MULTI_STREAM = EnvBool(True)
     # DSpark hot-op kernel impl selectors ("triton" | "torch"), one per extracted kernel
     # file under speculative/dspark_components/kernels/. Default "triton" is the optimized
