@@ -89,10 +89,20 @@ def _dequant_linear_weight(linear: torch.nn.Module) -> torch.Tensor:
         f"unsupported wkv weight dtype {weight.dtype} for the fused commit kv proj; "
         f"set SGLANG_DSPARK_KERNEL_COMMIT_KV_PROJ=torch"
     )
+    # Blockwise fp8 scales sit on the standard 128x128 grid; deriving the block
+    # from the scale shape is ambiguous when a dim is not an exact multiple.
+    block = 128
     scale = linear.weight_scale_inv
     out_dim, in_dim = weight.shape
-    block_out = (out_dim + scale.shape[0] - 1) // scale.shape[0]
-    block_in = (in_dim + scale.shape[1] - 1) // scale.shape[1]
-    scale_full = scale.repeat_interleave(block_out, dim=0)[:out_dim]
-    scale_full = scale_full.repeat_interleave(block_in, dim=1)[:, :in_dim]
+    expected_scale_shape = (
+        (out_dim + block - 1) // block,
+        (in_dim + block - 1) // block,
+    )
+    assert tuple(scale.shape) == expected_scale_shape, (
+        f"wkv weight_scale_inv shape {tuple(scale.shape)} does not match the "
+        f"128x128 block grid {expected_scale_shape} for weight {tuple(weight.shape)}; "
+        f"set SGLANG_DSPARK_KERNEL_COMMIT_KV_PROJ=torch"
+    )
+    scale_full = scale.repeat_interleave(block, dim=0)[:out_dim]
+    scale_full = scale_full.repeat_interleave(block, dim=1)[:, :in_dim]
     return (weight.to(torch.float32) * scale_full.to(torch.float32)).to(torch.bfloat16)

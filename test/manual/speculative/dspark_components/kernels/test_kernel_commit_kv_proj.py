@@ -62,10 +62,10 @@ def test_fused_matches_per_stage_loop(num_tokens):
 
 
 def test_dequant_fp8_blockwise_weight():
-    """fp8 blockwise dequant expands the scale grid to per-element scales exactly."""
+    """fp8 128x128-blockwise dequant expands the scale grid to per-element scales exactly (incl. partial tail blocks)."""
     device = torch.device("cuda")
     g = torch.Generator(device=device).manual_seed(3)
-    out_dim, in_dim, block = 96, 256, 64
+    out_dim, in_dim, block = 192, 384, 128
     weight_f32 = torch.randn(out_dim, in_dim, device=device, generator=g)
     weight_fp8 = weight_f32.to(torch.float8_e4m3fn)
     scale = (
