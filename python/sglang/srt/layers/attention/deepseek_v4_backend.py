@@ -678,19 +678,6 @@ class DeepseekV4AttnBackend(
         pin_tensor = torch.tensor(x, dtype=torch.int32, pin_memory=True)
         return pin_tensor.to(self.device, non_blocking=True)
 
-    def _draft_extend_lens(self, *, block_size: int, bs: int) -> torch.Tensor:
-        # The draft block's extend lens are the constant [block_size] * bs; a cached
-        # request-pool-capacity buffer replaces the old per-step pinned alloc + H2D
-        # copy (_move_to_device of a constant host list).
-        if not hasattr(self, "_draft_extend_lens_buffer"):
-            num_reqs = self.req_to_token.shape[0]
-            self._draft_extend_lens_buffer = torch.full(
-                (num_reqs,), block_size, **self.cuda_int32_kwargs
-            )
-            self._draft_extend_lens_block_size = block_size
-        assert self._draft_extend_lens_block_size == block_size
-        return self._draft_extend_lens_buffer[:bs]
-
     def _resolve_verify_layout(
         self,
         forward_batch: ForwardBatch,
@@ -1086,9 +1073,7 @@ class DeepseekV4AttnBackend(
             seq_lens_cpu=seq_lens_cpu_list,
             extend_len=block_size,
         )
-        extend_seq_lens = self._draft_extend_lens(
-            block_size=block_size, bs=len(seq_lens)
-        )
+        extend_seq_lens = self._move_to_device(lengths.extend_seq_lens_cpu)
         return self.init_forward_metadata_prefill(
             max_seq_len=max_seq_len,
             req_pool_indices=req_pool_indices,
