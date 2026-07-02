@@ -374,6 +374,16 @@ class DSparkV4MarkovHead(nn.Module):
                 f"num_embeddings_per_partition({per_partition}) * tp_size({tp_size}) != "
                 f"num_embeddings_padded({num_padded})."
             )
+        attn_tp_size = get_attention_tp_group().world_size
+        if attn_tp_size != tp_size:
+            raise ValueError(
+                "DSpark markov_w2 TP-shard needs the attn-TP group (used for the per-step "
+                f"all-gather) to equal the lm_head shard group, got attn_tp_size="
+                f"{attn_tp_size} vs lm_head tp_size={tp_size}. This config (e.g. DP "
+                "attention without --enable-dp-lm-head, where lm_head shards over the "
+                "global TP group) is unsupported; disable "
+                "SGLANG_DSPARK_OPT_MARKOV_W2_TP_SHARD."
+            )
         self._tp_shard = MarkovW2ShardGeometry(
             tp_size=tp_size,
             org_vocab_start=int(lm_head.shard_indices.org_vocab_start_index),
