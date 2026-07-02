@@ -101,14 +101,14 @@ def verify_layout_graph_num_tokens_floor(
 
 def ragged_capture_num_tokens(*, model_runner) -> Optional[list[int]]:
     runner = model_runner.decode_cuda_graph_runner
-    if runner is None or not getattr(runner, "ragged_verify_mode", False):
+    if runner is None or not runner.ragged_verify_mode:
         return None
     return runner.capture_num_tokens
 
 
 def ragged_capture_max_slots(*, model_runner) -> Optional[int]:
     runner = model_runner.decode_cuda_graph_runner
-    if runner is None or not getattr(runner, "ragged_verify_mode", False):
+    if runner is None or not runner.ragged_verify_mode:
         return None
     return runner.max_bs
 
