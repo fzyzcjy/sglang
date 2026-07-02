@@ -187,6 +187,7 @@ class DSparkAttention(MqaAttentionBase):
         # gated by the model-level env checks, so None here means overlap off.
         self.alt_streams = alt_streams
         self._multi_stream_bs_limit = 128 if is_blackwell_supported() else 64
+        self._attn_sink_padded: Optional[torch.Tensor] = None
 
     def kv_proj_only(self, x: torch.Tensor) -> torch.Tensor:
         kv, _ = self.wkv(x)
@@ -201,6 +202,23 @@ class DSparkAttention(MqaAttentionBase):
                 rank * self.n_local_heads : (rank + 1) * self.n_local_heads
             ].contiguous()
         return self._attn_sink_local
+
+    def _padded_attn_sink(self) -> torch.Tensor:
+        """Local attn_sink padded to _PAD_NUM_HEADS, built once post weight load.
+
+        Zero padding (not garbage) is required here, unlike the q padding: the sink is
+        per-head data the kernel reads for every head it runs. A per-forward rebuild
+        would replay a fill + copy per stage in the draft decode graph (mirrors the
+        target's build-once ``_attn_sink_local``).
+        """
+        attn_sink = self._local_attn_sink()
+        if self.n_local_heads >= _PAD_NUM_HEADS:
+            return attn_sink
+        if self._attn_sink_padded is None:
+            sink_padded = attn_sink.new_zeros(_PAD_NUM_HEADS)
+            sink_padded[: self.n_local_heads] = attn_sink
+            self._attn_sink_padded = sink_padded
+        return self._attn_sink_padded
 
     def _store_block_kv(
         self,
@@ -230,21 +248,30 @@ class DSparkAttention(MqaAttentionBase):
             positions=positions,
         )
 
-    def _compute_q(self, x: torch.Tensor, positions: torch.Tensor) -> torch.Tensor:
+    def _compute_q(
+        self,
+        x: torch.Tensor,
+        positions: torch.Tensor,
+        q_out: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """Project the draft block hidden to per-head queries with rmsnorm + rope.
 
         Returns ``[num_queries, n_local_heads, head_dim]`` (flat over bs * block_size).
         Fast path (``SGLANG_DSPARK_FAST_KERNEL`` on) drives the production fused
         rmsnorm-self + RoPE kernel (``fused_q_norm_rope``, the same one
         ``MQALayer._compute_q_b`` uses; same layout from ``MqaAttentionBase``). Slow path
-        is the eager reference float rsqrt + complex ``apply_rotary_emb``.
+        is the eager reference float rsqrt + complex ``apply_rotary_emb``. When ``q_out``
+        is given (the caller's padded-q slice, possibly strided -- the fused kernel
+        writes strided like ``_compute_q_b``), the result lands there directly, saving
+        the padded-copy launch.
         """
         q, _ = self.wq_a(x)
         q = self.q_norm(q)
         q, _ = self.wq_b(q)
         q = q.view(-1, self.n_local_heads, self.head_dim)
         if self._use_fast_kernel:
-            q_out = torch.empty_like(q)
+            if q_out is None:
+                q_out = torch.empty_like(q)
             fused_q_norm_rope(q, q_out, self.eps, self.freqs_cis, positions)
             return q_out
         else:
@@ -252,6 +279,9 @@ class DSparkAttention(MqaAttentionBase):
                 q.float().square().mean(-1, keepdim=True) + self.eps
             ).to(q.dtype)
             apply_rotary_emb(q[..., -self.rope_head_dim :], self.freqs_cis[positions])
+            if q_out is not None:
+                q_out.copy_(q)
+                return q_out
             return q
 
     def forward(
@@ -277,6 +307,21 @@ class DSparkAttention(MqaAttentionBase):
             and get_is_capture_mode()
             and hidden_states.shape[0] <= self._multi_stream_bs_limit
         )
+
+        # Pad the per-rank query heads (and attn_sink) up to the kernel's supported h_q
+        # like MQALayer and slice the output heads back afterward. new_empty, not
+        # new_zeros: only [:, :n_local_heads] is written and each head's attention is
+        # independent, so the garbage padded heads only yield garbage output heads that
+        # are sliced away (mirrors the target's non-gfx942 q_padded). _compute_q writes
+        # straight into the padded slice, dropping the per-forward memset + copy.
+        q_padded: Optional[torch.Tensor] = None
+        q_out: Optional[torch.Tensor] = None
+        if self.n_local_heads < _PAD_NUM_HEADS:
+            q_padded = hidden_states.new_empty(
+                hidden_states.shape[0], _PAD_NUM_HEADS, self.head_dim
+            )
+            q_out = q_padded[:, : self.n_local_heads, :]
+
         if enable_multi_stream:
             current_stream = torch.cuda.current_stream()
             stream_kv = self.alt_streams[0]
@@ -290,7 +335,7 @@ class DSparkAttention(MqaAttentionBase):
                     attn_backend=attn_backend,
                     pool=pool,
                 )
-            q = self._compute_q(hidden_states, positions)
+            q = self._compute_q(hidden_states, positions, q_out=q_out)
             current_stream.wait_stream(stream_kv)
         else:
             kv = self.kv_proj_only(hidden_states)
@@ -301,18 +346,11 @@ class DSparkAttention(MqaAttentionBase):
                 attn_backend=attn_backend,
                 pool=pool,
             )
-            q = self._compute_q(hidden_states, positions)
-        attn_sink = self._local_attn_sink()
+            q = self._compute_q(hidden_states, positions, q_out=q_out)
 
-        # Pad the per-rank query heads (and attn_sink) up to the kernel's supported h_q
-        # like MQALayer and slice the output heads back afterward.
-        if self.n_local_heads < _PAD_NUM_HEADS:
-            q_padded = q.new_zeros(q.shape[0], _PAD_NUM_HEADS, self.head_dim)
-            q_padded[:, : self.n_local_heads, :] = q
+        if q_padded is not None:
             q = q_padded
-            sink_padded = attn_sink.new_zeros(_PAD_NUM_HEADS)
-            sink_padded[: self.n_local_heads] = attn_sink
-            attn_sink = sink_padded
+        attn_sink = self._padded_attn_sink()
 
         # Drive the production sparse backend: it reads the NON-CAUSAL full-block SWA
         # metadata built in make_core_attn_metadata (is_dspark_draft branch) and runs
