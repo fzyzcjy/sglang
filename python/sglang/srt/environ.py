@@ -299,8 +299,10 @@ class Envs:
     # kernel is unimplemented, or to A/B a suspected kernel bug against torch).
     # SGLANG_DSPARK_KERNEL_SOFTMAX_TEMP additionally accepts "flashinfer" (fused online
     # safe-softmax via flashinfer.sampling.softmax; splits the huge vocab across blocks,
-    # unlike the one-block-per-row triton kernel). Non-byte-identical vs torch/triton, so
-    # the default stays "triton" until an e2e no-regression run clears the switch.
+    # unlike the one-block-per-row triton kernel) and defaults to it -- the triton kernel
+    # is one block per row over ~129k vocab and measures ~80us. flashinfer is
+    # non-byte-identical vs torch/triton, so an e2e no-regression run (gsm8k acc +
+    # acc_len) must still clear it before this rides into a release.
     SGLANG_DSPARK_KERNEL_SCATTER = EnvStr("triton")
     SGLANG_DSPARK_KERNEL_RAGGED_WINDOW = EnvStr("triton")
     SGLANG_DSPARK_KERNEL_SCHEDULE_TOPK = EnvStr("triton")
@@ -312,7 +314,7 @@ class Envs:
     SGLANG_DSPARK_KERNEL_PADDED_TO_BUCKET = EnvStr("triton")
     SGLANG_DSPARK_KERNEL_ACCEPT_GREEDY = EnvStr("triton")
     SGLANG_DSPARK_KERNEL_ACCEPT_SAMPLING = EnvStr("triton")
-    SGLANG_DSPARK_KERNEL_SOFTMAX_TEMP = EnvStr("triton")
+    SGLANG_DSPARK_KERNEL_SOFTMAX_TEMP = EnvStr("flashinfer")
     SGLANG_DSPARK_KERNEL_COMMIT_INJECT_LAYOUT = EnvStr("triton")
     SGLANG_DSPARK_KERNEL_QO_INDPTR = EnvStr("triton")
     SGLANG_DSPARK_KERNEL_PAGE_TABLE_POSITIONS = EnvStr("triton")
