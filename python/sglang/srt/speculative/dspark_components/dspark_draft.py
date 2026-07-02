@@ -6,6 +6,9 @@ from sglang.srt.environ import envs
 from sglang.srt.speculative.dflash_info_v2 import DFlashDraftInputV2
 from sglang.srt.speculative.draft_worker_common import make_draft_input_v2
 from sglang.srt.speculative.dspark_components.dspark_info import DraftBlockResult
+from sglang.srt.speculative.dspark_components.kernels.sample_step_tokens import (
+    SampleStepTokens,
+)
 
 
 def greedy_step_sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:
@@ -105,12 +108,36 @@ def sample_draft_block(
     else:
 
         def sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:
-            probs = torch.softmax(step_logits.float() / temperatures[:, None], dim=-1)
+            # Per-row mixed sampling: greedy rows take argmax, sampling rows draw
+            # from the temperature-scaled softmax, so a mixed batch keeps each
+            # request's own draft distribution. With at least one sampling row this
+            # matches the all-sampling RNG draw count (one draw per step), so the
+            # all-sampling path stays byte-identical.
             if fast_sampling:
-                noise = torch.empty_like(probs).exponential_(1)
-                noise = torch.where(greedy_mask[:, None], 1.0, noise)
-                return probs.div_(noise).argmax(dim=-1)
+                # Reference Gumbel-max trick: argmax(probs / Exp(1)) ~ Categorical(probs),
+                # one fused pass with no full-vocab CDF and no D2H sync, unlike
+                # torch.multinomial. Setting greedy rows' noise to 1 makes their
+                # argmax(probs / 1) == argmax(probs) == argmax(logits) (softmax is
+                # monotone), so this single argmax also yields the greedy token and
+                # the separate greedy torch.argmax(step_logits) drops out (the P1
+                # argmax in the profile). The exponential_ draw stays here (elementwise,
+                # cheap) so the per-step RNG count is unchanged: empty_like(step_logits,
+                # fp32) has the same shape/dtype/count as the old empty_like(probs) draw,
+                # keeping downstream accept coins byte-identical. The kernel then does the
+                # softmax + argmax reductions (deleted from this path), consuming the noise.
+                exp_noise = torch.empty_like(step_logits, dtype=torch.float32).exponential_(
+                    1
+                )
+                return SampleStepTokens.execute(
+                    step_logits=step_logits,
+                    temperatures=temperatures,
+                    greedy_mask=greedy_mask,
+                    exp_noise=exp_noise,
+                )
             else:
+                probs = torch.softmax(
+                    step_logits.float() / temperatures[:, None], dim=-1
+                )
                 argmax_tokens = torch.argmax(step_logits, dim=-1)
                 sampled_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)
                 return torch.where(greedy_mask, argmax_tokens, sampled_tokens)
