@@ -145,7 +145,6 @@ class DraftBlockProposer:
         if not self._dp_moe_sync or batch.global_num_tokens is None:
             return
         device = self.draft_model_runner.device
-        gamma = self.gamma
         empty_long = torch.empty((0,), dtype=torch.int64, device=device)
         idle_batch = ForwardBatch(
             forward_mode=ForwardMode.IDLE,
@@ -161,17 +160,7 @@ class DraftBlockProposer:
             spec_info=self._draft_block_spec_info,
             capture_hidden_mode=CaptureHiddenMode.NULL,
         )
-        gnt = [int(x) * gamma for x in batch.global_num_tokens]
-        gnt_logprob = [int(x) * gamma for x in batch.global_num_tokens_for_logprob]
-        idle_batch.global_num_tokens_cpu = gnt
-        idle_batch.global_num_tokens_for_logprob_cpu = gnt_logprob
-        idle_batch.global_num_tokens_gpu = torch.tensor(
-            gnt, dtype=torch.int64, device=device
-        )
-        idle_batch.global_num_tokens_for_logprob_gpu = torch.tensor(
-            gnt_logprob, dtype=torch.int64, device=device
-        )
-        idle_batch.can_run_dp_cuda_graph = batch.can_run_dp_cuda_graph
+        self._fill_dp_moe_sync_metadata(idle_batch, batch)
         with torch.inference_mode():
             self.draft_model_runner.forward(idle_batch)
 
@@ -232,25 +221,7 @@ class DraftBlockProposer:
             spec_info=self._draft_block_spec_info,
             capture_hidden_mode=CaptureHiddenMode.NULL,
         )
-        if self._dp_moe_sync and batch.global_num_tokens is not None:
-            # Feed the draft eager batch the DP metadata so it enters
-            # prepare_mlp_sync_batch and the shared MoE-DP gather sizes its buffer
-            # correctly. The draft forward runs bs*gamma tokens per rank, so scale the
-            # scheduler's all-gathered per-rank bs by gamma (NOT the graph MAX_LEN
-            # uniform value). prepare_mlp_sync_batch fills dp_padding_mode /
-            # global_dp_buffer_len from these.
-            gamma = self.gamma
-            gnt = [int(x) * gamma for x in batch.global_num_tokens]
-            gnt_logprob = [int(x) * gamma for x in batch.global_num_tokens_for_logprob]
-            draft_forward_batch.global_num_tokens_cpu = gnt
-            draft_forward_batch.global_num_tokens_for_logprob_cpu = gnt_logprob
-            draft_forward_batch.global_num_tokens_gpu = torch.tensor(
-                gnt, dtype=torch.int64, device=device
-            )
-            draft_forward_batch.global_num_tokens_for_logprob_gpu = torch.tensor(
-                gnt_logprob, dtype=torch.int64, device=device
-            )
-            draft_forward_batch.can_run_dp_cuda_graph = batch.can_run_dp_cuda_graph
+        self._fill_dp_moe_sync_metadata(draft_forward_batch, batch)
         with torch.inference_mode():
             draft_out = self.draft_model_runner.forward(draft_forward_batch)
         logits_output = draft_out.logits_output
@@ -268,3 +239,32 @@ class DraftBlockProposer:
             draft_hidden_3d=draft_hidden_3d,
             can_run_graph=draft_out.can_run_graph,
         )
+
+    def _fill_dp_moe_sync_metadata(
+        self, forward_batch: ForwardBatch, batch: ScheduleBatch
+    ) -> None:
+        """dsv4 (MoE) draft under DP attention: give the hand-built draft ForwardBatch
+        the DP MLP-sync metadata that ``ForwardBatch.init_new`` would derive (its "For
+        MLP sync" block), so the forward enters ``prepare_mlp_sync_batch`` and the
+        shared MoE-DP gather sizes its buffer correctly. The scheduler's all-gathered
+        per-rank bs is scaled by the draft-block spec_info's declared coefficient
+        (``draft_token_num`` == gamma, matching the bs*gamma draft tokens per rank --
+        NOT the graph MAX_LEN uniform value), mirroring EAGLE's init_new path.
+        prepare_mlp_sync_batch fills dp_padding_mode / global_dp_buffer_len from these.
+        No-op unless dp_moe_sync (the dense draft runs replicated in the attn-TP
+        context and must never get DP metadata)."""
+        if not self._dp_moe_sync or batch.global_num_tokens is None:
+            return
+        gnt, gnt_logprob = (
+            self._draft_block_spec_info.get_spec_adjusted_global_num_tokens(batch)
+        )
+        device = self.draft_model_runner.device
+        forward_batch.global_num_tokens_cpu = gnt
+        forward_batch.global_num_tokens_for_logprob_cpu = gnt_logprob
+        forward_batch.global_num_tokens_gpu = torch.tensor(
+            gnt, dtype=torch.int64
+        ).to(device, non_blocking=True)
+        forward_batch.global_num_tokens_for_logprob_gpu = torch.tensor(
+            gnt_logprob, dtype=torch.int64
+        ).to(device, non_blocking=True)
+        forward_batch.can_run_dp_cuda_graph = batch.can_run_dp_cuda_graph
