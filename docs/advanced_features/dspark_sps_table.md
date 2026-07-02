@@ -9,14 +9,14 @@ as a lightweight lookup table the scheduler queries in O(1) at runtime.
 
 ## Expected scheduler-on workflow
 
-A profiled table path is **required when the scheduler is enabled** (cap-accept /
-compact). Without `--speculative-dspark-sps-table-path` the scheduler **raises at
-startup** rather than silently degrading. To deliberately run with a flat constant-SPS
-table instead, pass `--speculative-dspark-sps-table-path=const`: `Theta` becomes
-proportional to `tau`, the budget degenerates to verify-all, and every request keeps
-`verify_len == gamma` (zero throughput gain).
+Without `--speculative-dspark-sps-table-path` the scheduler starts **uninitialized**:
+a flat constant-SPS table, so `Theta` becomes proportional to `tau`, the budget
+degenerates to verify-all, and every request keeps the full verify window (lossless,
+but zero throughput gain by itself; a startup WARNING flags it). The uninitialized
+start is also the natural cold start for [online profiling](#online-profiling), which
+learns the real curve in place.
 
-The expected workflow has two steps:
+To start from a measured curve instead, the offline workflow has two steps:
 
 1. **Profile the table offline** against a plain (non-speculative) server. The profiler
    connects to a running server, sweeps decode batch sizes, reads each batch's
@@ -37,13 +37,6 @@ The expected workflow has two steps:
 
    ```bash
    --speculative-dspark-sps-table-path ~/sglang_artifacts/dspark_sps_table.json
-   ```
-
-   To deliberately run with the flat constant-SPS table instead (verify-all, zero
-   throughput gain), pass the literal `const`:
-
-   ```bash
-   --speculative-dspark-sps-table-path=const
    ```
 
 Offline profiling is a deliberate engineering choice over the paper's literal
@@ -107,6 +100,36 @@ Patching is safe: a table only affects scheduling quality, never output correctn
 above), so correcting an implausible probe can only improve the schedule. When many
 probes wobble, prefer re-running the whole sweep with `--repeats 3` over hand-patching.
 
+## Online profiling
+
+Set `SGLANG_DSPARK_ENABLE_SPS_ONLINE_PROFILE=1` to re-measure the table from the live
+DSpark server itself and hot-swap the scheduler's copy periodically. Unlike the offline
+proxy, this times the *deployed verify path* -- compact packing, cuda-graph bucket
+quantization, and shared KV history included -- so the KV-history conservatism above
+disappears; the table converges to what verify steps actually cost under the real
+workload's context regime.
+
+Mechanics (see `OnlineSpsProfiler` in `dspark_sps_table.py`):
+
+- One sample per pair of consecutive decode steps: host wall-clock between the budget
+  planner's calls (the step rate `SPS` actually means, CPU overhead included),
+  attributed to the scheduler's own cost coordinate `B = bs + K`. Prefill steps and
+  idle gaps break the pairing and are never sampled.
+- Samples land in the bin grid of the initial table (its probes), each bin keeping a
+  rolling window of recent samples. Every `SGLANG_DSPARK_SPS_ONLINE_REBUILD_INTERVAL`
+  decode steps (default 1000) the table is rebuilt: a bin holding at least
+  `SGLANG_DSPARK_SPS_ONLINE_MIN_BIN_SAMPLES` samples (default 32) takes the window
+  median; an unmeasured bin keeps the initial (offline) value.
+- Starting table: pass a profiled `--speculative-dspark-sps-table-path` to refine it
+  per bin, or omit it to start uninitialized. In the uninitialized case the offline
+  sweep taper becomes the bin grid and unmeasured bins are filled from the nearest
+  measured neighbor instead of the flat constant, so the budget keeps exploring B
+  ranges it has not observed yet.
+- Rank-local, no cross-rank sync: only the `verify_lens` broadcast source rank's table
+  affects the schedule; peer ranks' tables drift harmlessly.
+- The non-monotone caveat above applies to online medians too, but the rolling window
+  re-measures continuously, so an outlier ages out instead of requiring hand-patching.
+
 ## Notes
 
 - The scheduler's two-steps-prior causal barrier (the K-source reads confidence stashed
@@ -116,5 +139,3 @@ probes wobble, prefer re-running the whole sweep with `--repeats 3` over hand-pa
   guaranteed by the accept-cap above.
 - The COMPACT (real-N) verify mode that turns the schedule into an actual throughput gain
   is not yet the default and is tracked separately.
-</content>
-</invoke>

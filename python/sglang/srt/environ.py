@@ -286,6 +286,14 @@ class Envs:
     SGLANG_DSPARK_DEBUG_CONFIDENCE_METRICS = EnvBool(False)
     SGLANG_DSPARK_DEBUG_MAIN_OUTPUT = EnvBool(False)
     SGLANG_DSPARK_STS_COLLECT_PATH = EnvStr("")
+    # DSpark online SPS profiling: re-measure the verify-step cost table from the
+    # live server (host wall-clock per decode step, per-bin rolling median) and
+    # hot-swap the budget planner's table every REBUILD_INTERVAL decode steps once
+    # a bin holds MIN_BIN_SAMPLES samples. Rank-local; only the verify_lens
+    # broadcast source rank's table takes effect (see OnlineSpsProfiler).
+    SGLANG_DSPARK_ENABLE_SPS_ONLINE_PROFILE = EnvBool(False)
+    SGLANG_DSPARK_SPS_ONLINE_REBUILD_INTERVAL = EnvInt(1000)
+    SGLANG_DSPARK_SPS_ONLINE_MIN_BIN_SAMPLES = EnvInt(32)
     # DSpark V4 draft perf toggles. FAST_KERNEL on: fused rmsnorm-rope + inverse-rope
     # + bf16 wo_a einsum (production DeepSeek-V4 primitives); off: the eager reference
     # path. FP32_LM_HEAD off: bf16 base-logit matmul like sglang's default lm_head /

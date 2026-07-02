@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 import msgspec
@@ -8,7 +9,9 @@ import torch
 from sglang.srt.environ import envs
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.speculative.dspark_components.dspark_sps_table import (
+    OnlineSpsProfiler,
     SpsCostTable,
+    build_uninitialized_sps_table,
     load_sps_table_from_path,
 )
 from sglang.srt.speculative.dspark_components.kernels.schedule_verify_lens_topk import (
@@ -17,6 +20,8 @@ from sglang.srt.speculative.dspark_components.kernels.schedule_verify_lens_topk 
 from sglang.srt.speculative.dspark_components.kernels.schedule_verify_lens_topk import (
     schedule_verify_lens_topk as schedule_verify_lens_topk,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class DSparkScheduleConfig(msgspec.Struct):
@@ -110,6 +115,11 @@ class HostConfidenceBudgetPlanner:
 
     Losslessness never depends on the budget (guaranteed by the accept-cap in
     _cap_correct_len); the carry only affects scheduling quality and the lag.
+
+    With online SPS profiling enabled, both feed paths' compute_budget also feed
+    the profiler (one wall-clock observation per decode step) and atomically swap
+    ``sps_table`` on rebuild ticks -- safe because the table is a frozen struct
+    and _lookup_sps_tensor re-materializes it every call.
     """
 
     def __init__(
@@ -119,10 +129,16 @@ class HostConfidenceBudgetPlanner:
         cfg: DSparkScheduleConfig,
         model_runner,
         relay_lag_steps: int = 1,
+        online_profiler: Optional[OnlineSpsProfiler] = None,
+        log_table_swaps: bool = False,
     ) -> None:
         cfg.validate()
         self.sps_table = sps_table
         self.cfg = cfg
+        # Rank-local online SPS re-profiler (None = disabled); see the wiring
+        # comment in dspark_verify_planner for the cross-rank story.
+        self._online_profiler = online_profiler
+        self._log_table_swaps = log_table_swaps
         # The carry buffer is sized from the req-pool, but req_to_token_pool is not
         # populated until after model-runner init (this planner is built during
         # scheduler/worker __init__), so the size is read lazily in _ensure_carry
@@ -162,11 +178,44 @@ class HostConfidenceBudgetPlanner:
             lagged_generation=lagged_generation,
             current_generation=current_generation,
         )
-        return compute_verify_token_budget(
+        budget = compute_verify_token_budget(
             history_survival_probs=survival,
             sps_table=self.sps_table,
             cfg=self.cfg,
         )
+        if self._online_profiler is not None:
+            # Observe in the scheduler's own cost coordinate B = bs + K (the
+            # batch_tokens axis theta optimizes over), so whatever the deployed
+            # verify path really costs at that coordinate -- eager total-token
+            # scaling, cuda-graph bucket quantization, cap-accept's K-independent
+            # full window -- is what the rebuilt table encodes.
+            self._observe_online_step(batch_tokens=int(survival.shape[0]) + budget)
+        return budget
+
+    def note_non_decode_step(self) -> None:
+        # Pairing-break signal for the online profiler: a prefill/extend or
+        # budget-less step means the next inter-call interval is not one decode
+        # step. No-op when online profiling is disabled.
+        if self._online_profiler is not None:
+            self._online_profiler.note_non_decode_step()
+
+    def _observe_online_step(self, *, batch_tokens: int) -> None:
+        new_table = self._online_profiler.observe_step(batch_tokens=batch_tokens)
+        if new_table is None:
+            return
+        # Atomic pointer swap: takes effect on the next compute_budget with no
+        # cache invalidation (the frozen table is re-read every lookup).
+        self.sps_table = new_table
+        if self._log_table_swaps:
+            logger.info(
+                "DSpark online SPS table swapped: %d/%d bins measured, "
+                "SPS range [%.3f, %.3f].",
+                self._online_profiler.num_measured_bins(),
+                self._online_profiler.num_bins(),
+                min(new_table.sample_steps_per_sec),
+                max(new_table.sample_steps_per_sec),
+            )
+            logger.debug("DSpark online SPS table json: %s", new_table.to_json())
 
     def _shift_to_lag(
         self,
@@ -231,15 +280,15 @@ def build_sps_cost_table(
     verify_num_draft_tokens: int,
 ) -> SpsCostTable:
     # A real --speculative-dspark-sps-table-path loads the pre-profiled,
-    # hardware-aware table; the literal "const" sentinel deliberately opts into
-    # a flat constant-SPS table (budget = verify-all-up-to-gamma, zero
-    # throughput gain); anything else unset raises. The expected scheduler-on
-    # workflow is to build the table offline with
-    # sglang.benchmark.dspark_sps_profiler and pass it via
-    # --speculative-dspark-sps-table-path (see
-    # docs/advanced_features/dspark_sps_table.md).
+    # hardware-aware table, built offline with sglang.benchmark.dspark_sps_profiler
+    # (see docs/advanced_features/dspark_sps_table.md). Unset means UNINITIALIZED:
+    # a flat single-probe constant-SPS table, under which the budget degenerates
+    # to verify-all-up-to-gamma (zero throughput gain by itself) -- and the
+    # natural cold start for online profiling
+    # (SGLANG_DSPARK_ENABLE_SPS_ONLINE_PROFILE), which keys off the single-probe
+    # shape and learns the real curve in place.
     #
-    # The flat "const" table makes the hardware-aware scheduler a no-op:
+    # The flat table makes the hardware-aware scheduler a no-op:
     # lookup() returns a constant, so the verify-token budget degenerates to
     # verify-all and every request keeps verify_len == gamma+1 (resolved_max_verify_len
     # = gamma+1, so compact verifies the anchor plus all gamma drafts = the full
@@ -250,25 +299,10 @@ def build_sps_cost_table(
     # any profiled table is supplied, because a non-flat table yields small K
     # and would otherwise drive verify_len to 0.
     sps_table_path = server_args.speculative_dspark_sps_table_path
-    if not sps_table_path:
-        raise ValueError(
-            "DSpark ragged-verify scheduler is enabled (mode != static) but "
-            "--speculative-dspark-sps-table-path was not supplied. Build a "
-            "hardware-aware SPS cost table offline against a plain (non-speculative) "
-            "server with `python -m sglang.benchmark.dspark_sps_profiler` and pass "
-            "its JSON path (see docs/advanced_features/dspark_sps_table.md). To "
-            "deliberately run with a flat constant-SPS table instead "
-            "(verify-all-up-to-gamma, zero throughput gain), pass "
-            "--speculative-dspark-sps-table-path=const."
-        )
-    if sps_table_path != "const":
+    if sps_table_path:
         return load_sps_table_from_path(sps_table_path)
     max_batch_tokens = max(
         1,
         int(server_args.max_running_requests or 1) * verify_num_draft_tokens,
     )
-    return SpsCostTable(
-        sample_batch_tokens=[1],
-        sample_steps_per_sec=[1.0],
-        max_batch_tokens=max_batch_tokens,
-    )
+    return build_uninitialized_sps_table(max_batch_tokens=max_batch_tokens)

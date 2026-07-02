@@ -63,6 +63,7 @@ from sglang.benchmark.one_batch_server import (
 from sglang.benchmark.utils import get_tokenizer
 from sglang.srt.speculative.dspark_components.dspark_sps_table import (
     SpsCostTable,
+    build_batch_size_sweep,
     load_sps_table_from_path,
     profile_sps_table,
 )
@@ -94,32 +95,6 @@ KV_HISTORY_CAVEAT = (
     "latency -> under-estimates steps_per_sec -> scheduler is conservative "
     "(never over-extends). Direction-safe."
 )
-
-
-def build_batch_size_sweep(max_num_tokens: int) -> list[int]:
-    if max_num_tokens < 1:
-        raise ValueError(f"max_num_tokens must be >= 1, got {max_num_tokens}.")
-    # Taper from dense at small batches to coarse at large ones: powers of 2 up to
-    # 8, step 4 / 16 / 32 through 1024, step 128 through 2048, then step 256 out to
-    # max_num_tokens. Large batches are sampled sparsely -- the SPS curve is smooth
-    # there and each big-batch probe is an expensive eager forward. Fine
-    # granularity stays where the SPS(B) hardware cliffs live; the capacity guard
-    # later skips any probe above the server's running / KV cap.
-    raw = [
-        1,
-        2,
-        4,
-        8,
-        *range(12, 128, 4),
-        *range(128, 256, 16),
-        *range(256, 1024, 32),
-        *range(1024, 2048, 128),
-        *range(2048, max_num_tokens + 1, 256),
-    ]
-    sweep = sorted({value for value in raw if 1 <= value <= max_num_tokens})
-    if sweep[-1] != max_num_tokens:
-        sweep.append(max_num_tokens)
-    return sweep
 
 
 class ServerContext(msgspec.Struct, frozen=True):

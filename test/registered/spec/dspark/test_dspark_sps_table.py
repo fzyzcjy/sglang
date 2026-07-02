@@ -4,7 +4,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from sglang.srt.speculative.dspark_components.dspark_sps_table import (
+    OnlineSpsProfiler,
     SpsCostTable,
+    build_batch_size_sweep,
     load_sps_table_from_path,
     profile_sps_table,
 )
@@ -285,19 +287,14 @@ def _build_sps_cost_table_for(*, sps_table_path):
 
 
 class TestBuildSpsCostTableContract(CustomTestCase):
-    def test_no_table_path_raises(self):
-        """An enabled scheduler with no table path (None or "") raises ValueError naming the profiler and 'const'."""
+    def test_unset_table_path_returns_flat_table(self):
+        """No table path (None or "") means uninitialized: a flat single-probe table sized to the running cap."""
         for sps_table_path in (None, ""):
-            with self.assertRaises(ValueError) as cm:
-                _build_sps_cost_table_for(sps_table_path=sps_table_path)
-            message = str(cm.exception)
-            self.assertIn("dspark_sps_profiler", message)
-            self.assertIn("const", message)
-
-    def test_const_sentinel_returns_flat_table(self):
-        """The literal 'const' sentinel opts into a flat constant-SPS table (SPS=1.0)."""
-        table = _build_sps_cost_table_for(sps_table_path="const")
-        self.assertEqual(table.sample_steps_per_sec, [1.0])
+            table = _build_sps_cost_table_for(sps_table_path=sps_table_path)
+            self.assertEqual(table.sample_batch_tokens, [1])
+            self.assertEqual(table.sample_steps_per_sec, [1.0])
+            # max_running_requests=4 * verify_num_draft_tokens=5
+            self.assertEqual(table.max_batch_tokens, 20)
 
     def test_real_path_loads_table(self):
         """A real table path loads the pre-profiled table back from its JSON file."""
@@ -313,8 +310,6 @@ class TestBuildSpsCostTableContract(CustomTestCase):
 
 class TestBuildBatchSizeSweep(CustomTestCase):
     def _sweep(self, max_num_tokens):
-        from sglang.benchmark.dspark_sps_profiler import build_batch_size_sweep
-
         return build_batch_size_sweep(max_num_tokens)
 
     def test_sweep_is_strictly_increasing_deduped_and_ends_at_max(self):
@@ -352,6 +347,148 @@ class TestBuildBatchSizeSweep(CustomTestCase):
         """max_num_tokens < 1 is rejected."""
         with self.assertRaises(ValueError):
             self._sweep(0)
+
+
+class _FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def advance(self, dt):
+        self.now += dt
+
+    def __call__(self):
+        return self.now
+
+
+def _make_online_profiler(
+    *, initial_table=None, rebuild_interval_steps=10, min_bin_samples=3
+):
+    clock = _FakeClock()
+    profiler = OnlineSpsProfiler(
+        initial_table=initial_table or _make_table(),
+        rebuild_interval_steps=rebuild_interval_steps,
+        min_bin_samples=min_bin_samples,
+        clock=clock,
+    )
+    return profiler, clock
+
+
+class TestOnlineSpsProfilerSampling(CustomTestCase):
+    def test_profiled_initial_reuses_its_probe_grid(self):
+        """A profiled initial table's probes become the online bin grid."""
+        profiler, _ = _make_online_profiler()
+        self.assertEqual(profiler.num_bins(), 4)
+
+    def test_returns_none_before_rebuild_interval(self):
+        """observe_step returns None on every step before the rebuild tick."""
+        profiler, clock = _make_online_profiler(rebuild_interval_steps=10)
+        for _ in range(9):
+            self.assertIsNone(profiler.observe_step(batch_tokens=20))
+            clock.advance(0.01)
+
+    def test_rebuild_replaces_measured_bin_and_keeps_initial_elsewhere(self):
+        """Steady dt=0.01 at B=20 rewrites the floor bin (16) to SPS=100; other bins keep the offline prior."""
+        profiler, clock = _make_online_profiler(
+            rebuild_interval_steps=10, min_bin_samples=3
+        )
+        table = None
+        for _ in range(10):
+            table = profiler.observe_step(batch_tokens=20)
+            clock.advance(0.01)
+        self.assertIsNotNone(table)
+        self.assertEqual(table.sample_batch_tokens, [8, 16, 32, 64])
+        self.assertAlmostEqual(table.lookup(20), 100.0)
+        self.assertEqual(table.lookup(8), 1000.0)
+        self.assertEqual(table.lookup(32), 500.0)
+        self.assertEqual(table.lookup(64), 480.0)
+        self.assertEqual(table.max_batch_tokens, 128)
+
+    def test_rebuild_tick_with_no_measured_bin_returns_none(self):
+        """A rebuild tick where no bin reached min_bin_samples yields no table."""
+        profiler, clock = _make_online_profiler(
+            rebuild_interval_steps=5, min_bin_samples=100
+        )
+        result = None
+        for _ in range(5):
+            result = profiler.observe_step(batch_tokens=20)
+            clock.advance(0.01)
+        self.assertIsNone(result)
+
+    def test_interval_attributed_to_earlier_step_batch_tokens(self):
+        """The paired interval updates the EARLIER step's bin, not the later one's."""
+        profiler, clock = _make_online_profiler(
+            rebuild_interval_steps=2, min_bin_samples=1
+        )
+        profiler.observe_step(batch_tokens=8)
+        clock.advance(0.01)
+        table = profiler.observe_step(batch_tokens=64)
+        self.assertIsNotNone(table)
+        self.assertAlmostEqual(table.lookup(8), 100.0)
+        self.assertEqual(table.lookup(64), 480.0)
+
+    def test_note_non_decode_step_breaks_the_pair(self):
+        """A prefill between two decode steps discards the spanning interval."""
+        profiler, clock = _make_online_profiler(
+            rebuild_interval_steps=2, min_bin_samples=1
+        )
+        profiler.observe_step(batch_tokens=20)
+        clock.advance(0.01)
+        profiler.note_non_decode_step()
+        self.assertIsNone(profiler.observe_step(batch_tokens=20))
+
+    def test_idle_gap_beyond_ceiling_is_dropped(self):
+        """An interval above ONLINE_MAX_STEP_INTERVAL_SECONDS never enters a bin."""
+        profiler, clock = _make_online_profiler(
+            rebuild_interval_steps=2, min_bin_samples=1
+        )
+        profiler.observe_step(batch_tokens=20)
+        clock.advance(5.0)
+        self.assertIsNone(profiler.observe_step(batch_tokens=20))
+
+    def test_rejects_bad_config(self):
+        """rebuild_interval_steps and min_bin_samples must be >= 1."""
+        with self.assertRaises(ValueError):
+            OnlineSpsProfiler(
+                initial_table=_make_table(),
+                rebuild_interval_steps=0,
+                min_bin_samples=1,
+            )
+        with self.assertRaises(ValueError):
+            OnlineSpsProfiler(
+                initial_table=_make_table(),
+                rebuild_interval_steps=1,
+                min_bin_samples=0,
+            )
+
+
+class TestOnlineSpsProfilerUninitializedColdStart(CustomTestCase):
+    def _flat_table(self):
+        return SpsCostTable(
+            sample_batch_tokens=[1],
+            sample_steps_per_sec=[1.0],
+            max_batch_tokens=64,
+        )
+
+    def test_flat_initial_uses_taper_grid(self):
+        """The uninitialized flat table (single probe) falls back to the offline sweep taper as the bin grid."""
+        profiler, _ = _make_online_profiler(initial_table=self._flat_table())
+        self.assertEqual(profiler.num_bins(), len(build_batch_size_sweep(64)))
+
+    def test_flat_initial_neighbor_fills_unmeasured_bins(self):
+        """With a flat initial, unmeasured bins take the nearest measured SPS (never the flat 1.0), so the budget keeps exploring larger B."""
+        profiler, clock = _make_online_profiler(
+            initial_table=self._flat_table(),
+            rebuild_interval_steps=10,
+            min_bin_samples=3,
+        )
+        table = None
+        for _ in range(10):
+            table = profiler.observe_step(batch_tokens=12)
+            clock.advance(0.01)
+        self.assertIsNotNone(table)
+        for sps in table.sample_steps_per_sec:
+            self.assertAlmostEqual(sps, 100.0)
+        self.assertEqual(table.sample_batch_tokens[-1], 64)
 
 
 if __name__ == "__main__":
