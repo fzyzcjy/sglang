@@ -26,7 +26,6 @@ def _make_table() -> SpsCostTable:
 
 class TestSpsCostTableInvariants(CustomTestCase):
     def test_rejects_non_increasing_batch_tokens(self):
-        """__post_init__ rejects non strictly-increasing sample_batch_tokens."""
         with self.assertRaises(ValueError):
             SpsCostTable(
                 sample_batch_tokens=[8, 8, 16],
@@ -35,7 +34,6 @@ class TestSpsCostTableInvariants(CustomTestCase):
             )
 
     def test_rejects_unsorted_batch_tokens(self):
-        """__post_init__ rejects unsorted sample_batch_tokens."""
         with self.assertRaises(ValueError):
             SpsCostTable(
                 sample_batch_tokens=[16, 8],
@@ -44,7 +42,6 @@ class TestSpsCostTableInvariants(CustomTestCase):
             )
 
     def test_rejects_length_mismatch(self):
-        """__post_init__ rejects mismatched probe/SPS list lengths."""
         with self.assertRaises(ValueError):
             SpsCostTable(
                 sample_batch_tokens=[8, 16],
@@ -53,7 +50,6 @@ class TestSpsCostTableInvariants(CustomTestCase):
             )
 
     def test_rejects_empty_table(self):
-        """__post_init__ rejects an empty probe list."""
         with self.assertRaises(ValueError):
             SpsCostTable(
                 sample_batch_tokens=[],
@@ -62,7 +58,6 @@ class TestSpsCostTableInvariants(CustomTestCase):
             )
 
     def test_rejects_max_below_largest_probe(self):
-        """__post_init__ rejects max_batch_tokens below the largest probe."""
         with self.assertRaises(ValueError):
             SpsCostTable(
                 sample_batch_tokens=[8, 16],
@@ -73,7 +68,6 @@ class TestSpsCostTableInvariants(CustomTestCase):
 
 class TestSpsCostTableLookup(CustomTestCase):
     def test_lookup_exact_probe_returns_that_sps(self):
-        """lookup at an exact captured probe returns that probe's SPS."""
         table = _make_table()
         self.assertEqual(table.lookup(8), 1000.0)
         self.assertEqual(table.lookup(16), 950.0)
@@ -81,26 +75,22 @@ class TestSpsCostTableLookup(CustomTestCase):
         self.assertEqual(table.lookup(64), 480.0)
 
     def test_lookup_floors_to_lower_captured_probe(self):
-        """lookup floors B down to the largest captured probe (no interpolation)."""
         table = _make_table()
         self.assertEqual(table.lookup(31), 950.0)
         self.assertEqual(table.lookup(63), 500.0)
 
     def test_lookup_does_not_interpolate_across_cliff(self):
-        """lookup preserves the hardware cliff rather than linearly interpolating."""
         table = _make_table()
         midpoint = table.lookup((16 + 32) // 2)
         self.assertEqual(midpoint, 950.0)
         self.assertNotEqual(midpoint, (950.0 + 500.0) / 2)
 
     def test_lookup_below_first_probe_clamps_to_first(self):
-        """lookup below the smallest probe clamps to the first SPS."""
         table = _make_table()
         self.assertEqual(table.lookup(1), 1000.0)
         self.assertEqual(table.lookup(7), 1000.0)
 
     def test_lookup_above_last_probe_clamps_to_last(self):
-        """lookup above the largest probe clamps to the last SPS."""
         table = _make_table()
         self.assertEqual(table.lookup(65), 480.0)
         self.assertEqual(table.lookup(10_000), 480.0)
@@ -108,7 +98,6 @@ class TestSpsCostTableLookup(CustomTestCase):
 
 class TestSpsCostTableJsonRoundTrip(CustomTestCase):
     def test_json_round_trip_preserves_table(self):
-        """to_json followed by from_json reproduces an equal table."""
         table = _make_table()
         restored = SpsCostTable.from_json(table.to_json())
         self.assertEqual(restored.sample_batch_tokens, table.sample_batch_tokens)
@@ -116,7 +105,6 @@ class TestSpsCostTableJsonRoundTrip(CustomTestCase):
         self.assertEqual(restored.max_batch_tokens, table.max_batch_tokens)
 
     def test_json_round_trip_preserves_lookup_behavior(self):
-        """A round-tripped table looks up identically to the original."""
         table = _make_table()
         restored = SpsCostTable.from_json(table.to_json())
         for batch_tokens in (1, 8, 31, 64, 200):
@@ -125,7 +113,6 @@ class TestSpsCostTableJsonRoundTrip(CustomTestCase):
 
 class TestLoadSpsTableFromPath(CustomTestCase):
     def test_load_from_path_round_trips_table_and_lookup(self):
-        """load_sps_table_from_path reads back a table written to a JSON file."""
         table = _make_table()
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sps.json"
@@ -140,8 +127,6 @@ class TestLoadSpsTableFromPath(CustomTestCase):
 
 class TestFlatTableLookupIsConstant(CustomTestCase):
     def test_flat_table_lookup_is_one_for_any_batch(self):
-        """The inert flat default (SPS=1.0) returns 1.0 for any B, so Theta = tau
-        and the budget degenerates to verify-all-up-to-max."""
         flat = SpsCostTable(
             sample_batch_tokens=[1],
             sample_steps_per_sec=[1.0],
@@ -153,7 +138,6 @@ class TestFlatTableLookupIsConstant(CustomTestCase):
 
 class TestProfileSpsTable(CustomTestCase):
     def test_profile_sorts_out_of_order_probes(self):
-        """profile_sps_table sorts probes by batch_tokens into a valid table."""
         table = profile_sps_table(
             probes=[(32, 500.0), (8, 1000.0), (16, 950.0)],
         )
@@ -161,27 +145,22 @@ class TestProfileSpsTable(CustomTestCase):
         self.assertEqual(table.sample_steps_per_sec, [1000.0, 950.0, 500.0])
 
     def test_profile_passes_steps_per_sec_through_unchanged(self):
-        """profile_sps_table stores each probe's steps_per_sec verbatim."""
         table = profile_sps_table(probes=[(4, 1234.5), (8, 678.25)])
         self.assertEqual(table.sample_steps_per_sec, [1234.5, 678.25])
 
     def test_profile_rejects_duplicate_batch_tokens(self):
-        """profile_sps_table rejects duplicate batch_tokens (caller medians first)."""
         with self.assertRaises(ValueError):
             profile_sps_table(probes=[(8, 1000.0), (8, 900.0)])
 
     def test_profile_rejects_empty_probes(self):
-        """profile_sps_table raises when given no probes."""
         with self.assertRaises(ValueError):
             profile_sps_table(probes=[])
 
     def test_profile_max_batch_tokens_defaults_to_largest_probe(self):
-        """profile_sps_table defaults max_batch_tokens to the largest batch_tokens."""
         table = profile_sps_table(probes=[(8, 1000.0), (64, 480.0), (16, 950.0)])
         self.assertEqual(table.max_batch_tokens, 64)
 
     def test_profile_honors_explicit_max_batch_tokens(self):
-        """profile_sps_table uses an explicit max_batch_tokens clamp bound."""
         table = profile_sps_table(
             probes=[(8, 1000.0), (16, 950.0)], max_batch_tokens=256
         )
@@ -189,7 +168,6 @@ class TestProfileSpsTable(CustomTestCase):
 
 
 def _make_bench_result(*, batch_size: int, output_throughput: float):
-    """Build a BenchOneCaseResult fake with only the conversion-relevant fields set."""
     from sglang.benchmark.one_batch_server import BenchOneCaseResult
 
     output_len = 1024
@@ -210,7 +188,6 @@ def _make_bench_result(*, batch_size: int, output_throughput: float):
 
 class TestProfilerConversion(CustomTestCase):
     def _table_from_results(self, results):
-        """Build + write + self-check a table from fake bench results, then reload it."""
         from sglang.benchmark import dspark_sps_profiler
 
         outcome = dspark_sps_profiler.build_sps_table(
@@ -223,7 +200,6 @@ class TestProfilerConversion(CustomTestCase):
             return load_sps_table_from_path(str(out_path))
 
     def test_conversion_sets_batch_tokens_and_steps_per_sec(self):
-        """batch_tokens = batch_size and steps_per_sec = output_throughput / batch_size."""
         table = self._table_from_results(
             [
                 _make_bench_result(batch_size=2, output_throughput=1000.0),
@@ -237,8 +213,6 @@ class TestProfilerConversion(CustomTestCase):
         self.assertAlmostEqual(table.sample_steps_per_sec[2], 300.0, places=6)
 
     def test_conversion_medians_across_repeats(self):
-        """Repeats of the same batch size are medianed per batch_tokens."""
-        # bs=4 yields steps_per_sec 250, 200, 300 across three repeats -> median 250.
         table = self._table_from_results(
             [
                 _make_bench_result(batch_size=4, output_throughput=1000.0),
@@ -250,8 +224,6 @@ class TestProfilerConversion(CustomTestCase):
         self.assertAlmostEqual(table.sample_steps_per_sec[0], 250.0, places=6)
 
     def test_conversion_keeps_non_monotone_samples_without_crashing(self):
-        """A non-monotone steps_per_sec sweep warns in self-check but does not crash."""
-        # bs=8 has a higher steps_per_sec than bs=4 (non-monotone rise > 10%).
         table = self._table_from_results(
             [
                 _make_bench_result(batch_size=4, output_throughput=1000.0),
@@ -263,7 +235,6 @@ class TestProfilerConversion(CustomTestCase):
         self.assertAlmostEqual(table.sample_steps_per_sec[1], 1000.0, places=6)
 
     def test_conversion_skips_degenerate_output_throughput(self):
-        """Cases with output_throughput <= 0 are dropped, not turned into bad probes."""
         table = self._table_from_results(
             [
                 _make_bench_result(batch_size=4, output_throughput=0.0),
@@ -288,16 +259,13 @@ def _build_sps_cost_table_for(*, sps_table_path):
 
 class TestBuildSpsCostTableContract(CustomTestCase):
     def test_unset_table_path_returns_flat_table(self):
-        """No table path (None or "") means uninitialized: a flat single-probe table sized to the running cap."""
         for sps_table_path in (None, ""):
             table = _build_sps_cost_table_for(sps_table_path=sps_table_path)
             self.assertEqual(table.sample_batch_tokens, [1])
             self.assertEqual(table.sample_steps_per_sec, [1.0])
-            # max_running_requests=4 * verify_num_draft_tokens=5
             self.assertEqual(table.max_batch_tokens, 20)
 
     def test_real_path_loads_table(self):
-        """A real table path loads the pre-profiled table back from its JSON file."""
         table = _make_table()
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "sps.json"
@@ -313,7 +281,6 @@ class TestBuildBatchSizeSweep(CustomTestCase):
         return build_batch_size_sweep(max_num_tokens)
 
     def test_sweep_is_strictly_increasing_deduped_and_ends_at_max(self):
-        """Every generated sweep is sorted, unique, within [1, max], and ends at max."""
         for max_num_tokens in (8, 100, 1024, 4096, 8192):
             sweep = self._sweep(max_num_tokens)
             self.assertEqual(sweep, sorted(set(sweep)))
@@ -321,17 +288,14 @@ class TestBuildBatchSizeSweep(CustomTestCase):
             self.assertEqual(sweep[-1], max_num_tokens)
 
     def test_sweep_head_is_the_fixed_taper(self):
-        """The small-batch head is the fixed powers-of-2 / step-4 taper."""
         sweep = self._sweep(1024)
         self.assertEqual(sweep[:6], [1, 2, 4, 8, 12, 16])
 
     def test_default_max_matches_legacy_endpoints(self):
-        """max_num_tokens=1024 keeps the legacy sweep's 32-step approach to 1024."""
         sweep = self._sweep(1024)
         self.assertEqual(sweep[-4:], [928, 960, 992, 1024])
 
     def test_large_max_extends_sparsely_past_1024(self):
-        """Above 1024 the sweep coarsens: step 128 through 2048, then step 256 to max."""
         sweep = self._sweep(8192)
         beyond = [value for value in sweep if value > 1024]
         self.assertEqual(beyond[:4], [1152, 1280, 1408, 1536])
@@ -340,11 +304,9 @@ class TestBuildBatchSizeSweep(CustomTestCase):
         self.assertEqual(sweep[-1], 8192)
 
     def test_tiny_max_truncates_the_taper(self):
-        """A small max keeps only the head values that fit."""
         self.assertEqual(self._sweep(8), [1, 2, 4, 8])
 
     def test_non_positive_max_raises(self):
-        """max_num_tokens < 1 is rejected."""
         with self.assertRaises(ValueError):
             self._sweep(0)
 
@@ -375,19 +337,16 @@ def _make_online_profiler(
 
 class TestOnlineSpsProfilerSampling(CustomTestCase):
     def test_profiled_initial_reuses_its_probe_grid(self):
-        """A profiled initial table's probes become the online bin grid."""
         profiler, _ = _make_online_profiler()
         self.assertEqual(profiler.num_bins(), 4)
 
     def test_returns_none_before_rebuild_interval(self):
-        """observe_step returns None on every step before the rebuild tick."""
         profiler, clock = _make_online_profiler(rebuild_interval_steps=10)
         for _ in range(9):
             self.assertIsNone(profiler.observe_step(batch_tokens=20))
             clock.advance(0.01)
 
     def test_rebuild_replaces_measured_bin_and_keeps_initial_elsewhere(self):
-        """Steady dt=0.01 at B=20 rewrites the floor bin (16) to SPS=100; other bins keep the offline prior."""
         profiler, clock = _make_online_profiler(
             rebuild_interval_steps=10, min_bin_samples=3
         )
@@ -404,7 +363,6 @@ class TestOnlineSpsProfilerSampling(CustomTestCase):
         self.assertEqual(table.max_batch_tokens, 128)
 
     def test_rebuild_tick_with_no_measured_bin_returns_none(self):
-        """A rebuild tick where no bin reached min_bin_samples yields no table."""
         profiler, clock = _make_online_profiler(
             rebuild_interval_steps=5, min_bin_samples=100
         )
@@ -415,7 +373,6 @@ class TestOnlineSpsProfilerSampling(CustomTestCase):
         self.assertIsNone(result)
 
     def test_interval_attributed_to_earlier_step_batch_tokens(self):
-        """The paired interval updates the EARLIER step's bin, not the later one's."""
         profiler, clock = _make_online_profiler(
             rebuild_interval_steps=2, min_bin_samples=1
         )
@@ -427,7 +384,6 @@ class TestOnlineSpsProfilerSampling(CustomTestCase):
         self.assertEqual(table.lookup(64), 480.0)
 
     def test_note_non_decode_step_breaks_the_pair(self):
-        """A prefill between two decode steps discards the spanning interval."""
         profiler, clock = _make_online_profiler(
             rebuild_interval_steps=2, min_bin_samples=1
         )
@@ -437,7 +393,6 @@ class TestOnlineSpsProfilerSampling(CustomTestCase):
         self.assertIsNone(profiler.observe_step(batch_tokens=20))
 
     def test_idle_gap_beyond_ceiling_is_dropped(self):
-        """An interval above ONLINE_MAX_STEP_INTERVAL_SECONDS never enters a bin."""
         profiler, clock = _make_online_profiler(
             rebuild_interval_steps=2, min_bin_samples=1
         )
@@ -446,7 +401,6 @@ class TestOnlineSpsProfilerSampling(CustomTestCase):
         self.assertIsNone(profiler.observe_step(batch_tokens=20))
 
     def test_rejects_bad_config(self):
-        """rebuild_interval_steps and min_bin_samples must be >= 1."""
         with self.assertRaises(ValueError):
             OnlineSpsProfiler(
                 initial_table=_make_table(),
@@ -470,12 +424,10 @@ class TestOnlineSpsProfilerUninitializedColdStart(CustomTestCase):
         )
 
     def test_flat_initial_uses_taper_grid(self):
-        """The uninitialized flat table (single probe) falls back to the offline sweep taper as the bin grid."""
         profiler, _ = _make_online_profiler(initial_table=self._flat_table())
         self.assertEqual(profiler.num_bins(), len(build_batch_size_sweep(64)))
 
     def test_flat_initial_neighbor_fills_unmeasured_bins(self):
-        """With a flat initial, unmeasured bins take the nearest measured SPS (never the flat 1.0), so the budget keeps exploring larger B."""
         profiler, clock = _make_online_profiler(
             initial_table=self._flat_table(),
             rebuild_interval_steps=10,

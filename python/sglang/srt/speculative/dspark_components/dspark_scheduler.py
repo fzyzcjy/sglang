@@ -34,10 +34,6 @@ class DSparkScheduleConfig(msgspec.Struct):
     survival_eps: float = 1e-6
 
     def resolved_max_verify_len(self) -> int:
-        # The full verify window is gamma+1 (anchor + all gamma drafts) =
-        # num_draft_tokens, which is what static verifies. Capping at gamma would
-        # verify only gamma-1 drafts (the last draft never checked) and drop accept
-        # below static.
         return self.max_verify_len or (self.gamma + 1)
 
     def validate(self) -> None:
@@ -59,25 +55,14 @@ def compute_verify_token_budget(
     sps_table: SpsCostTable,
     cfg: DSparkScheduleConfig,
 ) -> int:
-    # cfg is validated once at planner construction and is immutable, so skip the
-    # per-step re-validation on this hot path (called every decode step).
     num_requests = history_survival_probs.shape[0]
     max_len = cfg.resolved_max_verify_len()
 
-    # Candidates span all gamma draft slots (cols 0..gamma-1) so the budget can reach
-    # gamma (verify the full window); slicing [min_verify_len:max_len] gives gamma-1
-    # slots and caps the budget one draft short.
     candidates = history_survival_probs[:, :max_len].flatten()
     candidates = candidates[candidates >= cfg.survival_eps].to(torch.float64)
     candidates_sorted = torch.sort(candidates, descending=True).values
     prefix_sum = torch.cumsum(candidates_sorted, dim=0)
 
-    # Vectorized greedy: theta(extra) = tau_star(extra) * SPS(bs + extra) for
-    # every extra in [0, num_candidates] in one tensor pass (runs per decode
-    # step on the host planner; a per-extra python loop would pay O(bs*gamma)
-    # float() + bisect). tau_star at extra=0 is the bare num_requests. float64
-    # throughout == the python-double reference loop bit-for-bit; argmax picks
-    # the first maximal index, so the smallest extra wins a theta tie.
     tau_star = num_requests + torch.cat(
         [torch.zeros(1, dtype=torch.float64), prefix_sum]
     )
@@ -91,9 +76,6 @@ def compute_verify_token_budget(
 def _lookup_sps_tensor(
     *, sps_table: SpsCostTable, batch_tokens: torch.Tensor
 ) -> torch.Tensor:
-    # Tensor mirror of SpsCostTable.lookup's floor + clamp contract:
-    # bucketize(right=True) == bisect_right, then clamp out-of-range to the
-    # first/last probe. Keep in sync with SpsCostTable.lookup.
     probes = torch.tensor(sps_table.sample_batch_tokens, dtype=torch.int64)
     sps = torch.tensor(sps_table.sample_steps_per_sec, dtype=torch.float64)
     idx = torch.bucketize(batch_tokens, probes, right=True) - 1
@@ -102,28 +84,6 @@ def _lookup_sps_tensor(
 
 
 class HostConfidenceBudgetPlanner:
-    """Host-side verify-budget source (paper section 5.2 two-steps-prior barrier).
-
-    Owns a per-request-row host carry that shifts the FutureMap relay's confidence
-    to the configured causal lag (default 2), applies the exact same-request guard
-    (req-pool occupancy generation: use the relayed confidence iff the slot still
-    holds the same request -- a recycled slot's generation differs), and runs the
-    pure-CPU greedy. Everything is a host tensor, so the budget K is produced with
-    zero D2H sync. Two feed paths share the carry + guard + greedy:
-
-    - overlap: ``prepare_budget(resolved, req_pool_indices_cpu)`` consumes
-      ``FutureMap.resolve_confidence_cpu`` in the scheduler prepare window.
-    - non-overlap: ``compute_budget(...)`` is fed from a synchronous worker-side
-      ``.cpu()`` (the async relay is absent without overlap).
-
-    Losslessness never depends on the budget (guaranteed by the accept-cap in
-    _cap_correct_len); the carry only affects scheduling quality and the lag.
-
-    With online SPS profiling enabled, both feed paths' compute_budget also feed
-    the profiler (one wall-clock observation per decode step) and atomically swap
-    ``sps_table`` on rebuild ticks -- safe because the table is a frozen struct
-    and _lookup_sps_tensor re-materializes it every call.
-    """
 
     def __init__(
         self,
@@ -138,19 +98,9 @@ class HostConfidenceBudgetPlanner:
         cfg.validate()
         self.sps_table = sps_table
         self.cfg = cfg
-        # Rank-local online SPS re-profiler (None = disabled); see the wiring
-        # comment in dspark_verify_planner for the cross-rank story.
         self._online_profiler = online_profiler
         self._log_table_swaps = log_table_swaps
-        # The carry buffer is sized from the req-pool, but req_to_token_pool is not
-        # populated until after model-runner init (this planner is built during
-        # scheduler/worker __init__), so the size is read lazily in _ensure_carry
-        # (mirrors the former ConfidenceRelay.ensure_buffers).
         self._model_runner = model_runner
-        # Total causal lag (>= 1 already yields the barrier; default 2 reproduces the
-        # paper, tunable via env). The feed already supplies relay_lag_steps of lag (1
-        # under the async overlap relay, 0 in the synchronous non-overlap fallback);
-        # the host carry supplies the remainder.
         self.lag_steps = max(
             int(envs.SGLANG_DSPARK_CONFIDENCE_RELAY_LAG_STEPS.get()), 1
         )
@@ -167,10 +117,6 @@ class HostConfidenceBudgetPlanner:
         current_generation: torch.Tensor,
         req_pool_indices_cpu: torch.Tensor,
     ) -> int:
-        # confidence [bs, gamma], generation [bs] (the req-pool occupancy generation
-        # stamped with that confidence), current_generation [bs] (each slot's gen NOW)
-        # -- all host, the relay's snapshot for this batch's rows. Shift to lag, guard,
-        # greedy. req_pool_indices_cpu scatters/gathers the per-row carry.
         lagged_confidence, lagged_generation = self._shift_to_lag(
             confidence=confidence,
             generation=generation,
@@ -187,18 +133,10 @@ class HostConfidenceBudgetPlanner:
             cfg=self.cfg,
         )
         if self._online_profiler is not None:
-            # Observe in the scheduler's own cost coordinate B = bs + K (the
-            # batch_tokens axis theta optimizes over), so whatever the deployed
-            # verify path really costs at that coordinate -- eager total-token
-            # scaling, cuda-graph bucket quantization, cap-accept's K-independent
-            # full window -- is what the rebuilt table encodes.
             self._observe_online_step(batch_tokens=int(survival.shape[0]) + budget)
         return budget
 
     def note_non_decode_step(self) -> None:
-        # Pairing-break signal for the online profiler: a prefill/extend or
-        # budget-less step means the next inter-call interval is not one decode
-        # step. No-op when online profiling is disabled.
         if self._online_profiler is not None:
             self._online_profiler.note_non_decode_step()
 
@@ -206,8 +144,6 @@ class HostConfidenceBudgetPlanner:
         new_table = self._online_profiler.observe_step(batch_tokens=batch_tokens)
         if new_table is None:
             return
-        # Atomic pointer swap: takes effect on the next compute_budget with no
-        # cache invalidation (the frozen table is re-read every lookup).
         self.sps_table = new_table
         if self._log_table_swaps:
             logger.info(
@@ -227,11 +163,6 @@ class HostConfidenceBudgetPlanner:
         generation: torch.Tensor,
         req_pool_indices_cpu: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # carry_steps == 0 (relay already supplies the full lag): use the relayed
-        # value directly. Otherwise read the carry slot written carry_steps steps ago
-        # for these rows (= the lag-steps-prior confidence + its occupancy generation),
-        # then write this step's relayed value back. Rows idle for a cycle keep a stale
-        # carry whose generation the freshness guard rejects.
         if self.carry_steps == 0:
             return confidence, generation
         self._ensure_carry(gamma=confidence.shape[-1])
@@ -251,10 +182,6 @@ class HostConfidenceBudgetPlanner:
         lagged_generation: torch.Tensor,
         current_generation: torch.Tensor,
     ) -> torch.Tensor:
-        # cumprod of the lag-steps-prior confidence, gated by the exact same-request
-        # check: fresh iff the stamped occupancy generation equals the slot's current
-        # generation and the slot is live (current_gen >= 1). Stale / recycled / cold-
-        # start rows fall back to verify-all (survival = 1.0). No seq_len, no coincidence.
         k_survival = torch.cumprod(lagged_confidence.to(torch.float32), dim=1)
         current_gen = current_generation.to(torch.int64)
         fresh = (
@@ -269,8 +196,6 @@ class HostConfidenceBudgetPlanner:
         self._carry_confidence = torch.zeros(
             (self.carry_steps, req_pool_size, gamma), dtype=torch.float32
         )
-        # Init 0 (= no occupancy); a never-written carry row mismatches any live
-        # generation (>= 1), so the guard rejects it -> verify-all.
         self._carry_generation = torch.zeros(
             (self.carry_steps, req_pool_size),
             dtype=torch.int64,
@@ -282,25 +207,6 @@ def build_sps_cost_table(
     server_args: ServerArgs,
     verify_num_draft_tokens: int,
 ) -> SpsCostTable:
-    # A real --speculative-dspark-sps-table-path loads the pre-profiled,
-    # hardware-aware table, built offline with sglang.benchmark.dspark_sps_profiler
-    # (see docs/advanced_features/dspark_sps_table.md). Unset means UNINITIALIZED:
-    # a flat single-probe constant-SPS table, under which the budget degenerates
-    # to verify-all-up-to-gamma (zero throughput gain by itself) -- and the
-    # natural cold start for online profiling
-    # (SGLANG_DSPARK_ENABLE_SPS_ONLINE_PROFILE), which keys off the single-probe
-    # shape and learns the real curve in place.
-    #
-    # The flat table makes the hardware-aware scheduler a no-op:
-    # lookup() returns a constant, so the verify-token budget degenerates to
-    # verify-all and every request keeps verify_len == gamma+1 (resolved_max_verify_len
-    # = gamma+1, so compact verifies the anchor plus all gamma drafts = the full
-    # window, matching static; this is lossless -- _cap_correct_len caps accept and
-    # the bonus is re-read from the target distribution). The
-    # verify_lens >= 1 anchor contract (see DSparkScheduleConfig.min_verify_len
-    # and schedule_verify_lens_topk's lower-bound clamp) MUST be in place before
-    # any profiled table is supplied, because a non-flat table yields small K
-    # and would otherwise drive verify_len to 0.
     sps_table_path = server_args.speculative_dspark_sps_table_path
     if sps_table_path:
         return load_sps_table_from_path(sps_table_path)

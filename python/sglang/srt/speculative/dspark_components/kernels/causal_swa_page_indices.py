@@ -66,11 +66,6 @@ def build_causal_swa_page_indices(
     swa_window: int,
     page_index_aligned_size: int,
 ) -> torch.Tensor:
-    # Faithful original chain from get_swa_page_indices + _pad_last_dim: token q
-    # attends its own trailing window pos_q - k (k in [0, swa_window)), future/
-    # negative offsets masked to -1 before and after the req_to_token gather, the
-    # full-space slots translated to the SWA ring, cast to int32, and the K axis
-    # right-padded with -1 to a multiple of page_index_aligned_size.
     device = seq_lens_casual.device
     pos_causal = seq_lens_casual - 1
     num_qo_tokens = seq_lens_casual.size(0)

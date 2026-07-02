@@ -16,7 +16,6 @@ pytestmark = pytest.mark.skipif(
 @pytest.mark.parametrize("vocab", [1000, 4096, 129280])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_triton_matches_torch_probs(bs, rows_per_request, vocab, dtype):
-    """triton fused temp-softmax matches the torch cast/div/softmax chain within float tolerance."""
     device = torch.device("cuda")
     g = torch.Generator(device=device).manual_seed(bs * 1000 + rows_per_request)
     logits = (
@@ -42,7 +41,6 @@ def test_triton_matches_torch_probs(bs, rows_per_request, vocab, dtype):
 
 
 def test_column_temperatures_accepted():
-    """[bs, 1]-shaped temperatures (sampling_info layout) reshape cleanly in both impls."""
     device = torch.device("cuda")
     g = torch.Generator(device=device).manual_seed(7)
     logits = torch.randn(6, 512, device=device, generator=g).to(torch.bfloat16)

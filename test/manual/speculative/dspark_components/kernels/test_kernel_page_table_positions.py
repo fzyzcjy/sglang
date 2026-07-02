@@ -19,7 +19,6 @@ SWA_WINDOW = 128
 @pytest.mark.parametrize("page_size", [1, 64])
 @pytest.mark.parametrize("max_seq_len", [4096, 4000])
 def test_triton_matches_torch_prep(num_q, page_size, max_seq_len):
-    """triton page-table/positions prep is bit-exact vs the torch gather/div/cast/clamp chain."""
     device = torch.device("cuda")
     g = torch.Generator(device=device).manual_seed(num_q * 13 + page_size)
     req_to_token = torch.randint(

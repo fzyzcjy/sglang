@@ -14,7 +14,6 @@ T = 6
 
 @pytest.mark.parametrize("bs", [1, 2, 3, 8, 64])
 def test_gather_two_level_bonus_matches_torch(bs):
-    """triton gather_two_level_bonus equals predicts[accept_index[b, correct_len[b]]]."""
     device = torch.device("cuda")
     n_pred = bs * T
     accept_index = torch.randint(0, n_pred, (bs, T), dtype=torch.int64, device=device)

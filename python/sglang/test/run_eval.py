@@ -121,8 +121,6 @@ def dump_and_analyze_records(args, samplers: list) -> None:
             json.dump(records, f, indent=2, default=str)
         print(f"Wrote {len(records)} raw request/response records to {dump_path}")
     except OSError:
-        # A dump failure (e.g. non-writable home in CI) must not fail the eval;
-        # the in-memory accept-length summary below still prints.
         traceback.print_exc()
 
     accept_lengths = [
@@ -333,7 +331,6 @@ def run_eval(args):
 
         executor.shutdown()
 
-    # Dump every raw (request, response) pair + print a speculative accept-length summary
     dump_and_analyze_records(args, samplers)
 
     # Dump reports

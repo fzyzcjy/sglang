@@ -236,10 +236,6 @@ def hc_head_torch(
     norm_eps: float,
     hc_eps: float,
 ) -> torch.Tensor:
-    """Pure-torch mHC head collapse over the last two dims ``[..., hc, d] -> [..., d]``.
-
-    Shape-generic in the leading dims so both the 2D production fallback
-    (``[N, hc, d]``) and the 4D draft reference (``[b, s, hc, d]``) share one impl."""
     shape, dtype = x.size(), x.dtype
     x = x.flatten(-2).float()
     rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + norm_eps)
@@ -335,12 +331,6 @@ bcg_deepseek_v4_attention_with_output = eager_on_graph(True)(
 
 
 class MqaAttentionBase(nn.Module):
-    """Shared construction of the V4 MQA/MLA attention core: common dims, the
-    projections (wq_a/wkv or wqkv_a, q_norm, wq_b, kv_norm, wo_a, wo_b), attn_sink,
-    and freqs_cis. Holds NO forward. Subclasses (MQALayer / DSparkAttention) add
-    their own forward, KV-store, RadixAttention handle, and extra submodules.
-    All behavior kwargs default to None == reproduce MQALayer; a subclass passes
-    ONLY the options where it deviates."""
 
     def __init__(
         self,
@@ -494,8 +484,6 @@ class MqaAttentionBase(nn.Module):
         self.rope_base = (
             config.compress_rope_theta if self.compress_ratio else rope_theta
         )
-        # YARN correction applies to ALL layers (dense and compressed share the same
-        # YARN-corrected inv_freq); only the rope base differs (rope_theta vs compress_rope_theta).
         original_seq_len: int = (
             rope_original_seq_len
             if rope_original_seq_len is not None
@@ -1725,8 +1713,6 @@ class DeepseekV4DecoderLayer(nn.Module):
             hidden_states = self.hc_post(hidden_states, residual, post, comb)
             return hidden_states, None, None, None
 
-        # Return the deferred FFN hc_post state; the next layer consumes it with
-        # cross-layer fusion, and the final layer is completed in DeepseekV4Model.
         return hidden_states, residual, post, comb
 
     def _run_moe_ffn_dp_sync(
@@ -2019,11 +2005,6 @@ class DeepseekV4Model(nn.Module):
         use_fused = self.use_fused_mhc_post_pre
         capture_dspark = self.dspark_layers_to_capture is not None
         if capture_dspark and dsa_use_prefill_cp(forward_batch):
-            # The captured DSpark aux hidden states are CP-local and in CP-split token
-            # order; unlike the final hidden_states they are not CP all-gathered/reranged
-            # below, so they would misalign with the full-sequence draft input. DSpark
-            # static-verify is CP-off for v1 (c-plan decision 4); fail fast rather than
-            # relay misaligned aux hidden states.
             raise NotImplementedError(
                 "DSpark aux hidden-state capture is not supported together with "
                 "DeepSeek-V4 prefill context parallelism (attn_cp_size > 1). Disable one "
@@ -2052,10 +2033,6 @@ class DeepseekV4Model(nn.Module):
                     prev_comb=prev_comb,
                 )
             if capture_dspark and i in self.dspark_layers_to_capture:
-                # Materialize the completed post-layer mHC tensor [*, hc, d]. Under
-                # fused-MHC the layer returns the deferred FFN hc_post state, so apply
-                # hc_post to finish it (same as the last-layer completion below); under
-                # the non-fused path the returned tensor is already finalized.
                 if use_fused:
                     completed = layer.hc_post(
                         hidden_states, prev_residual, prev_post, prev_comb
@@ -2169,9 +2146,6 @@ class DeepseekV4ForCausalLM(nn.Module):
             raise ValueError(
                 "DSPARK requires explicit layer_ids for aux hidden capture."
             )
-        # DSpark captures the hc-mean of each target layer's completed post-layer mHC
-        # tensor (SoT model.py:920). Unlike DFLASH there is no +1 layer-id offset: the
-        # ids index directly into self.layers, matching the SoT target_layer_ids.
         self.capture_aux_hidden_states = True
         self.model.dspark_layers_to_capture = list(layer_ids)
 
@@ -2250,9 +2224,6 @@ class DeepseekV4ForCausalLM(nn.Module):
             self.lm_head,
             forward_batch,
             aux_hidden_states,
-            # LogitsProcessor stores before_norm in preference to aux when both are
-            # given; the DSpark draft consumes the concatenated aux features, so suppress
-            # before_norm whenever an aux capture was requested.
             hidden_states_before_norm=(
                 None if aux_hidden_states is not None else pre_hc_head
             ),

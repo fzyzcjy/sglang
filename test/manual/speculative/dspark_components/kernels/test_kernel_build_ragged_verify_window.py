@@ -45,7 +45,6 @@ def _fixtures(bs, graph_num_tokens, device):
 @pytest.mark.parametrize("bs", [1, 2, 3, 8])
 @pytest.mark.parametrize("pad", ["tight", "bucket"])
 def test_triton_matches_torch_window(bs, pad):
-    """triton build_ragged_verify_window equals torch (positions, cache_loc, verify_ids)."""
     device = torch.device("cuda")
     graph_num_tokens = bs * T if pad == "tight" else (bs + 3) * T
     layout, batch, model_runner, dbi, dt = _fixtures(bs, graph_num_tokens, device)

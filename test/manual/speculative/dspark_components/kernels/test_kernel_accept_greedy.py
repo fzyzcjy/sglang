@@ -19,7 +19,6 @@ V = 200
 @pytest.mark.parametrize("bs", [1, 2, 3, 8])
 @pytest.mark.parametrize("with_cutoff", [True, False])
 def test_accept_greedy_triton_matches_torch(bs, with_cutoff):
-    """triton accept_greedy equals torch (correct_len, bonus, cap_trim) with/without cutoff."""
     device = torch.device("cuda")
     candidates = torch.randint(0, V, (bs, T), dtype=torch.int64, device=device)
     target_logits = torch.randn(bs * T, V, device=device)
@@ -48,7 +47,6 @@ def test_accept_greedy_triton_matches_torch(bs, with_cutoff):
 
 @pytest.mark.parametrize("bs", [1, 2, 3, 8, 64])
 def test_gather_row_bonus_matches_torch(bs):
-    """triton gather_row_bonus equals table[b, idx[b]]."""
     device = torch.device("cuda")
     cols = T
     table = torch.randint(0, 129280, (bs, cols), dtype=torch.int64, device=device)

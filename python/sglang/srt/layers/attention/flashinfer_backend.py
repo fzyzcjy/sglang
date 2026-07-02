@@ -649,13 +649,6 @@ class FlashInferAttnBackend(AttentionBackend):
             getattr(spec_info, "ragged_verify_layout", None) is not None
             and forward_mode.is_target_verify()
         ):
-            # Graph-admission fail-fast: the TARGET_VERIFY out-graph path below
-            # uses the bs-keyed prefill wrapper with use_ragged=False and never
-            # reads the ragged layout. Unlike DSV4 it has no assert to catch the
-            # shape mismatch, so a ragged batch would silently run the uniform
-            # geometry. Reject it at admission (ragged-verify-compact only sets
-            # this layout on DSV4, which uses its own backend; the FlashInfer
-            # ragged graph path is a separate follow-up).
             raise NotImplementedError(
                 "FlashInfer does not support DSV4 ragged verify in cuda graph; "
                 "disable SGLANG_RAGGED_VERIFY_MODE for this configuration."

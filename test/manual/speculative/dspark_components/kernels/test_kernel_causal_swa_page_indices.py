@@ -19,7 +19,6 @@ POOL_LEN = 600
 @pytest.mark.parametrize("num_q", [1, 3, 8, 40])
 @pytest.mark.parametrize("lens_mode", ["short", "cross", "long"])
 def test_triton_matches_torch_on_attended_region(num_q, lens_mode):
-    """triton causal SWA indices match torch on the attended min(seq, W) columns and pad -1 beyond."""
     device = torch.device("cuda")
     g = torch.Generator(device=device).manual_seed(num_q * 7)
     req_to_token = torch.randint(
@@ -62,9 +61,6 @@ def test_triton_matches_torch_on_attended_region(num_q, lens_mode):
 
     assert got.shape == ref.shape
     assert got.dtype == ref.dtype == torch.int32
-    # The consumer reads only the first min(seq, W) columns per row; the torch ref
-    # holds mapping[-1] garbage in the never-attended remainder (faithful to the
-    # original chain), while triton writes -1 there.
     padded_width = ref.shape[1]
     col = torch.arange(padded_width, device=device).view(1, -1)
     attended = col < torch.clamp(seq_lens_casual, max=SWA_WINDOW).view(-1, 1)

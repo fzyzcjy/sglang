@@ -963,14 +963,8 @@ class Req(ReqDllmMixin):
         # Per-request count of accepted draft tokens (excludes the bonus token).
         self.spec_num_correct_drafts = 0
 
-        # Per-request sum of uncapped full-block accept tokens incl bonus
-        # (accept + cap-trimmed drafts). Exact only in DSpark CAP_ACCEPT (the
-        # full block is verified); equals committed accept otherwise.
         self.spec_num_block_accept_tokens = 0
 
-        # Per-request sum of DSpark confidence-scheduled verify windows incl
-        # the bonus slot (= ell_r + 1 per step). 0 when no cap is scheduled
-        # (STATIC and non-DSpark workers).
         self.spec_num_cap_tokens = 0
 
         # Acceptance histogram for speculative decoding.

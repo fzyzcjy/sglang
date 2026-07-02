@@ -11,7 +11,7 @@ pytestmark = pytest.mark.skipif(
     not torch.cuda.is_available(), reason="triton kernel needs CUDA"
 )
 
-T = 6  # verify_num_draft_tokens (gamma + 1)
+T = 6
 
 
 @pytest.mark.parametrize("bs", [1, 2, 3, 8])
@@ -19,7 +19,6 @@ T = 6  # verify_num_draft_tokens (gamma + 1)
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 @pytest.mark.parametrize("pad", ["exact", "bucket"])
 def test_triton_matches_torch_scatter(bs, dim, dtype, pad):
-    """triton scatter_compact_to_strided equals torch (bit-exact) across dtype/dim/padding."""
     device = torch.device("cuda")
     verify_lens = torch.randint(1, T + 1, (bs,), dtype=torch.int32, device=device)
     total = int(verify_lens.sum().item())

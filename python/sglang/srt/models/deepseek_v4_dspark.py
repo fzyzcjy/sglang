@@ -1,16 +1,3 @@
-# Adapted from the DeepSeek-V4-Flash DSpark reference (DSparkBlock / DSparkAttention /
-# DSparkMarkovHead / Transformer.forward_spec) but implemented with SGLang primitives.
-# The V4 DSpark draft is a block draft that reads and writes the production paged
-# DeepSeekV4TokenToKVPool sliding-window MLA ring (the same pool the target uses),
-# driven by the production sparse FlashMLA kernel. Its attention is compress_ratio == 0
-# (sliding window only, no compressor / indexer) and NON-CAUSAL over the full draft
-# block: every one of the gamma block queries attends the whole injected target-hidden
-# window plus the whole draft block (reference get_dspark_topk_idxs, model.py:744). The
-# draft carries a target-hidden projection (main_proj/main_norm), a serial Markov head,
-# and reuses the target model's token embedding / lm_head for the base logits. When the
-# draft config enables it, the draft also carries an opt-in confidence head that consumes
-# the post-hc_head PRE-norm draft hidden (reference model.py:862/873: x=hc_head(x),
-# confidence=confidence_head(x, markov_embed); the norm only feeds the logits).
 
 from __future__ import annotations
 
@@ -66,56 +53,25 @@ from sglang.srt.utils.async_probe import maybe_detect_in_closed_range
 
 logger = logging.getLogger(__name__)
 
-# FlashMLA's fp8 sparse decode kernel only specializes h_q for {64, 128}; the draft pads
-# its per-rank query heads up to this when tp shards them below 64.
 _PAD_NUM_HEADS = 64
 
 
 class DSparkV4DraftOutput(msgspec.Struct, frozen=True):
-    """Structured output of ``DeepseekV4ForCausalLMDSpark.forward`` (worker contract).
-
-    The dsv4 ``forward`` produces ONLY the raw backbone hidden; base-logit production
-    (the hc_head collapse the dense path lacks) is now the model's ``compute_base_logits``
-    hook driven by the worker post-forward, so this struct no longer carries base logits or
-    the confidence tap. This struct is returned as the model-runner ``logits_output``, so
-    the worker reads ``draft_out.logits_output.hidden_states`` and then calls
-    ``compute_base_logits`` on it.
-
-    NOTE: ``ModelRunner._forward_raw`` passes this struct through unchanged only because the
-    dsv4 draft always runs through the ``EagerRunner`` (TARGET_VERIFY + ``input_embeds``
-    both make ``PrefillCudaGraphRunner.can_run_graph`` return False). A graph runner's
-    ``execute`` only accepts ``LogitsProcessorOutput`` / ``EmbeddingPoolerOutput`` /
-    ``PPProxyTensors``; this struct must never enter one.
-
-    Fields:
-        draft_hidden: ``[bs * gamma, hc, d]`` post-stage hc-expanded backbone hidden (the
-            raw, un-collapsed tensor the stages produced; ``compute_base_logits`` consumes
-            this directly).
-    """
 
     draft_hidden: torch.Tensor
 
     @property
     def hidden_states(self) -> torch.Tensor:
-        # Back-compat accessor: the model-runner / generic logits-output consumers read
-        # ``.hidden_states``; the DSpark draft backbone hidden is ``draft_hidden``.
         return self.draft_hidden
 
     @property
     def next_token_logits(self) -> None:
-        # The dsv4 draft does not surface logits on this struct; the worker calls
-        # ``compute_base_logits`` on ``hidden_states`` and never reads this slot.
         return None
 
 
 def apply_rotary_emb(
     x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = False
 ) -> torch.Tensor:
-    """In-place rotary embedding, mirroring the DSpark reference (model.py:238).
-
-    Used by the eager (``SGLANG_DSPARK_FAST_KERNEL`` off) attention path; the fast path
-    drives the fused CUDA rope kernels instead.
-    """
     y = x
     x = torch.view_as_complex(x.float().unflatten(-1, (-1, 2)))
     if inverse:
@@ -130,18 +86,6 @@ def apply_rotary_emb(
 
 
 class DSparkAttention(MqaAttentionBase):
-    """Sliding-window sparse MLA for the V4 DSpark draft (compress_ratio == 0).
-
-    Extends ``MqaAttentionBase`` to reuse the weight / projection structure of the
-    production ``MQALayer`` (``deepseek_v4.py``) at compress_ratio == 0 -- same
-    wq_a/wkv/q_norm/wq_b/kv_norm/wo_a/wo_b/attn_sink shapes, same attn-TP sharding --
-    but drives the production paged ``DeepSeekV4TokenToKVPool`` sliding-window ring and
-    the production sparse FlashMLA kernel with a NON-CAUSAL full-block index layout
-    (every draft-block query attends the whole injected target-hidden window plus the
-    whole draft block, reference ``DSparkAttention.forward`` model.py:752). It is
-    intentionally NOT the causal SWA metadata that ``MQALayer.forward`` / the backend's
-    default forward build.
-    """
 
     def __init__(
         self,
@@ -172,8 +116,6 @@ class DSparkAttention(MqaAttentionBase):
             getattr(config, "sliding_window", None) or config.window_size
         )
 
-        # RadixAttention is the layer handle the pool / FlashMLA paths key off (layer_id);
-        # it is not invoked directly (the DSpark forward calls the sparse kernel itself).
         self.attn = RadixAttention(
             self.n_local_heads,
             self.head_dim,
@@ -185,9 +127,6 @@ class DSparkAttention(MqaAttentionBase):
         )
 
         self._use_fast_kernel = envs.SGLANG_DSPARK_FAST_KERNEL.get()
-        # Alt streams for the capture-mode KV/Q overlap in forward (mirrors
-        # MQALayer._forward_prepare_multi_stream's stream_kv). Creation is already
-        # gated by the model-level env checks, so None here means overlap off.
         self.alt_streams = alt_streams
         self._multi_stream_bs_limit = 128 if is_blackwell_supported() else 64
 
@@ -196,16 +135,7 @@ class DSparkAttention(MqaAttentionBase):
         return kv
 
     def _local_attn_sink(self) -> torch.Tensor:
-        """This rank's attn_sink slice, zero-padded to _PAD_NUM_HEADS when the draft
-        pads its q heads. Built once on the first forward (post weight load), exactly
-        the target's ``_attn_sink_local`` build in ``MQALayer.forward``: a per-call
-        rebuild would replay a fill + copy per stage in the draft decode graph. Zero
-        padding (not garbage) is required, unlike the q padding: the kernel reads the
-        sink for every head it runs.
-        """
         if self.attn_tp_size == 1:
-            # n_heads == 64 needs no padding at tp=1 (q does not pad either); returning
-            # the parameter itself keeps it alias-fresh across weight reloads.
             return self.attn_sink
         if self._attn_sink_local is None:
             rank = self.attn_tp_rank
@@ -224,15 +154,6 @@ class DSparkAttention(MqaAttentionBase):
         attn_backend,
         pool: DeepSeekV4TokenToKVPool,
     ) -> None:
-        """Write the draft block raw latent KV into the SWA ring (fused norm + rope).
-
-        Mirrors ``MQALayer._compute_kv_to_cache``: the raw ``wkv`` latent is normed +
-        rope'd + packed and stored at the block's SWA slots
-        (``attn_backend.get_swa_out_cache_loc`` translates ``out_cache_loc`` -> SWA),
-        so the backend's ``forward`` runs with ``save_kv_cache=False``. The non-causal
-        full-block index that the kernel consumes is built by the backend metadata
-        (``get_dspark_swa_page_indices``), which references the same translated slots.
-        """
         pool.set_swa_key_buffer_radix_fused_norm_rope(
             layer_id=self.layer_id,
             swa_loc=attn_backend.get_swa_out_cache_loc(forward_batch),
@@ -249,17 +170,6 @@ class DSparkAttention(MqaAttentionBase):
         positions: torch.Tensor,
         q_out: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-        """Project the draft block hidden to per-head queries with rmsnorm + rope.
-
-        Returns ``[num_queries, n_local_heads, head_dim]`` (flat over bs * block_size).
-        Fast path (``SGLANG_DSPARK_FAST_KERNEL`` on) drives the production fused
-        rmsnorm-self + RoPE kernel (``fused_q_norm_rope``, the same one
-        ``MQALayer._compute_q_b`` uses; same layout from ``MqaAttentionBase``). Slow path
-        is the eager reference float rsqrt + complex ``apply_rotary_emb``. When ``q_out``
-        is given (the caller's padded-q slice, possibly strided -- the fused kernel
-        writes strided like ``_compute_q_b``), the result lands there directly, saving
-        the padded-copy launch.
-        """
         q, _ = self.wq_a(x)
         q = self.q_norm(q)
         q, _ = self.wq_b(q)
@@ -291,24 +201,12 @@ class DSparkAttention(MqaAttentionBase):
         attn_backend = get_attn_backend()
         rd = self.rope_head_dim
 
-        # KV-store chain (wkv -> fused norm/rope/pool-write) and Q chain (wq_a ->
-        # q_norm -> wq_b -> fused q norm rope) both depend only on hidden_states; the
-        # join point is the backend forward (needs q + the KV already in the pool).
-        # Capture-mode only, like MQALayer._forward_prepare_multi_stream: the fork/join
-        # is recorded into the draft cuda graph as event deps (zero replay CPU cost),
-        # while eager runs keep the serial order.
         enable_multi_stream = (
             self.alt_streams is not None
             and get_is_capture_mode()
             and hidden_states.shape[0] <= self._multi_stream_bs_limit
         )
 
-        # Pad the per-rank query heads (and attn_sink) up to the kernel's supported h_q
-        # like MQALayer and slice the output heads back afterward. new_empty, not
-        # new_zeros: only [:, :n_local_heads] is written and each head's attention is
-        # independent, so the garbage padded heads only yield garbage output heads that
-        # are sliced away (mirrors the target's non-gfx942 q_padded). _compute_q writes
-        # straight into the padded slice, dropping the per-forward memset + copy.
         q_padded: Optional[torch.Tensor] = None
         q_out: Optional[torch.Tensor] = None
         if self.n_local_heads < _PAD_NUM_HEADS:
@@ -347,11 +245,6 @@ class DSparkAttention(MqaAttentionBase):
             q = q_padded
         attn_sink = self._local_attn_sink()
 
-        # Drive the production sparse backend: it reads the NON-CAUSAL full-block SWA
-        # metadata built in make_core_attn_metadata (is_dspark_draft branch) and runs
-        # flash_mla over the real SWA key buffer. The KV store is already done above, so
-        # save_kv_cache=False (mirrors MQALayer's non-fused path). attn_sink is this
-        # rank's local slice, zero-padded to _PAD_NUM_HEADS when the heads are.
         o = attn_backend.forward(
             q=q,
             k=kv,
@@ -372,10 +265,6 @@ class DSparkAttention(MqaAttentionBase):
         else:
             apply_rotary_emb(o[..., -rd:], self.freqs_cis[positions], inverse=True)
 
-        # Compute the per-group dim explicitly instead of -1: the idle-DP participation
-        # forward runs 0 tokens, and view(0, n_local_groups, -1) is ambiguous (0 = 0 *
-        # n_local_groups * anything) so torch refuses to infer it. Explicit dims are a
-        # no-op change for the normal N>0 path.
         o = o.view(
             o.shape[0],
             self.n_local_groups,
@@ -383,10 +272,6 @@ class DSparkAttention(MqaAttentionBase):
         )
         wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
         if self._use_fast_kernel:
-            # bf16 wo_a einsum, mirroring the production MQALayer else-path
-            # (deepseek_v4.py:1223) and the reference (model.py:790, also plain bf16 --
-            # no .float()). wo_a is bf16 (wo_a_fp8=False), so tensor-core fp32
-            # accumulation makes this numerically equivalent to the old fp32 cast.
             o = torch.einsum("bgd,grd->bgr", o, wo_a)
         else:
             o = torch.einsum("bgd,grd->bgr", o.float(), wo_a.float()).to(q.dtype)
@@ -404,13 +289,6 @@ def _resolve_dspark_pool() -> DeepSeekV4TokenToKVPool:
 
 
 class DSparkV4MarkovHead(nn.Module):
-    """V4 DSpark Markov head: full-logits bias = w2(w1(prev_token)), w2 in fp32.
-
-    Mirrors the reference ``DSparkMarkovHead`` (model.py:795): ``markov_w1`` is a full
-    (non-vocab-parallel) embedding, ``markov_w2`` a full fp32 head producing the
-    whole-vocab logits bias. Exposes the same ``apply_step_logits``/``sample_block``
-    interface as the dense ``VanillaMarkov`` so the shared serial-Markov loop can reuse it.
-    """
 
     markov_head_type = "vanilla"
 
@@ -475,18 +353,6 @@ class DSparkV4MarkovHead(nn.Module):
 def build_dspark_v4_confidence_head(
     *, config: DeepSeekV4Config, markov_rank: int
 ) -> Optional[DSparkConfidenceHead]:
-    """Build the V4 DSpark confidence head (enabled outside static ragged-verify).
-
-    Mirrors the dense ``build_confidence_head`` interface (the head emits a RAW
-    accept-rate logit; ``with_markov`` concatenates the per-step markov_embed). The V4
-    hidden size comes from ``config.hidden_size`` and the rank from the parsed draft
-    config. ``static`` ragged-verify uses a uniform block and never consults the head, so
-    the head is skipped there; otherwise it is ALWAYS built (the ``enable_confidence_head``
-    flag is not read): a DSpark draft checkpoint is expected to carry trained confidence
-    weights, so a missing config field is only warned about, and a checkpoint that
-    genuinely lacks the weights is surfaced by the weight-load assert. The ``proj`` matches
-    the checkpoint's DeepSpec ``AcceptRatePredictor`` layout (a single weight, no bias).
-    """
     if read_ragged_verify_mode() is RaggedVerifyMode.STATIC:
         return None
     if not hasattr(config, "enable_confidence_head"):
@@ -512,15 +378,6 @@ def build_dspark_v4_confidence_head(
 
 
 class DSparkV4Stage(DeepseekV4DecoderLayer):
-    """One DSpark MTP stage (reference ``DSparkBlock`` model.py:818).
-
-    Subclasses ``DeepseekV4DecoderLayer`` to reuse its MoE, mHC mixing params, norms, and
-    the ``hc_pre``/``hc_post`` math; only the attention submodule (``DSparkAttention`` via
-    ``_build_self_attn``) and the forward contract differ. The forward is the standard
-    SGLang ``(positions, hidden_states, forward_batch)`` contract on token-flattened
-    ``[N, hc, d]`` tensors -- the worker builds the draft ForwardBatch and the attention
-    reads / writes the production paged pool.
-    """
 
     def __init__(
         self,
@@ -533,14 +390,6 @@ class DSparkV4Stage(DeepseekV4DecoderLayer):
         prefix: str = "",
         alt_streams: Optional[List[torch.cuda.Stream]] = None,
     ) -> None:
-        # is_nextn disables the MoE hash topk (config.num_hash_layers gates it on the
-        # target's first layers by layer_id). The draft uses draft-local layer ids
-        # (0..num_stages-1), which would otherwise be misread as those hash layers; the
-        # draft gate is the normal noaux_tc gate (its checkpoint carries gate.bias), so
-        # force the non-hash path like NextN. It only affects this MoE construction.
-        # alt_streams flows to the base __init__ so the MoE gets its dual-stream
-        # alt_stream (shared experts overlap gate+routed under capture) and to
-        # _build_self_attn for the draft attention's KV/Q overlap.
         super().__init__(
             config=config,
             layer_id=layer_id,
@@ -600,7 +449,6 @@ class DSparkV4Stage(DeepseekV4DecoderLayer):
         hc_scale: torch.Tensor,
         hc_base: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Run the base ``hc_pre`` on the token-flattened draft tensor ``[N, hc, d]``."""
         y, post, comb, _ = self.hc_pre(x, hc_fn, hc_scale, hc_base)
         return y, post, comb
 
@@ -611,7 +459,6 @@ class DSparkV4Stage(DeepseekV4DecoderLayer):
         post: torch.Tensor,
         comb: torch.Tensor,
     ) -> torch.Tensor:
-        """Run the base ``hc_post`` on the token-flattened draft tensor ``[N, hc, d]``."""
         return self.hc_post(x, residual, post, comb)
 
     def forward(
@@ -638,12 +485,6 @@ class DSparkV4Stage(DeepseekV4DecoderLayer):
         return x
 
     def _run_ffn(self, x: torch.Tensor, forward_batch: ForwardBatch) -> torch.Tensor:
-        # Route the draft MoE through the parent's shared MoE-DP path so it does the
-        # same dp_gather -> experts -> combine as the target under dp attention. The hc
-        # dim is already collapsed by hc_pre, so x is [bs*gamma, dim] (DP token count is
-        # bs*gamma). input_ids* are None: the draft has the hash gate off (is_nextn), so
-        # the parent's gather never consumes them. Byte-identical without DP (attn_dp==1
-        # skips the gather and self.mlp ignores forward_batch on the forward_normal path).
         shape = x.shape
         x = x.reshape(-1, self.dim)
         y = self._run_moe_ffn_dp_sync(
@@ -653,24 +494,6 @@ class DSparkV4Stage(DeepseekV4DecoderLayer):
 
 
 class DeepseekV4ForCausalLMDSpark(nn.Module):
-    """V4 DSpark draft model: block draft over the production paged sliding-window MLA KV.
-
-    Owns the target-hidden projection (main_proj/main_norm), the DSpark MTP stages, the
-    Markov head, an opt-in confidence head, and the head finish (hc_head + the target's
-    shared lm_head). The token embedding and lm_head are supplied by the target model and
-    attached via ``attach_shared_modules`` (the worker wires them).
-
-    The standard ``forward(input_ids, positions, forward_batch, input_embeds)`` runs the
-    DSpark backbone on the production paged pool (every stage reads / writes the real SWA
-    ring through ``DSparkAttention``) and returns the per-token draft backbone hidden. The
-    base-logit collapse (hc_head) + serial Markov head finish are driven by the worker via
-    ``compute_base_logits`` / the shared sampler so the dense and dsv4 worker paths agree.
-
-    When the confidence head is enabled the draft computes the confidence at the correct
-    tap (post-hc_head, PRE-norm draft hidden) and stashes it on ``self._last_confidence``;
-    the worker relay reads it via ``last_confidence`` (the dense relay's post-norm
-    ``draft_hidden`` would be the wrong tap for V4, reference model.py:862/873).
-    """
 
     def __init__(
         self,
@@ -709,9 +532,6 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
 
         self.start_layer = 0
         self.end_layer = self.num_stages
-        # One shared alt stream is enough: within a stage the attention KV/Q fork joins
-        # before the MoE starts, so the two overlap sites never run concurrently
-        # (the target's MQALayer and MoE share alt_streams[0] the same way).
         use_multi_stream = (
             envs.SGLANG_OPT_USE_MULTI_STREAM_OVERLAP.get()
             and envs.SGLANG_DSPARK_ENABLE_MULTI_STREAM.get()
@@ -757,22 +577,15 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         return self.confidence_head is not None
 
     def last_confidence(self) -> Optional[torch.Tensor]:
-        """Confidence stashed by the most recent ``forward_head`` (worker relay).
-
-        Returns the post-STS confidence ``[bs, gamma]`` in ``(0, 1)`` computed from the
-        post-hc_head PRE-norm tap, or ``None`` when the confidence head is disabled.
-        """
         return self._last_confidence
 
     def attach_shared_modules(
         self, *, embed_tokens: nn.Module, lm_head: nn.Module
     ) -> None:
-        """Attach the target model's shared embedding and lm_head (worker wiring)."""
         self.embed_tokens = embed_tokens
         self.lm_head = lm_head
 
     def project_target_hidden(self, main_hidden: torch.Tensor) -> torch.Tensor:
-        """Project concatenated target-layer hc-mean features -> draft hidden (main_proj)."""
         stage0 = self.stages[0]
         projected, _ = stage0.main_proj(main_hidden)
         return stage0.main_norm(projected)
@@ -785,19 +598,6 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         positions: torch.Tensor,
         pool: DeepSeekV4TokenToKVPool,
     ) -> None:
-        """Inject the target hidden as MLA latent KV into every stage's SWA ring slot.
-
-        The dsv4 draft KV is a single MLA latent (kv_lora_rank + qk_rope_head_dim), not the
-        MHA k/v pair the dense path writes. For each stage: project the (main_proj'd) target
-        hidden through ``wkv``, then ``set_swa_key_buffer_radix_fused_norm_rope`` (the writer
-        consumes the RAW latent and applies kv_norm + rope + fp8 pack internally, so do NOT
-        pre-norm/rope here) at the already-translated SWA slots ``swa_loc`` with the absolute
-        per-row ``positions``. The worker owns full->SWA translation (after allocation) and
-        the per-row commit positions; this method owns the projection + pool API. There is
-        no MLA ``set_kv_buffer_prefix_valid`` equivalent, so commit-length masking is done by
-        the caller marking non-committed slots with ``swa_loc = -1`` (fixed-shape, no gather);
-        the fused-norm-rope writer kernel skips ``out_loc < 0``.
-        """
         main_x = self.project_target_hidden(main_hidden)
         swa_loc = swa_loc.to(torch.int32)
         kvs = CommitKvProj.execute(
@@ -817,11 +617,6 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
             )
 
     def forward_embed(self, input_ids: torch.Tensor) -> torch.Tensor:
-        """Build the draft block input embeddings, hc-expanded.
-
-        ``input_ids`` is the flat ``[bs * gamma]`` draft block ids the worker built (anchor
-        at column 0, noise elsewhere). Returns the hc-expanded embedding ``[N, hc, d]``.
-        """
         if self.embed_tokens is None:
             raise ValueError(
                 "DeepseekV4ForCausalLMDSpark requires the target embed_tokens "
@@ -840,18 +635,6 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         get_embedding: bool = False,
         pp_proxy_tensors=None,
     ) -> LogitsProcessorOutput:
-        """Standard SGLang draft forward: embed -> DSpark stages -> raw backbone hidden.
-
-        The worker builds the draft block ForwardBatch (TARGET_VERIFY mode, the gamma block
-        slots in ``out_cache_loc``, per-row positions, ``spec_info.draft_token_num`` =
-        gamma). The worker passes only ``input_ids`` (the dsv4 model hc-expands the
-        embedding itself via ``forward_embed``); ``input_embeds`` is accepted for parity
-        callers. Runs the DSpark stages on the production paged SWA pool and returns a
-        ``DSparkV4DraftOutput`` carrying ONLY the raw, un-collapsed backbone hidden. Base
-        logits (hc_head collapse -> norm -> lm_head -> TP all-gather -> org-vocab crop) are
-        produced separately by ``compute_base_logits``, which the worker calls on the raw
-        hidden post-forward; the head finish (serial Markov sampling) is also worker-driven.
-        """
         del get_embedding, pp_proxy_tensors
         if input_embeds is None:
             input_embeds = self.forward_embed(input_ids)
@@ -859,19 +642,9 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         for stage in self.stages:
             x = stage(positions, x, forward_batch)
 
-        # Return the raw [bs*gamma, hc, d] backbone hidden as a plain LogitsProcessorOutput
-        # (next_token_logits stays None; the worker calls compute_base_logits on
-        # hidden_states post-forward). LogitsProcessorOutput is the only struct the cuda
-        # graph runner's execute accepts, so this is what lets the draft be captured.
         return LogitsProcessorOutput(next_token_logits=None, hidden_states=x)
 
     def collapse_hc_head(self, x: torch.Tensor) -> torch.Tensor:
-        """Collapse the draft mHC tensor through the last stage's hc_head (PRE-norm).
-
-        Reference model.py:862 ``x = hc_head(x)``. The returned tensor is the post-hc_head
-        PRE-norm hidden that feeds both the confidence head and (after ``norm``) the LM
-        head. ``x`` is ``[N, hc, d]`` (token-flattened).
-        """
         last = self.stages[-1]
         return hc_head_torch(
             x,
@@ -883,20 +656,6 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         )
 
     def compute_base_logits(self, x: torch.Tensor) -> torch.Tensor:
-        """Base logits from the draft backbone hidden: hc_head -> norm -> lm_head gather.
-
-        Collapses the mHC draft hidden through the last stage's hc_head (PRE-norm), then
-        applies ``norm`` and the target's local-vocab lm_head matmul, all-gathers to the
-        full vocab (no-op at tp=1), and crops the TP vocab padding. This is the dsv4
-        analog of the dense ``DSparkDraftMixin.compute_base_logits`` (which has no hc_head
-        collapse); the matmul dtype is bf16 by default like the dense path, or the
-        reference-parity fp32 ``F.linear`` when ``SGLANG_DSPARK_FP32_LM_HEAD`` is set.
-        This is the SOLE base-logit producer: ``forward`` no longer computes them, and the
-        post-hc_head PRE-norm tap is stashed on ``self._x_post_hc`` HERE for
-        ``compute_confidence`` (the worker calls this before ``compute_confidence``, so the
-        stash is fresh). The worker calls this on the raw forward hidden and feeds the
-        result to the shared Markov loop.
-        """
         x_post_hc = self.collapse_hc_head(x)
         self._x_post_hc = x_post_hc
         return self._logits_from_x_post_hc(x_post_hc)
@@ -911,10 +670,8 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         x = last.norm(x_post_hc)
         weight = self.lm_head.weight
         if self._use_fp32_lm_head:
-            # Reference-parity path (model.py:735): fp32 matmul, per-step weight upcast.
             local_logits = F.linear(x.float(), weight.float())
         else:
-            # sglang default / dense DSpark draft: keep the weight dtype (bf16) matmul.
             local_logits = torch.matmul(x.to(weight.dtype), weight.T)
         return gather_and_crop_vocab(local_logits, self.lm_head)
 
@@ -924,19 +681,6 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         anchor_tokens: torch.Tensor,
         sampled_tokens: torch.Tensor,
     ) -> Optional[torch.Tensor]:
-        """Confidence on the post-hc_head PRE-norm tap (R9 seam), called by the worker.
-
-        Returns ``None`` when the confidence head is disabled (keeping the a+b path
-        unaffected). Otherwise it reads the post-hc_head PRE-norm tap stashed by the most
-        recent ``compute_base_logits`` (the same tap the LM head's ``norm`` consumes, but
-        BEFORE the norm, reference model.py:873) and, for with_markov heads, the per-step
-        markov_embed stack built from the prev-token sequence ``[anchor, s_0, ...,
-        s_{gamma-2}]`` (the off-by-one shared with the worker). ``confidence_head.apply_sts``
-        applies the per-position STS temperature (identity when no table is loaded) then
-        sigmoid, mapping the raw logit to ``(0, 1)``; losslessness does not depend on the
-        value. ``anchor_tokens`` is ``[bs]``; ``sampled_tokens`` is ``[bs, gamma]``.
-        Returns ``[bs, gamma]``.
-        """
         confidence_head = self.confidence_head
         if confidence_head is None:
             self._last_confidence = None
@@ -957,10 +701,6 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
             markov_embed_stack = None
         confidence_raw = confidence_head(x_post_hc, markov_embed_stack)
         confidence = confidence_head.apply_sts(confidence_raw)
-        # Async, gated probe (SGLANG_ENABLE_ASYNC_ASSERT) instead of ``assert
-        # bool(...all())``: the latter forces an is_nonzero -> item ->
-        # _local_scalar_dense -> cudaStreamSynchronize on every decode step,
-        # a hard d2h sync in the hot verify path.
         maybe_detect_in_closed_range(
             confidence, 0.0, 1.0, "DSpark confidence must lie in [0, 1]."
         )
@@ -968,26 +708,11 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         return confidence
 
     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]) -> None:
-        """Load DSpark draft weights from the V4 ``mtp.{i}.*`` checkpoint namespace.
-
-        Remaps the reference ``mtp.{stage}.*`` names to the draft module tree
-        (``stages.{stage}.*``), loads the confidence head when enabled (drops it
-        otherwise), drops the shared embed/lm_head (supplied by the target), and routes
-        MoE/attention weights through the V4 name conventions. Never goes through the
-        NextN loader. A confidence head that is enabled but absent from the checkpoint is
-        identity-initialized with a warning (mirrors the dense head).
-        """
         params_dict = dict(self.named_parameters())
         loaded_params = set()
 
         weights = list(weights)
         if any(name.endswith(".wo_a.scale") for name, _ in weights):
-            # The HF dsv4 checkpoint stores wo_a as an fp8 weight + a separate
-            # ``.wo_a.scale``, but the DSpark draft's o-projection runs a plain bf16
-            # einsum (no fp8 gemm, no weight_scale_inv applied), so the raw fp8 weight
-            # must be dequantized to bf16 at load -- mirroring the target's bf16 wo_a
-            # path. Without this the einsum consumes unscaled fp8 bytes and the whole
-            # attention output (hence every draft proposal) is garbage.
             weights = list(_dequant_fp8_wo_a(weights))
 
         stacked_params_mapping = DEEPSEEK_V4_STACKED_PARAMS_MAPPING
@@ -1073,7 +798,6 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
             )
 
     def _remap_dspark_weight_name(self, name: str) -> Optional[str]:
-        """Map a reference ``mtp.{stage}.*`` checkpoint name to a draft param name."""
         if name.startswith(("embed.", "embed_tokens.", "head.", "lm_head.")):
             return None
         if "rotary_emb.inv_freq" in name:

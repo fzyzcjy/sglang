@@ -114,10 +114,6 @@ class SpeculativeAlgorithm(Enum):
         return self == SpeculativeAlgorithm.DSPARK
 
     def is_dflash_or_dspark(self) -> bool:
-        """Block-shaped draft that materializes target hidden into a separate draft
-        KV cache and runs a target-verify forward (DFLASH and DSPARK). Gates the
-        shared draft-KV / draft-cuda-graph / aux-hidden-capture / prepare-for-decode
-        infrastructure that both algorithms reuse."""
         return self.is_dflash() or self.is_dspark()
 
     def is_standalone(self) -> bool:
@@ -210,9 +206,6 @@ class SpeculativeAlgorithm(Enum):
         # other cases which is not target verify but fixed length prefill.
         # Here, we expose this interface to allow the other use cases.
         if self.is_dspark() and is_draft_worker:
-            # DSpark draft block is gamma slots; the gamma+1 window (=
-            # num_draft_tokens) is the target verify geometry only. The draft
-            # runner's decode cuda graph must capture the gamma-slot draft forward.
             return num_draft_tokens - 1
         return num_draft_tokens
 

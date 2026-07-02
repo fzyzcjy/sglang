@@ -12,7 +12,6 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-# from sglang.srt.debug_utils.dumper import dumper
 from sglang.srt.layers.activation import SiluAndMul
 from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.layers.linear import (
@@ -184,19 +183,10 @@ class DFlashAttention(nn.Module):
             q, k, v = self.forward_prepare_npu(positions, hidden_states)
         else:
             q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
-            # dumper.dump("attn__q_proj_out", q)
-            # dumper.dump("attn__k_proj_out", k)
-            # dumper.dump("attn__v_proj_out", v)
             q, k = apply_qk_norm(q, k, self.q_norm, self.k_norm, self.head_dim)
-            # dumper.dump("attn__q_norm_out", q)
-            # dumper.dump("attn__k_norm_out", k)
             q, k = self.rotary_emb(positions, q, k)
-            # dumper.dump("attn__q_rope_out", q)
-            # dumper.dump("attn__k_rope_out", k)
         attn_output = self.attn(q, k, v, forward_batch)
-        # dumper.dump("attn__core_out", attn_output)
         output, _ = self.o_proj(attn_output)
-        # dumper.dump("attn__o_proj_out", output)
         return output
 
     def kv_proj_only(
@@ -236,8 +226,6 @@ class DFlashAttention(nn.Module):
         return k
 
     def apply_v_norm(self, v: torch.Tensor) -> torch.Tensor:
-        # Qwen3-style draft attention has no V normalization; the DSpark worker
-        # calls this uniformly across draft backbones (Gemma applies a real norm).
         return v
 
 
@@ -275,9 +263,7 @@ class DFlashMLP(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate_up, _ = self.gate_up_proj(x)
         x = self.act_fn(gate_up)
-        # dumper.dump("mlp__act_out", x)
         x, _ = self.down_proj(x)
-        # dumper.dump("mlp__down_proj_out", x)
         return x
 
 
@@ -311,7 +297,6 @@ class DFlashDecoderLayer(nn.Module):
             hidden_states = self.input_layernorm(hidden_states)
         else:
             hidden_states, residual = self.input_layernorm(hidden_states, residual)
-        # dumper.dump("attn__input_ln_out", hidden_states)
 
         attn_out = self.self_attn(
             positions=positions,
@@ -319,7 +304,6 @@ class DFlashDecoderLayer(nn.Module):
             forward_batch=forward_batch,
         )
         hidden_states, residual = self.post_attention_layernorm(attn_out, residual)
-        # dumper.dump("mlp__post_attn_ln_out", hidden_states)
         hidden_states = self.mlp(hidden_states)
         return hidden_states, residual
 
@@ -383,9 +367,7 @@ class DFlashDraftModel(nn.Module):
                 "This usually means the target model is capturing a different number of layer features than "
                 "the draft checkpoint/config expects."
             )
-        # dumper.dump("draft__target_hidden_in", target_hidden)
         out = self.hidden_norm(self.fc(target_hidden))
-        # dumper.dump("draft__target_hidden_proj", out)
         return out
 
     @torch.no_grad()
@@ -405,23 +387,10 @@ class DFlashDraftModel(nn.Module):
         hidden_states = input_embeds
         residual: Optional[torch.Tensor] = None
 
-        # dumper.dump("draft__input_embeds", hidden_states)
         for layer_id, layer in enumerate(self.layers):
-            # dumper.set_ctx(layer_id=layer_id)
-            # The backbone carries residual out-of-band (fused add-norm), so the
-            # comparable per-layer activation is the folded hidden = hidden + residual.
-            # dumper.dump(
-            # "layer_start__hidden_states",
-            # hidden_states if residual is None else hidden_states + residual,
-            # )
             hidden_states, residual = layer(
                 positions, hidden_states, forward_batch, residual
             )
-            # dumper.dump(
-            # "layer_end__hidden_states",
-            # hidden_states if residual is None else hidden_states + residual,
-            # )
-            # dumper.set_ctx(layer_id=None)
 
         if hidden_states.numel() != 0:
             if residual is None:
@@ -429,7 +398,6 @@ class DFlashDraftModel(nn.Module):
             else:
                 hidden_states, _ = self.norm(hidden_states, residual)
 
-        # dumper.dump("draft__norm_out", hidden_states)
         return LogitsProcessorOutput(
             next_token_logits=None,
             hidden_states=hidden_states,

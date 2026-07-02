@@ -542,11 +542,6 @@ class SchedulerBatchResultProcessor:
         result.num_correct_drafts = sum(accept_lens) - len(batch.reqs)
         result.num_correct_drafts_per_req_cpu = [x - 1 for x in accept_lens]
 
-        # DSpark per-request lens (None for non-DSpark workers):
-        # block_accept_lens — uncapped full-block accept incl bonus (exact only
-        # in CAP_ACCEPT; == accept_lens in STATIC/COMPACT).
-        # cap_lens — confidence-scheduled verify window incl the bonus slot
-        # (None when no cap is scheduled, i.e. STATIC).
         block_accept_lens = (
             result.block_accept_lens.tolist()
             if result.block_accept_lens is not None

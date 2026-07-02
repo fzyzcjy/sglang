@@ -42,24 +42,9 @@ class DraftBlockProposer:
         self._mask_token_id = mask_token_id
         self._draft_block_spec_info = draft_block_spec_info
         self._draft_sampler = None
-        # dsv4 (MoE) draft under dp attention: the draft forward runs the shared
-        # MoE-DP gather, so its manually-built ForwardBatch must carry DP metadata
-        # (global_num_tokens = per-rank bs * gamma). The dense draft runs replicated
-        # in the attention-TP context and must NOT get this (it would trigger an
-        # unwanted MLP sync in a size-1 group), so it stays False.
         self._dp_moe_sync = dp_moe_sync
 
     def _base_logits_context(self):
-        """Neutralize compute_base_logits' vocab all-gather under dsv4 (MoE) DP.
-
-        gather_and_crop_vocab all-gathers over the global TP group, but under
-        --enable-dp-lm-head + attn_tp==1 the lm_head is full-vocab per rank and each DP
-        rank holds different tokens, so a global gather is both wrong and deadlocks:
-        idle DP groups never call compute_base_logits, so busy ranks block forever on the
-        collective. Patch _TP to the size-1 attn-TP group so the gather is a per-rank
-        no-op (mirrors the dense draft, whose whole propose runs in this context). The
-        draft MODEL forward stays outside this context -- its MoE gather needs the real
-        global TP group and is matched by the idle group's run_idle_participation."""
         if self._dp_moe_sync:
             return draft_tp_context(get_attention_tp_group())
         return nullcontext()
@@ -75,14 +60,6 @@ class DraftBlockProposer:
         target_model,
         sampling_info,
     ) -> DraftProposal:
-        # Single orchestration for every draft (dense + V4): run the draft block forward
-        # on the real pool, then let the MODEL produce its base logits and the worker
-        # reshape to ``[bs, gamma, vocab]`` for the serial Markov block. Base-logit
-        # provenance is no longer a worker concern: every draft model owns
-        # ``compute_base_logits(raw_hidden)`` (dense: weight-dtype matmul; dsv4: hc_head
-        # collapse -> norm -> fp32 F.linear), and the worker calls it once. The
-        # ``[bs, gamma, vocab]`` reshape is MANDATORY: markov ``sample_block`` reads
-        # ``shape[:2]`` as ``(bs, proposal_len)`` and indexes ``[:, step, :]``.
         embed_module = target_model.get_input_embeddings()
         fwd = self._run_forward(
             batch=batch,
@@ -98,10 +75,6 @@ class DraftBlockProposer:
         all_greedy = sampling_info is None or sampling_info.is_all_greedy
         folded_confidence = None
         if draft_sampler is not None and fwd.can_run_graph and all_greedy:
-            # Captured greedy proposal: compute_base_logits + Markov argmax already ran
-            # in the draft cuda graph and wrote draft_sampler.out. Read it instead of
-            # the eager matmul + serial loop. corrected_logits unused on the greedy
-            # accept path, so None; greedy_mask/temperatures are cheap.
             if sampling_info is None:
                 temperatures = torch.ones(bs, dtype=torch.float32, device=device)
             else:
@@ -141,11 +114,6 @@ class DraftBlockProposer:
         )
 
     def run_idle_participation(self, batch: ScheduleBatch) -> None:
-        """dsv4 (MoE) draft under DP attention: run a 0-token draft forward so an idle
-        attention-DP group joins the draft's dp_gather (busy ranks gather bs*gamma
-        tokens across DP). No-op unless dp_moe_sync. Scale global_num_tokens by gamma
-        exactly like the busy draft; the idle rank's own entry is already 0, so it
-        contributes 0 rows to the gather. Output discarded."""
         if not self._dp_moe_sync or batch.global_num_tokens is None:
             return
         device = self.draft_model_runner.device
@@ -190,11 +158,6 @@ class DraftBlockProposer:
         draft_positions = positions_2d[:, :gamma].reshape(-1)
         draft_cache_loc = verify_cache_loc_2d[:, :gamma].reshape(-1)
 
-        # Embedding ownership is a capability, not a model identity: a draft model
-        # that hc-expands its own embedding exposes ``forward_embed`` and takes the
-        # flat ``input_ids`` only (V4 mHC needs the [N, hc, d] expand the worker can't
-        # build); dense backbones take the precomputed flat ``input_embeds`` from the
-        # target embedding, byte-identical to before.
         draft_owns_embed = hasattr(self.draft_model, "forward_embed")
         draft_input_embeds: Optional[torch.Tensor] = None
         if not draft_owns_embed:
@@ -232,10 +195,6 @@ class DraftBlockProposer:
         raw_hidden = logits_output.hidden_states
         if raw_hidden is None:
             raise RuntimeError("DSpark draft model returned no hidden states.")
-        # raw_hidden is the model's un-reshaped backbone hidden (dense 2-D [bs*gamma, d];
-        # dsv4 3-D [bs*gamma, hc, d]); compute_base_logits consumes it as-is (the dsv4
-        # hc-collapse needs the [N, hc, d] layout, NOT this view). draft_hidden_3d is the
-        # dense markov / dense confidence input; dsv4 ignores it.
         draft_hidden_3d = raw_hidden.view(bs, gamma, -1)
         return DraftForwardResult(
             draft_block_ids=draft_block_ids,
@@ -247,16 +206,6 @@ class DraftBlockProposer:
     def _fill_dp_moe_sync_metadata(
         self, forward_batch: ForwardBatch, batch: ScheduleBatch
     ) -> None:
-        """dsv4 (MoE) draft under DP attention: give the hand-built draft ForwardBatch
-        the DP MLP-sync metadata that ``ForwardBatch.init_new`` would derive (its "For
-        MLP sync" block), so the forward enters ``prepare_mlp_sync_batch`` and the
-        shared MoE-DP gather sizes its buffer correctly. The scheduler's all-gathered
-        per-rank bs is scaled by the draft-block spec_info's declared coefficient
-        (``draft_token_num`` == gamma, matching the bs*gamma draft tokens per rank --
-        NOT the graph MAX_LEN uniform value), mirroring EAGLE's init_new path.
-        prepare_mlp_sync_batch fills dp_padding_mode / global_dp_buffer_len from these.
-        No-op unless dp_moe_sync (the dense draft runs replicated in the attn-TP
-        context and must never get DP metadata)."""
         if not self._dp_moe_sync or batch.global_num_tokens is None:
             return
         gnt, gnt_logprob = (

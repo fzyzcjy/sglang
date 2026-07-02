@@ -93,8 +93,6 @@ def _build_out_tokens_kernel(
     bonus = tl.load(bonus_ptr + b, mask=mask, other=0)
     draft_mask = mask & (k < gamma)
     draft = tl.load(draft_tokens_ptr + b * gamma + k, mask=draft_mask, other=0)
-    # bonus overwrites position correct_len (mirrors torch scatter after the copy);
-    # cols [0, gamma) are drafts, col gamma is the 0 anchor.
     val = tl.where(k == cl, bonus, tl.where(k < gamma, draft, 0))
     tl.store(out_ptr + offs, val.to(tl.int64), mask=mask)
 
@@ -107,8 +105,6 @@ def build_out_tokens_triton(
     verify_num_draft_tokens: int,
     gamma: int,
 ) -> torch.Tensor:
-    # Fuse copy + fill + scatter into one launch: out[b, k] = bonus[b] if
-    # k == correct_len[b] else draft_tokens[b, k] if k < gamma else 0.
     bs = draft_tokens.shape[0]
     T = verify_num_draft_tokens
     device = draft_tokens.device

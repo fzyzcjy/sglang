@@ -80,7 +80,6 @@ class _DflashDraftSampler:
         )
 
     def __call__(self, hidden_states, input_ids=None):
-        # input_ids unused: DFLASH argmaxes hidden directly (no Markov anchor).
         # draft tokens are block positions 1: (pos 0 is the seeded bonus token)
         bs = hidden_states.shape[0] // self.block_size
         hs = hidden_states.view(bs, self.block_size, -1)[:, 1:, :].reshape(
@@ -135,7 +134,6 @@ class DFlashWorkerV2(BaseSpecWorker):
         self._warned_sampling_fallback = False
         self._logged_first_verify = False
 
-        # Draft runner (separate KV cache + attention backend), shared with DSpark.
         bundle = build_draft_tp_worker(
             server_args=server_args,
             gpu_id=gpu_id,

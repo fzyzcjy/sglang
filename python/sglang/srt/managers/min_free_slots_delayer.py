@@ -8,11 +8,10 @@ def resolve_min_free_slots(
 ) -> Optional[int]:
     """Resolve the min-free-slots threshold (None = disabled).
 
-    A user value (>1) is capped to the DFlash/DSpark formula so the trigger never
-    delays more aggressively than the legacy heuristic. When unset, block-draft
-    workloads (DFlash/DSpark) fall back to the formula (preserving the always-on
-    behavior); other workloads stay disabled. Also disabled when
-    max_running_requests < 8.
+    A user value (>1) is capped to the DFlash formula so the trigger never
+    delays more aggressively than the legacy heuristic. When unset, DFlash
+    workloads fall back to the formula (preserving the always-on behavior);
+    other workloads stay disabled. Also disabled when max_running_requests < 8.
     """
     max_running_requests = max(0, int(max_running_requests))
     formula = min(4, max(2, (max_running_requests + 5) // 6))

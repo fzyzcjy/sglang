@@ -47,17 +47,6 @@ def cap_correct_len(
     correct_len: torch.Tensor,
     layout: RaggedVerifyLayout,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    # Cutoff-only cap: commit at most ell_r = verify_len - 1 correct drafts per
-    # request. Capping accept is lossless -- fewer correctly-verified drafts are
-    # committed and the bonus (recomputed by callers at the capped index) is
-    # still the target's true next token at the cap.
-    #
-    # cap_trim_lens = correct_len - capped (>= 0) is the per-request count of
-    # target-correct drafts the confidence cap dropped. Only the CAP_ACCEPT mode
-    # (full bs*(gamma+1) window) makes this observable: there correct_len is the
-    # true full-block accept length, so the delta measures the accept-length the
-    # confidence schedule left on the table. COMPACT only computes 1+ell_r tokens
-    # so correct_len <= ell_r already and the delta is 0; STATIC has no cap.
     ell_r = (layout.verify_lens.to(device=correct_len.device) - 1).to(correct_len.dtype)
     capped = torch.minimum(correct_len, ell_r)
     cap_trim_lens = correct_len - capped
@@ -90,8 +79,6 @@ def cap_correct_len_triton(
     correct_len: torch.Tensor,
     layout: RaggedVerifyLayout,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    # Fuse (verify_lens - 1) + minimum + subtract into one launch. Outputs keep
-    # correct_len's dtype (int32 on the sampling path, int64 on the greedy path).
     device = correct_len.device
     correct_len = correct_len.contiguous()
     verify_lens = layout.verify_lens.to(device=device).contiguous()

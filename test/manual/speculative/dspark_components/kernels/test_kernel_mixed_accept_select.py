@@ -13,7 +13,6 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.mark.parametrize("bs", [1, 2, 3, 8, 64])
 def test_triton_matches_torch_selection(bs):
-    """triton mixed greedy/sampling select is bit-exact vs the three torch.where chain."""
     device = torch.device("cuda")
     g = torch.Generator(device=device).manual_seed(bs)
     greedy_mask = torch.rand(bs, device=device, generator=g) < 0.5

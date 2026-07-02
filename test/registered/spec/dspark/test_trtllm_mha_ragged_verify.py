@@ -21,15 +21,12 @@ _GRID = [8, 16, 24, 32, 64]
 
 class TestRaggedVerifyGraphCapability(CustomTestCase):
     def test_base_backend_defaults_false(self):
-        """The base attention backend does not advertise ragged verify graph support."""
         self.assertFalse(AttentionBackend.supports_ragged_verify_graph)
 
     def test_trtllm_mha_supports_ragged_verify_graph(self):
-        """trtllm_mha advertises the ragged verify graph capability (drives runner admission)."""
         self.assertTrue(TRTLLMHAAttnBackend.supports_ragged_verify_graph)
 
     def test_dsv4_supports_ragged_verify_graph(self):
-        """The DSV4 backend keeps ragged verify graph support after the probe refactor (no regression)."""
         from sglang.srt.layers.attention.deepseek_v4_backend import (
             DeepseekV4AttnBackend,
         )
@@ -39,17 +36,14 @@ class TestRaggedVerifyGraphCapability(CustomTestCase):
 
 class TestResolveRaggedVerifyLayout(CustomTestCase):
     def test_none_without_spec_info(self):
-        """A forward batch without spec_info has no ragged layout."""
         fb = types.SimpleNamespace(spec_info=None)
         self.assertIsNone(_resolve_ragged_verify_layout(fb))
 
     def test_none_without_layout_attr(self):
-        """A spec_info missing the ragged_verify_layout attribute resolves to None."""
         fb = types.SimpleNamespace(spec_info=types.SimpleNamespace())
         self.assertIsNone(_resolve_ragged_verify_layout(fb))
 
     def test_returns_attached_layout(self):
-        """An attached ragged_verify_layout is returned as-is (the per-batch geometry key)."""
         layout = RaggedVerifyLayout.uniform(
             bs=2, num_draft_tokens=8, device=_DEVICE, grid=_GRID
         )
@@ -61,7 +55,6 @@ class TestResolveRaggedVerifyLayout(CustomTestCase):
 
 class TestRaggedTargetVerifyGeometry(CustomTestCase):
     def test_mixed_verify_lens_geometry(self):
-        """Mixed verify_lens build per-request cache_seqlens, variable qo_indptr, kv cumsum, and max q."""
         layout = RaggedVerifyLayout.from_verify_lens(
             verify_lens_cpu=[8, 1, 3], device=_DEVICE, grid=_GRID
         )
@@ -73,7 +66,6 @@ class TestRaggedTargetVerifyGeometry(CustomTestCase):
         self.assertEqual(geometry.max_seq_len_q, 8)
 
     def test_geometry_dtypes_are_int32(self):
-        """The verify geometry tensors are int32 (the trtllm-gen kernel contract)."""
         layout = RaggedVerifyLayout.from_verify_lens(
             verify_lens_cpu=[8, 1, 3], device=_DEVICE, grid=_GRID
         )
@@ -84,7 +76,6 @@ class TestRaggedTargetVerifyGeometry(CustomTestCase):
         self.assertEqual(geometry.cu_seqlens_k.dtype, torch.int32)
 
     def test_qo_indptr_total_matches_input_tokens(self):
-        """cu_seqlens_q ends at the total verify-token count (the packed query length)."""
         layout = RaggedVerifyLayout.from_verify_lens(
             verify_lens_cpu=[8, 1, 3], device=_DEVICE, grid=_GRID
         )
@@ -95,7 +86,6 @@ class TestRaggedTargetVerifyGeometry(CustomTestCase):
 
 class TestPaddedRaggedVerifyGeometry(CustomTestCase):
     def test_padded_layout_grows_bs_and_fills_bucket(self):
-        """padded_to_bucket grows bs to graph_num_tokens//num_draft and the geometry covers every padded slot."""
         raw = RaggedVerifyLayout.from_verify_lens(
             verify_lens_cpu=[8, 1, 3],
             device=_DEVICE,
@@ -107,7 +97,6 @@ class TestPaddedRaggedVerifyGeometry(CustomTestCase):
         self.assertEqual(padded.bs, 4)
         self.assertEqual(padded.verify_lens_cpu, [8, 1, 3, 20])
         self.assertEqual(padded.qo_indptr_device.tolist(), [0, 8, 9, 12, 32])
-        # seq_lens carries the capture fill value (1) on the padded slot.
         seq_lens = torch.tensor([10, 20, 30, 1], dtype=torch.int32)
         geometry = build_ragged_target_verify_geometry(seq_lens=seq_lens, layout=padded)
         self.assertEqual(geometry.cu_seqlens_q.tolist(), [0, 8, 9, 12, 32])
@@ -115,7 +104,6 @@ class TestPaddedRaggedVerifyGeometry(CustomTestCase):
         self.assertEqual(int(geometry.cu_seqlens_k[-1]), 18 + 21 + 33 + 21)
 
     def test_padded_qo_indptr_reaches_graph_num_tokens(self):
-        """The padded qo_indptr ends exactly at the frozen bucket (so batch_size == padded_bs)."""
         raw = RaggedVerifyLayout.from_verify_lens(
             verify_lens_cpu=[8, 1, 3],
             device=_DEVICE,
@@ -129,7 +117,6 @@ class TestPaddedRaggedVerifyGeometry(CustomTestCase):
 
 class TestNegativeSeamGeometry(CustomTestCase):
     def test_uniform_capture_geometry_diverges_from_ragged(self):
-        """Forced-uniform geometry ([gamma+1]*bs) differs from a mixed ragged layout, so the negative seam has teeth."""
         seq_lens = torch.tensor([10, 20, 30], dtype=torch.int32)
         ragged = RaggedVerifyLayout.from_verify_lens(
             verify_lens_cpu=[8, 1, 3], device=_DEVICE, grid=_GRID
@@ -150,7 +137,6 @@ class TestNegativeSeamGeometry(CustomTestCase):
         )
 
     def test_uniform_layout_geometry_matches_legacy_arange(self):
-        """A uniform layout reproduces the legacy fixed-stride qo_indptr (byte-identical to the old uniform verify)."""
         seq_lens = torch.tensor([5, 7, 9], dtype=torch.int32)
         uniform = RaggedVerifyLayout.uniform(
             bs=3, num_draft_tokens=8, device=_DEVICE, grid=_GRID
@@ -164,7 +150,6 @@ class TestNegativeSeamGeometry(CustomTestCase):
 
 class TestSwaPaddedSlotGuard(CustomTestCase):
     def test_clamp_keeps_gather_index_in_range(self):
-        """The SWA gather clamp (mirrors the triton kernel) keeps a stale slot-0 slot inside [0, numel)."""
         full_to_swa_numel = 17
         slots = torch.tensor([-5, 0, 16, 100000, -1], dtype=torch.int64)
         clamped = torch.minimum(

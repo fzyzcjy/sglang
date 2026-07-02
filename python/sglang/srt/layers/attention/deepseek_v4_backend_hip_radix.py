@@ -415,9 +415,6 @@ class _GraphBucket(enum.Enum):
 class DeepseekV4HipRadixBackend(
     AttentionBackend, C4IndexerBackendMixin, CompressorBackendMixin
 ):
-    # Admitted to the ragged verify graph; the uniform TARGET_VERIFY out-graph
-    # path raises on a ragged layout, so it fails loud rather than running the
-    # wrong geometry.
     supports_ragged_verify_graph: bool = True
 
     def __init__(
@@ -878,11 +875,6 @@ class DeepseekV4HipRadixBackend(
                 )
                 is not None
             ):
-                # Graph-admission fail-fast: the out-graph TARGET_VERIFY path
-                # hardcodes num_tokens_v = num_draft * bs and never reads the
-                # ragged layout, so a ragged batch would silently run the uniform
-                # geometry. Reject it here (mirrors the eager _build_forward_metadata
-                # guard) so DSV4 ragged verify never runs the wrong geometry on HIP.
                 raise NotImplementedError(
                     "DSV4 ragged verify is not supported on the HIP backend "
                     "(DeepseekV4HipRadixBackend) cuda-graph path; disable "

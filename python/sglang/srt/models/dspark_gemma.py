@@ -31,7 +31,6 @@ logger = logging.getLogger(__name__)
 
 
 def _get_gemma4_rope_params(config) -> Tuple[float, str, float]:
-    """Return (rope_theta, rope_type, partial_rotary_factor) for full_attention layers."""
     rope_parameters = getattr(config, "rope_parameters", {})
     if "full_attention" in rope_parameters:
         params = dict(rope_parameters["full_attention"])
@@ -153,11 +152,6 @@ class Gemma4DFlashAttention(nn.Module):
     def kv_proj_only(
         self, hidden_states: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Project hidden_states to K/V only (skip Q).
-
-        Used by the DSpark worker to materialize ctx tokens into the draft KV
-        cache. When attention_k_eq_v, v == k (raw, before norms).
-        """
         can_slice, _ = can_dflash_slice_qkv_weight(self.qkv_proj)
         if can_slice:
             kv_slice = slice(self.q_size, self.q_size + 2 * self.kv_size)
@@ -276,19 +270,6 @@ class Gemma4DFlashDecoderLayer(nn.Module):
 
 
 class Gemma4DFlashDraftModel(nn.Module):
-    """Gemma4-style KV-injection draft backbone (no embedding / lm_head weights).
-
-    Mirrors DFlashDraftModel's public interface so the same DSpark worker drives
-    both Qwen3 and Gemma4 draft backbones. Key Gemma4 differences vs Qwen3/DFlash:
-    - GeGLU MLP (gelu_pytorch_tanh), not SiluAndMul
-    - Gemma4RMSNorm with (1+weight) scaling on all hidden-state norms
-    - v_norm applied per-head (apply_v_norm is a real norm, not identity)
-    - scaling = 1.0 (not head_dim**-0.5)
-    - head_dim = config.global_head_dim
-    - attention_k_eq_v: when True, v == k (raw) before separate norms
-    - 4-norm sandwich decoder layer with layer_scalar
-    - full_attention (ENCODER_ONLY) for all draft layers
-    """
 
     def __init__(self, config, quant_config=None, prefix: str = "") -> None:
         super().__init__()
@@ -326,7 +307,6 @@ class Gemma4DFlashDraftModel(nn.Module):
         self.block_size = draft_config.resolve_block_size(default=16)
 
     def project_target_hidden(self, target_hidden: torch.Tensor) -> torch.Tensor:
-        """Project concatenated target-layer hidden states into draft hidden_size."""
         expected = int(self.fc.in_features)
         if target_hidden.ndim != 2 or int(target_hidden.shape[-1]) != expected:
             raise ValueError(
@@ -447,7 +427,6 @@ class Gemma4DFlashDraftModel(nn.Module):
 
 
 class Gemma4DSparkModel(DSparkDraftMixin, Gemma4DFlashDraftModel):
-    """Gemma4 DSpark dense draft: Gemma4 KV-injection backbone + serial Markov head."""
 
     pass
 

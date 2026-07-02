@@ -138,8 +138,6 @@ try:
 except ImportError:
     pass
 
-# gemma4_unified reuses the upstream Gemma4 schema under an sglang-specific
-# model_type that transformers does not register.
 try:
     from transformers import Gemma4Config as _HFGemma4Config
 

@@ -477,17 +477,12 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         if self.spec_algorithm.is_dflash_or_dspark() and not self.is_draft_worker:
             from sglang.srt.speculative.dflash_utils import parse_dflash_draft_config
 
-            # Both DFLASH and DSPARK capture target-layer context features for the
-            # block draft, but DSPARK captures the hc-mean of each target layer's
-            # post-layer mHC tensor (plan §2.a), so the body branches per algorithm.
             draft_model_config = self._build_model_config(
                 server_args,
                 model_path=(server_args.speculative_draft_model_path),
                 model_revision=server_args.speculative_draft_model_revision,
                 is_draft_model=True,
             )
-            # The DSpark draft config is derived from the DFlash base parser, so the
-            # shared backbone/target-layer resolution reuses the DFlash config.
             dflash_draft_config = parse_dflash_draft_config(
                 draft_hf_config=draft_model_config.hf_config
             )
@@ -764,9 +759,6 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         _nnpl = self.model_config.num_nextn_predict_layers
         model_has_mtp_layers = _nnpl is not None and _nnpl > 0
         if self.is_draft_worker and model_has_mtp_layers:
-            # The dsv4 DSpark draft has num_stages attention layers (one per captured
-            # target layer), not num_nextn_predict_layers; size KV pool / PP accounting
-            # to the real attention-layer count so its layer ids map in-range.
             model_num_layers = getattr(
                 self.model, "num_stages", self.model_config.num_nextn_predict_layers
             )

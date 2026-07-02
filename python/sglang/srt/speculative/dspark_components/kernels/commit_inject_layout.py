@@ -77,14 +77,6 @@ def build_commit_inject_layout(
     commit_lens: torch.Tensor,
     stride: int,
 ) -> CommitInjectLayoutResult:
-    # Faithful original chain from inject_ragged/inject_target_hidden/_inject_mla:
-    # assign_extend_cache_locs gathers the verify window's already-allocated
-    # full-space slots req_to_token[req_pool_indices[r], prefix_lens[r] + c]; they
-    # are translated to the SWA ring (full_to_swa_index_mapping gather) and masked
-    # to -1 for the non-committed columns c >= commit_lens[r] (the fused-norm-rope
-    # writer skips out_loc < 0, keeping the write fixed-shape / sync-free -- no
-    # masked-select D2H). positions[r*stride + c] = prefix_lens[r] +
-    # block_pos_offsets[c] are the absolute rope positions of the window rows.
     from sglang.srt.speculative.triton_ops.cache_locs import (
         assign_extend_cache_locs_func,
     )

@@ -14,7 +14,6 @@ pytestmark = pytest.mark.skipif(
 @pytest.mark.parametrize("bs", [1, 2, 3, 8, 64])
 @pytest.mark.parametrize("cl_dtype", [torch.int32, torch.int64])
 def test_triton_matches_torch_incl_bonus_at_every_position(bs, cl_dtype):
-    """triton build_out_tokens equals torch for correct_len spanning 0..gamma and both dtypes."""
     device = torch.device("cuda")
     gamma = 5
     verify_num_draft_tokens = gamma + 1
@@ -22,7 +21,6 @@ def test_triton_matches_torch_incl_bonus_at_every_position(bs, cl_dtype):
         0, 129280, (bs, gamma), dtype=torch.int64, device=device
     )
     bonus = torch.randint(0, 129280, (bs,), dtype=torch.int64, device=device)
-    # sweep correct_len across the full valid range [0, gamma] deterministically
     correct_len = (torch.arange(bs, device=device) % (gamma + 1)).to(cl_dtype)
     ref = build_out_tokens(
         draft_tokens=draft_tokens,

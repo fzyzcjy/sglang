@@ -2367,16 +2367,6 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
                 meta_info["spec_num_proposed_drafts"] = num_proposed_drafts
                 meta_info["spec_verify_ct"] = recv_obj.spec_verify_ct[i]
 
-                # DSpark confidence metrics, both per-verify-step averages
-                # paralleling spec_accept_length (incl the bonus slot):
-                # spec_cap_length -- the confidence-scheduled verify window, so
-                # accept_length <= cap_length compares directly and
-                # cap_length - accept_length is the over-prediction cost.
-                # spec_block_accept_length -- uncapped full-block accept. Only
-                # CAP_ACCEPT verifies the full block, so only there is it exact
-                # (vs cap_length it measures calibration both ways); COMPACT is
-                # censored by the window and STATIC trivially equals
-                # accept_length, so it is not emitted for those.
                 if (
                     getattr(recv_obj, "spec_num_cap_tokens", None) is not None
                     and len(recv_obj.spec_num_cap_tokens) > i

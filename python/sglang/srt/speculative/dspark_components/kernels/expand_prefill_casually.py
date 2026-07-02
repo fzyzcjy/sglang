@@ -81,13 +81,6 @@ def expand_prefill_casually(
     num_tokens: int,
     padded_num_tokens: Optional[int],
 ) -> ExpandPrefillCasuallyResult:
-    # Faithful original per-token expansion from DeepseekV4AttnBackend
-    # .expand_prefill_casually: token t of request r gets the causal length
-    # (seq_len_r - extend_r + 1) + (t - start_r) and the request's pool index;
-    # padding rows (padded_num_tokens > num_tokens) get length 1 and repeat the
-    # last real pool index. The vectorized branch runs when extend_start_loc is
-    # given (the ragged verify path); otherwise the host-list loop branch (the
-    # uniform draft-block / eager prefill path).
     device = req_pool_indices.device
     cuda_int32_kwargs = {"dtype": torch.int32, "device": device}
 
@@ -166,10 +159,6 @@ def _expand_prefill_casually_kernel(
     BLOCK: tl.constexpr,
     BS_P2: tl.constexpr,
 ):
-    # start_locs (the exclusive cumsum of extend lens) is recomputed per program
-    # from the tiny [bs] extend row instead of being a separate input, so the
-    # kernel serves both the ragged path (extend_start_loc redundant) and the
-    # uniform draft path (extend_start_loc never materialized).
     offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
     mask = offs < total_tokens
 

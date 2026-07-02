@@ -91,16 +91,9 @@ def _accept_sampling_core(
     verify_num_draft_tokens: int,
     cutoff_layout: Optional[RaggedVerifyLayout],
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    # Shared setup for both impls: chain-speculative sampling + confidence cap. Returns
-    # (correct_len, cap_trim_lens, accept_index, predicts); the two impls differ only in
-    # how they gather the bonus token from (accept_index, correct_len, predicts).
     bs = candidates.shape[0]
     device = candidates.device
     if not sampling_info.need_top_k_sampling and not sampling_info.need_top_p_sampling:
-        # Dense fast path (no top-k/top-p): the builder degenerates to
-        # repeat_interleave + temperature divide + full-vocab softmax, which
-        # SoftmaxTemp fuses into one launch. Top-k/top-p batches keep the shared
-        # builder (its sparse topk path is a different shape of work).
         target_probs = SoftmaxTemp.execute(
             logits=target_logits,
             temperatures=sampling_info.temperatures,
@@ -129,9 +122,6 @@ def _accept_sampling_core(
     )
     uniform_samples = torch.rand((bs, gamma), dtype=torch.float32, device=device)
     uniform_samples_final = torch.rand((bs,), dtype=torch.float32, device=device)
-    # candidates goes in at its native int32: the chain kernel's tl.load is
-    # dtype-agnostic (token values fit int32), so the old per-step .to(int64)
-    # launch was pure glue.
     chain_speculative_sampling_triton(
         predicts=predicts,
         accept_index=accept_index,
@@ -213,8 +203,6 @@ def gather_two_level_bonus_triton(
     predicts: torch.Tensor,
     correct_len: torch.Tensor,
 ) -> torch.Tensor:
-    # bonus[b] = predicts[accept_index[b, correct_len[b]]] in one launch, replacing the
-    # arange + two chained advanced-index gathers.
     bs, cols = accept_index.shape
     accept_index = accept_index.contiguous()
     predicts = predicts.contiguous()

@@ -108,8 +108,6 @@ class RequestFuncOutput:
     start_time: float = 0.0
     cached_tokens: int = 0
     cached_tokens_details: Optional[Dict[str, Any]] = None
-    # Per-request spec-decoding accept length (completion_tokens / verify_ct, incl. bonus),
-    # read from the response meta_info when the server runs speculative decoding; 0.0 otherwise.
     spec_accept_length: float = 0.0
 
     @staticmethod
@@ -476,9 +474,6 @@ async def async_request_openai_chat_completions(
                         output.output_len = response_json.get("usage", {}).get(
                             "completion_tokens", output_len
                         )
-                        # Per-request spec accept length lives in choices[0].meta_info
-                        # only for non-streaming responses sent with return_meta_info=true
-                        # (the streaming usage chunk does not carry it).
                         output.spec_accept_length = (
                             response_json["choices"][0].get("meta_info") or {}
                         ).get("spec_accept_length", 0.0) or 0.0
@@ -704,9 +699,6 @@ async def async_request_sglang_generate(
                         else:
                             data = json.loads(chunk)
 
-                            # Keep the latest per-request spec accept length the server
-                            # reports in meta_info (present only under speculative decoding);
-                            # the final chunk carries the request's final accept length.
                             _meta_info = data.get("meta_info") or {}
                             if _meta_info.get("spec_accept_length") is not None:
                                 output.spec_accept_length = _meta_info[

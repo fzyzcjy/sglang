@@ -42,12 +42,6 @@ class GenerationBatchResult:
     next_token_ids: Optional[Union[torch.Tensor, List[torch.Tensor]]] = None
     num_correct_drafts: int = 0  # no bonus included
     num_correct_drafts_per_req_cpu: Optional[List[int]] = None
-    # DSpark aggregates, filled in _resolve_spec_v2_tokens:
-    # num_block_accept_tokens — uncapped full-block accept incl bonus (accept +
-    # cap-trimmed drafts); exact only in CAP_ACCEPT (full block verified),
-    # == num accept tokens in STATIC/COMPACT.
-    # num_cap_tokens — sum of confidence-scheduled verify windows incl the
-    # bonus slot (= ell_r + 1); 0 when no cap is scheduled (STATIC).
     num_block_accept_tokens: int = 0
     num_cap_tokens: int = 0
     can_run_cuda_graph: bool = False
@@ -71,14 +65,8 @@ class GenerationBatchResult:
     # sync path: forward stream -> output processor
     accept_lens: Optional[torch.Tensor] = None
 
-    # Per-request uncapped full-block accept incl bonus (= accept_lens +
-    # cap-trimmed drafts; exact only in CAP_ACCEPT, == accept_lens otherwise).
-    # Rides the same async D2H path as accept_lens.
     block_accept_lens: Optional[torch.Tensor] = None
 
-    # Per-request confidence-scheduled verify window incl the bonus slot
-    # (= ell_r + 1, so accept_lens <= cap_lens compares directly). None when no
-    # cap is scheduled (STATIC / non-DSpark). Same async D2H path.
     cap_lens: Optional[torch.Tensor] = None
 
     # Next-iter seq_lens; published via on_publish.

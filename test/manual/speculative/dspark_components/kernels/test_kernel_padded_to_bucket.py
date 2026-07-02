@@ -16,7 +16,6 @@ pytestmark = pytest.mark.skipif(
     [(1, 1), (2, 2), (3, 3), (2, 4), (3, 16), (8, 128), (1, 64), (5, 5)],
 )
 def test_triton_matches_torch_eager_and_padded_buckets(bs, padded_bs):
-    """triton pad_verify_lens_to_bucket equals torch for padded_bs == bs and padded_bs > bs."""
     device = torch.device("cuda")
     num_draft = 6
     graph_num_tokens = padded_bs * num_draft

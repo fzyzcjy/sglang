@@ -39,16 +39,8 @@ class DFlashVerifyInput(SpecInput):
     custom_mask: torch.Tensor | None = None
     capture_hidden_mode: CaptureHiddenMode = CaptureHiddenMode.FULL
 
-    # Shape info for padding (e.g., DP attention / CUDA graph). The DP MLP-sync path
-    # derives bs = num_tokens // num_tokens_per_req (forward_batch_info.py), matching
-    # the EAGLE verify-input field name.
     num_tokens_per_req: int = -1
 
-    # Per-request ragged verify geometry (DSpark real-N). When None the verify
-    # forward is the implicit-uniform `draft_token_num` block per request (the
-    # byte-identical legacy path); when set, each request verifies its own
-    # `verify_lens[r] = 1 + ℓ_r` tokens and `generate_attn_arg_prefill` emits the
-    # per-request cumsum geometry instead of a uniform stride.
     ragged_verify_layout: Optional[RaggedVerifyLayout] = None
 
     def __post_init__(self):

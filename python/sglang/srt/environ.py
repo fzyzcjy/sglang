@@ -286,36 +286,13 @@ class Envs:
     SGLANG_DSPARK_DEBUG_CONFIDENCE_METRICS = EnvBool(False)
     SGLANG_DSPARK_DEBUG_MAIN_OUTPUT = EnvBool(False)
     SGLANG_DSPARK_STS_COLLECT_PATH = EnvStr("")
-    # DSpark online SPS profiling: re-measure the verify-step cost table from the
-    # live server (host wall-clock per decode step, per-bin rolling median) and
-    # hot-swap the budget planner's table every REBUILD_INTERVAL decode steps once
-    # a bin holds MIN_BIN_SAMPLES samples. Rank-local; only the verify_lens
-    # broadcast source rank's table takes effect (see OnlineSpsProfiler).
     SGLANG_DSPARK_ENABLE_SPS_ONLINE_PROFILE = EnvBool(False)
     SGLANG_DSPARK_SPS_ONLINE_REBUILD_INTERVAL = EnvInt(1000)
     SGLANG_DSPARK_SPS_ONLINE_MIN_BIN_SAMPLES = EnvInt(32)
-    # DSpark V4 draft perf toggles. FAST_KERNEL on: fused rmsnorm-rope + inverse-rope
-    # + bf16 wo_a einsum (production DeepSeek-V4 primitives); off: the eager reference
-    # path. FP32_LM_HEAD off: bf16 base-logit matmul like sglang's default lm_head /
-    # the dense DSpark draft; on: the reference-parity per-step fp32 recast.
-    # FAST_SAMPLING on (default): the reference Gumbel-max trick (argmax over probs / Exp(1))
-    # for temperature draft sampling, avoiding torch.multinomial's full-vocab CDF + D2H sync
-    # and folding away the separate greedy argmax; off: torch.multinomial + torch.argmax.
-    # Uses a different draft RNG stream than multinomial, so byte-identical temperature dump
-    # comparisons against a multinomial baseline must set it off explicitly.
     SGLANG_DSPARK_FAST_KERNEL = EnvBool(True)
     SGLANG_DSPARK_FP32_LM_HEAD = EnvBool(False)
     SGLANG_DSPARK_FAST_SAMPLING = EnvBool(True)
-    # ENABLE_MULTI_STREAM on (default): the dsv4 draft stages overlap independent
-    # branches on alt cuda streams (attention KV-store vs Q projection; MoE shared vs
-    # routed experts), capture-mode only, mirroring the target's
-    # SGLANG_OPT_USE_MULTI_STREAM_OVERLAP machinery. Both this and the global
-    # OPT_USE_MULTI_STREAM_OVERLAP gate must be on; off falls back to the serial draft.
     SGLANG_DSPARK_ENABLE_MULTI_STREAM = EnvBool(True)
-    # DSpark hot-op kernel impl selectors ("triton" | "torch"), one per extracted kernel
-    # file under speculative/dspark_components/kernels/. Default "triton" is the optimized
-    # path; set the matching var to "torch" for the reference impl (e.g. while a triton
-    # kernel is unimplemented, or to A/B a suspected kernel bug against torch).
     SGLANG_DSPARK_KERNEL_SCATTER = EnvStr("triton")
     SGLANG_DSPARK_KERNEL_RAGGED_WINDOW = EnvStr("triton")
     SGLANG_DSPARK_KERNEL_SCHEDULE_TOPK = EnvStr("triton")
@@ -747,23 +724,8 @@ class Envs:
 
     # Spec Config
     SGLANG_SPEC_ENABLE_STRICT_FILTER_CHECK = EnvBool(True)
-    # Verify-schedule mode (per-request verify_len instead of uniform gamma+1).
-    # "static" = uniform full block (default); "cap-accept" = full block but caps
-    # accept per request (lossless harness); "compact" = real-N, only total tokens
-    # computed (throughput gain).
     SGLANG_RAGGED_VERIFY_MODE = EnvStr("static")
-    # DSpark verify-budget causal lag (paper §5.2 two-steps-prior barrier): the
-    # verify budget K is computed from the confidence relayed this many decode
-    # steps earlier so K is causally independent of the current step's just-sampled
-    # drafts. The async FutureMap relay contributes 1 step; the host carry makes up
-    # the remainder (carry = lag - 1). Default 2 reproduces the paper; any value
-    # >= 1 already yields the barrier. Losslessness never depends on it (guaranteed
-    # by the accept-cap in _cap_correct_len).
     SGLANG_DSPARK_CONFIDENCE_RELAY_LAG_STEPS = EnvInt(2)
-    # Test-only negative seam (§4): force the token-keyed verify capture to bake
-    # the uniform (non-ragged) geometry even in compact mode, so a graph-vs-eager
-    # parity check provably diverges. Off in prod; flipped only by the negative
-    # geometry test to prove the parity check has teeth.
     SGLANG_TEST_RAGGED_VERIFY_FORCE_UNIFORM_CAPTURE = EnvBool(False)
     # Skip draft_extend while adaptive spec is at steps=0 (drafting disabled).
     # Saves the per-step draft forward, but the draft KV goes stale: an upshift

@@ -59,9 +59,6 @@ class DFlashDraftInputV2(SpecInput):
     # Filled by scheduler after dispatch.
     future_indices: Optional[torch.Tensor] = None
 
-    # DSpark ragged verify budget K (host int), attached by the scheduler prepare
-    # hook (overlap) from the two-steps-prior relayed confidence; None at cold start
-    # or when no ragged scheduler is active -> uniform verify-all fallback.
     verify_token_budget: Optional[int] = None
 
     def __post_init__(self):
