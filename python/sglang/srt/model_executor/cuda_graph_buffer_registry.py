@@ -30,6 +30,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
+import logging
+
 import torch
 
 from sglang.srt.model_executor.input_buffers import share_input_buffer
@@ -37,6 +39,8 @@ from sglang.srt.model_executor.input_buffers import share_input_buffer
 if TYPE_CHECKING:
     from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 
+
+logger = logging.getLogger(__name__)
 
 _has_foreach_copy = hasattr(torch, "_foreach_copy_")
 
@@ -48,11 +52,22 @@ def _grouped_foreach_copy_(dsts: List[torch.Tensor], srcs: List[torch.Tensor]) -
     def _foreach_copy(
         group_dsts: List[torch.Tensor], group_srcs: List[torch.Tensor]
     ) -> None:
-        if _has_foreach_copy:
-            torch._foreach_copy_(group_dsts, group_srcs)
-        else:
-            for dst, src in zip(group_dsts, group_srcs):
-                dst.copy_(src)
+        try:
+            if _has_foreach_copy:
+                torch._foreach_copy_(group_dsts, group_srcs)
+            else:
+                for dst, src in zip(group_dsts, group_srcs):
+                    dst.copy_(src)
+        except RuntimeError:
+            shapes = [
+                (tuple(dst.shape), tuple(src.shape))
+                for dst, src in zip(group_dsts, group_srcs)
+                if tuple(dst.shape) != tuple(src.shape)
+            ]
+            logger.error(
+                "grouped foreach copy shape mismatch (dst vs src): %s", shapes
+            )
+            raise
 
     groups: Dict[Tuple[torch.dtype, torch.dtype], Tuple[List, List]] = {}
     for dst, src in zip(dsts, srcs):

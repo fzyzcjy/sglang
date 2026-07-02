@@ -526,6 +526,18 @@ class DSparkWorkerV2(BaseSpecWorker):
         batch.out_cache_loc = torch.zeros(
             (num_dummy_tokens,), dtype=torch.int64, device=self.device
         )
+        if idle_layout is not None:
+            # The captured per-request buffers span the tier's slot count; the
+            # idle batch must present matching dummy rows (padding at req 0).
+            num_dummy_slots = int(idle_layout.verify_lens.numel())
+            batch.seq_lens = torch.ones(
+                (num_dummy_slots,), dtype=torch.int64, device=self.device
+            )
+            batch.req_pool_indices = torch.zeros(
+                (num_dummy_slots,), dtype=torch.int64, device=self.device
+            )
+            batch.seq_lens_cpu = torch.ones((num_dummy_slots,), dtype=torch.int64)
+            batch.seq_lens_sum = num_dummy_slots
         verify_forward_batch, _ = verify_input.prepare_for_verify(
             batch, self.target_worker
         )
