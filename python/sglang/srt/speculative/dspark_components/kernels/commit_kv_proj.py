@@ -130,7 +130,9 @@ def _build_stacked_wkv_weight(
             scale = torch.cat(
                 [linear.weight_scale_inv for linear in wkv_linears], dim=0
             )
-            return _StackedWkvWeight(weight=weight, fp8_scale=scale.contiguous())
+            if scale.dim() >= 2 and scale.stride(-2) != 1:
+                scale = scale.transpose(-2, -1).contiguous().transpose(-2, -1)
+            return _StackedWkvWeight(weight=weight, fp8_scale=scale)
     weight = torch.cat(
         [_dequant_linear_weight(linear) for linear in wkv_linears], dim=0
     )

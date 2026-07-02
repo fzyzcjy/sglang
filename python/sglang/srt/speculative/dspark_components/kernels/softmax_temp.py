@@ -6,6 +6,11 @@ import triton.language as tl
 
 from sglang.srt.environ import envs
 
+try:
+    from flashinfer.sampling import softmax as _flashinfer_softmax
+except ImportError:
+    _flashinfer_softmax = None
+
 _KERNEL_IMPL = envs.SGLANG_DSPARK_KERNEL_SOFTMAX_TEMP.get()
 
 
@@ -14,6 +19,8 @@ class SoftmaxTemp:
     def execute(cls, *args, **kwargs) -> torch.Tensor:
         if _KERNEL_IMPL == "torch":
             return cls.torch(*args, **kwargs)
+        if _KERNEL_IMPL == "flashinfer":
+            return cls.flashinfer(*args, **kwargs)
         return cls.triton(*args, **kwargs)
 
     @classmethod
@@ -39,6 +46,20 @@ class SoftmaxTemp:
         rows_per_request: int,
     ) -> torch.Tensor:
         return softmax_temp_triton(
+            logits=logits,
+            temperatures=temperatures,
+            rows_per_request=rows_per_request,
+        )
+
+    @classmethod
+    def flashinfer(
+        cls,
+        *,
+        logits: torch.Tensor,
+        temperatures: torch.Tensor,
+        rows_per_request: int,
+    ) -> torch.Tensor:
+        return softmax_temp_flashinfer(
             logits=logits,
             temperatures=temperatures,
             rows_per_request=rows_per_request,
@@ -129,3 +150,26 @@ def softmax_temp_triton(
         BLOCK_V=BLOCK_V,
     )
     return out
+
+
+def softmax_temp_flashinfer(
+    *,
+    logits: torch.Tensor,
+    temperatures: torch.Tensor,
+    rows_per_request: int,
+) -> torch.Tensor:
+    if _flashinfer_softmax is None:
+        raise RuntimeError(
+            "SGLANG_DSPARK_KERNEL_SOFTMAX_TEMP=flashinfer requires flashinfer.sampling.softmax, "
+            "which is unavailable in this environment"
+        )
+    num_rows, vocab = logits.shape[0], logits.shape[-1]
+    bs = num_rows // rows_per_request
+    assert (
+        bs * rows_per_request == num_rows
+    ), f"num_rows {num_rows} not divisible by rows_per_request {rows_per_request}"
+    temp_per_row = torch.repeat_interleave(
+        temperatures.reshape(bs).to(torch.float32), rows_per_request, dim=0
+    ).contiguous()
+    logits_2d = logits.to(torch.float32).contiguous()
+    return _flashinfer_softmax(logits=logits_2d, temperature=temp_per_row)

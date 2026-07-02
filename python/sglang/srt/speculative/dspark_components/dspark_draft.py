@@ -6,6 +6,9 @@ from sglang.srt.environ import envs
 from sglang.srt.speculative.dflash_info_v2 import DFlashDraftInputV2
 from sglang.srt.speculative.draft_worker_common import make_draft_input_v2
 from sglang.srt.speculative.dspark_components.dspark_info import DraftBlockResult
+from sglang.srt.speculative.dspark_components.kernels.sample_step_tokens import (
+    SampleStepTokens,
+)
 
 
 def greedy_step_sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:
@@ -105,12 +108,20 @@ def sample_draft_block(
     else:
 
         def sampler(step_logits: torch.Tensor, step_idx: int) -> torch.Tensor:
-            probs = torch.softmax(step_logits.float() / temperatures[:, None], dim=-1)
             if fast_sampling:
-                noise = torch.empty_like(probs).exponential_(1)
-                noise = torch.where(greedy_mask[:, None], 1.0, noise)
-                return probs.div_(noise).argmax(dim=-1)
+                exp_noise = torch.empty(
+                    step_logits.shape, dtype=torch.float32, device=step_logits.device
+                ).exponential_(1)
+                return SampleStepTokens.execute(
+                    step_logits=step_logits,
+                    temperatures=temperatures,
+                    greedy_mask=greedy_mask,
+                    exp_noise=exp_noise,
+                )
             else:
+                probs = torch.softmax(
+                    step_logits.float() / temperatures[:, None], dim=-1
+                )
                 argmax_tokens = torch.argmax(step_logits, dim=-1)
                 sampled_tokens = torch.multinomial(probs, num_samples=1).squeeze(-1)
                 return torch.where(greedy_mask, argmax_tokens, sampled_tokens)

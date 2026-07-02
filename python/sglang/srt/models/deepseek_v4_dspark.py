@@ -11,6 +11,7 @@ from torch import nn
 from sglang.jit_kernel.dsv4 import fused_q_norm_rope, fused_rope_inplace
 from sglang.srt.configs.deepseek_v4 import DeepSeekV4Config
 from sglang.srt.environ import envs
+from sglang.srt.layers.dp_attention import get_attention_tp_group
 from sglang.srt.layers.layernorm import RMSNorm
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.layers.quantization.base_config import QuantizationConfig
@@ -39,6 +40,9 @@ from sglang.srt.models.dspark import (
 from sglang.srt.runtime_context import get_parallel
 from sglang.srt.speculative.dspark_components.dspark_utils import (
     parse_dspark_draft_config,
+)
+from sglang.srt.speculative.dspark_components.kernels.build_step_local import (
+    BuildStepLocal,
 )
 from sglang.srt.speculative.dspark_components.kernels.commit_kv_proj import (
     CommitKvProj,
@@ -287,7 +291,40 @@ def _resolve_dspark_pool() -> DeepSeekV4TokenToKVPool:
     return pool
 
 
+class MarkovW2ShardGeometry(msgspec.Struct, frozen=True):
+    """markov_w2 vocab-shard geometry, mirrored from the target lm_head partition.
+
+    ``tp_size`` / ``num_embeddings_per_partition`` / ``num_embeddings_padded`` copy the
+    lm_head ``ParallelLMHead`` so the per-rank base logits and the per-rank markov bias line
+    up column-for-column and one attn-TP all-gather reassembles the padded vocab exactly
+    (then cropped to the org vocab). ``org_vocab_start`` / ``org_vocab_end`` are this rank's
+    slice of the real (unpadded) vocab rows inside the full markov_w2 weight.
+    """
+
+    tp_size: int
+    org_vocab_start: int
+    org_vocab_end: int
+    num_embeddings_per_partition: int
+    num_embeddings_padded: int
+
+
 class DSparkV4MarkovHead(nn.Module):
+    """V4 DSpark Markov head: full-logits bias = w2(w1(prev_token)).
+
+    Mirrors the reference ``DSparkMarkovHead`` (model.py:795): ``markov_w1`` is a full
+    (non-vocab-parallel) embedding, ``markov_w2`` a head producing the whole-vocab logits
+    bias. Exposes the same ``apply_step_logits``/``sample_block`` interface as the dense
+    ``VanillaMarkov`` so the shared serial-Markov loop can reuse it.
+
+    Two opt-in perf toggles (both default off, baseline is fp32 replicated):
+    ``SGLANG_DSPARK_OPT_MARKOV_W2_BF16`` stores + reads markov_w2 in bf16 (the fp32-stored
+    checkpoint value is a bf16 already, so fp32 storage only doubles the HBM read), doing a
+    bf16xbf16 matmul with the bias upcast back to fp32 on the logits side.
+    ``SGLANG_DSPARK_OPT_MARKOV_W2_TP_SHARD`` shards the markov_w2 GEMV over the vocab dim
+    across the attn-TP ranks aligned to the lm_head partition (``configure_tp_shard``): each
+    rank reads only its 1/tp rows, and ``apply_step_logits`` all-gathers the per-step
+    corrected logits over the attn-TP group. markov_w1 stays replicated either way.
+    """
 
     markov_head_type = "vanilla"
 
@@ -302,15 +339,70 @@ class DSparkV4MarkovHead(nn.Module):
         self.markov_w1 = VocabParallelEmbedding(
             self.vocab_size, self.markov_rank, enable_tp=False
         )
+        self._opt_markov_w2_bf16 = envs.SGLANG_DSPARK_OPT_MARKOV_W2_BF16.get()
+        self._opt_markov_w2_tp_shard = envs.SGLANG_DSPARK_OPT_MARKOV_W2_TP_SHARD.get()
+        markov_w2_dtype = torch.bfloat16 if self._opt_markov_w2_bf16 else torch.float32
         self.markov_w2 = nn.Linear(
-            self.markov_rank, self.vocab_size, bias=False, dtype=torch.float32
+            self.markov_rank, self.vocab_size, bias=False, dtype=markov_w2_dtype
+        )
+        self._tp_shard: Optional[MarkovW2ShardGeometry] = None
+
+    def configure_tp_shard(self, *, lm_head: nn.Module) -> None:
+        """Align the markov_w2 vocab shard to the target lm_head partition (shard flag on).
+
+        Reads the lm_head ``ParallelLMHead`` partition (tp size, per-partition width, this
+        rank's org-vocab slice) so the sharded ``apply_step_logits`` produces a per-rank
+        bias that matches the per-rank base logits ``compute_base_logits`` leaves sharded.
+        No-op when the flag is off. Asserts the vocab + partition line up (a mismatch --
+        e.g. DP attention without ``--enable-dp-lm-head``, where lm_head shards over the
+        global TP group but the attn-TP group is size-1 -- fails loudly rather than
+        silently corrupting the logits; the flag is off by default so the baseline is safe).
+        """
+        if not self._opt_markov_w2_tp_shard:
+            return
+        if int(lm_head.org_vocab_size) != self.vocab_size:
+            raise ValueError(
+                "DSpark markov_w2 TP-shard requires lm_head.org_vocab_size == "
+                f"markov vocab_size, got {int(lm_head.org_vocab_size)} vs "
+                f"{self.vocab_size}."
+            )
+        tp_size = int(lm_head.tp_size)
+        per_partition = int(lm_head.num_embeddings_per_partition)
+        num_padded = int(lm_head.num_embeddings_padded)
+        if per_partition * tp_size != num_padded:
+            raise ValueError(
+                "DSpark markov_w2 TP-shard could not align to the lm_head partition: "
+                f"num_embeddings_per_partition({per_partition}) * tp_size({tp_size}) != "
+                f"num_embeddings_padded({num_padded})."
+            )
+        attn_tp_size = get_attention_tp_group().world_size
+        if attn_tp_size != tp_size:
+            raise ValueError(
+                "DSpark markov_w2 TP-shard needs the attn-TP group (used for the per-step "
+                f"all-gather) to equal the lm_head shard group, got attn_tp_size="
+                f"{attn_tp_size} vs lm_head tp_size={tp_size}. This config (e.g. DP "
+                "attention without --enable-dp-lm-head, where lm_head shards over the "
+                "global TP group) is unsupported; disable "
+                "SGLANG_DSPARK_OPT_MARKOV_W2_TP_SHARD."
+            )
+        self._tp_shard = MarkovW2ShardGeometry(
+            tp_size=tp_size,
+            org_vocab_start=int(lm_head.shard_indices.org_vocab_start_index),
+            org_vocab_end=int(lm_head.shard_indices.org_vocab_end_index),
+            num_embeddings_per_partition=per_partition,
+            num_embeddings_padded=num_padded,
         )
 
     def get_prev_embeddings(self, token_ids: torch.Tensor) -> torch.Tensor:
         return self.markov_w1(token_ids.long())
 
-    def project_bias(self, latent_states: torch.Tensor) -> torch.Tensor:
-        return F.linear(latent_states.float(), self.markov_w2.weight)
+    def project_bias(
+        self, latent_states: torch.Tensor, *, weight: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        weight = self.markov_w2.weight if weight is None else weight
+        if self._opt_markov_w2_bf16:
+            return F.linear(latent_states.to(weight.dtype), weight).float()
+        return F.linear(latent_states.float(), weight)
 
     def compute_step_bias(
         self, token_ids: torch.Tensor, hidden_states: Optional[torch.Tensor]
@@ -325,7 +417,41 @@ class DSparkV4MarkovHead(nn.Module):
         token_ids: torch.Tensor,
         hidden_states: Optional[torch.Tensor],
     ) -> torch.Tensor:
+        if self._tp_shard is not None:
+            return self._apply_step_logits_sharded(
+                base_local=logits, token_ids=token_ids
+            )
         return logits + self.compute_step_bias(token_ids, hidden_states)
+
+    def _apply_step_logits_sharded(
+        self, *, base_local: torch.Tensor, token_ids: torch.Tensor
+    ) -> torch.Tensor:
+        """Sharded step: local markov bias + local base logits, then attn-TP gather + crop.
+
+        ``base_local`` is this rank's ``[bs, num_embeddings_per_partition]`` slice of the
+        base logits (``compute_base_logits`` left it sharded). The markov_w1 lookup stays
+        replicated; only this rank's org-vocab rows of markov_w2 are read for the bias
+        (the 1/tp GEMV win). The bias is zero-padded up to the partition width so the
+        padding vocab columns get no bias (they are cropped after the gather), then the
+        per-step corrected logits are all-gathered over the attn-TP group and cropped to the
+        org vocab -- byte-identical to the replicated full-vocab matmul (modulo the bf16
+        toggle), just with the row-parallel matmul split across ranks.
+        """
+        shard = self._tp_shard
+        latent = self.get_prev_embeddings(token_ids)
+        weight_local = self.markov_w2.weight[
+            shard.org_vocab_start : shard.org_vocab_end
+        ]
+        if self._opt_markov_w2_bf16:
+            bias = F.linear(latent.to(weight_local.dtype), weight_local)
+        else:
+            bias = F.linear(latent.float(), weight_local)
+        step_local = BuildStepLocal.execute(bias=bias, base_local=base_local)
+        if shard.tp_size > 1:
+            full = get_attention_tp_group().all_gather(step_local, dim=-1)
+        else:
+            full = step_local
+        return full[..., : self.vocab_size]
 
     def forward(self, token_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         embed = self.get_prev_embeddings(token_ids)
@@ -568,6 +694,7 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         self.embed_tokens: Optional[nn.Module] = None
         self.lm_head: Optional[nn.Module] = None
         self._use_fp32_lm_head = envs.SGLANG_DSPARK_FP32_LM_HEAD.get()
+        self._opt_markov_w2_tp_shard = envs.SGLANG_DSPARK_OPT_MARKOV_W2_TP_SHARD.get()
         self._last_confidence: Optional[torch.Tensor] = None
         self._x_post_hc: Optional[torch.Tensor] = None
 
@@ -581,8 +708,15 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
     def attach_shared_modules(
         self, *, embed_tokens: nn.Module, lm_head: nn.Module
     ) -> None:
+        """Attach the target model's shared embedding and lm_head (worker wiring).
+
+        Also aligns the markov_w2 vocab shard to the lm_head partition when the TP-shard
+        flag is on (no-op otherwise); the geometry read is safe here regardless of the
+        markov_w2 weight-load order (the weight itself is only sliced at forward time).
+        """
         self.embed_tokens = embed_tokens
         self.lm_head = lm_head
+        self.markov_head.configure_tp_shard(lm_head=lm_head)
 
     def project_target_hidden(self, main_hidden: torch.Tensor) -> torch.Tensor:
         stage0 = self.stages[0]
@@ -655,6 +789,23 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         )
 
     def compute_base_logits(self, x: torch.Tensor) -> torch.Tensor:
+        """Base logits from the draft backbone hidden: hc_head -> norm -> lm_head gather.
+
+        Collapses the mHC draft hidden through the last stage's hc_head (PRE-norm), then
+        applies ``norm`` and the target's local-vocab lm_head matmul, all-gathers to the
+        full vocab (no-op at tp=1), and crops the TP vocab padding. This is the dsv4
+        analog of the dense ``DSparkDraftMixin.compute_base_logits`` (which has no hc_head
+        collapse); the matmul dtype is bf16 by default like the dense path, or the
+        reference-parity fp32 ``F.linear`` when ``SGLANG_DSPARK_FP32_LM_HEAD`` is set.
+        When ``SGLANG_DSPARK_OPT_MARKOV_W2_TP_SHARD`` is on, the base logits are returned
+        SHARDED (this rank's ``[*, per_partition]`` vocab slice, no gather); the markov head
+        adds its per-rank bias and does the attn-TP all-gather per step instead.
+        This is the SOLE base-logit producer: ``forward`` no longer computes them, and the
+        post-hc_head PRE-norm tap is stashed on ``self._x_post_hc`` HERE for
+        ``compute_confidence`` (the worker calls this before ``compute_confidence``, so the
+        stash is fresh). The worker calls this on the raw forward hidden and feeds the
+        result to the shared Markov loop.
+        """
         x_post_hc = self.collapse_hc_head(x)
         self._x_post_hc = x_post_hc
         return self._logits_from_x_post_hc(x_post_hc)
@@ -672,6 +823,8 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
             local_logits = F.linear(x.float(), weight.float())
         else:
             local_logits = torch.matmul(x.to(weight.dtype), weight.T)
+        if self._opt_markov_w2_tp_shard:
+            return local_logits
         return gather_and_crop_vocab(local_logits, self.lm_head)
 
     def compute_confidence(
