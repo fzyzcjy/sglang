@@ -11,6 +11,7 @@ from sglang.srt.managers.scheduler import GenerationBatchResult
 from sglang.srt.managers.tp_worker import TpModelWorker
 from sglang.srt.model_executor.forward_batch_info import (
     CaptureHiddenMode,
+    ForwardMode,
     compute_position,
 )
 from sglang.srt.server_args import ServerArgs
@@ -538,6 +539,11 @@ class DSparkWorkerV2(BaseSpecWorker):
             )
             batch.seq_lens_cpu = torch.ones((num_dummy_slots,), dtype=torch.int64)
             batch.seq_lens_sum = num_dummy_slots
+            # The token-keyed graph was captured as TARGET_VERIFY; an IDLE
+            # forward batch materializes zero tokens (empty positions) and
+            # cannot rendezvous with it. The dummies above make the idle rank
+            # a well-formed all-padding verify batch.
+            batch.forward_mode = ForwardMode.TARGET_VERIFY
         verify_forward_batch, _ = verify_input.prepare_for_verify(
             batch, self.target_worker
         )
