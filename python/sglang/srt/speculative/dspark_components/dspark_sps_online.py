@@ -100,7 +100,9 @@ class OnlineSpsProfiler:
         ]
         return SpsCostTable(
             sample_batch_tokens=list(self._bin_edges),
-            sample_steps_per_sec=sample_steps_per_sec,
+            sample_steps_per_sec=_enforce_strictly_decreasing(
+                _pava_non_increasing(sample_steps_per_sec)
+            ),
             max_batch_tokens=max(
                 self._initial_table.max_batch_tokens, self._bin_edges[-1]
             ),
@@ -116,3 +118,36 @@ class OnlineSpsProfiler:
             if measured[j] is not None:
                 return measured[j]
         raise AssertionError("_rebuild guarantees at least one measured bin.")
+
+
+def _pava_non_increasing(values: list[float]) -> list[float]:
+    # SPS(B) is physically non-increasing in B; isotonic projection removes
+    # measurement sawtooth that would otherwise make the budget argmax jump.
+    blocks: list[tuple[float, int]] = []
+    for value in values:
+        blocks.append((value, 1))
+        while len(blocks) > 1 and blocks[-1][0] > blocks[-2][0]:
+            mean_hi, weight_hi = blocks.pop()
+            mean_lo, weight_lo = blocks.pop()
+            merged_weight = weight_lo + weight_hi
+            merged_mean = (mean_lo * weight_lo + mean_hi * weight_hi) / merged_weight
+            blocks.append((merged_mean, merged_weight))
+    smoothed: list[float] = []
+    for mean, weight in blocks:
+        smoothed.extend([mean] * weight)
+    return smoothed
+
+
+_STRICT_DECREASE_RELATIVE_STEP = 1e-3
+
+
+def _enforce_strictly_decreasing(values: list[float]) -> list[float]:
+    # A zero-slope plateau makes the budget argmax see no cost for admitting
+    # more tokens (unbounded admission); a tiny strict tilt restores the
+    # "more tokens is never free" prior without distorting real slopes.
+    out: list[float] = []
+    for value in values:
+        if out:
+            value = min(value, out[-1] * (1.0 - _STRICT_DECREASE_RELATIVE_STEP))
+        out.append(value)
+    return out
