@@ -4,7 +4,6 @@ from typing import Optional
 
 import torch
 
-from sglang.srt.distributed import get_tp_group
 from sglang.srt.environ import envs
 from sglang.srt.layers.dp_attention import get_attention_tp_group
 from sglang.srt.managers.schedule_batch import ScheduleBatch
@@ -431,9 +430,6 @@ class DSparkWorkerV2(BaseSpecWorker):
                 )
             return None
 
-        if get_tp_group().world_size != 1:
-            # compute_base_logits' vocab all-gather is uncapturable above tp=1.
-            return _eager("tp>1")
         if self.gamma <= 0:
             return _eager("gamma<=0")
         if not hasattr(self.draft_model, "compute_base_logits"):
@@ -449,6 +445,13 @@ class DSparkWorkerV2(BaseSpecWorker):
             gamma=self.gamma,
             max_bs=max(self.server_args.cuda_graph_config.decode.bs),
             device=self.device,
+            # Fold confidence into the same graph when the planner carries a head:
+            # the dsv4 hook's _x_post_hc tap is only same-graph fresh (see sampler doc).
+            confidence_fn=(
+                self._verify_planner.compute_confidence_tensor
+                if self._verify_planner.carries_confidence
+                else None
+            ),
         )
 
     def clear_cache_pool(self):
@@ -633,11 +636,15 @@ class DSparkWorkerV2(BaseSpecWorker):
         # the value published into the relay for a future step's budget. No device ring
         # is stashed anymore -- the two-steps-prior budget K flows through the host
         # relay + carry (prepare hook in overlap, compute_budget_sync otherwise).
-        confidence = self._verify_planner.compute_confidence_tensor(
-            draft_hidden=proposal.draft_hidden,
-            anchor_tokens=draft_block_ids[:, 0],
-            draft_tokens=draft_tokens,
-        )
+        # On the captured greedy path the proposal already carries the in-graph
+        # confidence (same-graph _x_post_hc freshness); eager batches compute it here.
+        confidence = proposal.confidence
+        if confidence is None:
+            confidence = self._verify_planner.compute_confidence_tensor(
+                draft_hidden=proposal.draft_hidden,
+                anchor_tokens=draft_block_ids[:, 0],
+                draft_tokens=draft_tokens,
+            )
 
         verify_token_budget = self._resolve_verify_token_budget(
             batch=batch,

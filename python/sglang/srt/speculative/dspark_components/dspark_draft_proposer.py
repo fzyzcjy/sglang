@@ -96,6 +96,7 @@ class DraftBlockProposer:
 
         draft_sampler = self._draft_sampler
         all_greedy = sampling_info is None or sampling_info.is_all_greedy
+        folded_confidence = None
         if draft_sampler is not None and fwd.can_run_graph and all_greedy:
             # Captured greedy proposal: compute_base_logits + Markov argmax already ran
             # in the draft cuda graph and wrote draft_sampler.out. Read it instead of
@@ -117,6 +118,8 @@ class DraftBlockProposer:
                 ),
                 temperatures=temperatures,
             )
+            if draft_sampler.confidence_out is not None:
+                folded_confidence = draft_sampler.confidence_out[:bs]
         else:
             with self._base_logits_context():
                 base_logits = self.draft_model.compute_base_logits(fwd.raw_hidden).view(
@@ -134,6 +137,7 @@ class DraftBlockProposer:
             draft_block_ids=draft_block_ids,
             draft_block=draft_block,
             draft_hidden=fwd.draft_hidden_3d,
+            confidence=folded_confidence,
         )
 
     def run_idle_participation(self, batch: ScheduleBatch) -> None:
