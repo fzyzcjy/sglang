@@ -10,6 +10,7 @@ from sglang.srt.speculative.dspark_components.kernels.accept_greedy import Accep
 from sglang.srt.speculative.dspark_components.kernels.accept_sampling import (
     AcceptSampling,
 )
+from sglang.srt.speculative.dspark_components.kernels.softmax_temp import SoftmaxTemp
 from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 
 
@@ -37,10 +38,12 @@ def accept_draft_tokens(
             verify_num_draft_tokens=verify_num_draft_tokens,
             cutoff_layout=cutoff_layout,
         )
-    draft_probs = torch.softmax(
-        draft_block.corrected_logits.float() / draft_block.temperatures[:, None, None],
-        dim=-1,
-    )
+    bs, gamma_rows, vocab = draft_block.corrected_logits.shape
+    draft_probs = SoftmaxTemp.execute(
+        logits=draft_block.corrected_logits.reshape(bs * gamma_rows, vocab),
+        temperatures=draft_block.temperatures,
+        rows_per_request=gamma_rows,
+    ).view(bs, gamma_rows, vocab)
     # All-sampling fast path: no greedy rows -> only the chain kernel (host-side, sync-free).
     if not sampling_info.is_any_greedy:
         return AcceptSampling.execute(
