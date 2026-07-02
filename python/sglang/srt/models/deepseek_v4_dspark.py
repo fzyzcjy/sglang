@@ -187,10 +187,6 @@ class DSparkAttention(MqaAttentionBase):
         # gated by the model-level env checks, so None here means overlap off.
         self.alt_streams = alt_streams
         self._multi_stream_bs_limit = 128 if is_blackwell_supported() else 64
-        # The base pre-sets _attn_sink_local to the raw parameter at attn_tp_size == 1;
-        # the draft's cache is the PADDED local slice (see _local_attn_sink), so force
-        # the lazy post-weight-load build in every tp configuration.
-        self._attn_sink_local = None
 
     def kv_proj_only(self, x: torch.Tensor) -> torch.Tensor:
         kv, _ = self.wkv(x)
@@ -204,6 +200,10 @@ class DSparkAttention(MqaAttentionBase):
         padding (not garbage) is required, unlike the q padding: the kernel reads the
         sink for every head it runs.
         """
+        if self.attn_tp_size == 1:
+            # n_heads == 64 needs no padding at tp=1 (q does not pad either); returning
+            # the parameter itself keeps it alias-fresh across weight reloads.
+            return self.attn_sink
         if self._attn_sink_local is None:
             rank = self.attn_tp_rank
             num_heads = self.n_local_heads
