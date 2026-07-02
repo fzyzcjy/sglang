@@ -935,43 +935,8 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
                     forward_batch,
                     **kwargs,
                 )
-                draft_sampler = self.model_runner.draft_sampler
-                if draft_sampler is not None:
-                    # Must be captured here, or replay leaves a stale output buffer
-                    # the worker would read as valid tokens -- fail loudly instead.
-                    if (
-                        not isinstance(out, LogitsProcessorOutput)
-                        or out.hidden_states is None
-                    ):
-                        raise RuntimeError(
-                            "draft sampler set but the draft forward has no "
-                            "hidden_states to capture into the graph."
-                        )
-                    draft_sampler(out.hidden_states, forward_batch.input_ids)
-                verify_epilogue = self.model_runner.spec_capture_epilogue
-                if (
-                    verify_epilogue is not None
-                    and self.ragged_verify_mode
-                    and not self.model_runner.is_draft_worker
-                    and isinstance(out, LogitsProcessorOutput)
-                    and out.next_token_logits is not None
-                    and out.hidden_states is not None
-                ):
-                    # DSpark: fold the compact->strided post-verify scatter
-                    # into the token-keyed verify graph. NULL-hidden initial
-                    # captures are skipped -- the first real verify forces a
-                    # FULL recapture (recapture_if_needed) and only that graph
-                    # ever replays a verify. input_ids carries the compact
-                    # verify-window tokens (in-graph candidates rebuild);
-                    # seq_lens stays at the prefix (the accept finalize input).
-                    verify_epilogue(
-                        compact_logits=out.next_token_logits,
-                        compact_hidden=out.hidden_states,
-                        input_ids=forward_batch.input_ids,
-                        seq_lens=forward_batch.seq_lens,
-                        req_pool_indices=forward_batch.req_pool_indices,
-                        bs=num_tokens // self.num_tokens_per_bs,
-                    )
+                for capture_hook in self.model_runner.capture_tail_hooks:
+                    capture_hook(self, out, forward_batch, num_tokens)
                 return out
 
             self.deepep_adapter.capture(is_extend_in_batch=False)

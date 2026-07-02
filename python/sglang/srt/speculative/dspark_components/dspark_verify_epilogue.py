@@ -5,6 +5,7 @@ from typing import Optional
 import msgspec
 import torch
 
+from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.speculative.dspark_components.kernels.accept_greedy import (
     accept_greedy_triton,
 )
@@ -113,6 +114,30 @@ class DsparkVerifyEpilogue:
         # [max_bs*stride, dim], allocated on the first warmup call.
         self.strided_logits: Optional[torch.Tensor] = None
         self.strided_hidden: Optional[torch.Tensor] = None
+
+    def capture_hook(self, runner, out, forward_batch, num_tokens) -> None:
+        # Capture-tail hook for the token-keyed TARGET verify graph. NULL-hidden
+        # initial captures are skipped -- the first real verify forces a FULL
+        # recapture (recapture_if_needed) and only that graph ever replays a
+        # verify. input_ids carries the compact verify-window tokens (in-graph
+        # candidates rebuild); seq_lens stays at the prefix (the accept
+        # finalize input).
+        if runner.model_runner.is_draft_worker or not runner.ragged_verify_mode:
+            return
+        if (
+            not isinstance(out, LogitsProcessorOutput)
+            or out.next_token_logits is None
+            or out.hidden_states is None
+        ):
+            return
+        self(
+            compact_logits=out.next_token_logits,
+            compact_hidden=out.hidden_states,
+            input_ids=forward_batch.input_ids,
+            seq_lens=forward_batch.seq_lens,
+            req_pool_indices=forward_batch.req_pool_indices,
+            bs=num_tokens // runner.num_tokens_per_bs,
+        )
 
     def set_inject_gate(self, live: bool) -> None:
         self.inject_gate_buf.fill_(1 if live else 0)

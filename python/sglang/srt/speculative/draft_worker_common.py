@@ -9,6 +9,7 @@ import msgspec
 import torch
 
 from sglang.srt.configs.model_config import is_deepseek_v4
+from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.managers.tp_worker import TpModelWorker
 from sglang.srt.model_executor.forward_batch_info import CaptureHiddenMode
 from sglang.srt.server_args import (
@@ -173,6 +174,27 @@ def make_draft_block_spec_info(
         custom_mask=None,
         capture_hidden_mode=CaptureHiddenMode.NULL,
     )
+
+
+def make_draft_sampler_capture_hook(draft_sampler):
+    """Capture-tail hook wrapping a draft sampler (DFlash / DSpark greedy
+    proposal): runs inside the DRAFT decode graph capture. Fails loudly when
+    the forward exposes no hidden_states -- a silently skipped sampler would
+    leave a stale out buffer the worker reads as valid tokens. input_ids
+    carries the per-block anchor (bonus token at pos 0) the DSpark Markov
+    sampler needs; DFlash ignores it.
+    """
+
+    def capture_hook(runner, out, forward_batch, num_tokens):
+        del runner, num_tokens
+        if not isinstance(out, LogitsProcessorOutput) or out.hidden_states is None:
+            raise RuntimeError(
+                "draft sampler set but the draft forward has no "
+                "hidden_states to capture into the graph."
+            )
+        draft_sampler(out.hidden_states, forward_batch.input_ids)
+
+    return capture_hook
 
 
 def build_block_pos_offsets(*, length: int, device: torch.device) -> torch.Tensor:

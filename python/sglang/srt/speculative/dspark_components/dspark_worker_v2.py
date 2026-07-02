@@ -26,6 +26,7 @@ from sglang.srt.speculative.draft_worker_common import (
     build_draft_tp_worker,
     draft_is_deepseek_v4,
     make_draft_block_spec_info,
+    make_draft_sampler_capture_hook,
 )
 from sglang.srt.speculative.dspark_components.dspark_accept import (
     accept_draft_tokens,
@@ -264,7 +265,9 @@ class DSparkWorkerV2(BaseSpecWorker):
                 device=self.device,
                 commit_injector=self._kv_injector,
             )
-            self.model_runner.spec_capture_epilogue = self._verify_epilogue
+            self.model_runner.capture_tail_hooks.append(
+                self._verify_epilogue.capture_hook
+            )
 
         self._verify_executor = TargetVerifyExecutor(
             target_worker=self.target_worker,
@@ -352,7 +355,10 @@ class DSparkWorkerV2(BaseSpecWorker):
         with self._draft_context():
             if capture_decode_cuda_graph:
                 self._draft_sampler = self._maybe_build_draft_sampler()
-                self.draft_model_runner.draft_sampler = self._draft_sampler
+                if self._draft_sampler is not None:
+                    self.draft_model_runner.capture_tail_hooks.append(
+                        make_draft_sampler_capture_hook(self._draft_sampler)
+                    )
                 self._proposer._draft_sampler = self._draft_sampler
             self._draft_worker.init_cuda_graphs(
                 capture_decode_cuda_graph=capture_decode_cuda_graph
