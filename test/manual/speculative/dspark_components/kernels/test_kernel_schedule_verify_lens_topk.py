@@ -16,7 +16,7 @@ pytestmark = pytest.mark.skipif(
 GAMMA = 5
 
 
-def _make_survival(mode, bs, device):
+def _make_confidence(mode, bs, device):
     g = torch.Generator(device=device).manual_seed(1234 + bs)
     base = torch.rand(bs, GAMMA, device=device, generator=g)
     if mode == "random":
@@ -35,13 +35,13 @@ def _make_survival(mode, bs, device):
 @pytest.mark.parametrize("budget", [0, 1, 3, 7, 10, 1000])
 @pytest.mark.parametrize("mode", ["random", "ties", "coarse", "some_invalid"])
 def test_triton_matches_torch_selection(bs, budget, mode):
-    """triton schedule_verify_lens_topk equals torch verify_lens across ties/invalids/budgets."""
+    """triton schedule_verify_lens_topk (fused cumprod+finalize) equals torch verify_lens across ties/invalids/budgets."""
     device = torch.device("cuda")
     cfg = DSparkScheduleConfig(gamma=GAMMA)
-    survival = _make_survival(mode, bs, device)
-    ref = schedule_verify_lens_topk(survival_probs=survival, budget=budget, cfg=cfg)
+    confidence = _make_confidence(mode, bs, device)
+    ref = schedule_verify_lens_topk(confidence=confidence, budget=budget, cfg=cfg)
     got = schedule_verify_lens_topk_triton(
-        survival_probs=survival, budget=budget, cfg=cfg
+        confidence=confidence, budget=budget, cfg=cfg
     )
     assert got.dtype == ref.dtype
     assert torch.equal(got, ref)

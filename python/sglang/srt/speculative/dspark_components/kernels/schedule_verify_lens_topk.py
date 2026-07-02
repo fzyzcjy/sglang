@@ -27,28 +27,44 @@ class ScheduleVerifyLensTopk:
     def torch(
         cls,
         *,
-        survival_probs: torch.Tensor,
+        confidence: torch.Tensor,
         budget: int,
         cfg: DSparkScheduleConfig,
     ) -> torch.Tensor:
-        return schedule_verify_lens_topk(
-            survival_probs=survival_probs, budget=budget, cfg=cfg
-        )
+        return schedule_verify_lens_topk(confidence=confidence, budget=budget, cfg=cfg)
 
     @classmethod
     def triton(
         cls,
         *,
-        survival_probs: torch.Tensor,
+        confidence: torch.Tensor,
         budget: int,
         cfg: DSparkScheduleConfig,
     ) -> torch.Tensor:
         return schedule_verify_lens_topk_triton(
-            survival_probs=survival_probs, budget=budget, cfg=cfg
+            confidence=confidence, budget=budget, cfg=cfg
         )
 
 
+def compute_sort_survival(confidence: torch.Tensor) -> torch.Tensor:
+    # Row cumprod of the per-position confidence -> survival sort keys. Folded into
+    # both impls (the planner no longer launches a separate float-cast + cumprod per
+    # step); exposed standalone for the planner's env-gated debug log.
+    return torch.cumprod(confidence.to(torch.float32), dim=1)
+
+
 def schedule_verify_lens_topk(
+    *,
+    confidence: torch.Tensor,
+    budget: int,
+    cfg: DSparkScheduleConfig,
+) -> torch.Tensor:
+    return schedule_verify_lens_topk_from_survival(
+        survival_probs=compute_sort_survival(confidence), budget=budget, cfg=cfg
+    )
+
+
+def schedule_verify_lens_topk_from_survival(
     *,
     survival_probs: torch.Tensor,
     budget: int,
@@ -147,6 +163,47 @@ def _value_independent_descending_order(
 
 
 @triton.jit
+def _schedule_topk_prep_kernel(
+    confidence_ptr,
+    survival_ptr,
+    selected_extra_ptr,
+    gamma,
+    cols,
+    G_P2: tl.constexpr,
+):
+    # Per-row float32 cumprod of confidence into the candidate window buffer, plus
+    # zeroing this row's selected_extra accumulator (folds the planner's separate
+    # to(float32) + cumprod + zeros launches into one).
+    row = tl.program_id(0)
+    g = tl.arange(0, G_P2)
+    conf = tl.load(
+        confidence_ptr + row.to(tl.int64) * gamma + g, mask=g < gamma, other=1.0
+    ).to(tl.float32)
+    surv = tl.cumprod(conf, axis=0)
+    tl.store(survival_ptr + row.to(tl.int64) * cols + g, surv, mask=g < cols)
+    tl.store(selected_extra_ptr + row, 0)
+
+
+@triton.jit
+def _schedule_topk_finalize_kernel(
+    selected_extra_ptr,
+    out_ptr,
+    min_verify_len,
+    lower_bound,
+    max_len,
+    bs,
+    BLOCK: tl.constexpr,
+):
+    offs = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < bs
+    extra = tl.load(selected_extra_ptr + offs, mask=mask, other=0).to(tl.int32)
+    lens = min_verify_len + extra
+    lens = tl.maximum(lens, lower_bound)
+    lens = tl.minimum(lens, max_len)
+    tl.store(out_ptr + offs, lens, mask=mask)
+
+
+@triton.jit
 def _schedule_topk_selected_extra_kernel(
     survival_ptr,
     selected_extra_ptr,
@@ -192,23 +249,32 @@ def _schedule_topk_selected_extra_kernel(
 
 def schedule_verify_lens_topk_triton(
     *,
-    survival_probs: torch.Tensor,
+    confidence: torch.Tensor,
     budget: int,
     cfg: DSparkScheduleConfig,
 ) -> torch.Tensor:
-    num_requests, gamma = survival_probs.shape
+    num_requests, gamma = confidence.shape
     max_len = cfg.resolved_max_verify_len()
-    device = survival_probs.device
+    device = confidence.device
     cols = min(max_len, gamma)
     n = num_requests * cols
-    selected_extra = torch.zeros(num_requests, dtype=torch.int32, device=device)
+
+    selected_extra = torch.empty(num_requests, dtype=torch.int32, device=device)
+    survival = torch.empty((num_requests, cols), dtype=torch.float32, device=device)
+    _schedule_topk_prep_kernel[(num_requests,)](
+        confidence.contiguous(),
+        survival,
+        selected_extra,
+        gamma,
+        cols,
+        G_P2=triton.next_power_of_2(max(gamma, 1)),
+    )
     if budget > 0 and n > 0:
-        candidate_window = survival_probs[:, :cols].contiguous()
         BLOCK_C = 64
         BLOCK_CP = 256
         grid = (triton.cdiv(n, BLOCK_C),)
         _schedule_topk_selected_extra_kernel[grid](
-            candidate_window,
+            survival,
             selected_extra,
             int(budget),
             cols,
@@ -217,10 +283,16 @@ def schedule_verify_lens_topk_triton(
             BLOCK_C=BLOCK_C,
             BLOCK_CP=BLOCK_CP,
         )
-    lower_bound = max(cfg.min_verify_len, 1)
-    verify_lens = torch.clamp(
-        cfg.min_verify_len + selected_extra.to(torch.int64),
-        min=lower_bound,
-        max=max_len,
+
+    verify_lens = torch.empty(num_requests, dtype=torch.int32, device=device)
+    BLOCK = 256
+    _schedule_topk_finalize_kernel[(triton.cdiv(num_requests, BLOCK),)](
+        selected_extra,
+        verify_lens,
+        int(cfg.min_verify_len),
+        max(cfg.min_verify_len, 1),
+        int(max_len),
+        num_requests,
+        BLOCK=BLOCK,
     )
-    return verify_lens.to(torch.int32)
+    return verify_lens

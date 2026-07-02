@@ -15,6 +15,7 @@ from sglang.srt.speculative.dflash_utils import (
 from sglang.srt.speculative.dspark_components.kernels.cap_correct_len import (
     CapCorrectLen,
 )
+from sglang.srt.speculative.dspark_components.kernels.softmax_temp import SoftmaxTemp
 from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 from sglang.srt.speculative.reject_sampling import chain_speculative_sampling_triton
 
@@ -95,14 +96,25 @@ def _accept_sampling_core(
     # how they gather the bonus token from (accept_index, correct_len, predicts).
     bs = candidates.shape[0]
     device = candidates.device
-    target_probs = build_dflash_verify_target_probs(
-        next_token_logits=target_logits,
-        sampling_info=sampling_info,
-        draft_token_num=verify_num_draft_tokens,
-        bs=bs,
-        max_top_k=draft_input.max_top_k,
-        uniform_top_k_value=draft_input.uniform_top_k_value,
-    )
+    if not sampling_info.need_top_k_sampling and not sampling_info.need_top_p_sampling:
+        # Dense fast path (no top-k/top-p): the builder degenerates to
+        # repeat_interleave + temperature divide + full-vocab softmax, which
+        # SoftmaxTemp fuses into one launch. Top-k/top-p batches keep the shared
+        # builder (its sparse topk path is a different shape of work).
+        target_probs = SoftmaxTemp.execute(
+            logits=target_logits,
+            temperatures=sampling_info.temperatures,
+            rows_per_request=verify_num_draft_tokens,
+        ).view(bs, verify_num_draft_tokens, -1)
+    else:
+        target_probs = build_dflash_verify_target_probs(
+            next_token_logits=target_logits,
+            sampling_info=sampling_info,
+            draft_token_num=verify_num_draft_tokens,
+            bs=bs,
+            max_top_k=draft_input.max_top_k,
+            uniform_top_k_value=draft_input.uniform_top_k_value,
+        )
     (
         retrieve_index,
         retrieve_next_token,
@@ -117,12 +129,14 @@ def _accept_sampling_core(
     )
     uniform_samples = torch.rand((bs, gamma), dtype=torch.float32, device=device)
     uniform_samples_final = torch.rand((bs,), dtype=torch.float32, device=device)
-    candidates_i64 = candidates.to(torch.int64)
+    # candidates goes in at its native int32: the chain kernel's tl.load is
+    # dtype-agnostic (token values fit int32), so the old per-step .to(int64)
+    # launch was pure glue.
     chain_speculative_sampling_triton(
         predicts=predicts,
         accept_index=accept_index,
         accept_token_num=accept_token_num,
-        candidates=candidates_i64,
+        candidates=candidates,
         retrive_index=retrieve_index,
         retrive_next_token=retrieve_next_token,
         retrive_next_sibling=retrieve_next_sibling,
@@ -135,11 +149,12 @@ def _accept_sampling_core(
         deterministic=True,
     )
     correct_len = accept_token_num
-    cap_trim_lens = torch.zeros_like(correct_len)
     if cutoff_layout is not None:
         correct_len, cap_trim_lens = CapCorrectLen.execute(
             correct_len=correct_len, layout=cutoff_layout
         )
+    else:
+        cap_trim_lens = torch.zeros_like(correct_len)
     return correct_len, cap_trim_lens, accept_index, predicts
 
 

@@ -65,6 +65,9 @@ from sglang.srt.speculative.dspark_components.dspark_verify_planner import (
 from sglang.srt.speculative.dspark_components.kernels.build_out_tokens import (
     BuildOutTokens,
 )
+from sglang.srt.speculative.dspark_components.kernels.finalize_accept_lens import (
+    FinalizeAcceptLens,
+)
 from sglang.srt.speculative.spec_utils import draft_tp_context
 from sglang.srt.utils import get_available_gpu_memory, is_cuda
 
@@ -701,7 +704,13 @@ class DSparkWorkerV2(BaseSpecWorker):
             cutoff_layout=layout,
         )
 
-        commit_lens = correct_len.to(torch.int32) + 1
+        finalized = FinalizeAcceptLens.execute(
+            correct_len=correct_len,
+            cap_trim_lens=cap_trim_lens,
+            prefix_lens=prefix_lens,
+        )
+        commit_lens = finalized.commit_lens
+        new_seq_lens = finalized.new_seq_lens
         out_tokens = BuildOutTokens.execute(
             draft_tokens=draft_tokens,
             correct_len=correct_len,
@@ -709,7 +718,6 @@ class DSparkWorkerV2(BaseSpecWorker):
             verify_num_draft_tokens=self.verify_num_draft_tokens,
             gamma=self.gamma,
         )
-        new_seq_lens = prefix_lens + commit_lens.to(prefix_lens.dtype)
         if on_publish is not None:
             if confidence is not None:
                 # Publish this step's confidence + its prefix_len stamp into the relay
@@ -776,8 +784,9 @@ class DSparkWorkerV2(BaseSpecWorker):
             next_token_ids=out_tokens.reshape(-1),
             accept_lens=commit_lens,
             # Uncapped full-block accept incl bonus; cap_trim_lens is 0 outside
-            # CAP_ACCEPT so this equals commit_lens there.
-            block_accept_lens=commit_lens + cap_trim_lens.to(torch.int32),
+            # CAP_ACCEPT so this equals commit_lens there. finalized carries the
+            # int32 cap-trim mirror from FinalizeAcceptLens.
+            block_accept_lens=commit_lens + finalized.cap_trim_lens,
             cap_lens=(
                 layout.verify_lens.to(torch.int32) if layout is not None else None
             ),

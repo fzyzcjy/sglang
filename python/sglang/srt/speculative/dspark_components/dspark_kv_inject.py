@@ -3,6 +3,9 @@ from typing import Optional
 import torch
 
 from sglang.srt.managers.schedule_batch import ScheduleBatch
+from sglang.srt.speculative.dspark_components.kernels.commit_inject_layout import (
+    BuildCommitInjectLayout,
+)
 from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 from sglang.srt.speculative.triton_ops.cache_locs import assign_extend_cache_locs_func
 
@@ -145,6 +148,35 @@ class TargetHiddenKvInjector:
         # commit lengths are honoured.
         stride = self.verify_num_draft_tokens
         prefix_lens = batch.seq_lens
+        hidden = hidden_strided.view(bs, stride, -1)
+
+        pool = self.draft_model_runner.token_to_kv_pool
+        if hasattr(pool, "set_swa_key_buffer_radix_fused_norm_rope"):
+            # MLA fast path: one kernel builds the masked SWA slots + rope positions
+            # straight from req_to_token / full_to_swa (folding the
+            # assign_extend_cache_locs launch, the translate gather, the commit-mask
+            # arange/lt/where chain and the positions add), then the model does
+            # projection + pool write exactly as _inject_mla's tail.
+            if hidden_strided.numel() == 0:
+                return
+            inject_layout = BuildCommitInjectLayout.execute(
+                req_pool_indices=batch.req_pool_indices,
+                req_to_token=self.model_runner.req_to_token_pool.req_to_token,
+                prefix_lens=prefix_lens,
+                block_pos_offsets=self._block_pos_offsets[:stride],
+                full_to_swa_mapping=pool.full_to_swa_index_mapping,
+                commit_lens=commit_lens,
+                stride=stride,
+            )
+            with torch.inference_mode():
+                self.draft_model.write_target_hidden_kv(
+                    main_hidden=hidden.reshape(-1, hidden.shape[-1]),
+                    swa_loc=inject_layout.swa_loc,
+                    positions=inject_layout.positions,
+                    pool=pool,
+                )
+            return
+
         positions_2d = prefix_lens.unsqueeze(1) + self._block_pos_offsets
         verify_cache_loc = assign_extend_cache_locs_func(
             req_pool_indices=batch.req_pool_indices,
@@ -156,7 +188,6 @@ class TargetHiddenKvInjector:
             device=self.device,
         )
         verify_cache_loc_2d = verify_cache_loc.view(bs, stride)
-        hidden = hidden_strided.view(bs, stride, -1)
         self.inject_target_hidden(
             target_hidden=hidden.reshape(-1, hidden.shape[-1]),
             cache_loc=verify_cache_loc,

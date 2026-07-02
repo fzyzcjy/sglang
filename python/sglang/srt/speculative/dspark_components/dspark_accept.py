@@ -10,6 +10,10 @@ from sglang.srt.speculative.dspark_components.kernels.accept_greedy import Accep
 from sglang.srt.speculative.dspark_components.kernels.accept_sampling import (
     AcceptSampling,
 )
+from sglang.srt.speculative.dspark_components.kernels.mixed_accept_select import (
+    SelectMixedAccept,
+)
+from sglang.srt.speculative.dspark_components.kernels.softmax_temp import SoftmaxTemp
 from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 
 
@@ -37,10 +41,12 @@ def accept_draft_tokens(
             verify_num_draft_tokens=verify_num_draft_tokens,
             cutoff_layout=cutoff_layout,
         )
-    draft_probs = torch.softmax(
-        draft_block.corrected_logits.float() / draft_block.temperatures[:, None, None],
-        dim=-1,
-    )
+    bs, gamma_rows, vocab = draft_block.corrected_logits.shape
+    draft_probs = SoftmaxTemp.execute(
+        logits=draft_block.corrected_logits.reshape(bs * gamma_rows, vocab),
+        temperatures=draft_block.temperatures,
+        rows_per_request=gamma_rows,
+    ).view(bs, gamma_rows, vocab)
     # All-sampling fast path: no greedy rows -> only the chain kernel (host-side, sync-free).
     if not sampling_info.is_any_greedy:
         return AcceptSampling.execute(
@@ -70,11 +76,13 @@ def accept_draft_tokens(
         verify_num_draft_tokens=verify_num_draft_tokens,
         cutoff_layout=cutoff_layout,
     )
-    correct_len = torch.where(
-        greedy_mask, greedy_len.to(sampling_len.dtype), sampling_len
+    selected = SelectMixedAccept.execute(
+        greedy_mask=greedy_mask,
+        greedy_len=greedy_len,
+        greedy_bonus=greedy_bonus,
+        greedy_trim=greedy_trim,
+        sampling_len=sampling_len,
+        sampling_bonus=sampling_bonus,
+        sampling_trim=sampling_trim,
     )
-    bonus = torch.where(greedy_mask, greedy_bonus, sampling_bonus)
-    cap_trim_lens = torch.where(
-        greedy_mask, greedy_trim.to(sampling_trim.dtype), sampling_trim
-    )
-    return correct_len, bonus, cap_trim_lens
+    return selected.correct_len, selected.bonus, selected.cap_trim_lens

@@ -20,6 +20,9 @@ from sglang.srt.speculative.dspark_components.kernels.schedule_verify_lens_topk 
 from sglang.srt.speculative.dspark_components.kernels.schedule_verify_lens_topk import (
     schedule_verify_lens_topk as schedule_verify_lens_topk,
 )
+from sglang.srt.speculative.dspark_components.kernels.schedule_verify_lens_topk import (
+    schedule_verify_lens_topk_from_survival as schedule_verify_lens_topk_from_survival,
+)
 
 logger = logging.getLogger(__name__)
 
