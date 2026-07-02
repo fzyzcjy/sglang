@@ -9,7 +9,7 @@ from sglang.srt.environ import envs
 
 _KERNEL_IMPL = envs.SGLANG_DSPARK_KERNEL_COMMIT_KV_PROJ.get()
 
-_STACKED_WEIGHT_CACHE: dict[int, "_StackedWkvWeight"] = {}
+_STACKED_WEIGHT_CACHE: dict[int, _StackedWkvWeight] = {}
 
 
 class CommitKvProj:

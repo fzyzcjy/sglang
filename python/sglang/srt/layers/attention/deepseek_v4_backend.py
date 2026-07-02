@@ -1086,7 +1086,9 @@ class DeepseekV4AttnBackend(
             seq_lens_cpu=seq_lens_cpu_list,
             extend_len=block_size,
         )
-        extend_seq_lens = self._draft_extend_lens(block_size=block_size, bs=len(seq_lens))
+        extend_seq_lens = self._draft_extend_lens(
+            block_size=block_size, bs=len(seq_lens)
+        )
         return self.init_forward_metadata_prefill(
             max_seq_len=max_seq_len,
             req_pool_indices=req_pool_indices,
@@ -2239,6 +2241,7 @@ class DeepseekV4AttnBackend(
             page_index_aligned_size=PAGE_INDEX_ALIGNED_SIZE,
         )
         return swa_page_indices, swa_topk_lengths
+
 
 class DeepseekV4MultiStepBackend(DeepseekV4AttnBackend):
     def __init__(

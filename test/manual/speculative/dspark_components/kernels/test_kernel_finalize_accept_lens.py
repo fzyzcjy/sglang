@@ -17,9 +17,7 @@ def test_triton_matches_torch_finalize(bs, prefix_dtype):
     """triton commit/new-seq/cap-trim finalize is bit-exact vs the torch cast/add chain."""
     device = torch.device("cuda")
     g = torch.Generator(device=device).manual_seed(bs)
-    correct_len = torch.randint(0, 7, (bs,), device=device, generator=g).to(
-        torch.int32
-    )
+    correct_len = torch.randint(0, 7, (bs,), device=device, generator=g).to(torch.int32)
     cap_trim_lens = torch.randint(0, 4, (bs,), device=device, generator=g).to(
         torch.int64
     )

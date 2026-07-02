@@ -40,6 +40,8 @@ def test_triton_matches_torch_selection(bs, budget, mode):
     cfg = DSparkScheduleConfig(gamma=GAMMA)
     confidence = _make_confidence(mode, bs, device)
     ref = schedule_verify_lens_topk(confidence=confidence, budget=budget, cfg=cfg)
-    got = schedule_verify_lens_topk_triton(confidence=confidence, budget=budget, cfg=cfg)
+    got = schedule_verify_lens_topk_triton(
+        confidence=confidence, budget=budget, cfg=cfg
+    )
     assert got.dtype == ref.dtype
     assert torch.equal(got, ref)

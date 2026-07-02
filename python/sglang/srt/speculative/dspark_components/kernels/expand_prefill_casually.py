@@ -96,9 +96,7 @@ def expand_prefill_casually(
         req_pool_indices_repeated = torch.repeat_interleave(
             req_pool_indices, repeats, output_size=num_tokens
         )
-        start_positions = (
-            seq_lens.to(torch.int32) - extend_seq_lens.to(torch.int32) + 1
-        )
+        start_positions = seq_lens.to(torch.int32) - extend_seq_lens.to(torch.int32) + 1
         start_positions_repeated = torch.repeat_interleave(
             start_positions, repeats, output_size=num_tokens
         )

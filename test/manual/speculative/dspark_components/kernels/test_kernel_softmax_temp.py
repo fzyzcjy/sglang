@@ -22,9 +22,9 @@ def test_triton_matches_torch_probs(bs, rows_per_request, vocab, dtype):
     logits = (
         torch.randn(bs * rows_per_request, vocab, device=device, generator=g) * 8.0
     ).to(dtype)
-    temperatures = (
-        torch.rand(bs, device=device, generator=g) * 1.5 + 0.05
-    ).to(torch.float32)
+    temperatures = (torch.rand(bs, device=device, generator=g) * 1.5 + 0.05).to(
+        torch.float32
+    )
 
     ref = softmax_temp(
         logits=logits, temperatures=temperatures, rows_per_request=rows_per_request

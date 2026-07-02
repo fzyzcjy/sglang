@@ -56,9 +56,7 @@ def test_fused_matches_per_stage_loop(num_tokens):
         assert kv_got.is_contiguous()
         # Same K-reduction over the same bf16 values; only cuBLAS tiling differs
         # between the [head_dim] and stacked [num_stages*head_dim] GEMM shapes.
-        torch.testing.assert_close(
-            kv_got.float(), kv_ref.float(), rtol=2e-2, atol=2e-3
-        )
+        torch.testing.assert_close(kv_got.float(), kv_ref.float(), rtol=2e-2, atol=2e-3)
 
 
 def test_dequant_fp8_blockwise_weight():

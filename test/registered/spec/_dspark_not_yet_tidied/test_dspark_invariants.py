@@ -199,8 +199,12 @@ class TestNonAnticipatingBudgetAllocation(CustomTestCase):
             torch.full((3, 4), 0.8, dtype=torch.float32)
         )
         cfg = DSparkScheduleConfig(gamma=4, min_verify_len=1)
-        first = schedule_verify_lens_topk_from_survival(survival_probs=survival, budget=5, cfg=cfg)
-        second = schedule_verify_lens_topk_from_survival(survival_probs=survival, budget=5, cfg=cfg)
+        first = schedule_verify_lens_topk_from_survival(
+            survival_probs=survival, budget=5, cfg=cfg
+        )
+        second = schedule_verify_lens_topk_from_survival(
+            survival_probs=survival, budget=5, cfg=cfg
+        )
         self.assertTrue(torch.equal(first, second))
         extra = int((first.to(torch.int64) - cfg.min_verify_len).sum().item())
         self.assertEqual(extra, 5)

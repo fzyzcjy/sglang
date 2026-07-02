@@ -116,7 +116,10 @@ def schedule_verify_lens_topk_vanilla(
 # Every property test below runs against both the production function and the
 # vanilla reference (parameterized via subTest), so the readable reference is held
 # to exactly the same contract.
-_TOPK_IMPLS = (schedule_verify_lens_topk_from_survival, schedule_verify_lens_topk_vanilla)
+_TOPK_IMPLS = (
+    schedule_verify_lens_topk_from_survival,
+    schedule_verify_lens_topk_vanilla,
+)
 
 
 def _for_each_impl(test_method):
@@ -407,7 +410,7 @@ class TestVerifyLenAnchorContract(CustomTestCase):
             history_survival_probs=survival, sps_table=table, cfg=cfg
         )
         self.assertEqual(budget, 0)
-        verify_lens = schedule_verify_lens_topk(
+        verify_lens = schedule_verify_lens_topk_from_survival(
             survival_probs=survival, budget=budget, cfg=cfg
         )
         self.assertGreaterEqual(int(verify_lens.min().item()), 1)
@@ -507,7 +510,7 @@ class TestVanillaMatchesReference(CustomTestCase):
                 max_verify_len=max_verify_len,
                 survival_eps=survival_eps,
             )
-            reference = schedule_verify_lens_topk(
+            reference = schedule_verify_lens_topk_from_survival(
                 survival_probs=survival, budget=budget, cfg=cfg
             )
             vanilla = schedule_verify_lens_topk_vanilla(
@@ -543,10 +546,10 @@ class TestVerifyLensComposition(CustomTestCase):
         self.assertNotEqual(
             low_budget, high_budget, "budgets must differ for this test"
         )
-        lens_low = schedule_verify_lens_topk(
+        lens_low = schedule_verify_lens_topk_from_survival(
             survival_probs=sort_survival, budget=low_budget, cfg=cfg
         )
-        lens_high = schedule_verify_lens_topk(
+        lens_high = schedule_verify_lens_topk_from_survival(
             survival_probs=sort_survival, budget=high_budget, cfg=cfg
         )
         self.assertFalse(

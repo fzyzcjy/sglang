@@ -17,9 +17,7 @@ def test_triton_matches_torch_indptr(bs, dtype):
     """triton qo_indptr/extend_start_loc are bit-exact vs the torch cumsum/cat/clone chain."""
     device = torch.device("cuda")
     g = torch.Generator(device=device).manual_seed(bs)
-    verify_lens = torch.randint(
-        1, 8, (bs,), device=device, generator=g, dtype=dtype
-    )
+    verify_lens = torch.randint(1, 8, (bs,), device=device, generator=g, dtype=dtype)
 
     ref = build_qo_indptr(verify_lens=verify_lens)
     got = build_qo_indptr_triton(verify_lens=verify_lens.to(torch.int32))

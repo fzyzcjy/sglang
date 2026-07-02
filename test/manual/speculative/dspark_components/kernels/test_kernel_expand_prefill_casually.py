@@ -59,9 +59,7 @@ def test_triton_matches_torch_vectorized_branch(bs, pad):
     )
 
     assert torch.equal(got.seq_lens_casual, ref.seq_lens_casual)
-    assert torch.equal(
-        got.req_pool_indices_repeated, ref.req_pool_indices_repeated
-    )
+    assert torch.equal(got.req_pool_indices_repeated, ref.req_pool_indices_repeated)
 
 
 @pytest.mark.parametrize("bs", [1, 3, 8])
@@ -93,6 +91,4 @@ def test_triton_matches_torch_loop_branch_uniform(bs):
     )
 
     assert torch.equal(got.seq_lens_casual, ref.seq_lens_casual)
-    assert torch.equal(
-        got.req_pool_indices_repeated, ref.req_pool_indices_repeated
-    )
+    assert torch.equal(got.req_pool_indices_repeated, ref.req_pool_indices_repeated)

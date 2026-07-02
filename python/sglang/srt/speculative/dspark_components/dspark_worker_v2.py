@@ -58,11 +58,11 @@ from sglang.srt.speculative.dspark_components.dspark_verify import (
 from sglang.srt.speculative.dspark_components.dspark_verify_planner import (
     DSparkVerifyPlanner,
 )
-from sglang.srt.speculative.dspark_components.kernels.finalize_accept_lens import (
-    FinalizeAcceptLens,
-)
 from sglang.srt.speculative.dspark_components.kernels.build_out_tokens import (
     BuildOutTokens,
+)
+from sglang.srt.speculative.dspark_components.kernels.finalize_accept_lens import (
+    FinalizeAcceptLens,
 )
 from sglang.srt.utils import get_available_gpu_memory, is_cuda
 
