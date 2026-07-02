@@ -139,8 +139,12 @@ class SchedulerMetricsReporter:
         self.spec_num_forward_ct = 0
         self.spec_total_num_accept_tokens = 0  # lifetime
         self.spec_total_num_forward_ct = 0
-        # Correct drafts the DSpark confidence cap trimmed (CAP_ACCEPT only).
-        self.spec_num_cap_trim_drafts = 0  # per-log-interval
+        # DSpark confidence accumulators (per-log-interval):
+        # block accept = uncapped full-block accept incl bonus (exact only in
+        # CAP_ACCEPT); cap = scheduled verify window incl bonus slot (0 when no
+        # cap is scheduled, i.e. STATIC / non-DSpark).
+        self.spec_num_block_accept_tokens = 0
+        self.spec_num_cap_tokens = 0
 
         # For PD disaggregation
         self.kv_transfer_speed_gb_s: float = 0.0
@@ -347,11 +351,16 @@ class SchedulerMetricsReporter:
         }
 
     def update_spec_metrics(
-        self, bs: int, num_correct_drafts: int, num_cap_trim_drafts: int = 0
+        self,
+        bs: int,
+        num_correct_drafts: int,
+        num_block_accept_tokens: int = 0,
+        num_cap_tokens: int = 0,
     ):
         self.spec_num_accept_tokens += num_correct_drafts + bs
         self.spec_num_forward_ct += bs
-        self.spec_num_cap_trim_drafts += num_cap_trim_drafts
+        self.spec_num_block_accept_tokens += num_block_accept_tokens
+        self.spec_num_cap_tokens += num_cap_tokens
 
         # Bonus tokens updated elsewhere
         self.num_generated_tokens += num_correct_drafts
@@ -511,7 +520,8 @@ class SchedulerMetricsReporter:
         self.spec_num_forward_ct = 0
         self.spec_total_num_accept_tokens = 0
         self.spec_total_num_forward_ct = 0
-        self.spec_num_cap_trim_drafts = 0
+        self.spec_num_block_accept_tokens = 0
+        self.spec_num_cap_tokens = 0
 
     def report_prefill_stats(
         self,
@@ -735,6 +745,8 @@ class SchedulerMetricsReporter:
         if self.scheduler.spec_algorithm.is_none():
             spec_accept_length = 0
             spec_accept_rate = 0
+            spec_cap_length = 0
+            spec_block_accept_length = 0
         else:
             spec_accept_length = self.spec_num_accept_tokens / self.spec_num_forward_ct
             num_correct_drafts = self.spec_num_accept_tokens - self.spec_num_forward_ct
@@ -748,21 +760,31 @@ class SchedulerMetricsReporter:
             spec_accept_rate = (
                 num_correct_drafts / total_draft_tokens if total_draft_tokens > 0 else 0
             )
-            # Avg correct drafts the confidence cap trimmed per verify step
-            # (CAP_ACCEPT diagnostic; 0 in STATIC/COMPACT). Computed before the
-            # spec_num_forward_ct reset below.
-            spec_cap_trim_len = (
-                self.spec_num_cap_trim_drafts / self.spec_num_forward_ct
+            # DSpark confidence averages per verify step (computed before the
+            # spec_num_forward_ct reset below): cap len = scheduled verify
+            # window incl bonus slot (0 when no cap, i.e. STATIC); block accept
+            # len = uncapped full-block accept, exact only in CAP_ACCEPT.
+            spec_cap_length = (
+                self.spec_num_cap_tokens / self.spec_num_forward_ct
                 if self.spec_num_forward_ct > 0
+                else 0
+            )
+            spec_block_accept_length = (
+                self.spec_num_block_accept_tokens / self.spec_num_forward_ct
+                if self.spec_num_forward_ct > 0
+                and envs.SGLANG_RAGGED_VERIFY_MODE.get() == "cap-accept"
                 else 0
             )
             self.spec_total_num_accept_tokens += self.spec_num_accept_tokens
             self.spec_total_num_forward_ct += self.spec_num_forward_ct
             self.spec_num_accept_tokens = self.spec_num_forward_ct = 0
-            self.spec_num_cap_trim_drafts = 0
+            self.spec_num_block_accept_tokens = 0
+            self.spec_num_cap_tokens = 0
             msg += f"accept len: {spec_accept_length:.2f}, accept rate: {spec_accept_rate:.2f}, "
-            if spec_cap_trim_len > 0:
-                msg += f"cap trim len: {spec_cap_trim_len:.2f}, "
+            if spec_cap_length > 0:
+                msg += f"cap len: {spec_cap_length:.2f}, "
+            if spec_block_accept_length > 0:
+                msg += f"block accept len: {spec_block_accept_length:.2f}, "
 
             if self.current_scheduler_metrics_enabled:
                 spec_snapshot = self._active_spec_config_snapshot()
@@ -838,6 +860,8 @@ class SchedulerMetricsReporter:
             # Speculative decoding
             self.stats.spec_accept_length = spec_accept_length
             self.stats.spec_accept_rate = spec_accept_rate
+            self.stats.spec_cap_length = spec_cap_length
+            self.stats.spec_block_accept_length = spec_block_accept_length
             self.stats.spec_num_steps = spec_num_steps
             self.stats.spec_num_draft_tokens = spec_num_draft_tokens
 

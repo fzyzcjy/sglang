@@ -2367,18 +2367,33 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
                 meta_info["spec_num_proposed_drafts"] = num_proposed_drafts
                 meta_info["spec_verify_ct"] = recv_obj.spec_verify_ct[i]
 
-                # Correct drafts the DSpark confidence cap trimmed (CAP_ACCEPT
-                # only; 0 otherwise) -- accept-length the schedule left on the
-                # table. Expose both the lifetime sum and the per-verify-step
-                # average (spec_cap_trim_len parallels spec_accept_length).
+                # DSpark confidence metrics, both per-verify-step averages
+                # paralleling spec_accept_length (incl the bonus slot):
+                # spec_cap_length -- the confidence-scheduled verify window, so
+                # accept_length <= cap_length compares directly and
+                # cap_length - accept_length is the over-prediction cost.
+                # spec_block_accept_length -- uncapped full-block accept. Only
+                # CAP_ACCEPT verifies the full block, so only there is it exact
+                # (vs cap_length it measures calibration both ways); COMPACT is
+                # censored by the window and STATIC trivially equals
+                # accept_length, so it is not emitted for those.
                 if (
-                    getattr(recv_obj, "spec_num_cap_trim_drafts", None) is not None
-                    and len(recv_obj.spec_num_cap_trim_drafts) > i
+                    getattr(recv_obj, "spec_num_cap_tokens", None) is not None
+                    and len(recv_obj.spec_num_cap_tokens) > i
+                    and recv_obj.spec_num_cap_tokens[i] > 0
                 ):
-                    num_cap_trim_drafts = recv_obj.spec_num_cap_trim_drafts[i]
-                    meta_info["spec_num_cap_trim_drafts"] = num_cap_trim_drafts
-                    meta_info["spec_cap_trim_len"] = (
-                        num_cap_trim_drafts / recv_obj.spec_verify_ct[i]
+                    meta_info["spec_cap_length"] = (
+                        recv_obj.spec_num_cap_tokens[i] / recv_obj.spec_verify_ct[i]
+                    )
+                if (
+                    envs.SGLANG_RAGGED_VERIFY_MODE.get() == "cap-accept"
+                    and getattr(recv_obj, "spec_num_block_accept_tokens", None)
+                    is not None
+                    and len(recv_obj.spec_num_block_accept_tokens) > i
+                ):
+                    meta_info["spec_block_accept_length"] = (
+                        recv_obj.spec_num_block_accept_tokens[i]
+                        / recv_obj.spec_verify_ct[i]
                     )
 
                 # FIXME: backward-compat aliases, remove in next release.

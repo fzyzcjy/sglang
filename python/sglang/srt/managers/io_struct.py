@@ -1269,8 +1269,10 @@ class BatchTokenIDOutput(BaseBatchReq, kw_only=True):
     spec_verify_ct: Optional[List[int]] = None
     # Accepted drafts
     spec_num_correct_drafts: Optional[List[int]] = None
-    # Correct drafts the DSpark confidence cap trimmed (CAP_ACCEPT only)
-    spec_num_cap_trim_drafts: Optional[List[int]] = None
+    # DSpark uncapped full-block accept tokens incl bonus (exact in CAP_ACCEPT)
+    spec_num_block_accept_tokens: Optional[List[int]] = None
+    # DSpark confidence-scheduled verify windows incl bonus slot (0 if no cap)
+    spec_num_cap_tokens: Optional[List[int]] = None
     # Acceptance histogram
     spec_correct_drafts_histogram: Optional[List[List[int]]] = None
 
@@ -1346,8 +1348,10 @@ class BatchStrOutput(BaseBatchReq, kw_only=True):
     spec_verify_ct: Optional[List[int]] = None
     # Accepted drafts
     spec_num_correct_drafts: Optional[List[int]] = None
-    # Correct drafts the DSpark confidence cap trimmed (CAP_ACCEPT only)
-    spec_num_cap_trim_drafts: Optional[List[int]] = None
+    # DSpark uncapped full-block accept tokens incl bonus (exact in CAP_ACCEPT)
+    spec_num_block_accept_tokens: Optional[List[int]] = None
+    # DSpark confidence-scheduled verify windows incl bonus slot (0 if no cap)
+    spec_num_cap_tokens: Optional[List[int]] = None
     # Acceptance histogram
     spec_correct_drafts_histogram: Optional[List[List[int]]] = None
 
