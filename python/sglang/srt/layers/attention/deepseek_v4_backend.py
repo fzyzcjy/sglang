@@ -132,6 +132,7 @@ def _ima_check(
         f" min_allowed={min_allowed} bound={bound}"
     )
 
+
 SWA_WINDOW = 128
 C4_TOPK = 512
 PAGE_INDEX_ALIGNED_SIZE = 64
@@ -1899,9 +1900,7 @@ class DeepseekV4AttnBackend(
                     bound=swa_page_indices.shape[-1] + 1,
                 )
                 if extra_indices is not None:
-                    extra_token_bound = (
-                        extra_k_cache.shape[0] * extra_k_cache.shape[1]
-                    )
+                    extra_token_bound = extra_k_cache.shape[0] * extra_k_cache.shape[1]
                     _ima_check(
                         f"extra_indices[L{layer_id}/c{compress_ratio}]",
                         extra_indices,
