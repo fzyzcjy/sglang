@@ -1886,6 +1886,10 @@ class DeepseekV4Model(nn.Module):
                 or envs.SGLANG_OPT_USE_MULTI_STREAM_OVERLAP.get()
             )
         )
+        import os as _ima_os
+
+        if _ima_os.environ.get("IMA_NO_STREAM_POOL") == "1":
+            use_stream_pool = False
         num_alt_streams = 5 if _is_cuda else 2
         self.alt_streams = (
             [torch.cuda.Stream() for _ in range(num_alt_streams)]

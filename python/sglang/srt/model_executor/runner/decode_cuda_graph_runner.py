@@ -28,6 +28,7 @@ from __future__ import annotations
 import contextlib
 import inspect
 import logging
+import os
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Callable, Optional, Union
 
@@ -913,6 +914,21 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         # Ragged verify decouples request slots from the token tier: the tier
         # keys the graph, the slots bound how many requests it can hold.
         bs = self._ragged_capture_slots(num_tokens) if self.ragged_verify_mode else size
+
+        if os.environ.get("IMA_DEBUG") == "1":
+            ragged_desc = ""
+            if self.ragged_verify_mode:
+                ragged_base, ragged_remainder = num_tokens // bs, num_tokens % bs
+                ragged_desc = (
+                    f" ragged_base={ragged_base} ragged_remainder={ragged_remainder}"
+                    f" uniform={ragged_remainder == 0}"
+                )
+            logger.info(
+                f"[IMA-DEBUG] capture tier: variant={variant_label} size={size}"
+                f" num_tokens={num_tokens} slots_bs={bs}"
+                f" num_tokens_per_bs={self.num_tokens_per_bs}"
+                f" ragged_verify_mode={self.ragged_verify_mode}{ragged_desc}"
+            )
 
         # Sanity-check: --debug-cuda-graph requires breakable backend.
         if self.model_runner.server_args.debug_cuda_graph:
