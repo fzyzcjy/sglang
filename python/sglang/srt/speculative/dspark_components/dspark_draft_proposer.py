@@ -1,7 +1,9 @@
+from contextlib import nullcontext
 from typing import Optional
 
 import torch
 
+from sglang.srt.layers.dp_attention import get_attention_tp_group
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.model_executor.forward_batch_info import (
     CaptureHiddenMode,
@@ -20,6 +22,7 @@ from sglang.srt.speculative.dspark_components.dspark_info import (
     VerifyWindow,
 )
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
+from sglang.srt.speculative.spec_utils import draft_tp_context
 
 
 class DraftBlockProposer:
@@ -31,6 +34,7 @@ class DraftBlockProposer:
         gamma: int,
         mask_token_id: int,
         draft_block_spec_info,
+        dp_moe_sync: bool = False,
     ) -> None:
         self.draft_model = draft_model
         self.draft_model_runner = draft_model_runner
@@ -38,6 +42,27 @@ class DraftBlockProposer:
         self._mask_token_id = mask_token_id
         self._draft_block_spec_info = draft_block_spec_info
         self._draft_sampler = None
+        # dsv4 (MoE) draft under dp attention: the draft forward runs the shared
+        # MoE-DP gather, so its manually-built ForwardBatch must carry DP metadata
+        # (global_num_tokens = per-rank bs * gamma). The dense draft runs replicated
+        # in the attention-TP context and must NOT get this (it would trigger an
+        # unwanted MLP sync in a size-1 group), so it stays False.
+        self._dp_moe_sync = dp_moe_sync
+
+    def _base_logits_context(self):
+        """Neutralize compute_base_logits' vocab all-gather under dsv4 (MoE) DP.
+
+        gather_and_crop_vocab all-gathers over the global TP group, but under
+        --enable-dp-lm-head + attn_tp==1 the lm_head is full-vocab per rank and each DP
+        rank holds different tokens, so a global gather is both wrong and deadlocks:
+        idle DP groups never call compute_base_logits, so busy ranks block forever on the
+        collective. Patch _TP to the size-1 attn-TP group so the gather is a per-rank
+        no-op (mirrors the dense draft, whose whole propose runs in this context). The
+        draft MODEL forward stays outside this context -- its MoE gather needs the real
+        global TP group and is matched by the idle group's run_idle_participation."""
+        if self._dp_moe_sync:
+            return draft_tp_context(get_attention_tp_group())
+        return nullcontext()
 
     def propose(
         self,
@@ -93,9 +118,10 @@ class DraftBlockProposer:
                 temperatures=temperatures,
             )
         else:
-            base_logits = self.draft_model.compute_base_logits(fwd.raw_hidden).view(
-                bs, self.gamma, -1
-            )
+            with self._base_logits_context():
+                base_logits = self.draft_model.compute_base_logits(fwd.raw_hidden).view(
+                    bs, self.gamma, -1
+                )
             draft_block = sample_draft_block(
                 base_logits=base_logits,
                 anchor_tokens=draft_block_ids[:, 0],
@@ -109,6 +135,34 @@ class DraftBlockProposer:
             draft_block=draft_block,
             draft_hidden=fwd.draft_hidden_3d,
         )
+
+    def run_idle_participation(self, batch: ScheduleBatch) -> None:
+        """dsv4 (MoE) draft under DP attention: run a 0-token draft forward so an idle
+        attention-DP group joins the draft's dp_gather (busy ranks gather bs*gamma
+        tokens across DP). No-op unless dp_moe_sync. Scale global_num_tokens by gamma
+        exactly like the busy draft; the idle rank's own entry is already 0, so it
+        contributes 0 rows to the gather. Output discarded."""
+        if not self._dp_moe_sync or batch.global_num_tokens is None:
+            return
+        device = self.draft_model_runner.device
+        empty_long = torch.empty((0,), dtype=torch.int64, device=device)
+        idle_batch = ForwardBatch(
+            forward_mode=ForwardMode.IDLE,
+            batch_size=0,
+            input_ids=empty_long,
+            req_pool_indices=empty_long,
+            seq_lens=empty_long,
+            out_cache_loc=empty_long,
+            seq_lens_sum=0,
+            seq_lens_cpu=torch.empty((0,), dtype=torch.int64),
+            positions=empty_long,
+            spec_algorithm=SpeculativeAlgorithm.DSPARK,
+            spec_info=self._draft_block_spec_info,
+            capture_hidden_mode=CaptureHiddenMode.NULL,
+        )
+        self._fill_dp_moe_sync_metadata(idle_batch, batch)
+        with torch.inference_mode():
+            self.draft_model_runner.forward(idle_batch)
 
     def _run_forward(
         self,
@@ -167,6 +221,7 @@ class DraftBlockProposer:
             spec_info=self._draft_block_spec_info,
             capture_hidden_mode=CaptureHiddenMode.NULL,
         )
+        self._fill_dp_moe_sync_metadata(draft_forward_batch, batch)
         with torch.inference_mode():
             draft_out = self.draft_model_runner.forward(draft_forward_batch)
         logits_output = draft_out.logits_output
@@ -184,3 +239,32 @@ class DraftBlockProposer:
             draft_hidden_3d=draft_hidden_3d,
             can_run_graph=draft_out.can_run_graph,
         )
+
+    def _fill_dp_moe_sync_metadata(
+        self, forward_batch: ForwardBatch, batch: ScheduleBatch
+    ) -> None:
+        """dsv4 (MoE) draft under DP attention: give the hand-built draft ForwardBatch
+        the DP MLP-sync metadata that ``ForwardBatch.init_new`` would derive (its "For
+        MLP sync" block), so the forward enters ``prepare_mlp_sync_batch`` and the
+        shared MoE-DP gather sizes its buffer correctly. The scheduler's all-gathered
+        per-rank bs is scaled by the draft-block spec_info's declared coefficient
+        (``draft_token_num`` == gamma, matching the bs*gamma draft tokens per rank --
+        NOT the graph MAX_LEN uniform value), mirroring EAGLE's init_new path.
+        prepare_mlp_sync_batch fills dp_padding_mode / global_dp_buffer_len from these.
+        No-op unless dp_moe_sync (the dense draft runs replicated in the attn-TP
+        context and must never get DP metadata)."""
+        if not self._dp_moe_sync or batch.global_num_tokens is None:
+            return
+        gnt, gnt_logprob = (
+            self._draft_block_spec_info.get_spec_adjusted_global_num_tokens(batch)
+        )
+        device = self.draft_model_runner.device
+        forward_batch.global_num_tokens_cpu = gnt
+        forward_batch.global_num_tokens_for_logprob_cpu = gnt_logprob
+        forward_batch.global_num_tokens_gpu = torch.tensor(gnt, dtype=torch.int64).to(
+            device, non_blocking=True
+        )
+        forward_batch.global_num_tokens_for_logprob_gpu = torch.tensor(
+            gnt_logprob, dtype=torch.int64
+        ).to(device, non_blocking=True)
+        forward_batch.can_run_dp_cuda_graph = batch.can_run_dp_cuda_graph

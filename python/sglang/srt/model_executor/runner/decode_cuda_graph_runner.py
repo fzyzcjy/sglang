@@ -527,7 +527,16 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         if ragged_layout is not None:
             return self._can_run_ragged_verify_graph(forward_batch, ragged_layout)
 
-        if self.require_mlp_tp_gather:
+        # A batch without DP metadata under require_mlp_tp_gather is a per-rank-local
+        # forward that does not participate in DP MLP sync (the DSpark dense draft runs
+        # replicated in the attn-TP context and deliberately carries no
+        # global_num_tokens; prepare_mlp_sync_batch is likewise keyed on metadata
+        # presence), so key its graph on the local bs. Target batches always carry
+        # metadata under DP.
+        if (
+            self.require_mlp_tp_gather
+            and forward_batch.global_num_tokens_cpu is not None
+        ):
             cuda_graph_bs = (
                 max(forward_batch.global_num_tokens_cpu) // self.num_tokens_per_bs
                 if self.model_runner.spec_algorithm.is_eagle()
@@ -616,22 +625,23 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         # budget (no D2H of the real total), and it must fit the largest captured tier.
         # This also enforces raw_bs <= max_bs (mirroring the bs-keyed path's
         # cuda_graph_bs <= max_bs gate, without which _pad_to_bucket / the bs-axis
-        # assert would crash instead of falling back to eager).
-        admission_tokens = forward_batch.batch_size * self.num_tokens_per_bs
+        # assert would crash instead of falling back to eager). Under
+        # require_mlp_tp_gather the tier is DP-global: the planner floors it to the
+        # all-gathered max bs and bakes it into ragged_layout.graph_num_tokens, so admit
+        # on that global tier (identical on every rank) instead of this rank's local block.
+        admission_tokens = (
+            ragged_layout.graph_num_tokens
+            if self.require_mlp_tp_gather
+            else forward_batch.batch_size * self.num_tokens_per_bs
+        )
         is_tokens_supported = admission_tokens <= self.capture_num_tokens[-1]
 
         # Mirror the bs-keyed gates: DP/gathered-buffer batches that can't run the
-        # cuda graph (can_run_dp_cuda_graph False) must fall back to eager, and the
-        # require_mlp_tp_gather path derives bs from the global token count, which
-        # the ragged path does not yet support -- reject it loudly rather than
-        # silently selecting a graph at the wrong bs.
+        # cuda graph (can_run_dp_cuda_graph False) must fall back to eager. The
+        # require_mlp_tp_gather tier is DP-global (above), so every rank selects the
+        # same token-keyed graph and the old bs-keyed rejection is no longer needed.
         is_dp_supported = (
             forward_batch.can_run_dp_cuda_graph if self.require_mlp_sync else True
-        )
-        assert not self.require_mlp_tp_gather, (
-            "DSpark compact ragged verify does not support require_mlp_tp_gather "
-            "(bs derived from global token count); disable SGLANG_RAGGED_VERIFY_MODE "
-            "or the MLP-TP-gather path."
         )
         assert not self.disable_padding, (
             "DSpark compact ragged verify pads bs to the captured tier, which is "
@@ -1179,7 +1189,12 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
             padded_num_tokens = graph_size_key
         else:
             raw_num_token = raw_bs * self.num_tokens_per_bs
-            if self.require_mlp_tp_gather:
+            # Same metadata-presence key as can_run_graph: a metadata-less batch (DSpark
+            # dense draft attn-TP island) replays on its local bs bucket.
+            if (
+                self.require_mlp_tp_gather
+                and forward_batch.global_num_tokens_cpu is not None
+            ):
                 max_num_tokens = max(forward_batch.global_num_tokens_cpu)
                 max_batch_size = (
                     max_num_tokens / self.num_tokens_per_bs

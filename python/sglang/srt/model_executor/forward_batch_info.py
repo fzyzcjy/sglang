@@ -1280,7 +1280,10 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         # padding
         self.input_ids = self._pad_tensor_to_size(self.input_ids, num_tokens)
         self.req_pool_indices = self._pad_tensor_to_size(self.req_pool_indices, bs)
-        self.lora_ids.extend((bs - len(self.lora_ids)) * [None])
+        # Spec-decoding verify/draft batches carry no LoRA (lora_ids stays None);
+        # padding is a no-op there. Only extend when the batch actually has lora_ids.
+        if self.lora_ids is not None:
+            self.lora_ids.extend((bs - len(self.lora_ids)) * [None])
 
         seq_len_fill_value = (
             model_runner.attn_backend.get_cuda_graph_seq_len_fill_value()
@@ -1388,6 +1391,10 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         bs = self.batch_size
 
         if self.spec_info is not None:
+            # DSpark's draft block proposer runs its forward in TARGET_VERIFY mode with
+            # capture_hidden_mode=NULL and consumes only hidden_states, so
+            # next_token_logits stays None. Guard the DP MLP-sync trim so it is a no-op
+            # for such batches (a real target verify carries a tensor and still trims).
             if self.forward_mode.is_decode():  # draft
                 num_tokens = self.hidden_states_backup.shape[0]
                 self.positions = self.positions[:num_tokens]
@@ -1395,22 +1402,30 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
                 self.req_pool_indices = self.req_pool_indices[:bs]
                 if self.seq_lens_cpu is not None:
                     self.seq_lens_cpu = self.seq_lens_cpu[:bs]
-                logits_output.next_token_logits = logits_output.next_token_logits[
-                    :num_tokens
-                ]
+                if logits_output.next_token_logits is not None:
+                    logits_output.next_token_logits = logits_output.next_token_logits[
+                        :num_tokens
+                    ]
                 logits_output.hidden_states = logits_output.hidden_states[:num_tokens]
             elif self.forward_mode.is_target_verify():  # verify
                 num_tokens = bs * self.spec_info.draft_token_num
-                logits_output.next_token_logits = logits_output.next_token_logits[
-                    :num_tokens
-                ]
+                if logits_output.next_token_logits is not None:
+                    logits_output.next_token_logits = logits_output.next_token_logits[
+                        :num_tokens
+                    ]
                 logits_output.hidden_states = logits_output.hidden_states[:num_tokens]
             elif self.forward_mode.is_draft_extend_v2():  # draft extend_v2
                 bs = bs * self.spec_info.num_tokens_per_req
-                logits_output.next_token_logits = logits_output.next_token_logits[:bs]
+                if logits_output.next_token_logits is not None:
+                    logits_output.next_token_logits = logits_output.next_token_logits[
+                        :bs
+                    ]
                 logits_output.hidden_states = logits_output.hidden_states[:bs]
             elif self.forward_mode.is_extend() or self.forward_mode.is_idle():
-                logits_output.next_token_logits = logits_output.next_token_logits[:bs]
+                if logits_output.next_token_logits is not None:
+                    logits_output.next_token_logits = logits_output.next_token_logits[
+                        :bs
+                    ]
                 logits_output.hidden_states = logits_output.hidden_states[:bs]
 
             if hasattr(self, "hidden_states_backup"):

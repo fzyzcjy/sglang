@@ -45,6 +45,13 @@ class TargetHiddenKvInjector:
         cache_loc = cache_loc.to(device=device, dtype=torch.int64, non_blocking=True)
         positions = positions.to(device=device, dtype=torch.int64, non_blocking=True)
         target_hidden = target_hidden.to(device=device, non_blocking=True)
+        # Under DP attention the eager prefill's target hidden is MLP-sync padded past
+        # the real extend tokens, but the KV injection is keyed on the real
+        # positions/cache_loc; drop the trailing pad rows to match. No-op when
+        # unpadded (non-DP, or the decode-commit path where sizes already agree).
+        n_real = positions.shape[0]
+        if target_hidden.shape[0] > n_real:
+            target_hidden = target_hidden[:n_real]
         if cache_loc_2d is not None:
             cache_loc_2d = cache_loc_2d.to(
                 device=device, dtype=torch.int64, non_blocking=True

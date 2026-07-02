@@ -273,9 +273,33 @@ def _handle_dspark(server_args: ServerArgs) -> None:
         raise ValueError("DSpark speculative decoding only supports CUDA device.")
 
     if server_args.enable_dp_attention:
-        raise ValueError(
-            "Currently DSpark speculative decoding does not support dp attention."
-        )
+        # Narrow capability gate (see dp-attention impl plan). dp_lm_head is
+        # mandatory so the attached target lm_head is attention-TP sharded and the
+        # draft base-logits all-gather stays within the attention-TP group (a
+        # size-1 no-op returning the full vocab under pure DP). DeepEP / context
+        # parallel / a2a-mismatch are rejected; a MoE (dsv4) draft under DP is
+        # rejected at worker construction (the full-DP MoE path is not yet supported).
+        if not server_args.enable_dp_lm_head:
+            raise ValueError("DSpark with dp attention requires --enable-dp-lm-head.")
+        if server_args.moe_a2a_backend != "none":
+            raise ValueError(
+                "DSpark with dp attention only supports the built-in TP MoE "
+                f"(moe_a2a_backend='none'), got {server_args.moe_a2a_backend!r}."
+            )
+        if server_args.attn_cp_size > 1:
+            raise ValueError(
+                "DSpark with dp attention does not support context parallel "
+                f"(attn_cp_size={server_args.attn_cp_size})."
+            )
+        if (
+            server_args.speculative_moe_a2a_backend is not None
+            and server_args.speculative_moe_a2a_backend != server_args.moe_a2a_backend
+        ):
+            raise ValueError(
+                "DSpark ignores --speculative-moe-a2a-backend; with dp attention it "
+                f"must match the target moe_a2a_backend={server_args.moe_a2a_backend!r} "
+                f"(got {server_args.speculative_moe_a2a_backend!r})."
+            )
 
     if server_args.pp_size != 1:
         raise ValueError(

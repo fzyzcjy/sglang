@@ -13,6 +13,7 @@ Buckets (expected acc_len, high -> low):
 
 Each dataset targets PER_DATASET distinct prompts.
 """
+
 from __future__ import annotations
 
 import json
@@ -31,29 +32,69 @@ def rows(prompts: list[str]) -> list[dict]:
 def enumerate_ds() -> list[str]:
     out = []
     for n in range(80, 260, 10):  # 18
-        out.append(f"Write out every integer from 1 to {n}, separated by commas, with no other text.")
+        out.append(
+            f"Write out every integer from 1 to {n}, separated by commas, with no other text."
+        )
     for k in range(2, 20):  # 18
-        out.append(f"List the first 50 multiples of {k}, comma-separated, no other text.")
+        out.append(
+            f"List the first 50 multiples of {k}, comma-separated, no other text."
+        )
     for start in range(1000, 9001, 500):  # 17
-        out.append(f"Count down from {start} to {start-45} by ones, comma-separated, no other text.")
+        out.append(
+            f"Count down from {start} to {start-45} by ones, comma-separated, no other text."
+        )
     return out
 
 
 def alphabet_ds() -> list[str]:
     out = []
     for r in range(5, 16):  # 11
-        out.append(f"Write the lowercase English alphabet abcdefghijklmnopqrstuvwxyz, then repeat it {r} times, each on its own line.")
-    phrases = ["hello world", "the quick brown fox", "data data data", "spec decode",
-               "one two three", "keep it simple", "all work no play", "to be or not to be",
-               "practice makes perfect", "the early bird", "slow and steady", "here we go again"]
+        out.append(
+            f"Write the lowercase English alphabet abcdefghijklmnopqrstuvwxyz, then repeat it {r} times, each on its own line."
+        )
+    phrases = [
+        "hello world",
+        "the quick brown fox",
+        "data data data",
+        "spec decode",
+        "one two three",
+        "keep it simple",
+        "all work no play",
+        "to be or not to be",
+        "practice makes perfect",
+        "the early bird",
+        "slow and steady",
+        "here we go again",
+    ]
     for w in phrases:  # 12
-        out.append(f"Repeat the exact phrase '{w}' 30 times, each on its own line, nothing else.")
-    strings = ["0123456789", "abcabcabc", "xyzxyz", "1010101010", "hahaha", "na", "ab", "999",
-               "the", "loop", "yes", "----", "====", "....", "####"]
+        out.append(
+            f"Repeat the exact phrase '{w}' 30 times, each on its own line, nothing else."
+        )
+    strings = [
+        "0123456789",
+        "abcabcabc",
+        "xyzxyz",
+        "1010101010",
+        "hahaha",
+        "na",
+        "ab",
+        "999",
+        "the",
+        "loop",
+        "yes",
+        "----",
+        "====",
+        "....",
+        "####",
+    ]
     for d in strings:  # 15
-        out.append(f"Write the string '{d}' repeated 40 times with no separators and no other text.")
+        out.append(
+            f"Write the string '{d}' repeated 40 times with no separators and no other text."
+        )
     for n in [26, 52, 100, 200, 13, 39, 65, 78, 91, 104, 130, 156]:  # 12
-        out.append(f"Write 'abcdefghijklmnopqrstuvwxyz'[:26] then list the first {n} letters of the alphabet sequence continuing to wrap around, comma-separated.")
+        out.append(
+            f"Write 'abcdefghijklmnopqrstuvwxyz'[:26] then list the first {n} letters of the alphabet sequence continuing to wrap around, comma-separated."
+        )
     return out
 
 
@@ -79,9 +120,15 @@ def boilerplate_ds() -> list[str]:
     ]
     out = []
     for i, f in enumerate(fields):
-        out.append(f"Write a Python dataclass named Record{i} with exactly these fields and type hints, and nothing else:\n{f}")
-        out.append(f"Write a Python class Config{i} with an __init__ that assigns these attributes from arguments, and nothing else:\n{f}")
-        out.append(f"Write getter and setter methods for each of these fields in a Python class Model{i}:\n{f}")
+        out.append(
+            f"Write a Python dataclass named Record{i} with exactly these fields and type hints, and nothing else:\n{f}"
+        )
+        out.append(
+            f"Write a Python class Config{i} with an __init__ that assigns these attributes from arguments, and nothing else:\n{f}"
+        )
+        out.append(
+            f"Write getter and setter methods for each of these fields in a Python class Model{i}:\n{f}"
+        )
     return out
 
 
@@ -105,7 +152,9 @@ def json_fill_ds() -> list[str]:
     out = []
     for i, s in enumerate(schemas):
         for n in counts[: (4 if i < 12 else 5)]:
-            out.append(f"Output ONLY a JSON array of {n} objects, each with {s}. No prose, no code fences.")
+            out.append(
+                f"Output ONLY a JSON array of {n} objects, each with {s}. No prose, no code fences."
+            )
     return out
 
 
@@ -118,10 +167,18 @@ def code_algo_ds() -> list[str]:
         ("flatten", "nested: list", "flattens an arbitrarily nested list of ints"),
         ("count_vowels", "s: str", "returns the number of vowels in s"),
         ("merge_sort", "arr: list", "returns arr sorted ascending using merge sort"),
-        ("binary_search", "arr: list, target: int", "returns the index of target or -1"),
+        (
+            "binary_search",
+            "arr: list, target: int",
+            "returns the index of target or -1",
+        ),
         ("is_palindrome", "s: str", "returns True if s is a palindrome ignoring case"),
         ("run_length_encode", "s: str", "returns run-length encoding of s"),
-        ("two_sum", "nums: list, target: int", "returns indices of two numbers summing to target"),
+        (
+            "two_sum",
+            "nums: list, target: int",
+            "returns indices of two numbers summing to target",
+        ),
         ("rotate", "arr: list, k: int", "rotates arr right by k in place"),
         ("factorial", "n: int", "returns n! iteratively"),
         ("unique", "arr: list", "returns arr with duplicates removed, order preserved"),
@@ -134,13 +191,21 @@ def code_algo_ds() -> list[str]:
         ("digit_sum", "n: int", "returns the sum of the decimal digits of n"),
         ("dedupe_adjacent", "arr: list", "removes consecutive duplicate elements"),
         ("celsius_to_f", "c: float", "converts Celsius to Fahrenheit"),
-        ("count_words_len", "words: list", "returns a dict of length -> count of words"),
+        (
+            "count_words_len",
+            "words: list",
+            "returns a dict of length -> count of words",
+        ),
         ("clamp", "x: float, lo: float, hi: float", "clamps x into [lo, hi]"),
     ]
     out = []
     for name, args, desc in tasks:
-        out.append(f"Write a Python function `{name}({args})` that {desc}. Return only the function, no explanation.")
-        out.append(f"Write a well-documented Python function `{name}({args})` that {desc}, with a docstring and type hints. Only the function.")
+        out.append(
+            f"Write a Python function `{name}({args})` that {desc}. Return only the function, no explanation."
+        )
+        out.append(
+            f"Write a well-documented Python function `{name}({args})` that {desc}, with a docstring and type hints. Only the function."
+        )
     return out
 
 
@@ -175,7 +240,9 @@ def sql_ds() -> list[str]:
     out = []
     for r in reqs:
         out.append(f"Write a single SQL query to {r}. Output only the SQL.")
-        out.append(f"Write a single ANSI SQL query to {r}. No explanation, only the query.")
+        out.append(
+            f"Write a single ANSI SQL query to {r}. No explanation, only the query."
+        )
     return out
 
 
@@ -202,28 +269,45 @@ def translate_ds() -> list[str]:
     langs = ["French", "Spanish", "German"]
     out = []
     for i, s in enumerate(sents):
-        out.append(f"Translate this English sentence to {langs[i % 3]}. Output only the translation: '{s}'")
+        out.append(
+            f"Translate this English sentence to {langs[i % 3]}. Output only the translation: '{s}'"
+        )
     for i, s in enumerate(sents):
         out.append(f"Translate to {langs[(i + 1) % 3]}, translation only: '{s}'")
     for i, s in enumerate(sents):
-        out.append(f"Provide only the {langs[(i + 2) % 3]} translation of this sentence: '{s}'")
+        out.append(
+            f"Provide only the {langs[(i + 2) % 3]} translation of this sentence: '{s}'"
+        )
     return out
 
 
 def factual_qa_ds() -> list[str]:
     qs = [
-        "What is the capital of Australia", "Who wrote the novel Pride and Prejudice",
-        "What is the chemical symbol for gold", "In what year did the first human land on the Moon",
-        "What is the largest planet in our solar system", "What is the speed of light in a vacuum in meters per second",
-        "Who painted the Mona Lisa", "What is the tallest mountain on Earth",
-        "What language has the most native speakers worldwide", "What is the smallest prime number",
-        "What gas do plants primarily absorb during photosynthesis", "Who developed the theory of general relativity",
-        "What is the capital of Canada", "How many continents are there on Earth",
-        "What is the currency of Japan", "Who was the first President of the United States",
-        "What is the boiling point of water in Celsius at sea level", "What is the longest river in the world",
-        "What planet is known as the Red Planet", "Who discovered penicillin",
-        "What is the hardest natural material on Earth", "How many sides does a hexagon have",
-        "What is the capital of Brazil", "Who wrote Romeo and Juliet", "What is the freezing point of water in Fahrenheit",
+        "What is the capital of Australia",
+        "Who wrote the novel Pride and Prejudice",
+        "What is the chemical symbol for gold",
+        "In what year did the first human land on the Moon",
+        "What is the largest planet in our solar system",
+        "What is the speed of light in a vacuum in meters per second",
+        "Who painted the Mona Lisa",
+        "What is the tallest mountain on Earth",
+        "What language has the most native speakers worldwide",
+        "What is the smallest prime number",
+        "What gas do plants primarily absorb during photosynthesis",
+        "Who developed the theory of general relativity",
+        "What is the capital of Canada",
+        "How many continents are there on Earth",
+        "What is the currency of Japan",
+        "Who was the first President of the United States",
+        "What is the boiling point of water in Celsius at sea level",
+        "What is the longest river in the world",
+        "What planet is known as the Red Planet",
+        "Who discovered penicillin",
+        "What is the hardest natural material on Earth",
+        "How many sides does a hexagon have",
+        "What is the capital of Brazil",
+        "Who wrote Romeo and Juliet",
+        "What is the freezing point of water in Fahrenheit",
     ]
     out = []
     for q in qs:
@@ -233,92 +317,215 @@ def factual_qa_ds() -> list[str]:
 
 
 STORY_THEMES = [
-    "a lighthouse keeper who discovers a message in a bottle", "a robot learning to paint",
-    "two strangers who meet on a delayed train", "a city where it rains only at night",
-    "a child who can hear the thoughts of animals", "an astronaut stranded on a moon of Jupiter",
-    "a bakery that sells memories instead of bread", "a clockmaker who can pause time for one minute a day",
-    "a detective in a world without lies", "the last library on Earth",
-    "a garden that grows in outer space", "a musician who loses the ability to hear",
-    "a mapmaker charting a country that keeps rearranging itself", "a girl who trades her shadow for a wish",
-    "an old fisherman and the talking fish he catches", "a town where everyone shares one dream each night",
-    "a painter whose portraits predict the future", "a boy who collects lost sounds in glass jars",
-    "the night the streetlights started whispering", "a librarian who can step into any book",
-    "a chef cooking the last meal at the end of the world", "twins separated by a mirror",
-    "a gardener growing flowers that bloom into memories", "a spaceship crewed entirely by retired poets",
-    "a beekeeper whose bees spell out warnings", "a woman who wakes up one hour younger every day",
-    "a village that must whisper to keep the mountain asleep", "a cartographer of dreams",
-    "an inventor building a machine to talk to the rain", "the ghost who haunts a 24-hour laundromat",
-    "a child raised by librarian owls", "a diver who finds a drowned city that remembers her",
-    "a barista who serves emotions in coffee cups", "a tailor sewing coats out of weather",
-    "the courier who delivers the last letter on Earth", "a clock tower that runs on secrets",
-    "a shepherd guarding a flock of glass sheep", "a violinist whose music grows real flowers",
-    "a lighthouse that guides lost time instead of ships", "two rival street magicians who fall in love",
-    "a boy who befriends the monster under his bed", "a queen who rules a kingdom of paper",
-    "a scientist who shrinks to explore a single raindrop", "the last human and the first friendly robot",
-    "a girl who paints doors that open onto other worlds", "an old carousel that grants one ride to the past",
-    "a town where books read their readers", "a sailor navigating by constellations that move",
-    "a baker whose bread rises with people's hopes", "a translator for the language of storms",
+    "a lighthouse keeper who discovers a message in a bottle",
+    "a robot learning to paint",
+    "two strangers who meet on a delayed train",
+    "a city where it rains only at night",
+    "a child who can hear the thoughts of animals",
+    "an astronaut stranded on a moon of Jupiter",
+    "a bakery that sells memories instead of bread",
+    "a clockmaker who can pause time for one minute a day",
+    "a detective in a world without lies",
+    "the last library on Earth",
+    "a garden that grows in outer space",
+    "a musician who loses the ability to hear",
+    "a mapmaker charting a country that keeps rearranging itself",
+    "a girl who trades her shadow for a wish",
+    "an old fisherman and the talking fish he catches",
+    "a town where everyone shares one dream each night",
+    "a painter whose portraits predict the future",
+    "a boy who collects lost sounds in glass jars",
+    "the night the streetlights started whispering",
+    "a librarian who can step into any book",
+    "a chef cooking the last meal at the end of the world",
+    "twins separated by a mirror",
+    "a gardener growing flowers that bloom into memories",
+    "a spaceship crewed entirely by retired poets",
+    "a beekeeper whose bees spell out warnings",
+    "a woman who wakes up one hour younger every day",
+    "a village that must whisper to keep the mountain asleep",
+    "a cartographer of dreams",
+    "an inventor building a machine to talk to the rain",
+    "the ghost who haunts a 24-hour laundromat",
+    "a child raised by librarian owls",
+    "a diver who finds a drowned city that remembers her",
+    "a barista who serves emotions in coffee cups",
+    "a tailor sewing coats out of weather",
+    "the courier who delivers the last letter on Earth",
+    "a clock tower that runs on secrets",
+    "a shepherd guarding a flock of glass sheep",
+    "a violinist whose music grows real flowers",
+    "a lighthouse that guides lost time instead of ships",
+    "two rival street magicians who fall in love",
+    "a boy who befriends the monster under his bed",
+    "a queen who rules a kingdom of paper",
+    "a scientist who shrinks to explore a single raindrop",
+    "the last human and the first friendly robot",
+    "a girl who paints doors that open onto other worlds",
+    "an old carousel that grants one ride to the past",
+    "a town where books read their readers",
+    "a sailor navigating by constellations that move",
+    "a baker whose bread rises with people's hopes",
+    "a translator for the language of storms",
 ]
 
 BRAINSTORM_TOPICS = [
-    "reducing food waste in cities", "making public transit more fun",
-    "a mobile app for lonely elderly people", "gamifying household chores",
-    "novel uses for old smartphones", "helping people learn a new language faster",
-    "sustainable packaging for e-commerce", "a startup combining AI and gardening",
-    "reinventing the umbrella", "encouraging kids to read more",
-    "a new sport that uses drones", "improving remote team collaboration",
-    "making recycling irresistible", "a better alarm clock experience",
-    "helping introverts network", "reducing loneliness for remote workers",
-    "a smarter grocery list", "getting people to drink more water",
-    "a museum experience for the blind", "reinventing the office chair",
-    "making tax filing enjoyable", "a app that turns walking into a game",
-    "helping strangers share meals", "reducing single-use plastics at events",
-    "a creative way to teach fractions", "making dentist visits less scary",
-    "a subscription box for curiosity", "helping night-shift workers sleep",
-    "a playful way to save money", "getting cities to plant more trees",
-    "a better way to remember names", "making meetings 50 percent shorter",
-    "a device for talking to your plants", "reinventing the birthday card",
-    "helping people finish side projects", "a fun way to learn to cook",
-    "reducing screen time for teenagers", "a smarter umbrella-sharing system",
-    "making laundry day delightful", "a new format for local news",
-    "helping shy kids make friends", "reinventing the water bottle",
-    "a game that teaches empathy", "making commuting productive and calm",
-    "encouraging neighbors to know each other", "a kinder social media feed",
-    "helping people declutter their homes", "a creative reuse for coffee grounds",
-    "making stair-climbing appealing", "a better way to split a bill with friends",
+    "reducing food waste in cities",
+    "making public transit more fun",
+    "a mobile app for lonely elderly people",
+    "gamifying household chores",
+    "novel uses for old smartphones",
+    "helping people learn a new language faster",
+    "sustainable packaging for e-commerce",
+    "a startup combining AI and gardening",
+    "reinventing the umbrella",
+    "encouraging kids to read more",
+    "a new sport that uses drones",
+    "improving remote team collaboration",
+    "making recycling irresistible",
+    "a better alarm clock experience",
+    "helping introverts network",
+    "reducing loneliness for remote workers",
+    "a smarter grocery list",
+    "getting people to drink more water",
+    "a museum experience for the blind",
+    "reinventing the office chair",
+    "making tax filing enjoyable",
+    "a app that turns walking into a game",
+    "helping strangers share meals",
+    "reducing single-use plastics at events",
+    "a creative way to teach fractions",
+    "making dentist visits less scary",
+    "a subscription box for curiosity",
+    "helping night-shift workers sleep",
+    "a playful way to save money",
+    "getting cities to plant more trees",
+    "a better way to remember names",
+    "making meetings 50 percent shorter",
+    "a device for talking to your plants",
+    "reinventing the birthday card",
+    "helping people finish side projects",
+    "a fun way to learn to cook",
+    "reducing screen time for teenagers",
+    "a smarter umbrella-sharing system",
+    "making laundry day delightful",
+    "a new format for local news",
+    "helping shy kids make friends",
+    "reinventing the water bottle",
+    "a game that teaches empathy",
+    "making commuting productive and calm",
+    "encouraging neighbors to know each other",
+    "a kinder social media feed",
+    "helping people declutter their homes",
+    "a creative reuse for coffee grounds",
+    "making stair-climbing appealing",
+    "a better way to split a bill with friends",
 ]
 
 POETRY_THEMES = [
-    "the ocean at dawn", "a forgotten city", "autumn leaves", "distant galaxies",
-    "an old friendship", "the first snow", "a summer thunderstorm", "time passing",
-    "a candle burning", "the desert wind", "a river journey", "midnight in a train station",
-    "the smell of rain on hot pavement", "a grandmother's hands", "an empty playground at dusk",
-    "the last leaf on a tree", "a city seen from an airplane", "the sound of a distant train",
-    "a lighthouse in fog", "morning coffee alone", "a childhood home now sold", "the pause before a storm",
-    "footprints erased by the tide", "a moth circling a lamp", "the quiet after guests leave",
-    "a field of wildflowers", "an unfinished letter", "the moon over water", "a broken clock",
-    "the first day of spring", "a cathedral of trees", "static on an old radio",
-    "the space between two heartbeats", "a snow globe", "the color blue", "an abandoned house",
-    "the taste of salt air", "a spider's web at dawn", "the weight of a secret", "a lantern festival",
-    "the edge of sleep", "a train window at night", "the last page of a book", "a dying fire",
-    "the hush of falling snow", "a key with no lock", "the shape of longing", "an hourglass",
-    "the north wind", "a garden after rain",
+    "the ocean at dawn",
+    "a forgotten city",
+    "autumn leaves",
+    "distant galaxies",
+    "an old friendship",
+    "the first snow",
+    "a summer thunderstorm",
+    "time passing",
+    "a candle burning",
+    "the desert wind",
+    "a river journey",
+    "midnight in a train station",
+    "the smell of rain on hot pavement",
+    "a grandmother's hands",
+    "an empty playground at dusk",
+    "the last leaf on a tree",
+    "a city seen from an airplane",
+    "the sound of a distant train",
+    "a lighthouse in fog",
+    "morning coffee alone",
+    "a childhood home now sold",
+    "the pause before a storm",
+    "footprints erased by the tide",
+    "a moth circling a lamp",
+    "the quiet after guests leave",
+    "a field of wildflowers",
+    "an unfinished letter",
+    "the moon over water",
+    "a broken clock",
+    "the first day of spring",
+    "a cathedral of trees",
+    "static on an old radio",
+    "the space between two heartbeats",
+    "a snow globe",
+    "the color blue",
+    "an abandoned house",
+    "the taste of salt air",
+    "a spider's web at dawn",
+    "the weight of a secret",
+    "a lantern festival",
+    "the edge of sleep",
+    "a train window at night",
+    "the last page of a book",
+    "a dying fire",
+    "the hush of falling snow",
+    "a key with no lock",
+    "the shape of longing",
+    "an hourglass",
+    "the north wind",
+    "a garden after rain",
 ]
 
 LYRICS_THEMES = [
-    "chasing a dream", "a small town summer", "letting go", "city lights at 3am",
-    "an unlikely hero", "the road home", "a stormy heart", "dancing alone",
-    "old photographs", "a second chance", "the edge of the world", "fireflies",
-    "burning bridges", "the last goodbye", "a midnight drive", "coming back stronger",
-    "young and reckless", "a love that faded", "finding your voice", "the morning after",
-    "a hometown you outgrew", "wild and free", "a phone that never rings", "starting over",
-    "the one that got away", "neon and rain", "a long way from home", "holding on too long",
-    "summer that never ended", "ghosts of who we were", "a heart on fire", "the quiet kind of brave",
-    "empty highways", "a promise you kept", "dancing in the kitchen", "a storm we walked through",
-    "the color of goodbye", "running out of time", "a window seat", "the weight of the crown",
-    "learning to breathe again", "a last call at the bar", "the girl in the photograph",
-    "a fresh coat of paint", "two lanes and a full tank", "the end of an era", "a slow burn",
-    "waking up in a new city", "an old song on the radio", "the light at the end",
+    "chasing a dream",
+    "a small town summer",
+    "letting go",
+    "city lights at 3am",
+    "an unlikely hero",
+    "the road home",
+    "a stormy heart",
+    "dancing alone",
+    "old photographs",
+    "a second chance",
+    "the edge of the world",
+    "fireflies",
+    "burning bridges",
+    "the last goodbye",
+    "a midnight drive",
+    "coming back stronger",
+    "young and reckless",
+    "a love that faded",
+    "finding your voice",
+    "the morning after",
+    "a hometown you outgrew",
+    "wild and free",
+    "a phone that never rings",
+    "starting over",
+    "the one that got away",
+    "neon and rain",
+    "a long way from home",
+    "holding on too long",
+    "summer that never ended",
+    "ghosts of who we were",
+    "a heart on fire",
+    "the quiet kind of brave",
+    "empty highways",
+    "a promise you kept",
+    "dancing in the kitchen",
+    "a storm we walked through",
+    "the color of goodbye",
+    "running out of time",
+    "a window seat",
+    "the weight of the crown",
+    "learning to breathe again",
+    "a last call at the bar",
+    "the girl in the photograph",
+    "a fresh coat of paint",
+    "two lanes and a full tank",
+    "the end of an era",
+    "a slow burn",
+    "waking up in a new city",
+    "an old song on the radio",
+    "the light at the end",
 ]
 
 STORY_TEMPLATES = [
@@ -371,7 +578,9 @@ def main(out: Annotated[Path, typer.Option()] = Path("datasets")) -> None:
     for name, fn in DATASETS.items():
         prompts = fn()[:PER_DATASET]
         path = out / f"{name}.jsonl"
-        path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows(prompts)) + "\n")
+        path.write_text(
+            "\n".join(json.dumps(r, ensure_ascii=False) for r in rows(prompts)) + "\n"
+        )
         flag = "" if len(prompts) >= PER_DATASET else f"  <-- ONLY {len(prompts)}"
         print(f"{name:<18} {len(prompts):>3} prompts -> {path}{flag}")
 
