@@ -652,13 +652,6 @@ class DSparkWorkerV2(BaseSpecWorker):
         device = self.device
         prefix_lens = batch.seq_lens
 
-        if self._sps_recorder is not None:
-            self._sps_recorder.observe_decode_step(
-                forward_ct=int(batch.forward_iter),
-                num_running_reqs=bs,
-                num_verify_tokens=bs * self.verify_num_draft_tokens,
-            )
-
         target_model = self.target_worker.model_runner.model
 
         verify_window = alloc_verify_window(
@@ -721,6 +714,13 @@ class DSparkWorkerV2(BaseSpecWorker):
         verify_ids_2d = torch.cat(
             [draft_block_ids[:, :1], draft_tokens], dim=1
         ).contiguous()
+
+        if self._sps_recorder is not None:
+            self._sps_recorder.observe_decode_step(
+                forward_ct=int(batch.forward_iter),
+                num_running_reqs=bs,
+                num_verify_tokens=int(verify_ids_2d.numel()),
+            )
 
         # Pre-replay fold eligibility (everything except can_run_cuda_graph,
         # known only post-forward): gates the captured commit KV write and, with
