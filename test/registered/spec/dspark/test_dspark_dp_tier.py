@@ -3,7 +3,6 @@ import unittest
 
 from sglang.srt.speculative.dspark_components.dspark_verify import (
     dp_global_verify_tier_num_tokens,
-    dp_tier_budget,
     local_verify_tier_num_tokens,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -99,29 +98,6 @@ class TestDpGlobalVerifyTierNumTokens(CustomTestCase):
         )
 
 
-class TestDpTierBudget(CustomTestCase):
-    def test_budget_is_tier_minus_floor(self):
-        """The equivalent budget is F minus the tier's request floor."""
-        self.assertEqual(
-            dp_tier_budget(dp_tier_num_tokens=120, tier_num_reqs=32, min_verify_len=1),
-            88,
-        )
-
-    def test_clamps_at_zero(self):
-        """A tier below the request floor degenerates to a zero budget."""
-        self.assertEqual(
-            dp_tier_budget(dp_tier_num_tokens=10, tier_num_reqs=32, min_verify_len=1),
-            0,
-        )
-
-    def test_min_verify_len_scales_floor(self):
-        """The floor subtracted from F is tier_num_reqs * min_verify_len."""
-        self.assertEqual(
-            dp_tier_budget(dp_tier_num_tokens=120, tier_num_reqs=32, min_verify_len=3),
-            24,
-        )
-
-
 class TestBusyIdleGraphKeyIdentity(CustomTestCase):
     def test_busy_and_idle_floors_agree_on_random_topologies(self):
         """Busy floor arithmetic and idle bucket input both land exactly on F."""
@@ -162,14 +138,8 @@ class TestBusyIdleGraphKeyIdentity(CustomTestCase):
                 tier_num_tokens, global_num_reqs * verify_num_draft_tokens
             )
 
-            busy_budget = dp_tier_budget(
-                dp_tier_num_tokens=tier_num_tokens,
-                tier_num_reqs=global_num_reqs,
-                min_verify_len=min_verify_len,
-            )
             busy_floor = min(
-                global_num_reqs * effective_min + busy_budget,
-                global_num_reqs * verify_num_draft_tokens,
+                tier_num_tokens, global_num_reqs * verify_num_draft_tokens
             )
             self.assertEqual(busy_floor, tier_num_tokens)
 

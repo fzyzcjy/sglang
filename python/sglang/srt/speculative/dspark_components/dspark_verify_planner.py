@@ -35,7 +35,6 @@ from sglang.srt.speculative.dspark_components.dspark_sts_table import (
     load_sts_calibration_from_path,
 )
 from sglang.srt.speculative.dspark_components.dspark_verify import (
-    dp_tier_budget,
     local_verify_tier_num_tokens,
     ragged_capture_num_tokens,
     ragged_layout_exceeds_captured_grid,
@@ -179,18 +178,14 @@ class DSparkVerifyPlanner:
             self._dynamic_graph_tier = not is_dp_attention_enabled() and not (
                 online_profiler is not None and self.server_args.tp_size > 1
             )
-            # Every predicate here is identical on all ranks (server args, env,
-            # parallel topology), so ranks agree on whether the per-step tier
-            # gather collective runs at all. attn_tp > 1 is excluded: within an
-            # attention-TP group the confidence relay can resolve on rank 0 but
-            # miss on a peer, and the peer's lens-less pinned fallback cannot
-            # rendezvous with a trimmed tier. require_mlp_tp_gather must hold
-            # because without it batch.global_num_tokens carries only the LOCAL
-            # token count, which breaks every bs_max term the tier agreement is
-            # built on. The gather itself runs inside the scheduler's
-            # budget-prepare hook, which only fires on the overlap path;
-            # PD-disagg / PP event loops have early returns that skip the hook,
-            # so those stay on the pinned tier by the same static gate.
+            # All predicates are rank-identical (server args, env, topology),
+            # so ranks agree on whether the per-step tier gather runs at all.
+            # attn_tp > 1: the relay can resolve on rank 0 yet miss on a peer,
+            # whose lens-less pinned fallback cannot rendezvous with a trimmed
+            # tier. require_mlp_tp_gather: without it global_num_tokens holds
+            # only the LOCAL count, breaking every bs_max term. The gather runs
+            # inside the budget-prepare hook (overlap path only); PD-disagg /
+            # PP loops skip the hook and stay pinned.
             self._dp_tier_gather_enabled = (
                 self._ragged_verify_mode is RaggedVerifyMode.COMPACT
                 and is_dp_attention_enabled()
@@ -315,11 +310,10 @@ class DSparkVerifyPlanner:
         if self._budget_planner is None:
             return
         if draft_input is None:
-            # Idle batches carry no spec state but must still join the dp tier
-            # gather below (collectives need every rank), contributing the
-            # neutral 0. A non-empty batch without spec state is anomalous and
-            # will take the lens-less pinned fallback, so it must pin everyone
-            # via the -1 sentinel instead.
+            # Idle batches must still join the gather (collectives need every
+            # rank), contributing the neutral 0; a non-empty batch without
+            # spec state will take the pinned fallback, so it pins everyone
+            # via -1 instead.
             local_tier_num_tokens = 0 if batch.batch_size() == 0 else -1
             self._maybe_gather_dp_verify_tier(
                 batch=batch, local_tier_num_tokens=local_tier_num_tokens
@@ -351,14 +345,12 @@ class DSparkVerifyPlanner:
     ) -> None:
         if not self._dp_tier_gather_enabled:
             return
-        # is_extend_in_batch is the post-MLP-sync GLOBAL flag, so every rank
-        # takes the same branch: spec+dp never mixes prefill and decode steps
-        # (and the mixing opt-outs are statically gated off), so on a global
-        # prefill step all ranks skip and on a global decode step all ranks
-        # gather -- the collective can never be one-sided.
+        # is_extend_in_batch is the post-MLP-sync GLOBAL flag and spec+dp
+        # never mixes prefill with decode (the opt-outs are statically gated
+        # off), so every rank takes the same branch -- the collective can
+        # never be one-sided. The None write scrubs any list a previous
+        # decode step left on this persistent batch object.
         if batch.is_extend_in_batch:
-            # Scrub any list a previous decode step left on this (persistent)
-            # batch object so a later consumer can never read a stale tier.
             batch.global_spec_verify_tier_num_tokens = None
             return
         cpu_group = get_tp_group().cpu_group
@@ -439,12 +431,10 @@ class DSparkVerifyPlanner:
             budget=budget,
         )
         if verify_lens is None:
-            # The pinned uniform fallback and the dp tier agreement must stay
-            # mutually exclusive: lens are None iff this rank's budget resolved
-            # to None iff this rank contributed the -1 sentinel to the gather
-            # iff every rank aggregated dp_tier_num_tokens to None. A non-None
-            # tier here would mean this rank replays the pinned tier while
-            # other ranks replay the trimmed tier -> collective hang.
+            # lens None iff the budget resolved None iff this rank contributed
+            # the -1 sentinel iff every rank aggregated None. A non-None tier
+            # here would replay the pinned tier against peers on the trimmed
+            # tier -> collective hang, so crash instead.
             assert dp_tier_num_tokens is None, (
                 "dp tier agreement present but local verify lens are None; "
                 "the gathered hint and the local budget diverged"
@@ -461,36 +451,31 @@ class DSparkVerifyPlanner:
             return None
         bs = int(verify_lens.shape[0])
         tier_num_reqs = bs if global_num_reqs is None else global_num_reqs
-        min_verify_len = max(self._schedule_cfg.min_verify_len, 1)
-        # None keeps the legacy pinned tier round_up(bs * (gamma+1)); a host
-        # budget selects the budget-sized tier round_up(bs * min_verify_len +
-        # budget). Under dp-attn the local gate is off and the tier instead
-        # comes from the gathered agreement, identical on every rank by
-        # construction -- but only relative to the GLOBAL request count: with
-        # a local bs the small ranks would key a lower tier than their peers.
-        tier_budget = budget if self._dynamic_graph_tier else None
+        # None keeps the legacy pinned tier round_up(bs * (gamma+1)). Under
+        # dp-attn the tier comes from the gathered agreement, identical on
+        # every rank by construction -- but only relative to the GLOBAL
+        # request count: with a local bs the small ranks would key a lower
+        # tier than their peers.
         if dp_tier_num_tokens is not None:
             assert global_num_reqs is not None, (
                 "dp tier agreement requires the dp-global request count; "
                 "keying the tier off the local bs diverges across ranks"
             )
-            tier_budget = dp_tier_budget(
-                dp_tier_num_tokens=dp_tier_num_tokens,
-                tier_num_reqs=tier_num_reqs,
-                min_verify_len=min_verify_len,
+            tier_num_tokens = dp_tier_num_tokens
+        elif self._dynamic_graph_tier and budget is not None:
+            tier_num_tokens = local_verify_tier_num_tokens(
+                bs=tier_num_reqs,
+                verify_token_budget=budget,
+                verify_num_draft_tokens=self.verify_num_draft_tokens,
+                min_verify_len=self._schedule_cfg.min_verify_len,
             )
+        else:
+            tier_num_tokens = None
         if ragged_layout_exceeds_captured_grid(
             num_reqs=tier_num_reqs,
             verify_num_draft_tokens=self.verify_num_draft_tokens,
             model_runner=self.model_runner,
-            tier_tokens_hint=(
-                None
-                if tier_budget is None
-                else min(
-                    tier_num_reqs * min_verify_len + tier_budget,
-                    tier_num_reqs * self.verify_num_draft_tokens,
-                )
-            ),
+            tier_tokens_hint=tier_num_tokens,
         ):
             return None
         graph_num_tokens_floor = verify_layout_graph_num_tokens_floor(
@@ -498,8 +483,7 @@ class DSparkVerifyPlanner:
             ragged_verify_mode=self._ragged_verify_mode,
             verify_num_draft_tokens=self.verify_num_draft_tokens,
             model_runner=self.model_runner,
-            verify_token_budget=tier_budget,
-            min_verify_len=min_verify_len,
+            tier_num_tokens=tier_num_tokens,
         )
         capture_num_tokens = ragged_capture_num_tokens(model_runner=self.model_runner)
         if graph_num_tokens_floor > 0 and capture_num_tokens is not None:

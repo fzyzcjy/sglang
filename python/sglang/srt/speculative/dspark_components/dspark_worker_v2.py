@@ -599,38 +599,41 @@ class DSparkWorkerV2(BaseSpecWorker):
 
     def _idle_verify_ragged_layout(self, batch: ScheduleBatch):
         # Build the SAME layout family the busy compact verify selects, sized to
-        # the DP-global tier so the idle verify keys the exact same graph. With
-        # a gathered tier agreement the busy ranks replay the budget tier
-        # round_up(F), so the idle layout must land on that key too; without one
-        # it degenerates to the uniform verify-all layout at the pinned tier.
-        # The tier holds max(global bs) padded requests, so the layout carries
-        # that many verify_lens rows (a 0-request layout is rejected; the idle
+        # the DP-global tier so the idle verify keys the exact same graph: the
+        # gathered budget tier round_up(F) when the agreement is live, else the
+        # uniform verify-all layout at the pinned tier. The tier holds
+        # max(global bs) padded rows (a 0-request layout is rejected; the idle
         # rank's real tokens are 0 and the graph pads them out). Only compact
         # uses the token-keyed graph -- static / cap-accept stay on the shared
         # bs-keyed path (return None). None too when DP metadata is absent or
-        # the tier exceeds the captured grid (idle_ragged_layout returns None,
-        # and the busy side falls back to the same bs-keyed path).
+        # the tier exceeds the captured grid (the busy side then falls back to
+        # the same bs-keyed path).
         if batch.global_num_tokens is None or not self._verify_planner.is_compact_mode:
             return None
         global_bs = max(batch.global_num_tokens)
         if global_bs <= 0:
             return None
-        # Gate on _draft_is_moe to mirror the busy side's global_num_reqs
-        # condition: if the busy ranks never key off the dp-global tier, the
-        # idle rank must not either.
-        dp_tier_num_tokens = (
-            dp_global_verify_tier_num_tokens(
-                global_tier_num_tokens=batch.global_spec_verify_tier_num_tokens
-            )
-            if self._draft_is_moe
-            else None
-        )
         return idle_ragged_layout(
             tier_num_reqs=global_bs,
-            dp_tier_num_tokens=dp_tier_num_tokens,
+            dp_tier_num_tokens=self._dp_verify_tier_num_tokens(batch),
             device=self.device,
             verify_num_draft_tokens=self.verify_num_draft_tokens,
             model_runner=self.model_runner,
+        )
+
+    def _dp_verify_tier_num_tokens(self, batch: ScheduleBatch) -> Optional[int]:
+        # The single F-consumption predicate shared by the busy and idle verify
+        # paths: if it ever diverged between them, one side would key the
+        # gathered tier while the other stayed pinned -> collective hang.
+        if not (
+            self._draft_is_moe
+            and self.server_args.enable_dp_attention
+            and batch.global_num_tokens is not None
+            and self._verify_planner.is_compact_mode
+        ):
+            return None
+        return dp_global_verify_tier_num_tokens(
+            global_tier_num_tokens=batch.global_spec_verify_tier_num_tokens
         )
 
     def _decode_idle_result(
@@ -731,13 +734,6 @@ class DSparkWorkerV2(BaseSpecWorker):
             and batch.global_num_tokens is not None
             else None
         )
-        dp_tier_num_tokens = (
-            dp_global_verify_tier_num_tokens(
-                global_tier_num_tokens=batch.global_spec_verify_tier_num_tokens
-            )
-            if global_num_reqs is not None and self._verify_planner.is_compact_mode
-            else None
-        )
         layout = self._verify_planner.schedule_layout(
             req_pool_indices=batch.req_pool_indices,
             prefix_lens=prefix_lens,
@@ -745,7 +741,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             confidence=confidence,
             budget=verify_token_budget,
             global_num_reqs=global_num_reqs,
-            dp_tier_num_tokens=dp_tier_num_tokens,
+            dp_tier_num_tokens=self._dp_verify_tier_num_tokens(batch),
         )
         run_compact = self._verify_planner.should_run_compact(layout=layout)
 

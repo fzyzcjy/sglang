@@ -25,11 +25,11 @@ def local_verify_tier_num_tokens(
     min_verify_len: int,
 ) -> int:
     # -1 is the "no budget on this rank" sentinel: any rank contributing it
-    # forces the whole DP group onto the legacy pinned tier for the step, so
-    # a rank whose confidence relay missed (racy copy_done) can never diverge
-    # from ranks that resolved a budget. The floor term is bs * min_verify_len
-    # (not bs): the top-k allocator starts every request at min_verify_len and
-    # only the extra tokens above that count against the budget.
+    # pins the whole DP group to the legacy tier for the step, so a rank whose
+    # confidence relay missed (racy copy_done) can never diverge from ranks
+    # that resolved a budget. The floor term is bs * max(min_verify_len, 1),
+    # matching the top-k allocator: only tokens above that floor count against
+    # the budget.
     if verify_token_budget is None:
         return -1
     floor_tokens = bs * max(min_verify_len, 1)
@@ -48,12 +48,6 @@ def dp_global_verify_tier_num_tokens(
     return max_tier_num_tokens if max_tier_num_tokens > 0 else None
 
 
-def dp_tier_budget(
-    *, dp_tier_num_tokens: int, tier_num_reqs: int, min_verify_len: int
-) -> int:
-    return max(dp_tier_num_tokens - tier_num_reqs * max(min_verify_len, 1), 0)
-
-
 def idle_ragged_layout(
     *,
     tier_num_reqs: int,
@@ -63,10 +57,8 @@ def idle_ragged_layout(
     model_runner,
 ) -> Optional[RaggedVerifyLayout]:
     if ragged_capture_num_tokens(model_runner=model_runner) is None:
-        # No token-keyed capture grid: the busy side's budget floor degrades
-        # to the eager path, so the tier agreement must degrade symmetrically
-        # (a [1]-lens layout bucketed against a grid of [tier_num_reqs] would
-        # reject F > tier_num_reqs instead).
+        # No token-keyed capture grid: the busy side degrades to the eager
+        # path, so the tier agreement must degrade symmetrically.
         dp_tier_num_tokens = None
     if dp_tier_num_tokens is None:
         return uniform_ragged_layout(
@@ -83,11 +75,11 @@ def idle_ragged_layout(
         tier_tokens_hint=dp_tier_num_tokens,
     ):
         return None
-    # All rows are padding on an idle rank, so the lens only need to be a
-    # legal geometry whose bucket lands on the SAME budget tier the busy
-    # ranks select: verify-all lens would sum past the trimmed tier and trip
-    # the total<=graph_num_tokens invariant, while one anchor token per slot
-    # keeps the sum minimal and lets the floor pick the tier.
+    # All rows on an idle rank are padding, so the lens only need a legal
+    # geometry whose bucket lands on the SAME tier the busy ranks select:
+    # verify-all lens would sum past the trimmed tier (total must stay <=
+    # graph_num_tokens); one anchor per slot keeps the sum minimal and lets
+    # the floor pick the tier.
     verify_lens_cpu = [1] * tier_num_reqs
     grid = verify_layout_grid(
         verify_lens_cpu=verify_lens_cpu,
@@ -165,26 +157,19 @@ def verify_layout_graph_num_tokens_floor(
     ragged_verify_mode: RaggedVerifyMode,
     verify_num_draft_tokens: int,
     model_runner,
-    verify_token_budget: Optional[int] = None,
-    min_verify_len: int = 1,
+    tier_num_tokens: Optional[int] = None,
 ) -> int:
     if (
         ragged_verify_mode is not RaggedVerifyMode.COMPACT
         or ragged_capture_num_tokens(model_runner=model_runner) is None
     ):
         return 0
-    if verify_token_budget is not None:
-        # Budget-tiered floor: every request verifies at least min_verify_len
-        # tokens and the top-k allocator hands out at most `budget` tokens
-        # above that, so num_reqs * min_verify_len + budget upper-bounds the
-        # packed total. Both terms live on the host, so the tier choice stays
-        # sync-free (no D2H on verify_lens). The clamp pins the invariant that
-        # a budget tier never exceeds the legacy pinned tier (the packed total
-        # is also bounded by the full verify window).
-        floor_tokens = num_reqs * max(min_verify_len, 1)
-        return min(
-            floor_tokens + verify_token_budget, num_reqs * verify_num_draft_tokens
-        )
+    if tier_num_tokens is not None:
+        # Budget-tiered floor (local_verify_tier_num_tokens upper-bounds the
+        # packed total from host ints, so the tier choice stays sync-free);
+        # the clamp pins the invariant that a budget tier never exceeds the
+        # legacy pinned tier.
+        return min(tier_num_tokens, num_reqs * verify_num_draft_tokens)
     return num_reqs * verify_num_draft_tokens
 
 
