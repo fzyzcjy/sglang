@@ -310,6 +310,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             self._block_accept_recorder = BlockAcceptEstimateRecorder(
                 path=block_accept_estimate_path,
                 gamma=self.gamma,
+                device=self.device,
             )
 
         self._sps_recorder: Optional[SpsDataRecorder] = None
@@ -513,6 +514,8 @@ class DSparkWorkerV2(BaseSpecWorker):
             if self._sps_recorder is not None:
                 self._sps_recorder.note_non_decode_step()
             self._info_dumper.note_non_decode_step()
+            if self._block_accept_recorder is not None:
+                self._block_accept_recorder.flush()
             return self._forward_prefill(batch, on_publish)
 
         return self._forward_decode(batch, on_publish)

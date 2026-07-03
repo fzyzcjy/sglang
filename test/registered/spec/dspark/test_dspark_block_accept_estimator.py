@@ -31,7 +31,9 @@ def _reference_logprob(
 
 def _make_recorder(tmp_dir: str) -> tuple[BlockAcceptEstimateRecorder, Path]:
     path = Path(tmp_dir) / "estimate.jsonl"
-    recorder = BlockAcceptEstimateRecorder(path=str(path), gamma=_GAMMA)
+    recorder = BlockAcceptEstimateRecorder(
+        path=str(path), gamma=_GAMMA, device=torch.device("cpu")
+    )
     return recorder, path
 
 
