@@ -133,22 +133,17 @@ class DsparkInfoDumper:
         self._clock = clock
         self._max_step_cpu_seconds = max_step_cpu_seconds
 
-        resolved = {InfoComponent(component) for component in components}
-        self._core = InfoComponent.CORE in resolved
-        self._step_cpu = InfoComponent.STEP_CPU_TIME in resolved
-        self._step_gpu = InfoComponent.STEP_GPU_TIME in resolved
-        self._draft_gpu = InfoComponent.DRAFT_GPU_TIME in resolved
-        self._target_verify_gpu = InfoComponent.TARGET_VERIFY_GPU_TIME in resolved
-        self._reqs = InfoComponent.REQS in resolved
-        self._components = sorted(component.value for component in resolved)
-        self.enabled = bool(resolved) and self.tp_rank == 0
+        self._components: set[InfoComponent] = {
+            InfoComponent(component) for component in components
+        }
+        self.enabled = bool(self._components) and self.tp_rank == 0
 
         self._records: deque[DecodeStepRecord] = deque(maxlen=max_records)
         self._pending: Optional[_PendingStep] = None
         self._prev_stamp: Optional[float] = None
 
         self._d2h_stream: Optional[torch.cuda.Stream] = None
-        if self.enabled and self._reqs:
+        if self.enabled and InfoComponent.REQS in self._components:
             self._d2h_stream = torch.cuda.Stream(device=device)
 
         self._current_segments: dict[
@@ -161,7 +156,7 @@ class DsparkInfoDumper:
             return
         self._current_segments = {}
         self._open_segments = {}
-        if self._step_gpu:
+        if InfoComponent.STEP_GPU_TIME in self._components:
             self._open_segment(InfoSegment.STEP)
 
     def segment(self, name: Union[InfoSegment, str]) -> ContextManager[None]:
@@ -181,14 +176,18 @@ class DsparkInfoDumper:
     def observe_decode_step(self, obs: DecodeStepObservation) -> None:
         if not self.enabled:
             return
-        if self._step_gpu:
+        if InfoComponent.STEP_GPU_TIME in self._components:
             self._close_segment(InfoSegment.STEP)
 
         now = self._clock()
         step_cpu_ms = self._step_cpu_ms(now=now)
         self._drain_pending()
 
-        future = self._stage_reqs(obs) if self._reqs else None
+        future = (
+            self._stage_reqs(obs)
+            if InfoComponent.REQS in self._components
+            else None
+        )
         self._pending = _PendingStep(
             forward_ct=int(obs.forward_ct),
             bs=int(obs.bs),
@@ -224,17 +223,17 @@ class DsparkInfoDumper:
             "mode": self.mode_value,
             "gamma": self.gamma,
             "verify_num_draft_tokens": self.verify_num_draft_tokens,
-            "components": self._components,
+            "components": sorted(component.value for component in self._components),
             "records": [msgspec.to_builtins(record) for record in self._records],
         }
 
     def _segment_enabled(self, segment: InfoSegment) -> bool:
         if segment is InfoSegment.STEP:
-            return self._step_gpu
+            return InfoComponent.STEP_GPU_TIME in self._components
         if segment is InfoSegment.DRAFT:
-            return self._draft_gpu
+            return InfoComponent.DRAFT_GPU_TIME in self._components
         if segment is InfoSegment.TARGET_VERIFY:
-            return self._target_verify_gpu
+            return InfoComponent.TARGET_VERIFY_GPU_TIME in self._components
         return False
 
     def _open_segment(self, segment: InfoSegment) -> None:
@@ -273,24 +272,24 @@ class DsparkInfoDumper:
             return
 
         record = DecodeStepRecord(forward_ct=pending.forward_ct)
-        if self._core:
+        if InfoComponent.CORE in self._components:
             record.bs = pending.bs
             record.mode = pending.mode
             record.budget = pending.budget
             record.lag_steps = pending.lag_steps
             record.num_running_reqs = pending.bs
             record.num_verify_tokens = pending.num_verify_tokens
-        if self._step_cpu:
+        if InfoComponent.STEP_CPU_TIME in self._components:
             record.step_cpu_ms = pending.step_cpu_ms
-        if self._step_gpu:
+        if InfoComponent.STEP_GPU_TIME in self._components:
             record.step_gpu_ms = self._segment_ms(pending, InfoSegment.STEP)
-        if self._draft_gpu:
+        if InfoComponent.DRAFT_GPU_TIME in self._components:
             record.draft_gpu_ms = self._segment_ms(pending, InfoSegment.DRAFT)
-        if self._target_verify_gpu:
+        if InfoComponent.TARGET_VERIFY_GPU_TIME in self._components:
             record.target_verify_gpu_ms = self._segment_ms(
                 pending, InfoSegment.TARGET_VERIFY
             )
-        if self._reqs and pending.future is not None:
+        if InfoComponent.REQS in self._components and pending.future is not None:
             record.reqs = self._build_reqs(host=pending.future.wait(), bs=pending.bs)
         elif pending.future is not None:
             pending.future.wait()
