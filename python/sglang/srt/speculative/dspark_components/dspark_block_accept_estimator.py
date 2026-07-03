@@ -64,11 +64,12 @@ class _OnlineCeiling:
         self._evict(forward_ct=self._max_forward_ct)
         if self._count == 0:
             return None
+        horizon = min(self._window_steps, self._max_forward_ct)
         return (
             self._sum_lo / self._count,
             self._sum_hi / self._count,
             self._count,
-            len(self._steps),
+            horizon,
         )
 
     def maybe_log(self, *, forward_ct: int) -> None:
@@ -106,6 +107,36 @@ class _RequestState(msgspec.Struct):
     expected_seq_len: int = -1
     last_seen_ct: int = 0
     pending: List[_PendingBlock] = []
+
+
+class _PendingPlan(msgspec.Struct):
+    rows: List[int]
+    tokens: List[int]
+    slot_lookup: dict
+
+
+class _SettleBatch(msgspec.Struct):
+    forward_ct: int
+    rids: List[str]
+    row_meta: List[List[int]]
+    drafts: List[List[int]]
+    q_all: List[List[float]]
+    target_diag: List[List[float]]
+    pending_logprobs: List[float]
+    slot_lookup: dict
+
+    @classmethod
+    def from_bundle(cls, bundle: dict[str, Any]) -> _SettleBatch:
+        return cls(
+            forward_ct=bundle["forward_ct"],
+            rids=bundle["rids"],
+            row_meta=bundle["row_meta"].tolist(),
+            drafts=bundle["draft_tokens"].tolist(),
+            q_all=bundle["q_all"].tolist(),
+            target_diag=bundle["target_diag_logprobs"].tolist(),
+            pending_logprobs=bundle["pending_logprobs"].tolist(),
+            slot_lookup=bundle["pending_slot_lookup"],
+        )
 
 
 class BlockAcceptEstimateRecorder:
@@ -309,30 +340,63 @@ class BlockAcceptEstimateRecorder:
             .to(torch.float32)
             .repeat_interleave(rows_per_request)
         )
-
         draft_flat = draft_tokens.reshape(-1)
+
         q_all = self._gather_logprobs(
             logits=corrected_logits.reshape(bs * gamma, -1),
             row_indices=torch.arange(bs * gamma, device=device),
             token_indices=draft_flat,
             temps=draft_temps_full,
         ).reshape(bs, gamma)
-
-        diag_rows = (
-            (torch.arange(bs, device=device) * rows_per_request)[:, None]
-            + torch.arange(gamma, device=device)[None, :]
-        ).reshape(-1)
-        target_diag_logprobs = self._gather_logprobs(
+        target_diag = self._gather_logprobs(
             logits=target_logits,
-            row_indices=diag_rows,
+            row_indices=self._diag_rows(bs=bs, rows_per_request=rows_per_request),
             token_indices=draft_flat,
             temps=target_temps_full,
         ).reshape(bs, gamma)
 
         self._retained_h2d = []
-        pending_rows: List[int] = []
-        pending_tokens: List[int] = []
-        pending_slot_lookup: dict[tuple[int, int, int], int] = {}
+        plan = self._plan_pending(bs=bs, rows_per_request=rows_per_request, rids=rids)
+        pending_logprobs = self._gather_pending(
+            plan=plan,
+            target_logits=target_logits,
+            target_temps_full=target_temps_full,
+            device=device,
+        )
+
+        return {
+            "forward_ct": int(forward_ct),
+            "rids": list(rids),
+            "row_meta": self._pack_row_meta(
+                correct_len=correct_len,
+                cap_trim_lens=cap_trim_lens,
+                bonus=bonus,
+                prefix_lens=prefix_lens,
+                greedy_mask=greedy_mask,
+                truncated_mask=truncated_mask,
+                verify_lens=verify_lens,
+            ),
+            "draft_tokens": draft_tokens,
+            "q_all": q_all,
+            "target_diag_logprobs": target_diag,
+            "pending_logprobs": pending_logprobs,
+            "pending_slot_lookup": plan.slot_lookup,
+        }
+
+    def _diag_rows(self, *, bs: int, rows_per_request: int) -> torch.Tensor:
+        device = self._device
+        return (
+            (torch.arange(bs, device=device) * rows_per_request)[:, None]
+            + torch.arange(self._gamma, device=device)[None, :]
+        ).reshape(-1)
+
+    def _plan_pending(
+        self, *, bs: int, rows_per_request: int, rids: List[str]
+    ) -> _PendingPlan:
+        gamma = self._gamma
+        rows: List[int] = []
+        tokens: List[int] = []
+        slot_lookup: dict[tuple[int, int, int], int] = {}
         for b in range(bs):
             state = self._states.get(rids[b])
             if state is None or not state.pending or state.expected_seq_len < 0:
@@ -344,23 +408,42 @@ class BlockAcceptEstimateRecorder:
                     row = block.anchor_pos + offset - expected_seq_len
                     if row < 0 or row >= rows_per_request:
                         break
-                    token = block.trimmed_tokens[offset - block.window - 1]
-                    pending_slot_lookup[(b, block_idx, offset)] = len(pending_rows)
-                    pending_rows.append(b * rows_per_request + row)
-                    pending_tokens.append(token)
+                    slot_lookup[(b, block_idx, offset)] = len(rows)
+                    rows.append(b * rows_per_request + row)
+                    tokens.append(block.trimmed_tokens[offset - block.window - 1])
                     offset += 1
+        return _PendingPlan(rows=rows, tokens=tokens, slot_lookup=slot_lookup)
 
-        bucket = _pending_bucket(len(pending_rows))
-        pending_rows.extend([0] * (bucket - len(pending_rows)))
-        pending_tokens.extend([0] * (bucket - len(pending_tokens)))
-        pending_logprobs = self._gather_logprobs(
+    def _gather_pending(
+        self,
+        *,
+        plan: _PendingPlan,
+        target_logits: torch.Tensor,
+        target_temps_full: torch.Tensor,
+        device: torch.device,
+    ) -> torch.Tensor:
+        bucket = _pending_bucket(len(plan.rows))
+        rows = plan.rows + [0] * (bucket - len(plan.rows))
+        tokens = plan.tokens + [0] * (bucket - len(plan.tokens))
+        return self._gather_logprobs(
             logits=target_logits,
-            row_indices=self._host_to_device_async(pending_rows, device=device),
-            token_indices=self._host_to_device_async(pending_tokens, device=device),
+            row_indices=self._host_to_device_async(rows, device=device),
+            token_indices=self._host_to_device_async(tokens, device=device),
             temps=target_temps_full,
         )
 
-        row_meta = torch.stack(
+    def _pack_row_meta(
+        self,
+        *,
+        correct_len: torch.Tensor,
+        cap_trim_lens: torch.Tensor,
+        bonus: torch.Tensor,
+        prefix_lens: torch.Tensor,
+        greedy_mask: torch.Tensor,
+        truncated_mask: torch.Tensor,
+        verify_lens: torch.Tensor,
+    ) -> torch.Tensor:
+        return torch.stack(
             [
                 correct_len.to(torch.int64),
                 cap_trim_lens.to(torch.int64),
@@ -373,143 +456,168 @@ class BlockAcceptEstimateRecorder:
             dim=1,
         )
 
-        return {
-            "forward_ct": int(forward_ct),
-            "rids": list(rids),
-            "row_meta": row_meta,
-            "draft_tokens": draft_tokens,
-            "q_all": q_all,
-            "target_diag_logprobs": target_diag_logprobs,
-            "pending_logprobs": pending_logprobs,
-            "pending_slot_lookup": pending_slot_lookup,
-        }
-
     def _settle_and_write(self, bundle: dict[str, Any]) -> None:
-        gamma = self._gamma
-        forward_ct = bundle["forward_ct"]
-        self._last_forward_ct = forward_ct
-        rids = bundle["rids"]
-        bs = len(rids)
+        batch = _SettleBatch.from_bundle(bundle)
+        self._last_forward_ct = batch.forward_ct
+        for b in range(len(batch.rids)):
+            self._settle_row(b=b, batch=batch)
+        self._finish_step(forward_ct=batch.forward_ct)
 
-        row_meta = bundle["row_meta"].tolist()
-        drafts = bundle["draft_tokens"].tolist()
-        q_all = bundle["q_all"].tolist()
-        target_diag_logprobs = bundle["target_diag_logprobs"].tolist()
-        pending_logprobs = bundle["pending_logprobs"].tolist()
-        pending_slot_lookup = bundle["pending_slot_lookup"]
+    def _settle_row(self, *, b: int, batch: _SettleBatch) -> None:
+        forward_ct = batch.forward_ct
+        rid = batch.rids[b]
+        state = self._states.setdefault(rid, _RequestState())
+        state.last_seen_ct = forward_ct
 
-        for b in range(bs):
-            rid = rids[b]
-            state = self._states.setdefault(rid, _RequestState())
-            state.last_seen_ct = forward_ct
+        cl, cap_trim, bonus_token, seq_len, is_greedy, is_truncated, verify_len = (
+            batch.row_meta[b]
+        )
+        window = verify_len - 1
+        assert 0 <= cl <= window <= self._gamma
 
-            cl, cap_trim, bonus_token, seq_len, is_greedy, is_truncated, verify_len = (
-                row_meta[b]
-            )
-            window = verify_len - 1
-            assert 0 <= cl <= window <= gamma
+        self._drop_pending_on_discontinuity(
+            state, seq_len=seq_len, forward_ct=forward_ct
+        )
+        state.expected_seq_len = seq_len + cl + 1
 
-            if state.expected_seq_len >= 0 and seq_len != state.expected_seq_len:
-                if state.pending:
-                    self._discontinuity_drop_ct += len(state.pending)
-                    if self._online is not None:
-                        for block in state.pending:
-                            self._finalize_at_end_online(block, forward_ct=forward_ct)
-                    state.pending = []
-            state.expected_seq_len = seq_len + cl + 1
-
-            if is_greedy or is_truncated:
-                if is_truncated and not is_greedy:
-                    self._warn_once(
-                        reason="requests with top-k/top-p/min-p sampling are "
-                        "excluded per-row; the estimator only supports "
-                        "pure-temperature sampling (processed target distribution "
-                        "would differ from plain softmax(logits/T))"
-                    )
-                state.pending = []
-                continue
-
-            realized = drafts[b][:cl] + [bonus_token]
-
-            record: dict[str, Any] = {
-                "rid": rid,
-                "fct": forward_ct,
-                "w": window,
-                "cl": cl,
-                "ct": cap_trim,
-            }
-            censored = cl == window and window < gamma
-            num_old_pending = len(state.pending)
-            if censored:
-                trimmed_tokens = drafts[b][window:gamma]
-                q_lps = q_all[b][window:gamma]
-                state.pending.append(
-                    _PendingBlock(
-                        forward_ct=forward_ct,
-                        anchor_pos=seq_len - 1,
-                        window=window,
-                        trimmed_tokens=trimmed_tokens,
-                        next_offset=window + 1,
-                        q_lps=q_lps,
-                    )
+        if is_greedy or is_truncated:
+            if is_truncated and not is_greedy:
+                self._warn_once(
+                    reason="requests with top-k/top-p/min-p sampling are "
+                    "excluded per-row; the estimator only supports "
+                    "pure-temperature sampling (processed target distribution "
+                    "would differ from plain softmax(logits/T))"
                 )
-                record["trimmed_tokens"] = trimmed_tokens
-                record["q_lp"] = q_lps
+            state.pending = []
+            return
+
+        record: dict[str, Any] = {
+            "rid": rid,
+            "fct": forward_ct,
+            "w": window,
+            "cl": cl,
+            "ct": cap_trim,
+        }
+        num_old_pending = len(state.pending)
+        if cl == window and window < self._gamma:
+            self._open_block(
+                state,
+                record,
+                drafts_row=batch.drafts[b],
+                q_all_row=batch.q_all[b],
+                window=window,
+                seq_len=seq_len,
+                forward_ct=forward_ct,
+            )
+        elif self._online is not None:
+            self._online.add(forward_ct=forward_ct, lo=cl + 1.0, hi=cl + 1.0)
+
+        pending_gathers = self._settle_pending(
+            b=b,
+            batch=batch,
+            state=state,
+            realized=batch.drafts[b][:cl] + [bonus_token],
+            cl=cl,
+            seq_len=seq_len,
+            num_old_pending=num_old_pending,
+        )
+        if pending_gathers:
+            record["pg"] = pending_gathers
+        if self._file is not None:
+            self._file.write(json.dumps(record) + "\n")
+
+    def _open_block(
+        self,
+        state: _RequestState,
+        record: dict[str, Any],
+        *,
+        drafts_row: List[int],
+        q_all_row: List[float],
+        window: int,
+        seq_len: int,
+        forward_ct: int,
+    ) -> None:
+        trimmed_tokens = drafts_row[window : self._gamma]
+        q_lps = q_all_row[window : self._gamma]
+        state.pending.append(
+            _PendingBlock(
+                forward_ct=forward_ct,
+                anchor_pos=seq_len - 1,
+                window=window,
+                trimmed_tokens=trimmed_tokens,
+                next_offset=window + 1,
+                q_lps=q_lps,
+            )
+        )
+        record["trimmed_tokens"] = trimmed_tokens
+        record["q_lp"] = q_lps
+
+    def _settle_pending(
+        self,
+        *,
+        b: int,
+        batch: _SettleBatch,
+        state: _RequestState,
+        realized: List[int],
+        cl: int,
+        seq_len: int,
+        num_old_pending: int,
+    ) -> List[list]:
+        gamma = self._gamma
+        pending_gathers: List[list] = []
+        kept_pending: List[_PendingBlock] = []
+        for block_idx, block in enumerate(state.pending):
+            diverged = False
+            while block.next_offset <= gamma:
+                row = block.anchor_pos + block.next_offset - seq_len
+                assert row >= 0
+                if row > cl:
+                    break
+                token = block.trimmed_tokens[block.next_offset - block.window - 1]
+                if block_idx < num_old_pending:
+                    p_lp = batch.pending_logprobs[
+                        batch.slot_lookup[(b, block_idx, block.next_offset)]
+                    ]
+                else:
+                    p_lp = batch.target_diag[b][row]
+                pending_gathers.append(
+                    [block.forward_ct, block.next_offset, p_lp, token, realized[row]]
+                )
+                self._accumulate_online(block, p_lp=p_lp)
+                block.next_offset += 1
+                if realized[row] != token:
+                    diverged = True
+                    break
+            if not diverged and block.next_offset <= gamma:
+                kept_pending.append(block)
             elif self._online is not None:
-                self._online.add(forward_ct=forward_ct, lo=cl + 1.0, hi=cl + 1.0)
+                self._finalize_walk_online(
+                    block, diverged=diverged, forward_ct=batch.forward_ct
+                )
+        state.pending = kept_pending
+        return pending_gathers
 
-            pending_gathers: List[list] = []
-            kept_pending: List[_PendingBlock] = []
-            for block_idx, block in enumerate(state.pending):
-                diverged = False
-                while block.next_offset <= gamma:
-                    position = block.anchor_pos + block.next_offset
-                    row = position - seq_len
-                    assert row >= 0
-                    if row > cl:
-                        break
-                    token = block.trimmed_tokens[block.next_offset - block.window - 1]
-                    if block_idx < num_old_pending:
-                        p_lp = pending_logprobs[
-                            pending_slot_lookup[(b, block_idx, block.next_offset)]
-                        ]
-                    else:
-                        p_lp = target_diag_logprobs[b][row]
-                    pending_gathers.append(
-                        [
-                            block.forward_ct,
-                            block.next_offset,
-                            p_lp,
-                            token,
-                            realized[row],
-                        ]
-                    )
-                    if self._online is not None:
-                        a = min(
-                            1.0,
-                            math.exp(
-                                p_lp - block.q_lps[block.next_offset - block.window - 1]
-                            ),
-                        )
-                        block.est_prod *= a
-                        block.est_lo_extra += block.est_prod
-                    block.next_offset += 1
-                    if realized[row] != token:
-                        diverged = True
-                        break
-                if not diverged and block.next_offset <= gamma:
-                    kept_pending.append(block)
-                elif self._online is not None:
-                    self._finalize_walk_online(
-                        block, diverged=diverged, forward_ct=forward_ct
-                    )
-            state.pending = kept_pending
+    def _accumulate_online(self, block: _PendingBlock, *, p_lp: float) -> None:
+        if self._online is None:
+            return
+        a = min(1.0, math.exp(p_lp - block.q_lps[block.next_offset - block.window - 1]))
+        block.est_prod *= a
+        block.est_lo_extra += block.est_prod
 
-            if pending_gathers:
-                record["pg"] = pending_gathers
-            if self._file is not None:
-                self._file.write(json.dumps(record) + "\n")
+    def _drop_pending_on_discontinuity(
+        self, state: _RequestState, *, seq_len: int, forward_ct: int
+    ) -> None:
+        if state.expected_seq_len < 0 or seq_len == state.expected_seq_len:
+            return
+        if not state.pending:
+            return
+        self._discontinuity_drop_ct += len(state.pending)
+        if self._online is not None:
+            for block in state.pending:
+                self._finalize_at_end_online(block, forward_ct=forward_ct)
+        state.pending = []
 
+    def _finish_step(self, *, forward_ct: int) -> None:
         self._observed_step_ct += 1
         if self._file is not None:
             self._steps_since_flush += 1
