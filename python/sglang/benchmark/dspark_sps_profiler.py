@@ -511,9 +511,7 @@ def postprocess_round(
         )
 
     window_cts = [
-        ct
-        for ct in sorted(common_cts)
-        if aligned_cts[0] <= ct <= aligned_cts[-1]
+        ct for ct in sorted(common_cts) if aligned_cts[0] <= ct <= aligned_cts[-1]
     ]
     match_fraction = len(aligned_cts) / len(window_cts)
     if match_fraction < MATCH_FRACTION_ERROR:
