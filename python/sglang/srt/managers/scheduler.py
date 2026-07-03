@@ -3750,6 +3750,9 @@ class Scheduler(
             sps_record = self.draft_worker.dump_sps_records()
             if sps_record is not None:
                 ret["dspark_sps_record"] = sps_record
+            info_record = self.draft_worker.dump_info_records()
+            if info_record is not None:
+                ret["dspark_info_record"] = info_record
 
         # This field is not serializable.
         ret.pop("model_config", None)

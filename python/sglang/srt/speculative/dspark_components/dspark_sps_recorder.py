@@ -10,6 +10,9 @@ SPS_RECORD_MAX_STEP_INTERVAL_SECONDS = 1.0
 SPS_RECORD_MAX_RECORDS = 200_000
 
 
+# DEPRECATED: superseded by dspark_info_dumper.DsparkInfoDumper (the `core` /
+# `step_cpu_time` components). Retained only for the existing offline SPS
+# profiler path (SGLANG_DSPARK_ENABLE_SPS_RECORD); do not extend.
 class SpsStepRecord(msgspec.Struct, frozen=True):
     forward_ct: int
     num_running_reqs: int

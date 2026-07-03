@@ -42,6 +42,11 @@ from sglang.srt.speculative.dspark_components.dspark_draft import (
     DsparkDraftSampler,
     make_next_draft_input,
 )
+from sglang.srt.speculative.dspark_components.dspark_info_dumper import (
+    DecodeStepObservation,
+    DsparkInfoDumper,
+    resolve_components,
+)
 from sglang.srt.speculative.dspark_components.dspark_draft_proposer import (
     DraftBlockProposer,
 )
@@ -331,6 +336,15 @@ class DSparkWorkerV2(BaseSpecWorker):
             tp_rank=self.tp_rank,
         )
 
+        self._info_dumper = DsparkInfoDumper(
+            components=resolve_components(envs.SGLANG_DSPARK_DEBUG_DUMP.get()),
+            gamma=self.gamma,
+            verify_num_draft_tokens=self.verify_num_draft_tokens,
+            tp_rank=self.tp_rank,
+            device=self.device,
+            mode_value=self._verify_planner.mode_value,
+        )
+
     def _resolve_target_embed_tokens(self, target_model):
         if hasattr(target_model, "get_input_embeddings"):
             return target_model.get_input_embeddings()
@@ -456,6 +470,15 @@ class DSparkWorkerV2(BaseSpecWorker):
             "records": self._sps_recorder.dump_records(),
         }
 
+    def dump_info_records(self) -> Optional[dict]:
+        dumped = self._info_dumper.dump()
+        if dumped is None:
+            return None
+        dumped["simulate_acc_len"] = (
+            self._simulate_acc_len if self._simulate_acc_len > 0 else None
+        )
+        return dumped
+
     def forward_batch_generation(
         self,
         batch: ScheduleBatch,
@@ -470,6 +493,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             self._verify_planner.note_non_decode_step()
             if self._sps_recorder is not None:
                 self._sps_recorder.note_non_decode_step()
+            self._info_dumper.note_non_decode_step()
             return self._forward_prefill(batch, on_publish)
 
         return self._forward_decode(batch, on_publish)
@@ -672,6 +696,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         if batch.forward_mode.is_idle():
             if self._sps_recorder is not None:
                 self._sps_recorder.note_non_decode_step()
+            self._info_dumper.note_non_decode_step()
             if self.server_args.enable_dp_attention:
                 if self._draft_is_moe:
                     self._proposer.run_idle_participation(batch)
@@ -685,6 +710,8 @@ class DSparkWorkerV2(BaseSpecWorker):
         device = self.device
         prefix_lens = batch.seq_lens
 
+        self._info_dumper.begin_step()
+
         target_model = self.target_worker.model_runner.model
 
         verify_window = alloc_verify_window(
@@ -697,7 +724,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
 
         sampling_info = batch.sampling_info
-        with self._draft_context():
+        with self._draft_context(), self._info_dumper.segment("draft"):
             proposal = self._proposer.propose(
                 batch=batch,
                 draft_input=draft_input,
@@ -765,26 +792,27 @@ class DSparkWorkerV2(BaseSpecWorker):
             and verify_logits_adjustments_are_noop(sampling_info)
             and self._simulate_acc_len <= 0
         )
-        if run_compact:
-            target_verify, hidden_strided = self._verify_executor.run_compact(
-                batch=batch,
-                layout=layout,
-                draft_block_ids=draft_block_ids,
-                draft_tokens=draft_tokens,
-                bs=bs,
-                device=device,
-                sampling_info=sampling_info,
-                inject_gate=fold_eligible,
-            )
-        else:
-            target_verify = self._verify_executor.run_non_compact(
-                batch=batch,
-                draft_input=draft_input,
-                verify_ids_2d=verify_ids_2d,
-                verify_window=verify_window,
-                sampling_info=sampling_info,
-            )
-            hidden_strided = None
+        with self._info_dumper.segment("target_verify"):
+            if run_compact:
+                target_verify, hidden_strided = self._verify_executor.run_compact(
+                    batch=batch,
+                    layout=layout,
+                    draft_block_ids=draft_block_ids,
+                    draft_tokens=draft_tokens,
+                    bs=bs,
+                    device=device,
+                    sampling_info=sampling_info,
+                    inject_gate=fold_eligible,
+                )
+            else:
+                target_verify = self._verify_executor.run_non_compact(
+                    batch=batch,
+                    draft_input=draft_input,
+                    verify_ids_2d=verify_ids_2d,
+                    verify_window=verify_window,
+                    sampling_info=sampling_info,
+                )
+                hidden_strided = None
         logits_output = target_verify.logits_output
         can_run_cuda_graph = target_verify.can_run_cuda_graph
 
@@ -894,6 +922,26 @@ class DSparkWorkerV2(BaseSpecWorker):
             correct_len=correct_len,
             cap_trim_lens=cap_trim_lens,
             commit_lens=commit_lens,
+        )
+        self._info_dumper.observe_decode_step(
+            DecodeStepObservation(
+                forward_ct=int(batch.forward_iter),
+                bs=bs,
+                mode=self._verify_planner.mode_value,
+                budget=verify_token_budget,
+                lag_steps=self._verify_planner.lag_steps,
+                num_verify_tokens=int(verify_ids_2d.numel()),
+                verify_lens=layout.verify_lens if layout is not None else None,
+                confidence=confidence,
+                req_pool_indices=batch.req_pool_indices,
+                prefix_lens=prefix_lens,
+                draft_tokens=draft_tokens,
+                bonus_tokens=bonus,
+                correct_len=correct_len,
+                cap_trim_lens=cap_trim_lens,
+                commit_lens=commit_lens,
+                rids=[req.rid for req in batch.reqs],
+            )
         )
 
         next_draft_input = make_next_draft_input(
