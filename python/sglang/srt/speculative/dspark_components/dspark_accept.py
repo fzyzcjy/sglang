@@ -17,17 +17,6 @@ from sglang.srt.speculative.dspark_components.kernels.softmax_temp import Softma
 from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 
 
-def simulated_correct_drafts(
-    *,
-    simulate_acc_len: float,
-    gamma: int,
-    bs: int,
-    device: torch.device,
-) -> torch.Tensor:
-    correct_target = int(round(min(max(simulate_acc_len - 1.0, 0.0), float(gamma))))
-    return torch.full((bs,), correct_target, dtype=torch.int32, device=device)
-
-
 def accept_draft_tokens(
     *,
     candidates: torch.Tensor,

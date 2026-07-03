@@ -31,7 +31,6 @@ from sglang.srt.speculative.draft_worker_common import (
 )
 from sglang.srt.speculative.dspark_components.dspark_accept import (
     accept_draft_tokens,
-    simulated_correct_drafts,
 )
 from sglang.srt.speculative.dspark_components.dspark_confidence_metrics import (
     ConfidenceMetricsProbe,
@@ -902,12 +901,14 @@ class DSparkWorkerV2(BaseSpecWorker):
     ) -> torch.Tensor:
         buf = self._simulated_correct_drafts_buf
         if buf is None or buf.numel() < bs or buf.dtype != dtype:
-            buf = simulated_correct_drafts(
-                simulate_acc_len=self._simulate_acc_len,
-                gamma=self.gamma,
-                bs=max(bs, 512),
-                device=device,
-            ).to(dtype)
+            correct_target = int(
+                round(
+                    min(max(self._simulate_acc_len - 1.0, 0.0), float(self.gamma))
+                )
+            )
+            buf = torch.full(
+                (max(bs, 512),), correct_target, dtype=dtype, device=device
+            )
             self._simulated_correct_drafts_buf = buf
         return buf[:bs]
 
