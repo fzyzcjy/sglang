@@ -85,6 +85,7 @@ class RoundSettings(msgspec.Struct, frozen=True):
     target_steady_steps: int
     min_steady_steps: int
     round_timeout_seconds: float
+    ramp_token_slack: int = 0
 
 
 class LoadInfo(msgspec.Struct, frozen=True):
@@ -389,8 +390,12 @@ def round_max_new_tokens(*, settings: RoundSettings, context: ServerContext) -> 
         )
         + 1
     )
+    # Long inputs need a ramp allowance on top of the step budget: prefilling
+    # the whole batch can take minutes, and requests that finish their step
+    # budget before the last request enters decode make full-batch alignment
+    # unreachable (observed: input_len 8192, bs 384 -> 0 aligned steps).
     total_steps = ROUND_WARMUP_STEPS + settings.target_steady_steps + ROUND_STEP_SLACK
-    return total_steps * commit_tokens_per_step
+    return total_steps * commit_tokens_per_step + settings.ramp_token_slack
 
 
 def run_warmup_round(
@@ -407,6 +412,7 @@ def run_warmup_round(
         target_steady_steps=WARMUP_ROUND_STEADY_STEPS,
         min_steady_steps=1,
         round_timeout_seconds=settings.round_timeout_seconds,
+        ramp_token_slack=settings.ramp_token_slack,
     )
     try:
         run_one_round(
@@ -944,6 +950,16 @@ def cli_main() -> None:
         "steps before giving up and using what was collected.",
     )
     parser.add_argument(
+        "--ramp-token-slack",
+        type=int,
+        default=0,
+        help="Extra per-request tokens on top of the step budget so requests "
+        "outlive the whole-batch prefill ramp. Required for long --input-len "
+        "at high batch sizes, where the ramp exceeds the request lifetime and "
+        "full-batch alignment becomes unreachable; size it as roughly "
+        "ramp_seconds / step_time.",
+    )
+    parser.add_argument(
         "--out",
         type=str,
         default=DEFAULT_OUT,
@@ -1004,6 +1020,7 @@ def cli_main() -> None:
         target_steady_steps=args.target_steady_steps,
         min_steady_steps=args.min_steady_steps,
         round_timeout_seconds=args.round_timeout,
+        ramp_token_slack=args.ramp_token_slack,
     )
 
     profile(
