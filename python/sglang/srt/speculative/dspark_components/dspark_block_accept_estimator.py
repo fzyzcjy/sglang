@@ -211,7 +211,7 @@ class BlockAcceptEstimateRecorder:
         record_cursor = 0
         for b in range(bs):
             pending_gathers = row_pending_gathers[b]
-            if greedy_rows[b]:
+            if greedy_rows[b] or truncated_rows[b]:
                 assert not pending_gathers
                 continue
             record = row_records[record_cursor]
