@@ -276,9 +276,7 @@ def fetch_server_context(
     internal_states = info.get("internal_states") or []
     if not internal_states:
         raise RuntimeError(f"{base_url}/server_info returned no internal_states.")
-    sps_payloads = [
-        state.get(record_source.payload_key) for state in internal_states
-    ]
+    sps_payloads = [state.get(record_source.payload_key) for state in internal_states]
     for rank_index, payload in enumerate(sps_payloads):
         if payload is None:
             raise ValueError(
@@ -486,7 +484,9 @@ def run_one_round(
     flush_cache(base_url=context.base_url)
     watermarks = [
         max((row.forward_ct for row in rows), default=-1)
-        for rows in fetch_rank_rows(base_url=context.base_url, record_source=context.record_source)
+        for rows in fetch_rank_rows(
+            base_url=context.base_url, record_source=context.record_source
+        )
     ]
 
     start_time = time.monotonic()
@@ -525,7 +525,9 @@ def run_one_round(
             ROUND_WARMUP_STEPS + settings.target_steady_steps,
         )
 
-    rank_rows = fetch_rank_rows(base_url=context.base_url, record_source=context.record_source)
+    rank_rows = fetch_rank_rows(
+        base_url=context.base_url, record_source=context.record_source
+    )
     if len(rank_rows) != len(watermarks):
         raise RuntimeError(
             f"DP rank count changed mid-profile: {len(watermarks)} -> "
@@ -604,7 +606,9 @@ def wait_for_aligned_steps(
     while time.monotonic() < deadline:
         time.sleep(POLL_INTERVAL_SECONDS)
         try:
-            rank_rows = fetch_rank_rows(base_url=context.base_url, record_source=context.record_source)
+            rank_rows = fetch_rank_rows(
+                base_url=context.base_url, record_source=context.record_source
+            )
         except Exception:
             logger.warning("Polling /server_info failed; retrying.", exc_info=True)
             continue
@@ -686,9 +690,7 @@ def fetch_rank_rows(
     return rank_rows
 
 
-def _row_step_time(
-    *, record: dict, record_source: RecordSource
-) -> Optional[float]:
+def _row_step_time(*, record: dict, record_source: RecordSource) -> Optional[float]:
     if not record_source.step_time_ms:
         return float(record["step_time"])
     value = record.get("step_cpu_ms")

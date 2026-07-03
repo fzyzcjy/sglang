@@ -72,9 +72,7 @@ class TestResolveComponents(CustomTestCase):
 
     def test_subset_and_whitespace_are_kept(self):
         """A comma list keeps exactly the named components, stripped."""
-        self.assertEqual(
-            resolve_components((" core ", "reqs")), {"core", "reqs"}
-        )
+        self.assertEqual(resolve_components((" core ", "reqs")), {"core", "reqs"})
 
     def test_unknown_component_raises(self):
         """An unknown component name is a configuration error."""
@@ -130,9 +128,7 @@ class TestCoreAndCpuTiming(CustomTestCase):
     def test_core_fields_present(self):
         """The core component carries bs / mode / budget / verify-token counts."""
         dumper, _ = make_dumper({"core"})
-        dumper.observe_decode_step(
-            make_obs(forward_ct=7, bs=3, num_verify_tokens=18)
-        )
+        dumper.observe_decode_step(make_obs(forward_ct=7, bs=3, num_verify_tokens=18))
         record = dumper.dump()["records"][0]
         self.assertEqual(record["bs"], 3)
         self.assertEqual(record["num_running_reqs"], 3)
@@ -163,9 +159,7 @@ class TestCoreAndCpuTiming(CustomTestCase):
 
     def test_oversized_gap_nulls_cpu_ms_but_keeps_record(self):
         """A stall above the threshold nulls step_cpu_ms without dropping the step."""
-        dumper, clock = make_dumper(
-            {"core", "step_cpu_time"}, max_step_cpu_seconds=0.5
-        )
+        dumper, clock = make_dumper({"core", "step_cpu_time"}, max_step_cpu_seconds=0.5)
         dumper.observe_decode_step(make_obs(forward_ct=1))
         clock.advance(0.6)
         dumper.observe_decode_step(make_obs(forward_ct=2))
