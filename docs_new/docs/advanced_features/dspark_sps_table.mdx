@@ -1,0 +1,58 @@
+---
+title: "DSpark SPS Cost Table"
+metatags:
+    description: "Profile the DSpark SPS(B) cost table offline from a static-mode DSpark server and feed it to the confidence-prefix verify scheduler."
+---
+
+DSpark's hardware-aware verify scheduler sizes per-request verify windows by maximizing `Theta = tau * SPS(B)`, where `SPS(B)` is the engine's steps-per-second at verify batch-token count `B`. `SPS(B)` is a discrete, cliff-shaped hardware capacity curve; it is profiled once offline, stored as a small JSON lookup table, and queried in O(1) at runtime.
+
+## Offline profiling workflow
+
+The profiler measures real DSpark verify steps: it connects to a running DSpark server in static ragged-verify mode, holds a series of fixed request counts steady with ignore-EOS load, and reads per-step timings recorded inside the engine.
+
+1. Launch the target model as a DSpark server in static mode with the step recorder enabled:
+
+   ```bash
+   SGLANG_RAGGED_VERIFY_MODE=static \
+   SGLANG_DSPARK_ENABLE_SPS_RECORD=1 \
+   python -m sglang.launch_server \
+       --model-path deepseek-ai/DeepSeek-V4-Flash-DSpark --tp 4 \
+       --speculative-algorithm DSPARK \
+       --trust-remote-code --port 30000
+   ```
+
+   Cuda graphs must stay enabled, and `--cuda-graph-max-bs` must cover the largest per-rank request count you plan to sweep; the profiler refuses to run otherwise.
+
+2. Run the profiler against it:
+
+   ```bash
+   python -m sglang.benchmark.dspark_sps_profiler \
+       --base-url http://localhost:30000 \
+       --max-batch-size 128 \
+       --out /path/to/dspark_sps_table.json
+   ```
+
+   Next to the table it writes `<stem>.records.jsonl` (every raw per-step record from every DP rank, per round) and `<out>.manifest.json` (sweep configuration, per-round summaries, caveats).
+
+3. Pass the table to the production (compact-mode) DSpark server:
+
+   ```bash
+   --speculative-dspark-sps-table-path /path/to/dspark_sps_table.json
+   ```
+
+## How the measurement works
+
+With `SGLANG_DSPARK_ENABLE_SPS_RECORD=1` (static mode only), the DSpark worker records one row per decode step: `forward_ct`, `num_running_reqs`, `num_verify_tokens = num_running_reqs * (gamma + 1)`, and the host wall-clock `step_time` to the next decode step. Prefill and idle steps break the pairing, so only decode-to-decode gaps are sampled. The rows sit in a bounded in-memory ring exposed through `/server_info` under `dspark_sps_record`, one entry per DP rank; reads are non-destructive and the profiler scopes each round with a `forward_ct` watermark.
+
+Per swept request count, the profiler keeps only steps where **every** DP rank sits exactly at the target per-rank batch (which automatically discards ramp-up, retraction, and drain steps), drops a few warmup steps, and converts `1 / median(step_time)` into one `SpsCostTable` probe keyed by the per-rank verify token count.
+
+## Data-parallel attention
+
+Under `--enable-dp-attention` the table is keyed by **per-rank** batch tokens, matching the scheduler's rank-local lookup. The profiler aligns the sweep to multiples of `dp_size`, relies on uniform request dispatch to keep every rank at the same batch, and verifies this per step: at every common `forward_ct`, all ranks must report the same `num_verify_tokens`, otherwise the run aborts instead of producing a skewed table. The resulting table is only as valid as the runtime load balance; a heavily imbalanced deployment sees optimistic lookups on its overloaded ranks.
+
+## Table semantics and caveats
+
+- Lookups floor `B` down to the nearest probe and never interpolate, preserving hardware cliffs.
+- Static-mode conditioning: a static verify step of `B` tokens comes from `B / (gamma + 1)` requests, the fewest possible for that `B`. A compact-mode step with the same `B` usually spans more requests and reads more KV history, so the table slightly over-estimates `steps_per_sec` there and the scheduler may admit slightly more than optimal.
+- Correctness never depends on the table: acceptance is capped per request and the bonus token is re-read from the target distribution, so a stale or flat table only affects scheduling quality.
+- `SGLANG_DSPARK_ENABLE_SPS_ONLINE_PROFILE=1` can refine a profiled table in place at runtime; the offline table serves as its initial per-bin prior.
