@@ -258,8 +258,8 @@ def _gather_token_logprobs(
         rows = logits[row_indices[start:end]].to(torch.float32)
         rows = rows / temps[start:end, None]
         log_norm = torch.logsumexp(rows, dim=-1)
-        token_logits = rows.gather(
-            dim=1, index=token_indices[start:end, None]
-        ).squeeze(1)
+        token_logits = rows.gather(dim=1, index=token_indices[start:end, None]).squeeze(
+            1
+        )
         results.append(token_logits - log_norm)
     return torch.cat(results).cpu().tolist()

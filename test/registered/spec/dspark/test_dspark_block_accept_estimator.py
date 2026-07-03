@@ -22,7 +22,9 @@ class _FakeLayout:
         self.verify_lens = verify_lens
 
 
-def _reference_logprob(logits_row: torch.Tensor, token: int, temperature: float) -> float:
+def _reference_logprob(
+    logits_row: torch.Tensor, token: int, temperature: float
+) -> float:
     scaled = logits_row.to(torch.float32) / temperature
     return float(scaled[token] - torch.logsumexp(scaled, dim=-1))
 
@@ -275,9 +277,17 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
             recorder, path = _make_recorder(tmp)
             corrected = torch.randn(_GAMMA, _VOCAB)
             target = torch.randn((_GAMMA + 1), _VOCAB)
-            _observe(recorder, forward_ct=1, rid="r0", drafts=[1, 2, 3],
-                     corrected_logits=corrected, target_logits=target,
-                     verify_len=2, correct_len=1, bonus=2)
+            _observe(
+                recorder,
+                forward_ct=1,
+                rid="r0",
+                drafts=[1, 2, 3],
+                corrected_logits=corrected,
+                target_logits=target,
+                verify_len=2,
+                correct_len=1,
+                bonus=2,
+            )
             recorder.observe_verify_step(
                 forward_ct=2,
                 rids=["r0"],
