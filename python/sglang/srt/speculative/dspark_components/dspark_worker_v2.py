@@ -48,6 +48,9 @@ from sglang.srt.speculative.dspark_components.dspark_draft_proposer import (
 from sglang.srt.speculative.dspark_components.dspark_kv_inject import (
     TargetHiddenKvInjector,
 )
+from sglang.srt.speculative.dspark_components.dspark_sps_recorder import (
+    SpsDataRecorder,
+)
 from sglang.srt.speculative.dspark_components.dspark_sts_recorder import (
     StsDataRecorder,
 )
@@ -290,6 +293,18 @@ class DSparkWorkerV2(BaseSpecWorker):
 
         self._sts_recorder: Optional[StsDataRecorder] = None
 
+        self._sps_recorder: Optional[SpsDataRecorder] = None
+        if envs.SGLANG_DSPARK_ENABLE_SPS_RECORD.get():
+            if self._verify_planner.mode_value != RaggedVerifyMode.STATIC.value:
+                raise ValueError(
+                    "SGLANG_DSPARK_ENABLE_SPS_RECORD only supports "
+                    "SGLANG_RAGGED_VERIFY_MODE=static (the per-step verify token "
+                    "count is a host-side constant there; other modes would need a "
+                    "device sync to read it). Got mode="
+                    f"{self._verify_planner.mode_value!r}."
+                )
+            self._sps_recorder = SpsDataRecorder()
+
         self._confidence_probe = ConfidenceMetricsProbe(
             gamma=self.gamma,
             verify_num_draft_tokens=self.verify_num_draft_tokens,
@@ -415,6 +430,15 @@ class DSparkWorkerV2(BaseSpecWorker):
     def clear_cache_pool(self):
         pass
 
+    def dump_sps_records(self) -> Optional[dict]:
+        if self._sps_recorder is None:
+            return None
+        return {
+            "mode": self._verify_planner.mode_value,
+            "verify_num_draft_tokens": int(self.verify_num_draft_tokens),
+            "records": self._sps_recorder.dump_records(),
+        }
+
     def forward_batch_generation(
         self,
         batch: ScheduleBatch,
@@ -427,6 +451,8 @@ class DSparkWorkerV2(BaseSpecWorker):
 
         if batch.forward_mode.is_extend() or batch.is_extend_in_batch:
             self._verify_planner.note_non_decode_step()
+            if self._sps_recorder is not None:
+                self._sps_recorder.note_non_decode_step()
             return self._forward_prefill(batch, on_publish)
 
         return self._forward_decode(batch, on_publish)
@@ -611,6 +637,8 @@ class DSparkWorkerV2(BaseSpecWorker):
             )
 
         if batch.forward_mode.is_idle():
+            if self._sps_recorder is not None:
+                self._sps_recorder.note_non_decode_step()
             if self.server_args.enable_dp_attention:
                 if self._draft_is_moe:
                     self._proposer.run_idle_participation(batch)
@@ -623,6 +651,13 @@ class DSparkWorkerV2(BaseSpecWorker):
         bs = len(batch.seq_lens)
         device = self.device
         prefix_lens = batch.seq_lens
+
+        if self._sps_recorder is not None:
+            self._sps_recorder.observe_decode_step(
+                forward_ct=int(batch.forward_iter),
+                num_running_reqs=bs,
+                num_verify_tokens=bs * self.verify_num_draft_tokens,
+            )
 
         target_model = self.target_worker.model_runner.model
 
