@@ -936,6 +936,11 @@ class DSparkWorkerV2(BaseSpecWorker):
                     if sampling_info is not None
                     else False
                 ),
+                need_min_p_sampling=(
+                    sampling_info.need_min_p_sampling
+                    if sampling_info is not None
+                    else False
+                ),
                 logits_adjustments_are_noop=verify_logits_adjustments_are_noop(
                     sampling_info
                 ),

@@ -67,6 +67,7 @@ class BlockAcceptEstimateRecorder:
         target_temperatures: torch.Tensor,
         need_top_k_sampling: bool,
         need_top_p_sampling: bool,
+        need_min_p_sampling: bool,
         logits_adjustments_are_noop: bool,
         correct_len: torch.Tensor,
         cap_trim_lens: torch.Tensor,
@@ -76,11 +77,11 @@ class BlockAcceptEstimateRecorder:
     ) -> None:
         if self._disabled:
             return
-        if need_top_k_sampling or need_top_p_sampling:
+        if need_top_k_sampling or need_top_p_sampling or need_min_p_sampling:
             self._disable(
-                reason="top-k/top-p sampling detected; the estimator only supports "
-                "pure-temperature sampling (processed target distribution would "
-                "differ from plain softmax(logits/T))"
+                reason="top-k/top-p/min-p sampling detected; the estimator only "
+                "supports pure-temperature sampling (processed target distribution "
+                "would differ from plain softmax(logits/T))"
             )
             return
         if not logits_adjustments_are_noop:
