@@ -6,6 +6,7 @@ import torch
 from sglang.srt.distributed import get_tp_group
 from sglang.srt.environ import envs
 from sglang.srt.layers.dp_attention import (
+    get_attention_cp_size,
     get_attention_tp_size,
     is_dp_attention_enabled,
 )
@@ -54,6 +55,7 @@ from sglang.srt.speculative.ragged_verify import (
     round_up_grid,
 )
 from sglang.srt.utils.async_probe import maybe_assert_async
+from sglang.srt.utils.common import require_mlp_tp_gather
 
 logger = logging.getLogger(__name__)
 
@@ -182,14 +184,19 @@ class DSparkVerifyPlanner:
             # gather collective runs at all. attn_tp > 1 is excluded: within an
             # attention-TP group the confidence relay can resolve on rank 0 but
             # miss on a peer, and the peer's lens-less pinned fallback cannot
-            # rendezvous with a trimmed tier. The gather itself runs inside the
-            # scheduler's budget-prepare hook, which only fires on the overlap
-            # path; PD-disagg / PP event loops have early returns that skip the
-            # hook, so those stay on the pinned tier by the same static gate.
+            # rendezvous with a trimmed tier. require_mlp_tp_gather must hold
+            # because without it batch.global_num_tokens carries only the LOCAL
+            # token count, which breaks every bs_max term the tier agreement is
+            # built on. The gather itself runs inside the scheduler's
+            # budget-prepare hook, which only fires on the overlap path;
+            # PD-disagg / PP event loops have early returns that skip the hook,
+            # so those stay on the pinned tier by the same static gate.
             self._dp_tier_gather_enabled = (
                 self._ragged_verify_mode is RaggedVerifyMode.COMPACT
                 and is_dp_attention_enabled()
                 and get_attention_tp_size() == 1
+                and get_attention_cp_size() == 1
+                and require_mlp_tp_gather(self.server_args)
                 and not self.server_args.disable_overlap_schedule
                 and not self.server_args.speculative_skip_dp_mlp_sync
                 and self.server_args.disaggregation_mode == "null"

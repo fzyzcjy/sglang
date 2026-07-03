@@ -62,6 +62,12 @@ def idle_ragged_layout(
     verify_num_draft_tokens: int,
     model_runner,
 ) -> Optional[RaggedVerifyLayout]:
+    if ragged_capture_num_tokens(model_runner=model_runner) is None:
+        # No token-keyed capture grid: the busy side's budget floor degrades
+        # to the eager path, so the tier agreement must degrade symmetrically
+        # (a [1]-lens layout bucketed against a grid of [tier_num_reqs] would
+        # reject F > tier_num_reqs instead).
+        dp_tier_num_tokens = None
     if dp_tier_num_tokens is None:
         return uniform_ragged_layout(
             bs=tier_num_reqs,
