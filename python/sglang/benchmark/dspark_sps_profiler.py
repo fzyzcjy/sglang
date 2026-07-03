@@ -748,13 +748,15 @@ def postprocess_round(
         rows_at_ct = [by_ct[ct] for by_ct in by_ct_per_rank]
         if all(row.num_running_reqs == batch_size_per_rank for row in rows_at_ct):
             for rank_index, row in enumerate(rows_at_ct):
-                if row.num_verify_tokens != expected_tokens:
+                if row.num_verify_tokens < expected_tokens:
                     raise RuntimeError(
                         f"DP rank {rank_index} at forward_ct={ct} reports "
-                        f"num_verify_tokens={row.num_verify_tokens}, expected "
-                        f"{expected_tokens} (= {batch_size_per_rank} reqs x "
+                        f"num_verify_tokens={row.num_verify_tokens}, expected at "
+                        f"least {expected_tokens} (= {batch_size_per_rank} reqs x "
                         f"{verify_num_draft_tokens}); ranks are not running the "
-                        "uniform static verify the table assumes."
+                        "uniform static verify the table assumes. The recorded "
+                        "count is the replayed graph tier, which may exceed the "
+                        "candidate count when a bs is not an exact capture tier."
                     )
             aligned_cts.append(ct)
 
