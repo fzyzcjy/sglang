@@ -1,9 +1,11 @@
 import unittest
 
 from sglang.benchmark.dspark_sps_profiler import (
+    LoadInfo,
     ServerContext,
     SpsRow,
     build_request_count_sweep,
+    count_aligned_steps,
     build_table_from_rounds,
     postprocess_round,
     resolve_cuda_graph_max_bs,
@@ -13,6 +15,12 @@ from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 
 register_cpu_ci(est_time=10, suite="base-a-test-cpu")
+
+
+def make_load_info() -> LoadInfo:
+    return LoadInfo(
+        num_requests=4, max_new_tokens=1200, wall_seconds=1.0, reached_target=True
+    )
 
 
 def make_rows(
@@ -57,7 +65,8 @@ class TestPostprocessRound(CustomTestCase):
             batch_size_per_rank=4,
             dp_size=1,
             verify_num_draft_tokens=8,
-            client_result={},
+            min_steady_steps=16,
+            load_info=make_load_info(),
         )
         self.assertEqual(outcome.batch_tokens, 32)
         self.assertAlmostEqual(outcome.steps_per_sec, 100.0)
@@ -72,7 +81,8 @@ class TestPostprocessRound(CustomTestCase):
             batch_size_per_rank=4,
             dp_size=1,
             verify_num_draft_tokens=8,
-            client_result={},
+            min_steady_steps=16,
+            load_info=make_load_info(),
         )
         self.assertAlmostEqual(outcome.steps_per_sec, 100.0)
 
@@ -85,7 +95,8 @@ class TestPostprocessRound(CustomTestCase):
             batch_size_per_rank=4,
             dp_size=1,
             verify_num_draft_tokens=8,
-            client_result={},
+            min_steady_steps=16,
+            load_info=make_load_info(),
         )
         self.assertAlmostEqual(outcome.steps_per_sec, 50.0)
         self.assertAlmostEqual(outcome.match_fraction, 1.0)
@@ -103,7 +114,8 @@ class TestPostprocessRound(CustomTestCase):
                 batch_size_per_rank=4,
                 dp_size=1,
                 verify_num_draft_tokens=8,
-                client_result={},
+                min_steady_steps=16,
+                load_info=make_load_info(),
             )
 
     def test_round_that_never_stabilizes_raises(self):
@@ -116,7 +128,8 @@ class TestPostprocessRound(CustomTestCase):
                 batch_size_per_rank=4,
                 dp_size=1,
                 verify_num_draft_tokens=8,
-                client_result={},
+                min_steady_steps=16,
+                load_info=make_load_info(),
             )
 
 
@@ -128,7 +141,8 @@ class TestPostprocessRoundCrossRank(CustomTestCase):
             batch_size_per_rank=4,
             dp_size=2,
             verify_num_draft_tokens=8,
-            client_result={},
+            min_steady_steps=16,
+            load_info=make_load_info(),
         )
         self.assertEqual(outcome.batch_size_per_rank, 4)
         self.assertEqual(outcome.batch_tokens, 32)
@@ -145,7 +159,8 @@ class TestPostprocessRoundCrossRank(CustomTestCase):
                 batch_size_per_rank=4,
                 dp_size=2,
                 verify_num_draft_tokens=8,
-                client_result={},
+                min_steady_steps=16,
+                load_info=make_load_info(),
             )
 
     def test_disjoint_forward_ct_ranges_raise(self):
@@ -159,7 +174,8 @@ class TestPostprocessRoundCrossRank(CustomTestCase):
                 batch_size_per_rank=4,
                 dp_size=2,
                 verify_num_draft_tokens=8,
-                client_result={},
+                min_steady_steps=16,
+                load_info=make_load_info(),
             )
 
     def test_cross_rank_verify_token_mismatch_raises(self):
@@ -170,7 +186,8 @@ class TestPostprocessRoundCrossRank(CustomTestCase):
                 batch_size_per_rank=4,
                 dp_size=2,
                 verify_num_draft_tokens=8,
-                client_result={},
+                min_steady_steps=16,
+                load_info=make_load_info(),
             )
 
     def test_rank_count_mismatch_raises(self):
@@ -181,7 +198,8 @@ class TestPostprocessRoundCrossRank(CustomTestCase):
                 batch_size_per_rank=4,
                 dp_size=2,
                 verify_num_draft_tokens=8,
-                client_result={},
+                min_steady_steps=16,
+                load_info=make_load_info(),
             )
 
 
@@ -194,7 +212,8 @@ class TestTableAssembly(CustomTestCase):
                 batch_size_per_rank=4,
                 dp_size=1,
                 verify_num_draft_tokens=8,
-                client_result={},
+                min_steady_steps=16,
+                load_info=make_load_info(),
             )
             for step_time in (0.01, 0.02, 0.04)
         ]
@@ -215,7 +234,8 @@ class TestTableAssembly(CustomTestCase):
                 batch_size_per_rank=batch_size,
                 dp_size=1,
                 verify_num_draft_tokens=8,
-                client_result={},
+                min_steady_steps=16,
+                load_info=make_load_info(),
             )
             for batch_size in (8, 2, 4)
         ]
@@ -261,6 +281,45 @@ class TestSweepHelpers(CustomTestCase):
     def test_resolve_cuda_graph_max_bs_handles_missing_config(self):
         """A server without a parseable cuda_graph_config resolves to None."""
         self.assertIsNone(resolve_cuda_graph_max_bs(internal_state={}))
+
+
+class TestCountAlignedSteps(CustomTestCase):
+    def test_counts_common_cts_at_target_batch(self):
+        """Only forward_cts present on every rank at the target batch are counted."""
+        rows_a = make_rows(num_rows=10)
+        rows_b = make_rows(num_rows=8, first_forward_ct=2)
+        self.assertEqual(
+            count_aligned_steps(rank_rows=[rows_a, rows_b], batch_size_per_rank=4),
+            8,
+        )
+
+    def test_zero_when_any_rank_is_empty(self):
+        """A rank without records means no aligned steps yet."""
+        self.assertEqual(
+            count_aligned_steps(rank_rows=[make_rows(), []], batch_size_per_rank=4),
+            0,
+        )
+
+    def test_off_target_steps_are_not_counted(self):
+        """Steps at a different running batch do not count toward the target."""
+        rows = make_rows(num_rows=10, num_running_reqs=3)
+        self.assertEqual(
+            count_aligned_steps(rank_rows=[rows], batch_size_per_rank=4), 0
+        )
+
+
+class TestMinSteadySteps(CustomTestCase):
+    def test_min_steady_steps_rejects_thin_probes(self):
+        """A probe built from fewer aligned steps than required is rejected."""
+        with self.assertRaisesRegex(RuntimeError, "never stabilized"):
+            postprocess_round(
+                rank_rows=[make_rows(num_rows=20)],
+                batch_size_per_rank=4,
+                dp_size=1,
+                verify_num_draft_tokens=8,
+                min_steady_steps=32,
+                load_info=make_load_info(),
+            )
 
 
 if __name__ == "__main__":

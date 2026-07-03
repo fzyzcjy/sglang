@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import random
 import statistics
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -13,8 +15,6 @@ import requests
 
 from sglang.benchmark.one_batch_server import (
     DEFAULT_TIMEOUT,
-    BenchOneCaseResult,
-    run_one_case,
     should_skip_due_to_max_running_requests,
     should_skip_due_to_token_capacity,
 )
@@ -30,16 +30,20 @@ logger = logging.getLogger(__name__)
 DEFAULT_OUT = "~/main/artifacts/sglang/dspark_sps_table.json"
 DEFAULT_MAX_BATCH_SIZE = 256
 DEFAULT_INPUT_LEN = 16
-DEFAULT_OUTPUT_LEN = 480
 DEFAULT_TEMPERATURE = 1.0
-WARMUP_OUTPUT_LEN = 32
+DEFAULT_TARGET_STEADY_STEPS = 128
+DEFAULT_MIN_STEADY_STEPS = 32
+DEFAULT_ROUND_TIMEOUT_SECONDS = 300.0
 ROUND_WARMUP_STEPS = 8
-MIN_STEADY_STEPS = 16
+ROUND_STEP_SLACK = 64
+WARMUP_ROUND_STEADY_STEPS = 16
+POLL_INTERVAL_SECONDS = 2.0
+LOAD_JOIN_TIMEOUT_SECONDS = 60.0
 MATCH_FRACTION_WARN = 0.9
 MATCH_FRACTION_ERROR = 0.5
 PROFILE_SEED = 42
-PROFILE_STREAM_INTERVAL = 1
-PROFILE_INPUT_LEN_STEP_PERCENTAGE = 0.0
+RANDOM_TOKEN_LOW = 1000
+RANDOM_TOKEN_HIGH_MARGIN = 1000
 
 STATIC_CONDITIONING_CAVEAT = (
     "Profiled with SGLANG_RAGGED_VERIFY_MODE=static: a verify step of B tokens "
@@ -73,30 +77,38 @@ class ServerContext(msgspec.Struct, frozen=True):
     skip_token_capacity_threshold: float
 
 
+class RoundSettings(msgspec.Struct, frozen=True):
+    input_len: int
+    temperature: float
+    target_steady_steps: int
+    min_steady_steps: int
+    round_timeout_seconds: float
+
+
+class LoadInfo(msgspec.Struct, frozen=True):
+    num_requests: int
+    max_new_tokens: int
+    wall_seconds: float
+    reached_target: bool
+
+
 class RoundOutcome(msgspec.Struct, frozen=True):
     batch_size: int
     batch_size_per_rank: int
     batch_tokens: int
     steps_per_sec: float
-    num_aligned_steps: int
+    num_steady_steps: int
     match_fraction: float
     per_rank_median_step_time: list[float]
     rank_rows: list[list[SpsRow]]
-    client_result: dict
-
-
-class SweepOutcome(msgspec.Struct, frozen=True):
-    table: SpsCostTable
-    rounds: list[RoundOutcome]
+    load_info: LoadInfo
 
 
 def profile(
     *,
     base_url: str,
     batch_sizes: list[int],
-    input_len: int,
-    output_len: int,
-    temperature: float,
+    settings: RoundSettings,
     out: str,
     max_batch_tokens: Optional[int],
     repeats: int,
@@ -113,23 +125,26 @@ def profile(
     out_path = Path(out).expanduser()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     records_path = out_path.with_name(out_path.stem + ".records.jsonl")
+    rounds_path = out_path.with_name(out_path.stem + ".rounds.jsonl")
     manifest_path = out_path.with_name(out_path.name + ".manifest.json")
-    if records_path.exists():
-        records_path.unlink()
+    for path in (records_path, rounds_path):
+        if path.exists():
+            path.unlink()
 
     context = fetch_server_context(
         base_url=base_url, local_tokenizer_path=local_tokenizer_path
     )
-    tokenizer = get_tokenizer(context.tokenizer_path)
+    vocab_size = len(get_tokenizer(context.tokenizer_path))
     batch_sizes = sorted(set(batch_sizes))
     validate_sweep_against_server(context=context, batch_sizes=batch_sizes)
+    rng = random.Random(PROFILE_SEED)
 
-    run_warmup_case(
+    run_warmup_round(
         context=context,
-        tokenizer=tokenizer,
+        vocab_size=vocab_size,
         batch_sizes=batch_sizes,
-        input_len=input_len,
-        temperature=temperature,
+        settings=settings,
+        rng=rng,
     )
 
     rounds: list[RoundOutcome] = []
@@ -137,30 +152,33 @@ def profile(
         for batch_size_per_rank in batch_sizes:
             outcome = run_one_round(
                 context=context,
-                tokenizer=tokenizer,
+                vocab_size=vocab_size,
                 batch_size_per_rank=batch_size_per_rank,
-                input_len=input_len,
-                output_len=output_len,
-                temperature=temperature,
+                settings=settings,
+                rng=rng,
             )
             if outcome is None:
                 continue
             logger.info(
                 "Round bs=%s (per-rank %s, batch_tokens=%s) repeat=%s/%s: "
-                "steps_per_sec=%.3f over %s aligned steps (match_fraction=%.2f, "
-                "per-rank median step_time=%s)",
+                "steps_per_sec=%.3f over %s steady steps (match_fraction=%.2f, "
+                "wall=%.1fs, per-rank median step_time=%s)",
                 outcome.batch_size,
                 outcome.batch_size_per_rank,
                 outcome.batch_tokens,
                 repeat + 1,
                 max(1, repeats),
                 outcome.steps_per_sec,
-                outcome.num_aligned_steps,
+                outcome.num_steady_steps,
                 outcome.match_fraction,
+                outcome.load_info.wall_seconds,
                 ["%.4f" % value for value in outcome.per_rank_median_step_time],
             )
-            append_round_records(
-                records_path=records_path, outcome=outcome, repeat=repeat
+            append_round_files(
+                records_path=records_path,
+                rounds_path=rounds_path,
+                outcome=outcome,
+                repeat=repeat,
             )
             rounds.append(outcome)
 
@@ -182,11 +200,10 @@ def profile(
     write_manifest(
         manifest_path=manifest_path,
         records_path=records_path,
+        rounds_path=rounds_path,
         context=context,
         batch_sizes=batch_sizes,
-        input_len=input_len,
-        output_len=output_len,
-        temperature=temperature,
+        settings=settings,
         repeats=repeats,
         rounds=rounds,
     )
@@ -337,57 +354,101 @@ def build_request_count_sweep(max_num_reqs: int) -> list[int]:
     return sweep
 
 
-def run_warmup_case(
+def round_max_new_tokens(*, settings: RoundSettings, context: ServerContext) -> int:
+    total_steps = (
+        ROUND_WARMUP_STEPS + settings.target_steady_steps + ROUND_STEP_SLACK
+    )
+    return total_steps * context.verify_num_draft_tokens
+
+
+def run_warmup_round(
     *,
     context: ServerContext,
-    tokenizer: object,
+    vocab_size: int,
     batch_sizes: list[int],
-    input_len: int,
-    temperature: float,
+    settings: RoundSettings,
+    rng: random.Random,
 ) -> None:
-    batch_size = min(8, max(batch_sizes)) * context.dp_size
-    _bench_case_or_none(
-        context=context,
-        tokenizer=tokenizer,
-        batch_size=batch_size,
-        input_len=input_len,
-        output_len=WARMUP_OUTPUT_LEN,
-        temperature=temperature,
+    warmup_settings = RoundSettings(
+        input_len=settings.input_len,
+        temperature=settings.temperature,
+        target_steady_steps=WARMUP_ROUND_STEADY_STEPS,
+        min_steady_steps=1,
+        round_timeout_seconds=settings.round_timeout_seconds,
     )
+    try:
+        run_one_round(
+            context=context,
+            vocab_size=vocab_size,
+            batch_size_per_rank=min(8, max(batch_sizes)),
+            settings=warmup_settings,
+            rng=rng,
+        )
+    except Exception:
+        logger.warning("Warmup round failed; continuing.", exc_info=True)
 
 
 def run_one_round(
     *,
     context: ServerContext,
-    tokenizer: object,
+    vocab_size: int,
     batch_size_per_rank: int,
-    input_len: int,
-    output_len: int,
-    temperature: float,
+    settings: RoundSettings,
+    rng: random.Random,
 ) -> Optional[RoundOutcome]:
     batch_size = batch_size_per_rank * context.dp_size
+    max_new_tokens = round_max_new_tokens(settings=settings, context=context)
     if should_skip_due_to_max_running_requests(
         batch_size, context.skip_max_running_requests_threshold
     ) or should_skip_due_to_token_capacity(
-        batch_size, input_len, output_len, context.skip_token_capacity_threshold
+        batch_size,
+        settings.input_len,
+        max_new_tokens,
+        context.skip_token_capacity_threshold,
     ):
         return None
 
+    flush_cache(base_url=context.base_url)
     watermarks = [
         max((row.forward_ct for row in rows), default=-1)
         for rows in fetch_rank_rows(base_url=context.base_url)
     ]
 
-    client_result = _bench_case_or_none(
-        context=context,
-        tokenizer=tokenizer,
-        batch_size=batch_size,
-        input_len=input_len,
-        output_len=output_len,
-        temperature=temperature,
+    start_time = time.monotonic()
+    load_thread = start_load(
+        base_url=context.base_url,
+        num_requests=batch_size,
+        input_len=settings.input_len,
+        max_new_tokens=max_new_tokens,
+        temperature=settings.temperature,
+        vocab_size=vocab_size,
+        rng=rng,
     )
-    if client_result is None:
-        return None
+    reached_target = wait_for_aligned_steps(
+        context=context,
+        watermarks=watermarks,
+        batch_size_per_rank=batch_size_per_rank,
+        target_aligned_steps=ROUND_WARMUP_STEPS + settings.target_steady_steps,
+        timeout_seconds=settings.round_timeout_seconds,
+    )
+    abort_all_requests(base_url=context.base_url)
+    load_thread.join(timeout=LOAD_JOIN_TIMEOUT_SECONDS)
+    if load_thread.is_alive():
+        logger.warning(
+            "Load batch for bs=%s did not return within %.0fs after abort; "
+            "continuing with the collected records.",
+            batch_size,
+            LOAD_JOIN_TIMEOUT_SECONDS,
+        )
+    wall_seconds = time.monotonic() - start_time
+    if not reached_target:
+        logger.warning(
+            "Round bs=%s hit the %.0fs timeout before collecting %s aligned "
+            "steps; proceeding with what was collected.",
+            batch_size,
+            settings.round_timeout_seconds,
+            ROUND_WARMUP_STEPS + settings.target_steady_steps,
+        )
 
     rank_rows = fetch_rank_rows(base_url=context.base_url)
     if len(rank_rows) != len(watermarks):
@@ -404,8 +465,123 @@ def run_one_round(
         batch_size_per_rank=batch_size_per_rank,
         dp_size=context.dp_size,
         verify_num_draft_tokens=context.verify_num_draft_tokens,
-        client_result=client_result.model_dump(),
+        min_steady_steps=settings.min_steady_steps,
+        load_info=LoadInfo(
+            num_requests=batch_size,
+            max_new_tokens=max_new_tokens,
+            wall_seconds=round(wall_seconds, 3),
+            reached_target=reached_target,
+        ),
     )
+
+
+def start_load(
+    *,
+    base_url: str,
+    num_requests: int,
+    input_len: int,
+    max_new_tokens: int,
+    temperature: float,
+    vocab_size: int,
+    rng: random.Random,
+) -> threading.Thread:
+    token_high = vocab_size - RANDOM_TOKEN_HIGH_MARGIN
+    if token_high <= RANDOM_TOKEN_LOW:
+        raise ValueError(f"vocab_size={vocab_size} too small for random prompts.")
+    input_ids = [
+        [rng.randrange(RANDOM_TOKEN_LOW, token_high) for _ in range(input_len)]
+        for _ in range(num_requests)
+    ]
+    payload = {
+        "input_ids": input_ids,
+        "sampling_params": {
+            "temperature": temperature,
+            "max_new_tokens": max_new_tokens,
+            "ignore_eos": True,
+        },
+        "stream": False,
+    }
+
+    def _post() -> None:
+        try:
+            requests.post(
+                base_url + "/generate", json=payload, timeout=DEFAULT_TIMEOUT
+            )
+        except Exception:
+            logger.warning(
+                "Load batch POST /generate failed (expected on abort for some "
+                "server versions).",
+                exc_info=True,
+            )
+
+    thread = threading.Thread(target=_post, daemon=True)
+    thread.start()
+    return thread
+
+
+def wait_for_aligned_steps(
+    *,
+    context: ServerContext,
+    watermarks: list[int],
+    batch_size_per_rank: int,
+    target_aligned_steps: int,
+    timeout_seconds: float,
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        time.sleep(POLL_INTERVAL_SECONDS)
+        try:
+            rank_rows = fetch_rank_rows(base_url=context.base_url)
+        except Exception:
+            logger.warning("Polling /server_info failed; retrying.", exc_info=True)
+            continue
+        new_rank_rows = [
+            [row for row in rows if row.forward_ct > watermark]
+            for rows, watermark in zip(rank_rows, watermarks)
+        ]
+        if len(new_rank_rows) != len(watermarks):
+            continue
+        aligned = count_aligned_steps(
+            rank_rows=new_rank_rows, batch_size_per_rank=batch_size_per_rank
+        )
+        if aligned >= target_aligned_steps:
+            return True
+    return False
+
+
+def count_aligned_steps(
+    *, rank_rows: list[list[SpsRow]], batch_size_per_rank: int
+) -> int:
+    if any(not rows for rows in rank_rows):
+        return 0
+    by_ct_per_rank = [{row.forward_ct: row for row in rows} for rows in rank_rows]
+    common_cts = set(by_ct_per_rank[0])
+    for by_ct in by_ct_per_rank[1:]:
+        common_cts &= set(by_ct)
+    return sum(
+        1
+        for ct in common_cts
+        if all(
+            by_ct[ct].num_running_reqs == batch_size_per_rank
+            for by_ct in by_ct_per_rank
+        )
+    )
+
+
+def abort_all_requests(*, base_url: str) -> None:
+    response = requests.post(
+        base_url + "/abort_request",
+        json={"abort_all": True},
+        timeout=DEFAULT_TIMEOUT,
+    )
+    response.raise_for_status()
+
+
+def flush_cache(*, base_url: str) -> None:
+    try:
+        requests.post(base_url + "/flush_cache", timeout=DEFAULT_TIMEOUT)
+    except Exception:
+        logger.warning("POST /flush_cache failed; continuing.", exc_info=True)
 
 
 def fetch_rank_rows(*, base_url: str) -> list[list[SpsRow]]:
@@ -435,7 +611,8 @@ def postprocess_round(
     batch_size_per_rank: int,
     dp_size: int,
     verify_num_draft_tokens: int,
-    client_result: dict,
+    min_steady_steps: int,
+    load_info: LoadInfo,
 ) -> RoundOutcome:
     batch_size = batch_size_per_rank * dp_size
     expected_tokens = batch_size_per_rank * verify_num_draft_tokens
@@ -480,13 +657,14 @@ def postprocess_round(
                     )
             aligned_cts.append(ct)
 
-    if len(aligned_cts) < ROUND_WARMUP_STEPS + MIN_STEADY_STEPS:
+    if len(aligned_cts) < ROUND_WARMUP_STEPS + min_steady_steps:
         raise RuntimeError(
             f"Round bs={batch_size} never stabilized: only {len(aligned_cts)} "
             f"of {len(common_cts)} common decode steps had every rank at the "
             f"target {batch_size_per_rank} requests (need at least "
-            f"{ROUND_WARMUP_STEPS + MIN_STEADY_STEPS}). Increase --output-len, "
-            "or inspect the raw records for retraction / DP imbalance."
+            f"{ROUND_WARMUP_STEPS + min_steady_steps}). Increase "
+            "--round-timeout / --target-steady-steps, or inspect the raw "
+            "records for retraction / DP imbalance."
         )
 
     window_cts = [
@@ -510,7 +688,6 @@ def postprocess_round(
         )
 
     steady_cts = aligned_cts[ROUND_WARMUP_STEPS:]
-
     per_ct_step_times = [
         statistics.fmean(by_ct[ct].step_time for by_ct in by_ct_per_rank)
         for ct in steady_cts
@@ -526,11 +703,11 @@ def postprocess_round(
         batch_size_per_rank=batch_size_per_rank,
         batch_tokens=expected_tokens,
         steps_per_sec=1.0 / median_step_time,
-        num_aligned_steps=len(steady_cts),
+        num_steady_steps=len(steady_cts),
         match_fraction=match_fraction,
         per_rank_median_step_time=per_rank_median_step_time,
         rank_rows=rank_rows,
-        client_result=client_result,
+        load_info=load_info,
     )
 
 
@@ -549,42 +726,26 @@ def build_table_from_rounds(
     return profile_sps_table(probes=probes, max_batch_tokens=max_batch_tokens)
 
 
-def _bench_case_or_none(
+def round_summary_dict(*, outcome: RoundOutcome, repeat: int) -> dict:
+    return {
+        "repeat": repeat,
+        "batch_size": outcome.batch_size,
+        "batch_size_per_rank": outcome.batch_size_per_rank,
+        "batch_tokens": outcome.batch_tokens,
+        "steps_per_sec": outcome.steps_per_sec,
+        "num_steady_steps": outcome.num_steady_steps,
+        "match_fraction": outcome.match_fraction,
+        "per_rank_median_step_time": outcome.per_rank_median_step_time,
+        "load_info": msgspec.to_builtins(outcome.load_info),
+    }
+
+
+def append_round_files(
     *,
-    context: ServerContext,
-    tokenizer: object,
-    batch_size: int,
-    input_len: int,
-    output_len: int,
-    temperature: float,
-) -> Optional[BenchOneCaseResult]:
-    try:
-        return run_one_case(
-            context.base_url,
-            batch_size=batch_size,
-            input_len=input_len,
-            output_len=output_len,
-            temperature=temperature,
-            return_logprob=False,
-            stream_interval=PROFILE_STREAM_INTERVAL,
-            input_len_step_percentage=PROFILE_INPUT_LEN_STEP_PERCENTAGE,
-            run_name="",
-            result_filename="",
-            tokenizer=tokenizer,
-        )
-    except Exception:
-        logger.warning(
-            "Bench case bs=%s (input_len=%s, output_len=%s) failed; skipping it.",
-            batch_size,
-            input_len,
-            output_len,
-            exc_info=True,
-        )
-        return None
-
-
-def append_round_records(
-    *, records_path: Path, outcome: RoundOutcome, repeat: int
+    records_path: Path,
+    rounds_path: Path,
+    outcome: RoundOutcome,
+    repeat: int,
 ) -> None:
     with records_path.open("a", encoding="utf-8") as fout:
         for rank_index, rows in enumerate(outcome.rank_rows):
@@ -604,36 +765,18 @@ def append_round_records(
                     )
                     + "\n"
                 )
-        fout.write(
-            json.dumps(
-                {
-                    "repeat": repeat,
-                    "batch_size": outcome.batch_size,
-                    "round_summary": {
-                        "batch_tokens": outcome.batch_tokens,
-                        "steps_per_sec": outcome.steps_per_sec,
-                        "num_aligned_steps": outcome.num_aligned_steps,
-                        "match_fraction": outcome.match_fraction,
-                        "per_rank_median_step_time": (
-                            outcome.per_rank_median_step_time
-                        ),
-                        "client_result": outcome.client_result,
-                    },
-                }
-            )
-            + "\n"
-        )
+    with rounds_path.open("a", encoding="utf-8") as fout:
+        fout.write(json.dumps(round_summary_dict(outcome=outcome, repeat=repeat)) + "\n")
 
 
 def write_manifest(
     *,
     manifest_path: Path,
     records_path: Path,
+    rounds_path: Path,
     context: ServerContext,
     batch_sizes: list[int],
-    input_len: int,
-    output_len: int,
-    temperature: float,
+    settings: RoundSettings,
     repeats: int,
     rounds: list[RoundOutcome],
 ) -> None:
@@ -642,10 +785,8 @@ def write_manifest(
         "tp_size": context.tp_size,
         "dp_size": context.dp_size,
         "verify_num_draft_tokens": context.verify_num_draft_tokens,
-        "batch_size_sweep": batch_sizes,
-        "input_len": input_len,
-        "output_len": output_len,
-        "temperature": temperature,
+        "batch_size_per_rank_sweep": batch_sizes,
+        "settings": msgspec.to_builtins(settings),
         "repeats": repeats,
         "seed": PROFILE_SEED,
         "timestamp": time.time(),
@@ -653,17 +794,9 @@ def write_manifest(
         "conversion_formula": CONVERSION_FORMULA,
         "static_conditioning_caveat": STATIC_CONDITIONING_CAVEAT,
         "records_jsonl": records_path.name,
+        "rounds_jsonl": rounds_path.name,
         "round_summaries": [
-            {
-                "batch_size": outcome.batch_size,
-                "batch_size_per_rank": outcome.batch_size_per_rank,
-                "batch_tokens": outcome.batch_tokens,
-                "steps_per_sec": outcome.steps_per_sec,
-                "num_aligned_steps": outcome.num_aligned_steps,
-                "match_fraction": outcome.match_fraction,
-                "per_rank_median_step_time": outcome.per_rank_median_step_time,
-            }
-            for outcome in rounds
+            round_summary_dict(outcome=outcome, repeat=0) for outcome in rounds
         ],
     }
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -686,7 +819,7 @@ def run_self_check(*, out_path: Path) -> None:
             logger.warning(
                 "Non-monotone SPS across probes: batch_tokens=%s SPS=%.3f rose "
                 "above the previous probe's SPS=%.3f by >10%%; verify the server "
-                "was at steady state (output_len long enough, no co-tenants).",
+                "was at steady state (no co-tenants, steady clocks).",
                 batch_tokens,
                 looked_up,
                 previous_sps,
@@ -746,13 +879,6 @@ def cli_main() -> None:
         "decode-heavy regime.",
     )
     parser.add_argument(
-        "--output-len",
-        type=int,
-        default=DEFAULT_OUTPUT_LEN,
-        help="Decode length per request. Long enough to collect many aligned "
-        "steady-state decode steps per round.",
-    )
-    parser.add_argument(
         "--temperature",
         type=float,
         default=DEFAULT_TEMPERATURE,
@@ -760,12 +886,35 @@ def cli_main() -> None:
         "the same accept/sampling kernels as real serving.",
     )
     parser.add_argument(
+        "--target-steady-steps",
+        type=int,
+        default=DEFAULT_TARGET_STEADY_STEPS,
+        help="Aligned decode steps to collect per round before aborting the "
+        "load batch. The batch is held at exactly the target running-request "
+        "count the whole time (no early-finish drain tail).",
+    )
+    parser.add_argument(
+        "--min-steady-steps",
+        type=int,
+        default=DEFAULT_MIN_STEADY_STEPS,
+        help="Reject a probe built from fewer aligned steady steps than this "
+        "(a handful of steps gives a jittery point).",
+    )
+    parser.add_argument(
+        "--round-timeout",
+        type=float,
+        default=DEFAULT_ROUND_TIMEOUT_SECONDS,
+        help="Per-round wall-clock budget in seconds to collect the target "
+        "steps before giving up and using what was collected.",
+    )
+    parser.add_argument(
         "--out",
         type=str,
         default=DEFAULT_OUT,
-        help="Output JSON path for the SpsCostTable. The raw per-step records "
-        "are written next to it as <stem>.records.jsonl and a "
-        "<out>.manifest.json ties everything together.",
+        help="Output JSON path for the SpsCostTable. Raw per-step records land "
+        "next to it as <stem>.records.jsonl, one line per round as "
+        "<stem>.rounds.jsonl, and <out>.manifest.json ties everything "
+        "together.",
     )
     parser.add_argument(
         "--max-batch-tokens",
@@ -813,13 +962,18 @@ def cli_main() -> None:
         if args.batch_size is not None
         else build_request_count_sweep(args.max_batch_size)
     )
+    settings = RoundSettings(
+        input_len=args.input_len,
+        temperature=args.temperature,
+        target_steady_steps=args.target_steady_steps,
+        min_steady_steps=args.min_steady_steps,
+        round_timeout_seconds=args.round_timeout,
+    )
 
     profile(
         base_url=args.base_url,
         batch_sizes=batch_sizes,
-        input_len=args.input_len,
-        output_len=args.output_len,
-        temperature=args.temperature,
+        settings=settings,
         out=args.out,
         max_batch_tokens=args.max_batch_tokens,
         repeats=args.repeats,
