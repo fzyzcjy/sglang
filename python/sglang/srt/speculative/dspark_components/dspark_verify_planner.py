@@ -29,6 +29,8 @@ from sglang.srt.speculative.dspark_components.dspark_sps_online import (
     OnlineSpsProfiler,
 )
 from sglang.srt.speculative.dspark_components.dspark_sps_table import (
+    SpsAdditiveCostTable,
+    SpsCostTable,
     is_uninitialized_sps_table,
 )
 from sglang.srt.speculative.dspark_components.dspark_sts_table import (
@@ -141,6 +143,14 @@ class DSparkVerifyPlanner:
             )
             online_profiler = None
             if envs.SGLANG_DSPARK_ENABLE_SPS_ONLINE_PROFILE.get():
+                if isinstance(sps_table, SpsAdditiveCostTable):
+                    raise ValueError(
+                        "SGLANG_DSPARK_ENABLE_SPS_ONLINE_PROFILE rebuilds a 1D "
+                        "diagonal SPS table and would overwrite the additive "
+                        "T(bs, K) prior loaded from "
+                        "--speculative-dspark-sps-table-path; run one or the "
+                        "other."
+                    )
                 online_profiler = OnlineSpsProfiler(
                     initial_table=sps_table,
                     rebuild_interval_steps=(
@@ -220,7 +230,11 @@ class DSparkVerifyPlanner:
                         )
                     ),
                 )
-                if is_uninitialized_sps_table(sps_table) and online_profiler is None:
+                if (
+                    isinstance(sps_table, SpsCostTable)
+                    and is_uninitialized_sps_table(sps_table)
+                    and online_profiler is None
+                ):
                     logger.warning(
                         "DSpark SPS table is uninitialized (flat) and online "
                         "profiling is disabled: the verify budget degenerates to "
@@ -366,6 +380,13 @@ class DSparkVerifyPlanner:
     def note_non_decode_step(self) -> None:
         if self._budget_planner is not None:
             self._budget_planner.note_non_decode_step()
+
+    def set_forced_budget_frac(self, frac) -> None:
+        # Runtime verify-budget pin (see DSparkWorkerV2
+        # .set_dspark_forced_budget_frac); no-op on static runs, which have no
+        # budget planner.
+        if self._budget_planner is not None:
+            self._budget_planner.forced_budget_frac = frac
 
     def compute_budget_sync(
         self,

@@ -52,6 +52,84 @@ class SpsCostTable(msgspec.Struct, frozen=True):
         return msgspec.json.decode(data.encode("utf-8"), type=cls)
 
 
+def _interp_clamped(xs: list[int], ys: list[float], x: float) -> float:
+    # Piecewise-linear with edge clamp. xs strictly increasing.
+    if x <= xs[0]:
+        return ys[0]
+    if x >= xs[-1]:
+        return ys[-1]
+    hi = bisect.bisect_right(xs, x)
+    lo = hi - 1
+    frac = (x - xs[lo]) / (xs[hi] - xs[lo])
+    return ys[lo] + frac * (ys[hi] - ys[lo])
+
+
+class SpsAdditiveCostTable(msgspec.Struct, frozen=True):
+    """Additive step-cost model: T(bs, M) = bias + alpha(bs) + theta(M), in
+    seconds, with bs the running request count and M = bs + K the total packed
+    verify tokens (1-token-per-request floor + K trimmable candidates).
+
+    The three components are mutually independent lookup functions:
+    - bias: per-step fixed cost (launch / scheduling), invariant to bs and M.
+    - alpha(bs): request-scaling cost (draft pass, per-request KV/attention),
+      invariant to M -- the part trimming can never recover.
+    - theta(M): verify-token-scaling cost of the target forward over M tokens;
+      trimming lowers M and only this term.
+
+    Indexed on M (not K): along an off-diagonal (bs, K) grid the K-ranges are
+    disjoint across bs, but the M = bs + K ranges overlap, so theta is
+    identifiable (the collapse test: equal M + higher bs -> higher T isolates
+    alpha). Unlike the 1D diagonal SpsCostTable, whose single slope conflates
+    alpha' with theta' and overestimates the marginal saving of trimming.
+
+    Gauge convention (identifiability): alpha(bs_probes[0]) = 0 and
+    theta(m_probes[0]) = 0; bias absorbs the reference-point cost. Only the
+    sum is ever consumed, so the gauge is a storage convention.
+    """
+
+    bias_seconds: float
+    bs_probes: list[int]
+    alpha_seconds: list[float]
+    m_probes: list[int]
+    theta_seconds: list[float]
+
+    def __post_init__(self) -> None:
+        for name, probes, values in (
+            ("bs", self.bs_probes, self.alpha_seconds),
+            ("m", self.m_probes, self.theta_seconds),
+        ):
+            if not probes:
+                raise ValueError(f"SpsAdditiveCostTable requires {name}_probes.")
+            if probes != sorted(set(probes)):
+                raise ValueError(
+                    f"{name}_probes must be strictly increasing, got {probes}."
+                )
+            if len(probes) != len(values):
+                raise ValueError(
+                    f"{name}_probes and its values must have equal length, got "
+                    f"{len(probes)} vs {len(values)}."
+                )
+        if self.bias_seconds <= 0:
+            raise ValueError(f"bias_seconds must be > 0, got {self.bias_seconds}.")
+
+    def step_time(self, *, num_reqs: int, budget: int) -> float:
+        # budget = K above the floor; the verify forward sees M = num_reqs + K.
+        return (
+            self.bias_seconds
+            + _interp_clamped(self.bs_probes, self.alpha_seconds, float(num_reqs))
+            + _interp_clamped(
+                self.m_probes, self.theta_seconds, float(num_reqs + budget)
+            )
+        )
+
+    def to_json(self) -> str:
+        return msgspec.json.encode(self).decode("utf-8")
+
+    @classmethod
+    def from_json(cls, data: str) -> SpsAdditiveCostTable:
+        return msgspec.json.decode(data.encode("utf-8"), type=cls)
+
+
 def profile_sps_table(
     *,
     probes: list[tuple[int, float]],
@@ -91,9 +169,14 @@ def profile_sps_table(
     )
 
 
-def load_sps_table_from_path(path: str) -> SpsCostTable:
+def load_sps_table_from_path(path: str):
+    # Sniff by the discriminating top-level key: only the additive model
+    # carries "bias_seconds"; the 1D diagonal table stays the default.
     with open(path, "r", encoding="utf-8") as f:
-        return SpsCostTable.from_json(f.read())
+        data = f.read()
+    if '"bias_seconds"' in data:
+        return SpsAdditiveCostTable.from_json(data)
+    return SpsCostTable.from_json(data)
 
 
 def build_uninitialized_sps_table(*, max_batch_tokens: int) -> SpsCostTable:
