@@ -1041,9 +1041,19 @@ def postprocess_round(
                 f"Round bs={batch_size} frac={frac}: aligned steps ran at "
                 f"differing num_verify_tokens {sorted(aligned_verify_tokens)}; the "
                 "budget pin did not hold a single graph tier across all "
-                "ranks/steps, so M is ambiguous. Inspect the raw records."
+                "ranks/steps, so the measurement is ambiguous. Inspect the raw "
+                "records."
             )
-        batch_tokens = aligned_verify_tokens.pop()
+        graph_tier = aligned_verify_tokens.pop()
+        budget = int(frac * batch_size_per_rank * (verify_num_draft_tokens - 1))
+        batch_tokens = batch_size_per_rank + budget
+        if graph_tier < batch_tokens:
+            raise RuntimeError(
+                f"Round bs={batch_size} frac={frac}: replayed graph tier "
+                f"{graph_tier} is smaller than the pinned M={batch_tokens} "
+                f"(= {batch_size_per_rank} + int({frac} * {batch_size_per_rank} "
+                f"* {verify_num_draft_tokens - 1})); the budget pin did not take."
+            )
     else:
         batch_tokens = expected_tokens
 
