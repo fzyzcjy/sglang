@@ -17,6 +17,9 @@ class SpsStepRecord(msgspec.Struct, frozen=True):
     step_time: float
 
 
+# TODO: unify with OnlineSpsProfiler's step sampling (same pairing semantics);
+# deferred for now because that code is being changed concurrently by others
+# and unifying would conflict.
 class SpsDataRecorder:
     def __init__(
         self,

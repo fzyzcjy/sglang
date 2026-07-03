@@ -31,7 +31,7 @@ from sglang.srt.speculative.draft_worker_common import (
 )
 from sglang.srt.speculative.dspark_components.dspark_accept import (
     accept_draft_tokens,
-    sample_simulated_correct_drafts,
+    simulated_correct_drafts,
 )
 from sglang.srt.speculative.dspark_components.dspark_confidence_metrics import (
     ConfidenceMetricsProbe,
@@ -452,7 +452,6 @@ class DSparkWorkerV2(BaseSpecWorker):
             "simulate_acc_len": (
                 self._simulate_acc_len if self._simulate_acc_len > 0 else None
             ),
-            "simulate_acc_method": envs.SGLANG_SIMULATE_ACC_METHOD.get(),
             "records": self._sps_recorder.dump_records(),
         }
 
@@ -798,12 +797,10 @@ class DSparkWorkerV2(BaseSpecWorker):
                 cutoff_layout=layout,
             )
             if self._simulate_acc_len > 0:
-                correct_len = sample_simulated_correct_drafts(
+                correct_len = simulated_correct_drafts(
                     simulate_acc_len=self._simulate_acc_len,
-                    simulate_acc_method=envs.SGLANG_SIMULATE_ACC_METHOD.get(),
                     gamma=self.gamma,
                     bs=bs,
-                    forward_ct=int(batch.forward_iter),
                     device=correct_len.device,
                 ).to(correct_len.dtype)
 

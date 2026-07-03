@@ -3,7 +3,7 @@ import unittest
 import torch
 
 from sglang.srt.speculative.dspark_components.dspark_accept import (
-    sample_simulated_correct_drafts,
+    simulated_correct_drafts,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
@@ -11,49 +11,38 @@ from sglang.test.test_utils import CustomTestCase
 register_cpu_ci(est_time=10, suite="base-a-test-cpu")
 
 
-def sample(**overrides) -> torch.Tensor:
+def simulate(**overrides) -> torch.Tensor:
     values = dict(
-        simulate_acc_len=4.5,
-        simulate_acc_method="match-expected",
+        simulate_acc_len=1.0,
         gamma=5,
-        bs=4096,
-        forward_ct=7,
+        bs=16,
         device=torch.device("cpu"),
     )
     values.update(overrides)
-    return sample_simulated_correct_drafts(**values)
+    return simulated_correct_drafts(**values)
 
 
-class TestSampleSimulatedCorrectDrafts(CustomTestCase):
-    def test_match_expected_mean_matches_target(self):
-        """match-expected sampling averages to simulate_acc_len - 1 correct drafts."""
-        correct_drafts = sample()
-        self.assertAlmostEqual(float(correct_drafts.float().mean()), 3.5, delta=0.05)
+class TestSimulatedCorrectDrafts(CustomTestCase):
+    def test_acc_len_one_gives_zero_correct_drafts(self):
+        """Accept length 1.0 (bonus only) yields a constant zero-draft tensor."""
+        correct_drafts = simulate()
+        self.assertTrue(torch.equal(correct_drafts, torch.zeros(16, dtype=torch.int32)))
 
-    def test_values_stay_within_draft_bounds(self):
-        """Sampled correct drafts never leave [0, gamma] for either method."""
-        for method in ("match-expected", "multinomial"):
-            correct_drafts = sample(simulate_acc_method=method, simulate_acc_len=9.0)
-            self.assertGreaterEqual(int(correct_drafts.min()), 0)
-            self.assertLessEqual(int(correct_drafts.max()), 5)
+    def test_acc_len_counts_the_bonus_token(self):
+        """Accept length 4.0 means 3 correct drafts per request."""
+        self.assertTrue(bool((simulate(simulate_acc_len=4.0) == 3).all()))
 
-    def test_acc_len_below_one_clamps_to_zero_drafts(self):
-        """An accept length of 1 (bonus only) yields zero correct drafts."""
-        correct_drafts = sample(simulate_acc_len=1.0)
-        self.assertEqual(int(correct_drafts.max()), 0)
+    def test_acc_len_above_gamma_clamps_to_gamma(self):
+        """An accept length beyond gamma+1 clamps to gamma correct drafts."""
+        self.assertTrue(bool((simulate(simulate_acc_len=9.0) == 5).all()))
 
-    def test_same_forward_ct_is_deterministic_across_calls(self):
-        """Two ranks sampling at the same forward_ct derive identical lengths."""
-        self.assertTrue(torch.equal(sample(forward_ct=42), sample(forward_ct=42)))
+    def test_acc_len_below_one_clamps_to_zero(self):
+        """An accept length below 1 clamps to zero correct drafts."""
+        self.assertTrue(bool((simulate(simulate_acc_len=0.25) == 0).all()))
 
-    def test_different_forward_ct_gives_different_draws(self):
-        """Consecutive steps do not repeat the same simulated pattern."""
-        self.assertFalse(torch.equal(sample(forward_ct=1), sample(forward_ct=2)))
-
-    def test_unknown_method_raises(self):
-        """An unknown simulate_acc_method is rejected."""
-        with self.assertRaises(ValueError):
-            sample(simulate_acc_method="bogus")
+    def test_fractional_acc_len_rounds_to_nearest(self):
+        """A fractional accept length rounds to the nearest integer draft count."""
+        self.assertTrue(bool((simulate(simulate_acc_len=4.6) == 4).all()))
 
 
 if __name__ == "__main__":

@@ -43,7 +43,6 @@ MATCH_FRACTION_WARN = 0.9
 MATCH_FRACTION_ERROR = 0.5
 PROFILE_SEED = 42
 REQUIRED_SIMULATE_ACC_LEN = 1.0
-REQUIRED_SIMULATE_ACC_METHOD = "match-expected"
 RANDOM_TOKEN_LOW = 1000
 RANDOM_TOKEN_HIGH_MARGIN = 1000
 
@@ -263,15 +262,6 @@ def fetch_server_context(
                 "step advances every request by exactly the bonus token, so "
                 "the per-step KV conditioning is deterministic instead of "
                 "drifting with the model's accept behavior)."
-            )
-        if payload.get("simulate_acc_method") != REQUIRED_SIMULATE_ACC_METHOD:
-            raise ValueError(
-                f"DP rank {rank_index} reports simulate_acc_method="
-                f"{payload.get('simulate_acc_method')!r}, but SPS profiling "
-                f"requires SGLANG_SIMULATE_ACC_METHOD="
-                f"{REQUIRED_SIMULATE_ACC_METHOD!r} (at acc len 1.0 it is "
-                "exactly zero correct drafts; 'multinomial' adds Gaussian "
-                "noise and would accept some drafts)."
             )
     verify_num_draft_tokens = {
         int(payload["verify_num_draft_tokens"]) for payload in sps_payloads
