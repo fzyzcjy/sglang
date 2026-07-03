@@ -91,7 +91,9 @@ class TestSpsDataRecorderPairing(CustomTestCase):
         recorder.observe_decode_step(
             forward_ct=3, num_running_reqs=4, num_verify_tokens=32
         )
-        self.assertEqual([record["forward_ct"] for record in recorder.dump_records()], [2])
+        self.assertEqual(
+            [record["forward_ct"] for record in recorder.dump_records()], [2]
+        )
 
 
 class TestSpsDataRecorderBuffer(CustomTestCase):
@@ -103,7 +105,9 @@ class TestSpsDataRecorderBuffer(CustomTestCase):
                 forward_ct=forward_ct, num_running_reqs=1, num_verify_tokens=8
             )
             clock.advance(0.01)
-        self.assertEqual([record["forward_ct"] for record in recorder.dump_records()], [4, 5, 6])
+        self.assertEqual(
+            [record["forward_ct"] for record in recorder.dump_records()], [4, 5, 6]
+        )
 
     def test_dump_is_non_destructive(self):
         """Dumping twice returns the same records; reading never drains the ring."""
