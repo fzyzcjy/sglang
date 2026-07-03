@@ -107,6 +107,7 @@ class _PendingStep(msgspec.Struct):
     lag_steps: Optional[int]
     num_verify_tokens: int
     step_cpu_ms: Optional[float]
+    rids: Optional[list[str]]
     future: Optional[FutureTensors]
     segment_events: dict[InfoSegment, tuple[torch.cuda.Event, torch.cuda.Event]]
 
@@ -160,8 +161,10 @@ class DsparkInfoDumper:
             self._open_segment(InfoSegment.STEP)
 
     def segment(self, name: Union[InfoSegment, str]) -> ContextManager[None]:
+        if not self.enabled:
+            return _NULL_SEGMENT
         segment = InfoSegment(name)
-        if not self.enabled or not self._segment_enabled(segment):
+        if not self._segment_enabled(segment):
             return _NULL_SEGMENT
         return self._active_segment(segment)
 
@@ -194,6 +197,7 @@ class DsparkInfoDumper:
             lag_steps=None if obs.lag_steps is None else int(obs.lag_steps),
             num_verify_tokens=int(obs.num_verify_tokens),
             step_cpu_ms=step_cpu_ms,
+            rids=obs.rids,
             future=future,
             segment_events=self._current_segments,
         )
@@ -288,7 +292,9 @@ class DsparkInfoDumper:
                 pending, InfoSegment.TARGET_VERIFY
             )
         if InfoComponent.REQS in self._components and pending.future is not None:
-            record.reqs = self._build_reqs(host=pending.future.wait(), bs=pending.bs)
+            record.reqs = self._build_reqs(
+                host=pending.future.wait(), bs=pending.bs, rids=pending.rids
+            )
         elif pending.future is not None:
             pending.future.wait()
 
@@ -311,9 +317,14 @@ class DsparkInfoDumper:
             return None
         start, end = events
         end.synchronize()
-        return round(start.elapsed_time(end), 4)
+        elapsed_ms = start.elapsed_time(end)
+        if elapsed_ms > self._max_step_cpu_seconds * 1000.0:
+            return None
+        return round(elapsed_ms, 4)
 
-    def _build_reqs(self, *, host: dict, bs: int) -> list[ReqDetail]:
+    def _build_reqs(
+        self, *, host: dict, bs: int, rids: Optional[list[str]]
+    ) -> list[ReqDetail]:
         req_ids = host["req_pool_indices"].tolist()
         prefixes = host["prefix_lens"].tolist()
         draft_rows = host["draft_tokens"].tolist()
@@ -339,6 +350,7 @@ class DsparkInfoDumper:
             )
             reqs.append(
                 ReqDetail(
+                    rid=None if rids is None else rids[row],
                     req_pool_index=int(req_ids[row]),
                     prefix_len=int(prefixes[row]),
                     verify_len=verify_len,

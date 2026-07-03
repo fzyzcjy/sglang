@@ -230,6 +230,7 @@ class TestReqsAndGpuTiming(CustomTestCase):
         record = next(r for r in dumper.dump()["records"] if r["forward_ct"] == 1)
         self.assertEqual(len(record["reqs"]), 3)
         req = record["reqs"][0]
+        self.assertEqual(req["rid"], "r0")
         self.assertEqual(req["verify_len"], 6)
         self.assertEqual(req["acc_len"], 4)
         self.assertEqual(req["correct_drafts"], 3)

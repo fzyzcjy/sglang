@@ -924,26 +924,31 @@ class DSparkWorkerV2(BaseSpecWorker):
             cap_trim_lens=cap_trim_lens,
             commit_lens=commit_lens,
         )
-        self._info_dumper.observe_decode_step(
-            DecodeStepObservation(
-                forward_ct=int(batch.forward_iter),
-                bs=bs,
-                mode=self._verify_planner.mode_value,
-                budget=verify_token_budget,
-                lag_steps=self._verify_planner.lag_steps,
-                num_verify_tokens=int(verify_ids_2d.numel()),
-                verify_lens=layout.verify_lens if layout is not None else None,
-                confidence=confidence,
-                req_pool_indices=batch.req_pool_indices,
-                prefix_lens=prefix_lens,
-                draft_tokens=draft_tokens,
-                bonus_tokens=bonus,
-                correct_len=correct_len,
-                cap_trim_lens=cap_trim_lens,
-                commit_lens=commit_lens,
-                rids=[req.rid for req in batch.reqs],
+        if self._info_dumper.enabled:
+            self._info_dumper.observe_decode_step(
+                DecodeStepObservation(
+                    forward_ct=int(batch.forward_iter),
+                    bs=bs,
+                    mode=self._verify_planner.mode_value,
+                    budget=verify_token_budget,
+                    lag_steps=self._verify_planner.lag_steps,
+                    num_verify_tokens=(
+                        layout.graph_num_tokens
+                        if layout is not None
+                        else int(verify_ids_2d.numel())
+                    ),
+                    verify_lens=layout.verify_lens if layout is not None else None,
+                    confidence=confidence,
+                    req_pool_indices=batch.req_pool_indices,
+                    prefix_lens=prefix_lens,
+                    draft_tokens=draft_tokens,
+                    bonus_tokens=bonus,
+                    correct_len=correct_len,
+                    cap_trim_lens=cap_trim_lens,
+                    commit_lens=commit_lens,
+                    rids=[req.rid for req in batch.reqs],
+                )
             )
-        )
 
         next_draft_input = make_next_draft_input(
             bonus_tokens=bonus,

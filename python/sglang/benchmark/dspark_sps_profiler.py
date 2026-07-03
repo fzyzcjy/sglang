@@ -288,6 +288,15 @@ def fetch_server_context(
                 f"{record_source.payload_key}.mode must be 'static', got "
                 f"{payload.get('mode')!r} on DP rank {rank_index}."
             )
+        if record_source is INFO_RECORD_SOURCE:
+            components = payload.get("components") or []
+            missing = {"core", "step_cpu_time"} - set(components)
+            if missing:
+                raise ValueError(
+                    f"DP rank {rank_index} {record_source.payload_key} is missing "
+                    f"component(s) {sorted(missing)}; launch with "
+                    f"{record_source.enable_hint}."
+                )
         if payload.get("simulate_acc_len") != REQUIRED_SIMULATE_ACC_LEN:
             raise ValueError(
                 f"DP rank {rank_index} reports simulate_acc_len="
