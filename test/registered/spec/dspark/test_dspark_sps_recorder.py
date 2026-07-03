@@ -45,7 +45,10 @@ class TestSpsDataRecorderPairing(CustomTestCase):
         recorder.observe_decode_step(
             forward_ct=2, num_running_reqs=5, num_verify_tokens=40
         )
-        self.assertEqual(recorder.dump_records(), [[1, 4, 32, 0.02]])
+        records = recorder.dump_records()
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0][:3], [1, 4, 32])
+        self.assertAlmostEqual(records[0][3], 0.02)
 
     def test_consecutive_steps_emit_one_record_per_gap(self):
         """N observed steps emit N-1 records, each keyed by the earlier step."""
