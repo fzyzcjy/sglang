@@ -11,6 +11,11 @@ Then it back-fits the additive cost table (two 1D lookups + a bias, zero
 parametric form) and reports the fit residual (the additivity/separability
 check) and each cell's step-time noise.
 
+`--bs` is PER DP RANK: the client sends bs * dp_size requests (dp_size read from
+/server_info) so every rank sits at bs, so the table's bs/M axes match the
+scheduler's per-rank lookup (num_requests = one rank's batch). Under pure TP
+dp_size == 1, so bs is the whole batch and nothing changes.
+
 Example:
   python3 -m sglang.benchmark.sps_profiler --base-url http://127.0.0.1:31310 \
     --fracs 0.42 0.5 0.6 0.7 0.8 1.0 --bs 4 8 16 32 64 96 128 160 192 224 256 \
@@ -43,6 +48,12 @@ def get_gamma(base_url: str) -> int:
     return int(g)
 
 
+def get_dp_size(base_url: str) -> int:
+    info = requests.get(base_url + "/server_info", timeout=DEFAULT_TIMEOUT).json()
+    st = (info.get("internal_states") or [{}])[0]
+    return int(st.get("dp_size") or 1)
+
+
 def set_frac(base_url: str, frac) -> None:
     r = requests.post(
         base_url + "/set_internal_state",
@@ -60,10 +71,16 @@ def set_frac(base_url: str, frac) -> None:
         raise RuntimeError(f"set dspark_force_budget_frac={frac} rejected: {r}")
 
 
-def one_batch(base_url: str, bs: int, input_len: int, output_len: int, temp: float):
+def one_batch(
+    base_url: str, bs: int, input_len: int, output_len: int, temp: float, dp_size: int
+):
     with tempfile.NamedTemporaryFile("r+", suffix=".jsonl", delete=False) as f:
         out = f.name
     requests.post(base_url + "/flush_cache", timeout=DEFAULT_TIMEOUT)
+    # bs is PER DP RANK: under dp attention the round-robin dispatcher spreads
+    # bs * dp_size requests so every rank sits at bs, matching the scheduler's
+    # per-rank table query (num_requests = this rank's batch). dp_size == 1
+    # under pure TP, so this is a no-op there.
     cmd = [
         sys.executable,
         "-m",
@@ -73,7 +90,7 @@ def one_batch(base_url: str, bs: int, input_len: int, output_len: int, temp: flo
         "--base-url",
         base_url,
         "--batch-size",
-        str(bs),
+        str(bs * dp_size),
         "--input-len",
         str(input_len),
         "--output-len",
@@ -165,11 +182,12 @@ def main() -> None:
     a = p.parse_args()
 
     gamma = get_gamma(a.base_url)  # = verify_num_draft_tokens (gamma+1)
+    dp_size = get_dp_size(a.base_url)  # --bs is per-rank; client sends bs * dp_size
     total = len(a.fracs) * len(a.bs)
     t0 = time.monotonic()
     print(
-        f"[sps] verify_num_draft_tokens={gamma}  grid={len(a.fracs)}fracs x "
-        f"{len(a.bs)}bs = {total} cells"
+        f"[sps] verify_num_draft_tokens={gamma}  dp_size={dp_size} (--bs is "
+        f"per-rank)  grid={len(a.fracs)}fracs x {len(a.bs)}bs = {total} cells"
     )
     cells = []
     done = 0
@@ -183,7 +201,9 @@ def main() -> None:
             # spec-accept counters, so acc_length reads back as THIS cell's
             # average (used to derive iter_time = decode_wall / (out_len/acc)).
             set_frac(a.base_url, frac)
-            r = one_batch(a.base_url, bs, a.input_len, a.output_len, a.temperature)
+            r = one_batch(
+                a.base_url, bs, a.input_len, a.output_len, a.temperature, dp_size
+            )
             budget = int(frac * bs * (gamma - 1))  # K above the 1-token floor
             M = bs + budget
             if not r or r.get("iter_time", -1) <= 0:
