@@ -184,9 +184,7 @@ class DsparkInfoDumper:
         self._drain_pending()
 
         future = (
-            self._stage_reqs(obs)
-            if InfoComponent.REQS in self._components
-            else None
+            self._stage_reqs(obs) if InfoComponent.REQS in self._components else None
         )
         self._pending = _PendingStep(
             forward_ct=int(obs.forward_ct),
