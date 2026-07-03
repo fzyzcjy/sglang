@@ -3,7 +3,6 @@ import unittest
 from sglang.benchmark.dspark_sps_profiler import (
     ServerContext,
     SpsRow,
-    align_batch_sizes_to_dp,
     build_request_count_sweep,
     build_table_from_rounds,
     postprocess_round,
@@ -55,7 +54,7 @@ class TestPostprocessRound(CustomTestCase):
         """A steady single-rank round yields batch_tokens=bs*gamma1 and sps=1/median(dt)."""
         outcome = postprocess_round(
             rank_rows=[make_rows(step_time=0.01)],
-            batch_size=4,
+            batch_size_per_rank=4,
             dp_size=1,
             verify_num_draft_tokens=8,
             client_result={},
@@ -70,7 +69,7 @@ class TestPostprocessRound(CustomTestCase):
         steady_tail = make_rows(num_rows=20, step_time=0.01, first_forward_ct=8)
         outcome = postprocess_round(
             rank_rows=[slow_head + steady_tail],
-            batch_size=4,
+            batch_size_per_rank=4,
             dp_size=1,
             verify_num_draft_tokens=8,
             client_result={},
@@ -83,7 +82,7 @@ class TestPostprocessRound(CustomTestCase):
         steady = make_rows(num_rows=30, first_forward_ct=10, step_time=0.02)
         outcome = postprocess_round(
             rank_rows=[ramp + steady],
-            batch_size=4,
+            batch_size_per_rank=4,
             dp_size=1,
             verify_num_draft_tokens=8,
             client_result={},
@@ -101,7 +100,7 @@ class TestPostprocessRound(CustomTestCase):
         with self.assertRaisesRegex(RuntimeError, "unstable mid-round"):
             postprocess_round(
                 rank_rows=[head + gap + tail],
-                batch_size=4,
+                batch_size_per_rank=4,
                 dp_size=1,
                 verify_num_draft_tokens=8,
                 client_result={},
@@ -114,30 +113,18 @@ class TestPostprocessRound(CustomTestCase):
         with self.assertRaisesRegex(RuntimeError, "never stabilized"):
             postprocess_round(
                 rank_rows=[rows],
-                batch_size=4,
+                batch_size_per_rank=4,
                 dp_size=1,
                 verify_num_draft_tokens=8,
                 client_result={},
             )
-
-    def test_batch_size_must_be_a_multiple_of_dp_size(self):
-        """A per-system batch size not divisible by dp_size is a caller bug."""
-        with self.assertRaises(ValueError):
-            postprocess_round(
-                rank_rows=[make_rows(), make_rows()],
-                batch_size=5,
-                dp_size=2,
-                verify_num_draft_tokens=8,
-                client_result={},
-            )
-
 
 class TestPostprocessRoundCrossRank(CustomTestCase):
     def test_two_uniform_ranks_average_their_step_times(self):
         """With dp=2 the per-step timing averages the two ranks' step times."""
         outcome = postprocess_round(
             rank_rows=[make_rows(step_time=0.01), make_rows(step_time=0.03)],
-            batch_size=8,
+            batch_size_per_rank=4,
             dp_size=2,
             verify_num_draft_tokens=8,
             client_result={},
@@ -154,7 +141,7 @@ class TestPostprocessRoundCrossRank(CustomTestCase):
         with self.assertRaisesRegex(RuntimeError, "no new decode-step records"):
             postprocess_round(
                 rank_rows=[make_rows(), []],
-                batch_size=8,
+                batch_size_per_rank=4,
                 dp_size=2,
                 verify_num_draft_tokens=8,
                 client_result={},
@@ -168,7 +155,7 @@ class TestPostprocessRoundCrossRank(CustomTestCase):
                     make_rows(first_forward_ct=0),
                     make_rows(first_forward_ct=1000),
                 ],
-                batch_size=8,
+                batch_size_per_rank=4,
                 dp_size=2,
                 verify_num_draft_tokens=8,
                 client_result={},
@@ -179,7 +166,7 @@ class TestPostprocessRoundCrossRank(CustomTestCase):
         with self.assertRaisesRegex(RuntimeError, "num_verify_tokens"):
             postprocess_round(
                 rank_rows=[make_rows(), make_rows(num_verify_tokens=40)],
-                batch_size=8,
+                batch_size_per_rank=4,
                 dp_size=2,
                 verify_num_draft_tokens=8,
                 client_result={},
@@ -190,7 +177,7 @@ class TestPostprocessRoundCrossRank(CustomTestCase):
         with self.assertRaisesRegex(RuntimeError, "DP ranks"):
             postprocess_round(
                 rank_rows=[make_rows()],
-                batch_size=8,
+                batch_size_per_rank=4,
                 dp_size=2,
                 verify_num_draft_tokens=8,
                 client_result={},
@@ -203,7 +190,7 @@ class TestTableAssembly(CustomTestCase):
         rounds = [
             postprocess_round(
                 rank_rows=[make_rows(step_time=step_time)],
-                batch_size=4,
+                batch_size_per_rank=4,
                 dp_size=1,
                 verify_num_draft_tokens=8,
                 client_result={},
@@ -224,7 +211,7 @@ class TestTableAssembly(CustomTestCase):
                         num_verify_tokens=batch_size * 8,
                     )
                 ],
-                batch_size=batch_size,
+                batch_size_per_rank=batch_size,
                 dp_size=1,
                 verify_num_draft_tokens=8,
                 client_result={},
@@ -236,19 +223,6 @@ class TestTableAssembly(CustomTestCase):
 
 
 class TestSweepHelpers(CustomTestCase):
-    def test_align_rounds_up_to_dp_multiples_and_dedupes(self):
-        """Batch sizes are rounded up to dp_size multiples and deduplicated."""
-        self.assertEqual(
-            align_batch_sizes_to_dp(batch_sizes=[1, 2, 4, 5, 8], dp_size=4),
-            [4, 8],
-        )
-
-    def test_align_is_identity_for_dp1(self):
-        """With dp_size=1 the sweep passes through unchanged (sorted, deduped)."""
-        self.assertEqual(
-            align_batch_sizes_to_dp(batch_sizes=[8, 1, 2], dp_size=1), [1, 2, 8]
-        )
-
     def test_request_count_sweep_tapers_and_hits_the_max(self):
         """The default sweep starts at powers of two and always includes the max."""
         sweep = build_request_count_sweep(100)
@@ -270,10 +244,10 @@ class TestSweepHelpers(CustomTestCase):
             )
 
     def test_sweep_within_captured_cuda_graphs_passes(self):
-        """A sweep whose per-rank max fits the captured graphs is accepted."""
+        """A per-rank sweep max that fits the captured graphs is accepted."""
         validate_sweep_against_server(
             context=make_context(cuda_graph_max_bs=64, dp_size=2),
-            batch_sizes=[8, 128],
+            batch_sizes=[8, 64],
         )
 
     def test_resolve_cuda_graph_max_bs_prefers_captured_list(self):

@@ -121,9 +121,7 @@ def profile(
         base_url=base_url, local_tokenizer_path=local_tokenizer_path
     )
     tokenizer = get_tokenizer(context.tokenizer_path)
-    batch_sizes = align_batch_sizes_to_dp(
-        batch_sizes=batch_sizes, dp_size=context.dp_size
-    )
+    batch_sizes = sorted(set(batch_sizes))
     validate_sweep_against_server(context=context, batch_sizes=batch_sizes)
 
     run_warmup_case(
@@ -136,11 +134,11 @@ def profile(
 
     rounds: list[RoundOutcome] = []
     for repeat in range(max(1, repeats)):
-        for batch_size in batch_sizes:
+        for batch_size_per_rank in batch_sizes:
             outcome = run_one_round(
                 context=context,
                 tokenizer=tokenizer,
-                batch_size=batch_size,
+                batch_size_per_rank=batch_size_per_rank,
                 input_len=input_len,
                 output_len=output_len,
                 temperature=temperature,
@@ -309,7 +307,7 @@ def validate_sweep_against_server(
             "not clamping the sweep against it."
         )
         return
-    max_per_rank = max(batch_sizes) // context.dp_size
+    max_per_rank = max(batch_sizes)
     if max_per_rank > context.cuda_graph_max_bs:
         raise ValueError(
             f"The sweep reaches {max_per_rank} running requests per DP rank but "
@@ -318,22 +316,6 @@ def validate_sweep_against_server(
             "the table. Relaunch the server with a larger --cuda-graph-max-bs "
             "or shrink --max-batch-size."
         )
-
-
-def align_batch_sizes_to_dp(*, batch_sizes: list[int], dp_size: int) -> list[int]:
-    aligned: list[int] = []
-    for batch_size in batch_sizes:
-        value = max(batch_size, dp_size)
-        value = ((value + dp_size - 1) // dp_size) * dp_size
-        aligned.append(value)
-    deduped = sorted(set(aligned))
-    if deduped != sorted(set(batch_sizes)):
-        logger.info(
-            "Aligned batch-size sweep to multiples of dp_size=%s: %s",
-            dp_size,
-            deduped,
-        )
-    return deduped
 
 
 def build_request_count_sweep(max_num_reqs: int) -> list[int]:
@@ -363,7 +345,7 @@ def run_warmup_case(
     input_len: int,
     temperature: float,
 ) -> None:
-    batch_size = min(8 * context.dp_size, max(batch_sizes))
+    batch_size = min(8, max(batch_sizes)) * context.dp_size
     _bench_case_or_none(
         context=context,
         tokenizer=tokenizer,
@@ -378,11 +360,12 @@ def run_one_round(
     *,
     context: ServerContext,
     tokenizer: object,
-    batch_size: int,
+    batch_size_per_rank: int,
     input_len: int,
     output_len: int,
     temperature: float,
 ) -> Optional[RoundOutcome]:
+    batch_size = batch_size_per_rank * context.dp_size
     if should_skip_due_to_max_running_requests(
         batch_size, context.skip_max_running_requests_threshold
     ) or should_skip_due_to_token_capacity(
@@ -418,7 +401,7 @@ def run_one_round(
     ]
     return postprocess_round(
         rank_rows=new_rank_rows,
-        batch_size=batch_size,
+        batch_size_per_rank=batch_size_per_rank,
         dp_size=context.dp_size,
         verify_num_draft_tokens=context.verify_num_draft_tokens,
         client_result=client_result.model_dump(),
@@ -449,16 +432,12 @@ def fetch_rank_rows(*, base_url: str) -> list[list[SpsRow]]:
 def postprocess_round(
     *,
     rank_rows: list[list[SpsRow]],
-    batch_size: int,
+    batch_size_per_rank: int,
     dp_size: int,
     verify_num_draft_tokens: int,
     client_result: dict,
 ) -> RoundOutcome:
-    if batch_size % dp_size != 0:
-        raise ValueError(
-            f"batch_size={batch_size} must be a multiple of dp_size={dp_size}."
-        )
-    batch_size_per_rank = batch_size // dp_size
+    batch_size = batch_size_per_rank * dp_size
     expected_tokens = batch_size_per_rank * verify_num_draft_tokens
 
     if len(rank_rows) != dp_size:
@@ -747,15 +726,17 @@ def cli_main() -> None:
         type=int,
         nargs="+",
         default=None,
-        help="Explicit system-wide running-request counts to sweep (auto-aligned "
-        "to multiples of dp_size). Overrides --max-batch-size when given.",
+        help="Explicit PER-DP-RANK running-request counts to sweep; the load "
+        "generator sends value * dp_size requests so every rank (GPU group) "
+        "sits at the given batch. Overrides --max-batch-size when given.",
     )
     parser.add_argument(
         "--max-batch-size",
         type=int,
         default=DEFAULT_MAX_BATCH_SIZE,
-        help="Upper bound of the auto-generated tapered request-count sweep "
-        "(used only when --batch-size is not given).",
+        help="Upper bound of the auto-generated tapered PER-DP-RANK "
+        "request-count sweep (used only when --batch-size is not given), so "
+        "per-rank token coverage is identical for any dp_size.",
     )
     parser.add_argument(
         "--input-len",
