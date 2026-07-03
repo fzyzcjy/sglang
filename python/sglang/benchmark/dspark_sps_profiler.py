@@ -381,7 +381,12 @@ def round_max_new_tokens(*, settings: RoundSettings, context: ServerContext) -> 
     # than designed. Natural exhaustion now bounds every round at the step
     # budget even if the abort never fires.
     commit_tokens_per_step = (
-        max(0, min(round(context.simulate_acc_len - 1), context.verify_num_draft_tokens - 1))
+        max(
+            0,
+            min(
+                round(context.simulate_acc_len - 1), context.verify_num_draft_tokens - 1
+            ),
+        )
         + 1
     )
     total_steps = ROUND_WARMUP_STEPS + settings.target_steady_steps + ROUND_STEP_SLACK
