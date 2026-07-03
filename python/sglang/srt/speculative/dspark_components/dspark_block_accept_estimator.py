@@ -44,10 +44,11 @@ class BlockAcceptEstimateRecorder:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._file = self._path.open("w")
         self._states: dict[str, _RequestState] = {}
-        self._disabled = False
         self._steps_since_flush = 0
         self._observed_step_ct = 0
         self._discontinuity_drop_ct = 0
+        self._skipped_step_ct = 0
+        self._warned_skip_reasons: set[str] = set()
         logger.info(
             "DSPARK block accept estimate recorder enabled: path=%s gamma=%d",
             path,
@@ -75,24 +76,22 @@ class BlockAcceptEstimateRecorder:
         prefix_lens: torch.Tensor,
         layout: Optional[RaggedVerifyLayout],
     ) -> None:
-        if self._disabled:
-            return
         if need_top_k_sampling or need_top_p_sampling or need_min_p_sampling:
-            self._disable(
-                reason="top-k/top-p/min-p sampling detected; the estimator only "
+            self._skip_step(
+                reason="top-k/top-p/min-p sampling in batch; the estimator only "
                 "supports pure-temperature sampling (processed target distribution "
                 "would differ from plain softmax(logits/T))"
             )
             return
         if not logits_adjustments_are_noop:
-            self._disable(
+            self._skip_step(
                 reason="non-noop logits adjustments (penalizer/logit_bias/grammar) "
-                "detected; cross-step conditioning of the gathered target "
+                "in batch; cross-step conditioning of the gathered target "
                 "probabilities would be state-dependent"
             )
             return
         if corrected_logits is None:
-            self._disable(reason="corrected_logits unavailable (folded draft path)")
+            self._skip_step(reason="corrected_logits unavailable (folded draft path)")
             return
 
         gamma = self._gamma
@@ -252,10 +251,16 @@ class BlockAcceptEstimateRecorder:
         for rid in expired:
             del self._states[rid]
 
-    def _disable(self, *, reason: str) -> None:
-        self._disabled = True
-        self._file.flush()
-        logger.warning("DSPARK block accept estimate recorder disabled: %s", reason)
+    def _skip_step(self, *, reason: str) -> None:
+        self._skipped_step_ct += 1
+        if reason not in self._warned_skip_reasons:
+            self._warned_skip_reasons.add(reason)
+            logger.warning(
+                "DSPARK block accept estimate recorder skipping step: %s "
+                "(warned once; pending blocks of affected requests are dropped "
+                "by the seq-len continuity check)",
+                reason,
+            )
 
 
 def _gather_token_logprobs(

@@ -328,8 +328,8 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
             self.assertEqual(recorder._states["r0"].pending, [])
             self.assertEqual(recorder._discontinuity_drop_ct, 1)
 
-    def test_top_p_disables_recorder(self):
-        """Detecting top-p sampling permanently disables the recorder."""
+    def test_top_p_skips_step_without_disabling(self):
+        """A batch with top-p sampling is skipped while later pure-temperature steps still record."""
         with tempfile.TemporaryDirectory() as tmp:
             recorder, path = _make_recorder(tmp)
             corrected = torch.randn(_GAMMA, _VOCAB)
@@ -365,7 +365,26 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
                 prefix_lens=torch.tensor([12], dtype=torch.int64),
                 layout=_FakeLayout(torch.tensor([2], dtype=torch.int32)),
             )
-            self.assertTrue(recorder._disabled)
+            self.assertEqual(recorder._skipped_step_ct, 1)
+
+            corrected3 = torch.randn(_GAMMA, _VOCAB)
+            target3 = torch.randn((_GAMMA + 1), _VOCAB)
+            _observe(
+                recorder,
+                forward_ct=3,
+                rid="r0",
+                drafts=[4, 5, 6],
+                corrected_logits=corrected3,
+                target_logits=target3,
+                verify_len=2,
+                correct_len=1,
+                bonus=5,
+                seq_len=14,
+            )
+            recorder._file.flush()
+
+            records = _read_records(path)
+            self.assertEqual([r["fct"] for r in records], [1, 3])
 
 
 if __name__ == "__main__":
