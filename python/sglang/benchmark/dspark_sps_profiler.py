@@ -22,7 +22,6 @@ from sglang.benchmark.sps_backfit import ols_resid_backfit
 from sglang.benchmark.utils import get_tokenizer
 from sglang.srt.speculative.dspark_components.dspark_sps_table import (
     SpsAdditiveCostTable,
-    SpsCostTable,
     load_sps_table_from_path,
     profile_sps_table,
 )
@@ -310,7 +309,11 @@ def fit_profile(
         )
 
     if plot:
-        plot_fit(cells=summaries_to_cells(summaries=summaries), table=table, plot_path=paths["plot"])
+        plot_fit(
+            cells=summaries_to_cells(summaries=summaries),
+            table=table,
+            plot_path=paths["plot"],
+        )
 
     if self_check:
         run_self_check(out_path=paths["table"], offdiag=offdiag)
@@ -372,7 +375,9 @@ def build_table_from_summaries(
     *, summaries: list[dict], max_batch_tokens: Optional[int], offdiag: bool
 ):
     if offdiag:
-        return build_additive_table_from_cells(cells=summaries_to_cells(summaries=summaries))
+        return build_additive_table_from_cells(
+            cells=summaries_to_cells(summaries=summaries)
+        )
 
     by_batch_tokens: dict[int, list[float]] = {}
     for summary in summaries:
@@ -1034,7 +1039,9 @@ def plot_fit(*, cells: list[dict], table, plot_path: Path) -> None:
         ),
     )
     for bs in batch_sizes:
-        points = sorted((cell for cell in cells if cell["bs"] == bs), key=lambda c: c["M"])
+        points = sorted(
+            (cell for cell in cells if cell["bs"] == bs), key=lambda c: c["M"]
+        )
         m_values = [cell["M"] for cell in points]
         t_ms = [cell["T"] * 1e3 for cell in points]
         color = color_of[bs]
@@ -1079,11 +1086,16 @@ def plot_fit(*, cells: list[dict], table, plot_path: Path) -> None:
         fig.add_trace(
             go.Scatter(
                 x=m_values,
-                y=[fitted_step_time(table=table, bs=bs, m=cell["M"]) * 1e3 for cell in points],
+                y=[
+                    fitted_step_time(table=table, bs=bs, m=cell["M"]) * 1e3
+                    for cell in points
+                ],
                 mode="markers",
                 legendgroup=f"bs={bs}",
                 showlegend=False,
-                marker=dict(color=color, size=9, symbol="square-open", line=dict(width=2)),
+                marker=dict(
+                    color=color, size=9, symbol="square-open", line=dict(width=2)
+                ),
             ),
             row=1,
             col=3,
