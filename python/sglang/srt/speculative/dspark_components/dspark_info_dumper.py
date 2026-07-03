@@ -306,7 +306,9 @@ class DsparkInfoDumper:
             return None
         return round(step_cpu * 1000.0, 4)
 
-    def _segment_ms(self, pending: _PendingStep, segment: InfoSegment) -> Optional[float]:
+    def _segment_ms(
+        self, pending: _PendingStep, segment: InfoSegment
+    ) -> Optional[float]:
         events = pending.segment_events.get(segment)
         if events is None:
             return None
