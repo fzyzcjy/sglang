@@ -60,7 +60,8 @@ from sglang.srt.speculative.dspark_components.dspark_utils import (
 )
 from sglang.srt.speculative.dspark_components.dspark_verify import (
     alloc_verify_window,
-    uniform_ragged_layout,
+    dp_global_verify_tier_num_tokens,
+    idle_ragged_layout,
 )
 from sglang.srt.speculative.dspark_components.dspark_verify_epilogue import (
     CommitInjectCtx,
@@ -75,7 +76,6 @@ from sglang.srt.speculative.dspark_components.kernels.build_out_tokens import (
 from sglang.srt.speculative.dspark_components.kernels.finalize_accept_lens import (
     FinalizeAcceptLens,
 )
-from sglang.srt.speculative.ragged_verify import RaggedVerifyMode
 from sglang.srt.speculative.spec_utils import draft_tp_context
 from sglang.srt.utils import get_available_gpu_memory, is_cuda
 
@@ -555,25 +555,38 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
 
     def _idle_verify_ragged_layout(self, batch: ScheduleBatch):
-        # Build the SAME degenerate uniform layout the compact token-keyed graph is
-        # captured with, sized to the DP-global tier so the idle verify keys the exact
-        # same graph as the busy compact verify. The tier holds max(global bs) padded
-        # requests, so the layout carries that many uniform verify_lens (a 0-request
-        # layout is rejected; the idle rank's real tokens are 0 and the graph pads them
-        # out). Only compact uses the token-keyed graph -- static / cap-accept stay on
-        # the shared bs-keyed path (return None). None too when DP metadata is absent or
-        # the tier exceeds the captured grid (uniform_ragged_layout returns None, and the
-        # busy side falls back to the same bs-keyed path).
+        # Build the SAME layout family the busy compact verify selects, sized to
+        # the DP-global tier so the idle verify keys the exact same graph. With
+        # a gathered tier agreement the busy ranks replay the budget tier
+        # round_up(F), so the idle layout must land on that key too; without one
+        # it degenerates to the uniform verify-all layout at the pinned tier.
+        # The tier holds max(global bs) padded requests, so the layout carries
+        # that many verify_lens rows (a 0-request layout is rejected; the idle
+        # rank's real tokens are 0 and the graph pads them out). Only compact
+        # uses the token-keyed graph -- static / cap-accept stay on the shared
+        # bs-keyed path (return None). None too when DP metadata is absent or
+        # the tier exceeds the captured grid (idle_ragged_layout returns None,
+        # and the busy side falls back to the same bs-keyed path).
         if batch.global_num_tokens is None or not self._verify_planner.is_compact_mode:
             return None
         global_bs = max(batch.global_num_tokens)
         if global_bs <= 0:
             return None
-        return uniform_ragged_layout(
-            bs=global_bs,
+        # Gate on _draft_is_moe to mirror the busy side's global_num_reqs
+        # condition: if the busy ranks never key off the dp-global tier, the
+        # idle rank must not either.
+        dp_tier_num_tokens = (
+            dp_global_verify_tier_num_tokens(
+                global_tier_num_tokens=batch.global_spec_verify_tier_num_tokens
+            )
+            if self._draft_is_moe
+            else None
+        )
+        return idle_ragged_layout(
+            tier_num_reqs=global_bs,
+            dp_tier_num_tokens=dp_tier_num_tokens,
             device=self.device,
             verify_num_draft_tokens=self.verify_num_draft_tokens,
-            ragged_verify_mode=RaggedVerifyMode.COMPACT,
             model_runner=self.model_runner,
         )
 
@@ -673,6 +686,13 @@ class DSparkWorkerV2(BaseSpecWorker):
             and batch.global_num_tokens is not None
             else None
         )
+        dp_tier_num_tokens = (
+            dp_global_verify_tier_num_tokens(
+                global_tier_num_tokens=batch.global_spec_verify_tier_num_tokens
+            )
+            if global_num_reqs is not None and self._verify_planner.is_compact_mode
+            else None
+        )
         layout = self._verify_planner.schedule_layout(
             req_pool_indices=batch.req_pool_indices,
             prefix_lens=prefix_lens,
@@ -680,6 +700,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             confidence=confidence,
             budget=verify_token_budget,
             global_num_reqs=global_num_reqs,
+            dp_tier_num_tokens=dp_tier_num_tokens,
         )
         run_compact = self._verify_planner.should_run_compact(layout=layout)
 
