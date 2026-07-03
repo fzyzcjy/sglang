@@ -48,6 +48,7 @@ from sglang.srt.speculative.dspark_components.dspark_draft_proposer import (
 from sglang.srt.speculative.dspark_components.dspark_info_dumper import (
     DecodeStepObservation,
     DsparkInfoDumper,
+    InfoSegment,
     resolve_components,
 )
 from sglang.srt.speculative.dspark_components.dspark_kv_inject import (
@@ -724,7 +725,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
 
         sampling_info = batch.sampling_info
-        with self._draft_context(), self._info_dumper.segment("draft"):
+        with self._draft_context(), self._info_dumper.segment(InfoSegment.DRAFT):
             proposal = self._proposer.propose(
                 batch=batch,
                 draft_input=draft_input,
@@ -792,7 +793,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             and verify_logits_adjustments_are_noop(sampling_info)
             and self._simulate_acc_len <= 0
         )
-        with self._info_dumper.segment("target_verify"):
+        with self._info_dumper.segment(InfoSegment.TARGET_VERIFY):
             if run_compact:
                 target_verify, hidden_strided = self._verify_executor.run_compact(
                     batch=batch,

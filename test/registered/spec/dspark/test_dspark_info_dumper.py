@@ -3,9 +3,9 @@ import unittest
 import torch
 
 from sglang.srt.speculative.dspark_components.dspark_info_dumper import (
-    ALL_COMPONENTS,
     DecodeStepObservation,
     DsparkInfoDumper,
+    InfoComponent,
     resolve_components,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -68,11 +68,14 @@ class TestResolveComponents(CustomTestCase):
 
     def test_all_expands_to_every_component(self):
         """The 'all' token selects every known component."""
-        self.assertEqual(resolve_components(("all",)), set(ALL_COMPONENTS))
+        self.assertEqual(resolve_components(("all",)), set(InfoComponent))
 
     def test_subset_and_whitespace_are_kept(self):
         """A comma list keeps exactly the named components, stripped."""
-        self.assertEqual(resolve_components((" core ", "reqs")), {"core", "reqs"})
+        self.assertEqual(
+            resolve_components((" core ", "reqs")),
+            {InfoComponent.CORE, InfoComponent.REQS},
+        )
 
     def test_unknown_component_raises(self):
         """An unknown component name is a configuration error."""
