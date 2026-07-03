@@ -318,13 +318,19 @@ class DSparkWorkerV2(BaseSpecWorker):
         self._simulated_correct_drafts_buf: Optional[torch.Tensor] = None
         if (
             self._simulate_acc_len > 0
+            and self._simulate_acc_len != 1.0
             and self._verify_planner.mode_value != RaggedVerifyMode.STATIC.value
         ):
             raise ValueError(
-                "SGLANG_SIMULATE_ACC_LEN with DSpark only supports "
-                "SGLANG_RAGGED_VERIFY_MODE=static (the simulated correct_len "
-                "would break the cutoff/cap accounting of ragged modes). Got "
-                f"mode={self._verify_planner.mode_value!r}."
+                "SGLANG_SIMULATE_ACC_LEN>1.0 with DSpark only supports "
+                "SGLANG_RAGGED_VERIFY_MODE=static: a constant simulated "
+                "correct_len>0 can exceed a ragged-trimmed request's verify "
+                "budget and break the cutoff/cap accounting. "
+                "SGLANG_SIMULATE_ACC_LEN=1.0 yields correct_len=0 (commit is the "
+                "bonus token only), which stays within every verify budget and "
+                f"is safe in any mode. Got mode="
+                f"{self._verify_planner.mode_value!r}, simulate_acc_len="
+                f"{self._simulate_acc_len}."
             )
 
         self._confidence_probe = ConfidenceMetricsProbe(
