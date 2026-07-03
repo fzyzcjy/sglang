@@ -307,6 +307,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             self._sps_recorder = SpsDataRecorder()
 
         self._simulate_acc_len = float(envs.SGLANG_SIMULATE_ACC_LEN.get())
+        self._simulated_correct_drafts_buf: Optional[torch.Tensor] = None
         if (
             self._simulate_acc_len > 0
             and self._verify_planner.mode_value != RaggedVerifyMode.STATIC.value
@@ -797,12 +798,9 @@ class DSparkWorkerV2(BaseSpecWorker):
                 cutoff_layout=layout,
             )
             if self._simulate_acc_len > 0:
-                correct_len = simulated_correct_drafts(
-                    simulate_acc_len=self._simulate_acc_len,
-                    gamma=self.gamma,
-                    bs=bs,
-                    device=correct_len.device,
-                ).to(correct_len.dtype)
+                correct_len = self._simulated_correct_len(
+                    bs=bs, dtype=correct_len.dtype, device=correct_len.device
+                )
 
             finalized = FinalizeAcceptLens.execute(
                 correct_len=correct_len,
@@ -898,6 +896,20 @@ class DSparkWorkerV2(BaseSpecWorker):
             speculative_num_draft_tokens=int(self.verify_num_draft_tokens),
             new_seq_lens=new_seq_lens,
         )
+
+    def _simulated_correct_len(
+        self, *, bs: int, dtype: torch.dtype, device: torch.device
+    ) -> torch.Tensor:
+        buf = self._simulated_correct_drafts_buf
+        if buf is None or buf.numel() < bs or buf.dtype != dtype:
+            buf = simulated_correct_drafts(
+                simulate_acc_len=self._simulate_acc_len,
+                gamma=self.gamma,
+                bs=max(bs, 512),
+                device=device,
+            ).to(dtype)
+            self._simulated_correct_drafts_buf = buf
+        return buf[:bs]
 
     def _maybe_record_sts_collect(
         self,
