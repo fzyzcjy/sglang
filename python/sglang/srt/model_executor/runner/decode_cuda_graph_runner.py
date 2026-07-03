@@ -1222,6 +1222,20 @@ class DecodeCudaGraphRunner(BaseCudaGraphRunner):
         )
         with timer_ctx, self.backend.replay_session():
             self.load_batch(forward_batch, pp_proxy_tensors)
+            if envs.SGLANG_LOG_DECODE_GRAPH_KEY.get():
+                logger.info(
+                    "Decode graph replay: worker=%s key_size=%s (%s) mode=%s raw_bs=%d%s",
+                    "draft" if self.model_runner.is_draft_worker else "target",
+                    self._replay_graph_key.size,
+                    "num_tokens" if self.ragged_verify_mode else "bs",
+                    forward_batch.forward_mode.name,
+                    forward_batch.batch_size,
+                    (
+                        f" slots={self._ragged_capture_slots(self._replay_graph_key.size)}"
+                        if self.ragged_verify_mode
+                        else ""
+                    ),
+                )
             if publish_read_done and not read_done_post_replay:
                 read_done = self.device_module.Event()
                 read_done.record()

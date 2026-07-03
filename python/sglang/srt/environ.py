@@ -235,6 +235,7 @@ class Envs:
     # Logging Options
     SGLANG_LOG_GC = EnvBool(False)
     SGLANG_LOG_FORWARD_ITERS = EnvBool(False)
+    SGLANG_LOG_DECODE_GRAPH_KEY = EnvBool(False)
     SGLANG_LOG_MS = EnvBool(False)
     SGLANG_LOG_REQUEST_EXCEEDED_MS = EnvInt(-1)
     SGLANG_LOG_REQUEST_HEADERS = EnvTuple(tuple())
