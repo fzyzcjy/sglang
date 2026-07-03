@@ -12,7 +12,7 @@ from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 
 logger = logging.getLogger(__name__)
 
-_GATHER_ROW_CHUNK = 512
+_GATHER_ROW_CHUNK = 128
 _STATE_SWEEP_INTERVAL = 1024
 _STATE_EXPIRE_STEPS = 4096
 _FLUSH_EVERY_STEPS = 16
