@@ -150,9 +150,9 @@ class DsparkInfoDumper:
         if self.enabled and self._reqs:
             self._d2h_stream = torch.cuda.Stream(device=device)
 
-        self._current_segments: dict[
-            str, tuple[torch.cuda.Event, torch.cuda.Event]
-        ] = {}
+        self._current_segments: dict[str, tuple[torch.cuda.Event, torch.cuda.Event]] = (
+            {}
+        )
         self._open_segments: dict[str, torch.cuda.Event] = {}
 
     def begin_step(self) -> None:
@@ -289,9 +289,7 @@ class DsparkInfoDumper:
                 pending, SEGMENT_TARGET_VERIFY
             )
         if self._reqs and pending.future is not None:
-            record.reqs = self._build_reqs(
-                host=pending.future.wait(), bs=pending.bs
-            )
+            record.reqs = self._build_reqs(host=pending.future.wait(), bs=pending.bs)
         elif pending.future is not None:
             pending.future.wait()
 

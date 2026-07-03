@@ -42,13 +42,13 @@ from sglang.srt.speculative.dspark_components.dspark_draft import (
     DsparkDraftSampler,
     make_next_draft_input,
 )
+from sglang.srt.speculative.dspark_components.dspark_draft_proposer import (
+    DraftBlockProposer,
+)
 from sglang.srt.speculative.dspark_components.dspark_info_dumper import (
     DecodeStepObservation,
     DsparkInfoDumper,
     resolve_components,
-)
-from sglang.srt.speculative.dspark_components.dspark_draft_proposer import (
-    DraftBlockProposer,
 )
 from sglang.srt.speculative.dspark_components.dspark_kv_inject import (
     TargetHiddenKvInjector,
