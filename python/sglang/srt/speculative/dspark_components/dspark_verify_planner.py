@@ -214,9 +214,7 @@ class DSparkVerifyPlanner:
                         "dynamic"
                         if self._dynamic_graph_tier
                         else (
-                            "dp-gathered"
-                            if self._dp_tier_gather_enabled
-                            else "pinned"
+                            "dp-gathered" if self._dp_tier_gather_enabled else "pinned"
                         )
                     ),
                 )

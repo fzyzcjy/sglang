@@ -77,9 +77,7 @@ class TestLocalVerifyTierNumTokens(CustomTestCase):
 class TestDpGlobalVerifyTierNumTokens(CustomTestCase):
     def test_none_list_pins(self):
         """No gathered list (gather disabled) keeps the pinned tier."""
-        self.assertIsNone(
-            dp_global_verify_tier_num_tokens(global_tier_num_tokens=None)
-        )
+        self.assertIsNone(dp_global_verify_tier_num_tokens(global_tier_num_tokens=None))
 
     def test_any_sentinel_pins_everyone(self):
         """A single -1 contribution pins the whole group for the step."""
@@ -159,9 +157,7 @@ class TestBusyIdleGraphKeyIdentity(CustomTestCase):
                 self.assertEqual(global_num_reqs, 0)
                 continue
 
-            self.assertGreaterEqual(
-                tier_num_tokens, global_num_reqs * effective_min
-            )
+            self.assertGreaterEqual(tier_num_tokens, global_num_reqs * effective_min)
             self.assertLessEqual(
                 tier_num_tokens, global_num_reqs * verify_num_draft_tokens
             )
