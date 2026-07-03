@@ -355,9 +355,7 @@ def build_request_count_sweep(max_num_reqs: int) -> list[int]:
 
 
 def round_max_new_tokens(*, settings: RoundSettings, context: ServerContext) -> int:
-    total_steps = (
-        ROUND_WARMUP_STEPS + settings.target_steady_steps + ROUND_STEP_SLACK
-    )
+    total_steps = ROUND_WARMUP_STEPS + settings.target_steady_steps + ROUND_STEP_SLACK
     return total_steps * context.verify_num_draft_tokens
 
 
@@ -504,9 +502,7 @@ def start_load(
 
     def _post() -> None:
         try:
-            requests.post(
-                base_url + "/generate", json=payload, timeout=DEFAULT_TIMEOUT
-            )
+            requests.post(base_url + "/generate", json=payload, timeout=DEFAULT_TIMEOUT)
         except Exception:
             logger.warning(
                 "Load batch POST /generate failed (expected on abort for some "
@@ -766,7 +762,9 @@ def append_round_files(
                     + "\n"
                 )
     with rounds_path.open("a", encoding="utf-8") as fout:
-        fout.write(json.dumps(round_summary_dict(outcome=outcome, repeat=repeat)) + "\n")
+        fout.write(
+            json.dumps(round_summary_dict(outcome=outcome, repeat=repeat)) + "\n"
+        )
 
 
 def write_manifest(
