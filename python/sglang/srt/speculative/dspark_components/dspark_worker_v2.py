@@ -452,6 +452,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             "simulate_acc_len": (
                 self._simulate_acc_len if self._simulate_acc_len > 0 else None
             ),
+            "simulate_acc_method": envs.SGLANG_SIMULATE_ACC_METHOD.get(),
             "records": self._sps_recorder.dump_records(),
         }
 
