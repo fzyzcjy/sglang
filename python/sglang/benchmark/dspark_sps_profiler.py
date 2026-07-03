@@ -373,8 +373,19 @@ def build_request_count_sweep(max_num_reqs: int) -> list[int]:
 
 
 def round_max_new_tokens(*, settings: RoundSettings, context: ServerContext) -> int:
+    # Under the required simulate_acc_len == 1.0 every request advances
+    # exactly ONE token per verify step (bonus only, zero correct drafts), so
+    # the per-request token budget for N steps is N, not N * (gamma+1).
+    # Multiplying by the verify window made requests outlive the target by
+    # (gamma+1)x, so rounds that missed the poll-based abort ran ~6x longer
+    # than designed. Natural exhaustion now bounds every round at the step
+    # budget even if the abort never fires.
+    commit_tokens_per_step = (
+        max(0, min(round(context.simulate_acc_len - 1), context.verify_num_draft_tokens - 1))
+        + 1
+    )
     total_steps = ROUND_WARMUP_STEPS + settings.target_steady_steps + ROUND_STEP_SLACK
-    return total_steps * context.verify_num_draft_tokens
+    return total_steps * commit_tokens_per_step
 
 
 def run_warmup_round(
@@ -557,6 +568,9 @@ def wait_for_aligned_steps(
             continue
         aligned = count_aligned_steps(
             rank_rows=new_rank_rows, batch_size_per_rank=batch_size_per_rank
+        )
+        logger.debug(
+            "Aligned-step poll: %d/%d aligned steps", aligned, target_aligned_steps
         )
         if aligned >= target_aligned_steps:
             return True
