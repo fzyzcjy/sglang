@@ -46,6 +46,8 @@ def _observe(
     verify_len: int,
     correct_len: int,
     bonus: int,
+    seq_len: int,
+    cap_trim: int = 0,
     temperature: float = 1.0,
 ) -> None:
     recorder.observe_verify_step(
@@ -59,8 +61,11 @@ def _observe(
         target_temperatures=torch.tensor([[temperature]], dtype=torch.float32),
         need_top_k_sampling=False,
         need_top_p_sampling=False,
+        logits_adjustments_are_noop=True,
         correct_len=torch.tensor([correct_len], dtype=torch.int32),
+        cap_trim_lens=torch.tensor([cap_trim], dtype=torch.int32),
         bonus=torch.tensor([bonus], dtype=torch.int64),
+        prefix_lens=torch.tensor([seq_len], dtype=torch.int64),
         layout=_FakeLayout(torch.tensor([verify_len], dtype=torch.int32)),
     )
 
@@ -86,6 +91,7 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
                 verify_len=3,
                 correct_len=1,
                 bonus=5,
+                seq_len=10,
             )
             recorder._file.flush()
 
@@ -113,6 +119,7 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
                 verify_len=2,
                 correct_len=1,
                 bonus=2,
+                seq_len=10,
             )
             recorder._file.flush()
 
@@ -158,6 +165,7 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
                 verify_len=2,
                 correct_len=1,
                 bonus=2,
+                seq_len=10,
             )
 
             corrected2 = torch.randn(_GAMMA, _VOCAB)
@@ -172,6 +180,7 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
                 verify_len=4,
                 correct_len=3,
                 bonus=4,
+                seq_len=12,
             )
             recorder._file.flush()
 
@@ -204,6 +213,7 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
                 verify_len=2,
                 correct_len=1,
                 bonus=6,
+                seq_len=10,
             )
             recorder._file.flush()
 
@@ -229,6 +239,7 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
                 verify_len=2,
                 correct_len=1,
                 bonus=2,
+                seq_len=10,
                 temperature=0.7,
             )
             recorder._file.flush()
@@ -245,8 +256,8 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
                 places=4,
             )
 
-    def test_greedy_row_is_skipped_but_commit_count_advances(self):
-        """A greedy request emits no record while its committed-count bookkeeping still advances."""
+    def test_greedy_row_is_skipped_but_seq_len_bookkeeping_advances(self):
+        """A greedy request emits no record while its expected-seq-len bookkeeping still advances."""
         with tempfile.TemporaryDirectory() as tmp:
             recorder, path = _make_recorder(tmp)
             corrected = torch.randn(_GAMMA, _VOCAB)
@@ -262,14 +273,58 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
                 target_temperatures=torch.tensor([[1.0]]),
                 need_top_k_sampling=False,
                 need_top_p_sampling=False,
+                logits_adjustments_are_noop=True,
                 correct_len=torch.tensor([2], dtype=torch.int32),
+                cap_trim_lens=torch.tensor([0], dtype=torch.int32),
                 bonus=torch.tensor([5], dtype=torch.int64),
+                prefix_lens=torch.tensor([10], dtype=torch.int64),
                 layout=_FakeLayout(torch.tensor([4], dtype=torch.int32)),
             )
             recorder._file.flush()
 
             self.assertEqual(path.read_text(), "")
-            self.assertEqual(recorder._states["r0"].committed_ct, 3)
+            self.assertEqual(recorder._states["r0"].expected_seq_len, 13)
+
+    def test_seq_len_discontinuity_drops_pending_blocks(self):
+        """A seq-len jump (retraction signature) drops pending blocks instead of gathering at wrong rows."""
+        with tempfile.TemporaryDirectory() as tmp:
+            recorder, path = _make_recorder(tmp)
+            corrected1 = torch.randn(_GAMMA, _VOCAB)
+            target1 = torch.randn((_GAMMA + 1), _VOCAB)
+            _observe(
+                recorder,
+                forward_ct=1,
+                rid="r0",
+                drafts=[1, 2, 3],
+                corrected_logits=corrected1,
+                target_logits=target1,
+                verify_len=2,
+                correct_len=1,
+                bonus=2,
+                seq_len=10,
+            )
+            self.assertEqual(len(recorder._states["r0"].pending), 1)
+
+            corrected2 = torch.randn(_GAMMA, _VOCAB)
+            target2 = torch.randn((_GAMMA + 1), _VOCAB)
+            _observe(
+                recorder,
+                forward_ct=2,
+                rid="r0",
+                drafts=[3, 6, 7],
+                corrected_logits=corrected2,
+                target_logits=target2,
+                verify_len=4,
+                correct_len=3,
+                bonus=4,
+                seq_len=11,
+            )
+            recorder._file.flush()
+
+            records = _read_records(path)
+            self.assertNotIn("pg", records[1])
+            self.assertEqual(recorder._states["r0"].pending, [])
+            self.assertEqual(recorder._discontinuity_drop_ct, 1)
 
     def test_top_p_disables_recorder(self):
         """Detecting top-p sampling permanently disables the recorder."""
@@ -287,6 +342,7 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
                 verify_len=2,
                 correct_len=1,
                 bonus=2,
+                seq_len=10,
             )
             recorder.observe_verify_step(
                 forward_ct=2,
@@ -299,8 +355,11 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
                 target_temperatures=torch.tensor([[1.0]]),
                 need_top_k_sampling=False,
                 need_top_p_sampling=True,
+                logits_adjustments_are_noop=True,
                 correct_len=torch.tensor([1], dtype=torch.int32),
+                cap_trim_lens=torch.tensor([0], dtype=torch.int32),
                 bonus=torch.tensor([2], dtype=torch.int64),
+                prefix_lens=torch.tensor([12], dtype=torch.int64),
                 layout=_FakeLayout(torch.tensor([2], dtype=torch.int32)),
             )
             self.assertTrue(recorder._disabled)

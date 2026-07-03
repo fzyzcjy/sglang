@@ -936,8 +936,13 @@ class DSparkWorkerV2(BaseSpecWorker):
                     if sampling_info is not None
                     else False
                 ),
+                logits_adjustments_are_noop=verify_logits_adjustments_are_noop(
+                    sampling_info
+                ),
                 correct_len=correct_len,
+                cap_trim_lens=cap_trim_lens,
                 bonus=bonus,
+                prefix_lens=prefix_lens,
                 layout=layout,
             )
 

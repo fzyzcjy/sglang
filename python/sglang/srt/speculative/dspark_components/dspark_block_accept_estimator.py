@@ -27,7 +27,7 @@ class _PendingBlock(msgspec.Struct):
 
 
 class _RequestState(msgspec.Struct):
-    committed_ct: int = 0
+    expected_seq_len: int = -1
     last_seen_ct: int = 0
     pending: List[_PendingBlock] = []
 
@@ -47,6 +47,7 @@ class BlockAcceptEstimateRecorder:
         self._disabled = False
         self._steps_since_flush = 0
         self._observed_step_ct = 0
+        self._discontinuity_drop_ct = 0
         logger.info(
             "DSPARK block accept estimate recorder enabled: path=%s gamma=%d",
             path,
@@ -66,8 +67,11 @@ class BlockAcceptEstimateRecorder:
         target_temperatures: torch.Tensor,
         need_top_k_sampling: bool,
         need_top_p_sampling: bool,
+        logits_adjustments_are_noop: bool,
         correct_len: torch.Tensor,
+        cap_trim_lens: torch.Tensor,
         bonus: torch.Tensor,
+        prefix_lens: torch.Tensor,
         layout: Optional[RaggedVerifyLayout],
     ) -> None:
         if self._disabled:
@@ -77,6 +81,13 @@ class BlockAcceptEstimateRecorder:
                 reason="top-k/top-p sampling detected; the estimator only supports "
                 "pure-temperature sampling (processed target distribution would "
                 "differ from plain softmax(logits/T))"
+            )
+            return
+        if not logits_adjustments_are_noop:
+            self._disable(
+                reason="non-noop logits adjustments (penalizer/logit_bias/grammar) "
+                "detected; cross-step conditioning of the gathered target "
+                "probabilities would be state-dependent"
             )
             return
         if corrected_logits is None:
@@ -91,9 +102,11 @@ class BlockAcceptEstimateRecorder:
         assert target_logits.shape[0] == bs * rows_per_request
 
         correct_lens = correct_len.tolist()
+        cap_trims = cap_trim_lens.tolist()
         bonus_tokens = bonus.tolist()
         drafts = draft_tokens.tolist()
         greedy_rows = greedy_mask.tolist()
+        seq_lens = prefix_lens.tolist()
         if layout is not None:
             verify_lens = layout.verify_lens.tolist()
         else:
@@ -111,22 +124,28 @@ class BlockAcceptEstimateRecorder:
 
             cl = int(correct_lens[b])
             window = int(verify_lens[b]) - 1
+            seq_len = int(seq_lens[b])
             assert 0 <= cl <= window <= gamma
+
+            if state.expected_seq_len >= 0 and seq_len != state.expected_seq_len:
+                if state.pending:
+                    self._discontinuity_drop_ct += len(state.pending)
+                    state.pending = []
+            state.expected_seq_len = seq_len + cl + 1
 
             if greedy_rows[b]:
                 state.pending = []
-                state.committed_ct += cl + 1
                 row_pending_gathers.append([])
                 continue
 
             realized = drafts[b][:cl] + [bonus_tokens[b]]
-            cum = state.committed_ct
 
             record: dict[str, Any] = {
                 "rid": rid,
                 "fct": forward_ct,
                 "w": window,
                 "cl": cl,
+                "ct": int(cap_trims[b]),
             }
             censored = cl == window and window < gamma
             if censored:
@@ -134,7 +153,7 @@ class BlockAcceptEstimateRecorder:
                 state.pending.append(
                     _PendingBlock(
                         forward_ct=forward_ct,
-                        anchor_pos=cum,
+                        anchor_pos=seq_len - 1,
                         window=window,
                         trimmed_tokens=trimmed_tokens,
                         next_offset=window + 1,
@@ -152,7 +171,7 @@ class BlockAcceptEstimateRecorder:
                 diverged = False
                 while block.next_offset <= gamma:
                     position = block.anchor_pos + block.next_offset
-                    row = position - cum - 1
+                    row = position - seq_len
                     assert row >= 0
                     if row > cl:
                         break
@@ -168,7 +187,6 @@ class BlockAcceptEstimateRecorder:
                     kept_pending.append(block)
             state.pending = kept_pending
 
-            state.committed_ct += cl + 1
             row_records.append(record)
             row_pending_gathers.append(pending_gathers)
 
