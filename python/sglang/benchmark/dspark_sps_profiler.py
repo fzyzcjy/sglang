@@ -1100,12 +1100,20 @@ def plot_fit(*, cells: list[dict], table, plot_path: Path) -> None:
             row=1,
             col=3,
         )
-    fig.update_xaxes(title_text="M = num total verify tokens", row=1, col=1)
-    fig.update_xaxes(title_text="M = num total verify tokens", row=1, col=2)
-    fig.update_xaxes(title_text="M = num total verify tokens", row=1, col=3)
-    fig.update_yaxes(title_text="T = step time (ms)", row=1, col=1)
-    fig.update_yaxes(title_text="throughput (tokens/s)", row=1, col=2)
-    fig.update_yaxes(title_text="T = step time (ms)", row=1, col=3)
+    fig.update_xaxes(
+        title_text="M = num total verify tokens", rangemode="tozero", row=1, col=1
+    )
+    fig.update_xaxes(
+        title_text="M = num total verify tokens", rangemode="tozero", row=1, col=2
+    )
+    fig.update_xaxes(
+        title_text="M = num total verify tokens", rangemode="tozero", row=1, col=3
+    )
+    fig.update_yaxes(title_text="T = step time (ms)", rangemode="tozero", row=1, col=1)
+    fig.update_yaxes(
+        title_text="throughput (tokens/s)", rangemode="tozero", row=1, col=2
+    )
+    fig.update_yaxes(title_text="T = step time (ms)", rangemode="tozero", row=1, col=3)
     fig.update_layout(
         title="DSpark SPS profiler: raw cells vs additive fit",
         legend_title="batch size",
