@@ -412,7 +412,7 @@ class TestOnlineCeilingEstimate(CustomTestCase):
                 gamma=_GAMMA,
                 device="cpu",
                 online_log_interval=3,
-                online_window_steps=10000,
+                online_window_steps=2,
             )
             for t in range(steps):
                 verify_lens, correct_lens, drafts, bonus, prefix = [], [], [], [], []
@@ -454,13 +454,13 @@ class TestOnlineCeilingEstimate(CustomTestCase):
             recorder._file.flush()
 
             off_lo, off_hi, off_n = _offline_estimate(path, _GAMMA)
-            online = recorder.online_estimate()
-            self.assertIsNotNone(online)
-            on_lo, on_hi, on_n, on_steps = online
-            self.assertEqual(on_n, off_n)
-            self.assertAlmostEqual(on_lo, off_lo, places=6)
-            self.assertAlmostEqual(on_hi, off_hi, places=6)
+            snap = recorder.online_estimate()
+            self.assertIsNotNone(snap)
+            self.assertEqual(snap.cumulative_blocks, off_n)
+            self.assertAlmostEqual(snap.cumulative_lo, off_lo, places=6)
+            self.assertAlmostEqual(snap.cumulative_hi, off_hi, places=6)
             self.assertGreater(off_n, bs)
+            self.assertLessEqual(snap.window_blocks, snap.cumulative_blocks)
 
     def test_online_window_evicts_forward_passes_outside_horizon(self):
         """The rolling window only keeps blocks finalized within the last window_steps forward passes."""
@@ -490,11 +490,11 @@ class TestOnlineCeilingEstimate(CustomTestCase):
                     seq_len=seq,
                 )
                 seq += cl + 1
-            online = recorder.online_estimate()
-            self.assertIsNotNone(online)
-            _, _, num_blocks, num_steps = online
-            self.assertLessEqual(num_steps, 3)
-            self.assertLessEqual(num_blocks, 3)
+            snap = recorder.online_estimate()
+            self.assertIsNotNone(snap)
+            self.assertLessEqual(snap.window_horizon, 3)
+            self.assertLessEqual(snap.window_blocks, 3)
+            self.assertEqual(snap.cumulative_blocks, 10)
 
     def test_online_disabled_by_default(self):
         """Without an interval the online aggregator is absent and online_estimate is None."""

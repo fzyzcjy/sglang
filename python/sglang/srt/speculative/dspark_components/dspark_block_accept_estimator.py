@@ -31,14 +31,27 @@ def _pending_bucket(count: int) -> int:
     return bucket
 
 
+class _CeilingSnapshot(msgspec.Struct):
+    window_lo: float
+    window_hi: float
+    window_blocks: int
+    window_horizon: int
+    cumulative_lo: float
+    cumulative_hi: float
+    cumulative_blocks: int
+
+
 class _OnlineCeiling:
     def __init__(self, *, log_interval: int, window_steps: int) -> None:
         self._log_interval = log_interval
         self._window_steps = window_steps
         self._steps: deque[Tuple[int, float, float, int]] = deque()
-        self._sum_lo = 0.0
-        self._sum_hi = 0.0
-        self._count = 0
+        self._win_lo = 0.0
+        self._win_hi = 0.0
+        self._win_count = 0
+        self._cum_lo = 0.0
+        self._cum_hi = 0.0
+        self._cum_count = 0
         self._max_forward_ct = 0
 
     def add(self, *, forward_ct: int, lo: float, hi: float) -> None:
@@ -48,47 +61,57 @@ class _OnlineCeiling:
             self._steps[-1] = (fct, slo + lo, shi + hi, c + 1)
         else:
             self._steps.append((forward_ct, lo, hi, 1))
-        self._sum_lo += lo
-        self._sum_hi += hi
-        self._count += 1
+        self._win_lo += lo
+        self._win_hi += hi
+        self._win_count += 1
+        self._cum_lo += lo
+        self._cum_hi += hi
+        self._cum_count += 1
 
     def _evict(self, *, forward_ct: int) -> None:
         cutoff = forward_ct - self._window_steps
         while self._steps and self._steps[0][0] <= cutoff:
             _, slo, shi, c = self._steps.popleft()
-            self._sum_lo -= slo
-            self._sum_hi -= shi
-            self._count -= c
+            self._win_lo -= slo
+            self._win_hi -= shi
+            self._win_count -= c
 
-    def estimate(self) -> Optional[Tuple[float, float, int, int]]:
+    def estimate(self) -> Optional[_CeilingSnapshot]:
         self._evict(forward_ct=self._max_forward_ct)
-        if self._count == 0:
+        if self._cum_count == 0:
             return None
-        horizon = min(self._window_steps, self._max_forward_ct)
-        return (
-            self._sum_lo / self._count,
-            self._sum_hi / self._count,
-            self._count,
-            horizon,
+        return _CeilingSnapshot(
+            window_lo=self._win_lo / self._win_count,
+            window_hi=self._win_hi / self._win_count,
+            window_blocks=self._win_count,
+            window_horizon=min(self._window_steps, self._max_forward_ct),
+            cumulative_lo=self._cum_lo / self._cum_count,
+            cumulative_hi=self._cum_hi / self._cum_count,
+            cumulative_blocks=self._cum_count,
         )
 
     def maybe_log(self, *, forward_ct: int) -> None:
         if self._log_interval <= 0 or forward_ct % self._log_interval != 0:
             return
-        est = self.estimate()
-        if est is None:
+        snap = self.estimate()
+        if snap is None:
             return
-        lo, hi, num_blocks, num_steps = est
         logger.info(
-            "DSpark uncapped-acc-len estimate (forward_ct=%d): ~%.3f "
-            "bracket=[%.3f, %.3f] width=%.3f over last %d forward passes (%d blocks)",
+            "DSpark uncapped-acc-len estimate (forward_ct=%d): "
+            "last %d passes ~%.3f [%.3f, %.3f] w=%.3f (%d blocks) | "
+            "cumulative ~%.3f [%.3f, %.3f] w=%.3f (%d blocks)",
             forward_ct,
-            0.5 * (lo + hi),
-            lo,
-            hi,
-            hi - lo,
-            num_steps,
-            num_blocks,
+            snap.window_horizon,
+            0.5 * (snap.window_lo + snap.window_hi),
+            snap.window_lo,
+            snap.window_hi,
+            snap.window_hi - snap.window_lo,
+            snap.window_blocks,
+            0.5 * (snap.cumulative_lo + snap.cumulative_hi),
+            snap.cumulative_lo,
+            snap.cumulative_hi,
+            snap.cumulative_hi - snap.cumulative_lo,
+            snap.cumulative_blocks,
         )
 
 
@@ -262,7 +285,7 @@ class BlockAcceptEstimateRecorder:
             self._file.flush()
         self._steps_since_flush = 0
 
-    def online_estimate(self) -> Optional[Tuple[float, float, int, int]]:
+    def online_estimate(self) -> Optional[_CeilingSnapshot]:
         if self._online is None:
             return None
         return self._online.estimate()
