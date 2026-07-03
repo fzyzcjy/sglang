@@ -920,9 +920,7 @@ class DSparkWorkerV2(BaseSpecWorker):
         buf = self._simulated_correct_drafts_buf
         if buf is None or buf.numel() < bs or buf.dtype != dtype:
             correct_target = int(
-                round(
-                    min(max(self._simulate_acc_len - 1.0, 0.0), float(self.gamma))
-                )
+                round(min(max(self._simulate_acc_len - 1.0, 0.0), float(self.gamma)))
             )
             buf = torch.full(
                 (max(bs, 512),), correct_target, dtype=dtype, device=device

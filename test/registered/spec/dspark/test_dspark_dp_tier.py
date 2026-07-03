@@ -138,9 +138,7 @@ class TestBusyIdleGraphKeyIdentity(CustomTestCase):
                 tier_num_tokens, global_num_reqs * verify_num_draft_tokens
             )
 
-            busy_floor = min(
-                tier_num_tokens, global_num_reqs * verify_num_draft_tokens
-            )
+            busy_floor = min(tier_num_tokens, global_num_reqs * verify_num_draft_tokens)
             self.assertEqual(busy_floor, tier_num_tokens)
 
             idle_lens_total = global_num_reqs
