@@ -17,10 +17,12 @@ _GATHER_ROW_CHUNK = 512
 _STATE_SWEEP_INTERVAL = 1024
 _STATE_EXPIRE_STEPS = 4096
 _FLUSH_EVERY_STEPS = 16
-_PENDING_BUCKET_MIN = 256
+_PENDING_BUCKET_MIN = 16
 
 
 def _pending_bucket(count: int) -> int:
+    if count == 0:
+        return 0
     bucket = _PENDING_BUCKET_MIN
     while bucket < count:
         bucket *= 2
