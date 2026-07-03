@@ -32,6 +32,9 @@ from sglang.srt.speculative.draft_worker_common import (
 from sglang.srt.speculative.dspark_components.dspark_accept import (
     accept_draft_tokens,
 )
+from sglang.srt.speculative.dspark_components.dspark_block_accept_estimator import (
+    BlockAcceptEstimateRecorder,
+)
 from sglang.srt.speculative.dspark_components.dspark_confidence_metrics import (
     ConfidenceMetricsProbe,
 )
@@ -294,6 +297,14 @@ class DSparkWorkerV2(BaseSpecWorker):
 
         self._sts_recorder: Optional[StsDataRecorder] = None
 
+        self._block_accept_recorder: Optional[BlockAcceptEstimateRecorder] = None
+        block_accept_estimate_path = envs.SGLANG_DSPARK_BLOCK_ACCEPT_ESTIMATE_PATH.get()
+        if block_accept_estimate_path and self.tp_rank == 0:
+            self._block_accept_recorder = BlockAcceptEstimateRecorder(
+                path=block_accept_estimate_path,
+                gamma=self.gamma,
+            )
+
         self._sps_recorder: Optional[SpsDataRecorder] = None
         if envs.SGLANG_DSPARK_ENABLE_SPS_RECORD.get():
             if self._verify_planner.mode_value != RaggedVerifyMode.STATIC.value:
@@ -317,6 +328,12 @@ class DSparkWorkerV2(BaseSpecWorker):
                 "SGLANG_RAGGED_VERIFY_MODE=static (the simulated correct_len "
                 "would break the cutoff/cap accounting of ragged modes). Got "
                 f"mode={self._verify_planner.mode_value!r}."
+            )
+        if self._simulate_acc_len > 0 and self._block_accept_recorder is not None:
+            raise ValueError(
+                "SGLANG_DSPARK_BLOCK_ACCEPT_ESTIMATE_PATH cannot be combined with "
+                "SGLANG_SIMULATE_ACC_LEN (simulated correct_len breaks the "
+                "accept-probability bookkeeping of the estimator)."
             )
 
         self._confidence_probe = ConfidenceMetricsProbe(
@@ -895,6 +912,34 @@ class DSparkWorkerV2(BaseSpecWorker):
             cap_trim_lens=cap_trim_lens,
             commit_lens=commit_lens,
         )
+        if self._block_accept_recorder is not None and not proposal.folded:
+            self._block_accept_recorder.observe_verify_step(
+                forward_ct=int(batch.forward_iter),
+                rids=[req.rid for req in batch.reqs],
+                draft_tokens=draft_tokens,
+                corrected_logits=draft_block.corrected_logits,
+                draft_temperatures=draft_block.temperatures,
+                greedy_mask=draft_block.greedy_mask,
+                target_logits=logits_output.next_token_logits,
+                target_temperatures=(
+                    sampling_info.temperatures
+                    if sampling_info is not None
+                    else draft_block.temperatures
+                ),
+                need_top_k_sampling=(
+                    sampling_info.need_top_k_sampling
+                    if sampling_info is not None
+                    else False
+                ),
+                need_top_p_sampling=(
+                    sampling_info.need_top_p_sampling
+                    if sampling_info is not None
+                    else False
+                ),
+                correct_len=correct_len,
+                bonus=bonus,
+                layout=layout,
+            )
 
         next_draft_input = make_next_draft_input(
             bonus_tokens=bonus,
