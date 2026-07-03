@@ -306,11 +306,17 @@ class DSparkWorkerV2(BaseSpecWorker):
 
         self._block_accept_recorder: Optional[BlockAcceptEstimateRecorder] = None
         block_accept_estimate_path = envs.SGLANG_DSPARK_BLOCK_ACCEPT_ESTIMATE_PATH.get()
-        if block_accept_estimate_path and self.tp_rank == 0:
+        block_accept_online_interval = (
+            envs.SGLANG_DSPARK_BLOCK_ACCEPT_ONLINE_INTERVAL.get()
+        )
+        if (
+            block_accept_estimate_path or block_accept_online_interval > 0
+        ) and self.tp_rank == 0:
             self._block_accept_recorder = BlockAcceptEstimateRecorder(
                 path=block_accept_estimate_path,
                 gamma=self.gamma,
                 device=self.device,
+                online_log_interval=block_accept_online_interval,
             )
 
         self._sps_recorder: Optional[SpsDataRecorder] = None

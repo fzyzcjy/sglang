@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+from collections import deque
 from pathlib import Path
-from typing import Any, List, Optional, Union
+from typing import Any, List, Optional, Tuple, Union
 
 import msgspec
 import torch
@@ -18,6 +20,7 @@ _STATE_SWEEP_INTERVAL = 1024
 _STATE_EXPIRE_STEPS = 4096
 _FLUSH_EVERY_STEPS = 16
 _PENDING_BUCKET_MIN = 16
+_ONLINE_WINDOW_BLOCKS = 65536
 
 
 def _pending_bucket(count: int) -> int:
@@ -29,12 +32,59 @@ def _pending_bucket(count: int) -> int:
     return bucket
 
 
+class _OnlineCeiling:
+    def __init__(self, *, log_interval: int, window_blocks: int) -> None:
+        self._log_interval = log_interval
+        self._brackets: deque[Tuple[float, float]] = deque(maxlen=window_blocks)
+        self._sum_lo = 0.0
+        self._sum_hi = 0.0
+        self._finalized_ct = 0
+
+    def add(self, *, lo: float, hi: float) -> None:
+        if len(self._brackets) == self._brackets.maxlen:
+            old_lo, old_hi = self._brackets[0]
+            self._sum_lo -= old_lo
+            self._sum_hi -= old_hi
+        self._brackets.append((lo, hi))
+        self._sum_lo += lo
+        self._sum_hi += hi
+        self._finalized_ct += 1
+
+    def estimate(self) -> Optional[Tuple[float, float, int]]:
+        n = len(self._brackets)
+        if n == 0:
+            return None
+        return (self._sum_lo / n, self._sum_hi / n, n)
+
+    def maybe_log(self, *, forward_ct: int) -> None:
+        if self._log_interval <= 0 or forward_ct % self._log_interval != 0:
+            return
+        n = len(self._brackets)
+        if n == 0:
+            return
+        lo = self._sum_lo / n
+        hi = self._sum_hi / n
+        logger.info(
+            "DSpark uncapped-acc-len estimate (forward_ct=%d): ~%.3f "
+            "bracket=[%.3f, %.3f] width=%.3f over last %d blocks",
+            forward_ct,
+            0.5 * (lo + hi),
+            lo,
+            hi,
+            hi - lo,
+            n,
+        )
+
+
 class _PendingBlock(msgspec.Struct):
     forward_ct: int
     anchor_pos: int
     window: int
     trimmed_tokens: List[int]
     next_offset: int
+    q_lps: List[float] = []
+    est_prod: float = 1.0
+    est_lo_extra: float = 0.0
 
 
 class _RequestState(msgspec.Struct):
@@ -45,12 +95,21 @@ class _RequestState(msgspec.Struct):
 
 class BlockAcceptEstimateRecorder:
     def __init__(
-        self, *, path: str, gamma: int, device: Union[str, torch.device]
+        self,
+        *,
+        path: str,
+        gamma: int,
+        device: Union[str, torch.device],
+        online_log_interval: int = 0,
     ) -> None:
         self._gamma = gamma
-        self._path = Path(path)
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._file = self._path.open("w")
+        if path:
+            self._path: Optional[Path] = Path(path)
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._file = self._path.open("w")
+        else:
+            self._path = None
+            self._file = None
         self._device = torch.device(device)
         self._states: dict[str, _RequestState] = {}
         self._steps_since_flush = 0
@@ -58,6 +117,13 @@ class BlockAcceptEstimateRecorder:
         self._discontinuity_drop_ct = 0
         self._skipped_step_ct = 0
         self._warned_skip_reasons: set[str] = set()
+
+        self._online: Optional[_OnlineCeiling] = None
+        if online_log_interval > 0:
+            self._online = _OnlineCeiling(
+                log_interval=online_log_interval,
+                window_blocks=_ONLINE_WINDOW_BLOCKS,
+            )
 
         self._retained_h2d: List[torch.Tensor] = []
         self._delayed: Optional[DelayedDeviceHostHandler] = None
@@ -67,10 +133,12 @@ class BlockAcceptEstimateRecorder:
             )
 
         logger.info(
-            "DSPARK block accept estimate recorder enabled: path=%s gamma=%d async=%s",
+            "DSPARK block accept estimate recorder enabled: path=%s gamma=%d "
+            "async=%s online_log_interval=%d",
             path,
             gamma,
             self._delayed is not None,
+            online_log_interval,
         )
 
     def observe_verify_step(
@@ -138,8 +206,40 @@ class BlockAcceptEstimateRecorder:
                 compute_on_device=lambda: None,
                 postprocess_on_host=self._settle_and_write,
             )
-        self._file.flush()
+        if self._file is not None:
+            self._file.flush()
         self._steps_since_flush = 0
+
+    def online_estimate(self) -> Optional[Tuple[float, float, int]]:
+        if self._online is None:
+            return None
+        return self._online.estimate()
+
+    def drain_pending_online(self) -> None:
+        if self._online is None:
+            return
+        for state in self._states.values():
+            for block in state.pending:
+                self._finalize_at_end_online(block)
+            state.pending = []
+
+    def _finalize_walk_online(self, block: _PendingBlock, *, diverged: bool) -> None:
+        base = block.window + 1.0
+        lo = base + block.est_lo_extra
+        if diverged:
+            offset = block.next_offset - 1
+            tail = (
+                block.est_prod * (self._gamma - offset) if offset < self._gamma else 0.0
+            )
+        else:
+            tail = 0.0
+        self._online.add(lo=lo, hi=lo + tail)
+
+    def _finalize_at_end_online(self, block: _PendingBlock) -> None:
+        base = block.window + 1.0
+        lo = base + block.est_lo_extra
+        tail = block.est_prod * (self._gamma - block.next_offset + 1)
+        self._online.add(lo=lo, hi=lo + tail)
 
     def _build_device_bundle(
         self,
@@ -288,6 +388,9 @@ class BlockAcceptEstimateRecorder:
             if state.expected_seq_len >= 0 and seq_len != state.expected_seq_len:
                 if state.pending:
                     self._discontinuity_drop_ct += len(state.pending)
+                    if self._online is not None:
+                        for block in state.pending:
+                            self._finalize_at_end_online(block)
                     state.pending = []
             state.expected_seq_len = seq_len + cl + 1
 
@@ -315,6 +418,7 @@ class BlockAcceptEstimateRecorder:
             num_old_pending = len(state.pending)
             if censored:
                 trimmed_tokens = drafts[b][window:gamma]
+                q_lps = q_all[b][window:gamma]
                 state.pending.append(
                     _PendingBlock(
                         forward_ct=forward_ct,
@@ -322,10 +426,13 @@ class BlockAcceptEstimateRecorder:
                         window=window,
                         trimmed_tokens=trimmed_tokens,
                         next_offset=window + 1,
+                        q_lps=q_lps,
                     )
                 )
                 record["trimmed_tokens"] = trimmed_tokens
-                record["q_lp"] = q_all[b][window:gamma]
+                record["q_lp"] = q_lps
+            elif self._online is not None:
+                self._online.add(lo=cl + 1.0, hi=cl + 1.0)
 
             pending_gathers: List[list] = []
             kept_pending: List[_PendingBlock] = []
@@ -353,25 +460,40 @@ class BlockAcceptEstimateRecorder:
                             realized[row],
                         ]
                     )
+                    if self._online is not None:
+                        a = min(
+                            1.0,
+                            math.exp(
+                                p_lp - block.q_lps[block.next_offset - block.window - 1]
+                            ),
+                        )
+                        block.est_prod *= a
+                        block.est_lo_extra += block.est_prod
                     block.next_offset += 1
                     if realized[row] != token:
                         diverged = True
                         break
                 if not diverged and block.next_offset <= gamma:
                     kept_pending.append(block)
+                elif self._online is not None:
+                    self._finalize_walk_online(block, diverged=diverged)
             state.pending = kept_pending
 
             if pending_gathers:
                 record["pg"] = pending_gathers
-            self._file.write(json.dumps(record) + "\n")
+            if self._file is not None:
+                self._file.write(json.dumps(record) + "\n")
 
         self._observed_step_ct += 1
-        self._steps_since_flush += 1
-        if self._steps_since_flush >= _FLUSH_EVERY_STEPS:
-            self._file.flush()
-            self._steps_since_flush = 0
+        if self._file is not None:
+            self._steps_since_flush += 1
+            if self._steps_since_flush >= _FLUSH_EVERY_STEPS:
+                self._file.flush()
+                self._steps_since_flush = 0
         if self._observed_step_ct % _STATE_SWEEP_INTERVAL == 0:
             self._sweep_states(forward_ct=forward_ct)
+        if self._online is not None:
+            self._online.maybe_log(forward_ct=forward_ct)
 
     def _host_to_device_async(
         self, values: List[int], *, device: torch.device
@@ -410,6 +532,9 @@ class BlockAcceptEstimateRecorder:
             if forward_ct - state.last_seen_ct > _STATE_EXPIRE_STEPS
         ]
         for rid in expired:
+            if self._online is not None:
+                for block in self._states[rid].pending:
+                    self._finalize_at_end_online(block)
             del self._states[rid]
 
     def _skip_reason(

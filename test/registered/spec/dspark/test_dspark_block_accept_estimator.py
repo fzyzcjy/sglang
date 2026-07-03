@@ -1,4 +1,5 @@
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -354,6 +355,114 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
             self.assertEqual(recorder._skipped_step_ct, 0)
             self.assertEqual(recorder._states["r_top_p"].pending, [])
             self.assertEqual(recorder._states["r_top_p"].expected_seq_len, 22)
+
+
+def _offline_estimate(path: Path, gamma: int) -> tuple[float, float, int]:
+    from collections import defaultdict
+
+    blocks: list[dict] = []
+    gathers: dict[tuple, list] = defaultdict(list)
+    for line in path.read_text().splitlines():
+        rec = json.loads(line)
+        blocks.append(rec)
+        for src_fct, offset, p_lp, draft_token, realized_token in rec.get("pg", []):
+            gathers[(rec["rid"], src_fct)].append(
+                [offset, p_lp, draft_token, realized_token]
+            )
+    los: list[float] = []
+    his: list[float] = []
+    for rec in blocks:
+        cl, w = rec["cl"], rec["w"]
+        if "q_lp" not in rec:
+            los.append(cl + 1.0)
+            his.append(cl + 1.0)
+            continue
+        q_lps = rec["q_lp"]
+        entries = {e[0]: e for e in gathers.get((rec["rid"], rec["fct"]), [])}
+        base, prod, lo_extra, tail = w + 1.0, 1.0, 0.0, 0.0
+        for offset in range(w + 1, gamma + 1):
+            entry = entries.get(offset)
+            if entry is None:
+                tail = prod * (gamma - offset + 1)
+                break
+            _, p_lp, draft_token, realized_token = entry
+            a = min(1.0, math.exp(p_lp - q_lps[offset - w - 1]))
+            prod *= a
+            lo_extra += prod
+            if draft_token != realized_token:
+                if offset < gamma:
+                    tail = prod * (gamma - offset)
+                break
+        los.append(base + lo_extra)
+        his.append(base + lo_extra + tail)
+    n = len(los)
+    return sum(los) / n, sum(his) / n, n
+
+
+class TestOnlineCeilingEstimate(CustomTestCase):
+    def test_online_estimate_matches_offline_aggregation(self):
+        """The online rolling ceiling estimate equals the offline analyzer over the same blocks."""
+        bs, steps = 4, 14
+        gen = torch.Generator().manual_seed(11)
+        seq = [50 + 3 * b for b in range(bs)]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "est.jsonl"
+            recorder = BlockAcceptEstimateRecorder(
+                path=str(path), gamma=_GAMMA, device="cpu", online_log_interval=3
+            )
+            for t in range(steps):
+                verify_lens, correct_lens, drafts, bonus, prefix = [], [], [], [], []
+                for b in range(bs):
+                    vl = int(torch.randint(1, _GAMMA + 2, (1,), generator=gen))
+                    window = vl - 1
+                    cl = int(torch.randint(0, window + 1, (1,), generator=gen))
+                    row = torch.randint(0, _VOCAB, (_GAMMA,), generator=gen).tolist()
+                    if cl < _GAMMA and int(torch.randint(0, 2, (1,), generator=gen)):
+                        bt = row[cl]
+                    else:
+                        bt = int(torch.randint(0, _VOCAB, (1,), generator=gen))
+                    verify_lens.append(vl)
+                    correct_lens.append(cl)
+                    drafts.append(row)
+                    bonus.append(bt)
+                    prefix.append(seq[b])
+                    seq[b] += cl + 1
+                recorder.observe_verify_step(
+                    forward_ct=t + 1,
+                    rids=[f"r{b}" for b in range(bs)],
+                    draft_tokens=torch.tensor(drafts, dtype=torch.int64),
+                    corrected_logits=torch.randn(bs, _GAMMA, _VOCAB, generator=gen),
+                    draft_temperatures=torch.ones(bs),
+                    greedy_mask=torch.zeros(bs, dtype=torch.bool),
+                    target_logits=torch.randn(bs * (_GAMMA + 1), _VOCAB, generator=gen),
+                    target_temperatures=torch.ones(bs),
+                    truncated_sampling_mask=None,
+                    logits_adjustments_are_noop=True,
+                    correct_len=torch.tensor(correct_lens, dtype=torch.int32),
+                    cap_trim_lens=torch.tensor(
+                        [_GAMMA - (v - 1) for v in verify_lens], dtype=torch.int32
+                    ),
+                    bonus=torch.tensor(bonus, dtype=torch.int64),
+                    prefix_lens=torch.tensor(prefix, dtype=torch.int64),
+                    layout=_FakeLayout(torch.tensor(verify_lens, dtype=torch.int32)),
+                )
+            recorder.drain_pending_online()
+            recorder._file.flush()
+
+            off_lo, off_hi, off_n = _offline_estimate(path, _GAMMA)
+            online = recorder.online_estimate()
+            self.assertIsNotNone(online)
+            on_lo, on_hi, on_n = online
+            self.assertEqual(on_n, off_n)
+            self.assertAlmostEqual(on_lo, off_lo, places=6)
+            self.assertAlmostEqual(on_hi, off_hi, places=6)
+            self.assertGreater(off_n, bs)
+
+    def test_online_disabled_by_default(self):
+        """Without an interval the online aggregator is absent and online_estimate is None."""
+        with tempfile.TemporaryDirectory() as tmp:
+            recorder, _ = _make_recorder(tmp)
+            self.assertIsNone(recorder.online_estimate())
 
 
 if __name__ == "__main__":
