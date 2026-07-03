@@ -1,6 +1,11 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["msgspec", "requests", "plotly", "kaleido", "numpy"]
+# ///
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import logging
 import random
@@ -13,20 +18,50 @@ from typing import Optional
 import msgspec
 import requests
 
-from sglang.benchmark.one_batch_server import (
-    DEFAULT_TIMEOUT,
-    should_skip_due_to_max_running_requests,
-    should_skip_due_to_token_capacity,
-)
-from sglang.benchmark.sps_backfit import ols_resid_backfit
-from sglang.benchmark.utils import get_tokenizer
-from sglang.srt.speculative.dspark_components.dspark_sps_table import (
-    SpsAdditiveCostTable,
-    load_sps_table_from_path,
-    profile_sps_table,
-)
-
 logger = logging.getLogger(__name__)
+
+
+def _load_module_by_path(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+try:
+    from sglang.benchmark.one_batch_server import (
+        DEFAULT_TIMEOUT,
+        should_skip_due_to_max_running_requests,
+        should_skip_due_to_token_capacity,
+    )
+    from sglang.benchmark.sps_backfit import ols_resid_backfit
+    from sglang.benchmark.utils import get_tokenizer
+    from sglang.srt.speculative.dspark_components.dspark_sps_table import (
+        SpsAdditiveCostTable,
+        load_sps_table_from_path,
+        profile_sps_table,
+    )
+except ImportError as exc:
+    logger.warning(
+        "Full sglang runtime unavailable (%s); using a torch-free fallback import. "
+        "The 'fit' subcommand works; 'run' requires the full sglang install.",
+        exc,
+    )
+    _benchmark_dir = Path(__file__).resolve().parent
+    ols_resid_backfit = _load_module_by_path(
+        "sps_backfit", _benchmark_dir / "sps_backfit.py"
+    ).ols_resid_backfit
+    _table_module = _load_module_by_path(
+        "dspark_sps_table",
+        _benchmark_dir.parent / "srt/speculative/dspark_components/dspark_sps_table.py",
+    )
+    SpsAdditiveCostTable = _table_module.SpsAdditiveCostTable
+    load_sps_table_from_path = _table_module.load_sps_table_from_path
+    profile_sps_table = _table_module.profile_sps_table
+    DEFAULT_TIMEOUT = 60
+    get_tokenizer = None
+    should_skip_due_to_max_running_requests = None
+    should_skip_due_to_token_capacity = None
 
 DEFAULT_OUT = "~/main/artifacts/sglang/dspark_sps_table.json"
 DEFAULT_MAX_BATCH_SIZE = 256
@@ -160,6 +195,12 @@ def run_profile(
     recorder_source: str,
     fracs: Optional[list[float]],
 ) -> None:
+    if get_tokenizer is None:
+        raise RuntimeError(
+            "'run' needs the full sglang runtime (torch, tokenizers, ...), but this "
+            "process loaded the torch-free fallback. Run 'run' where sglang is "
+            "installed; 'fit' works in either environment."
+        )
     if not base_url:
         raise ValueError(
             "dspark_sps_profiler connects to an already-running DSpark server "
