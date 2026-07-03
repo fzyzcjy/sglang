@@ -59,9 +59,7 @@ def _observe(
         greedy_mask=torch.tensor([False]),
         target_logits=target_logits,
         target_temperatures=torch.tensor([[temperature]], dtype=torch.float32),
-        need_top_k_sampling=False,
-        need_top_p_sampling=False,
-        need_min_p_sampling=False,
+        truncated_sampling_mask=None,
         logits_adjustments_are_noop=True,
         correct_len=torch.tensor([correct_len], dtype=torch.int32),
         cap_trim_lens=torch.tensor([cap_trim], dtype=torch.int32),
@@ -272,9 +270,7 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
                 greedy_mask=torch.tensor([True]),
                 target_logits=target,
                 target_temperatures=torch.tensor([[1.0]]),
-                need_top_k_sampling=False,
-                need_top_p_sampling=False,
-                need_min_p_sampling=False,
+                truncated_sampling_mask=None,
                 logits_adjustments_are_noop=True,
                 correct_len=torch.tensor([2], dtype=torch.int32),
                 cap_trim_lens=torch.tensor([0], dtype=torch.int32),
@@ -328,63 +324,36 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
             self.assertEqual(recorder._states["r0"].pending, [])
             self.assertEqual(recorder._discontinuity_drop_ct, 1)
 
-    def test_top_p_skips_step_without_disabling(self):
-        """A batch with top-p sampling is skipped while later pure-temperature steps still record."""
+    def test_truncated_sampling_row_is_excluded_while_clean_row_records(self):
+        """A mixed batch records the pure-temperature row and excludes only the truncated-sampling row."""
         with tempfile.TemporaryDirectory() as tmp:
             recorder, path = _make_recorder(tmp)
-            corrected = torch.randn(_GAMMA, _VOCAB)
-            target = torch.randn((_GAMMA + 1), _VOCAB)
-            _observe(
-                recorder,
-                forward_ct=1,
-                rid="r0",
-                drafts=[1, 2, 3],
-                corrected_logits=corrected,
-                target_logits=target,
-                verify_len=2,
-                correct_len=1,
-                bonus=2,
-                seq_len=10,
-            )
+            corrected = torch.randn(2, _GAMMA, _VOCAB)
+            target = torch.randn(2 * (_GAMMA + 1), _VOCAB)
             recorder.observe_verify_step(
-                forward_ct=2,
-                rids=["r0"],
-                draft_tokens=torch.tensor([[1, 2, 3]], dtype=torch.int64),
-                corrected_logits=corrected.unsqueeze(0),
-                draft_temperatures=torch.tensor([1.0]),
-                greedy_mask=torch.tensor([False]),
+                forward_ct=1,
+                rids=["r_clean", "r_top_p"],
+                draft_tokens=torch.tensor([[1, 2, 3], [4, 5, 6]], dtype=torch.int64),
+                corrected_logits=corrected,
+                draft_temperatures=torch.tensor([1.0, 1.0]),
+                greedy_mask=torch.tensor([False, False]),
                 target_logits=target,
-                target_temperatures=torch.tensor([[1.0]]),
-                need_top_k_sampling=False,
-                need_top_p_sampling=True,
-                need_min_p_sampling=False,
+                target_temperatures=torch.tensor([[1.0], [1.0]]),
+                truncated_sampling_mask=torch.tensor([False, True]),
                 logits_adjustments_are_noop=True,
-                correct_len=torch.tensor([1], dtype=torch.int32),
-                cap_trim_lens=torch.tensor([0], dtype=torch.int32),
-                bonus=torch.tensor([2], dtype=torch.int64),
-                prefix_lens=torch.tensor([12], dtype=torch.int64),
-                layout=_FakeLayout(torch.tensor([2], dtype=torch.int32)),
-            )
-            self.assertEqual(recorder._skipped_step_ct, 1)
-
-            corrected3 = torch.randn(_GAMMA, _VOCAB)
-            target3 = torch.randn((_GAMMA + 1), _VOCAB)
-            _observe(
-                recorder,
-                forward_ct=3,
-                rid="r0",
-                drafts=[4, 5, 6],
-                corrected_logits=corrected3,
-                target_logits=target3,
-                verify_len=2,
-                correct_len=1,
-                bonus=5,
-                seq_len=14,
+                correct_len=torch.tensor([1, 1], dtype=torch.int32),
+                cap_trim_lens=torch.tensor([0, 0], dtype=torch.int32),
+                bonus=torch.tensor([2, 7], dtype=torch.int64),
+                prefix_lens=torch.tensor([10, 20], dtype=torch.int64),
+                layout=_FakeLayout(torch.tensor([2, 2], dtype=torch.int32)),
             )
             recorder._file.flush()
 
             records = _read_records(path)
-            self.assertEqual([r["fct"] for r in records], [1, 3])
+            self.assertEqual([r["rid"] for r in records], ["r_clean"])
+            self.assertEqual(recorder._skipped_step_ct, 0)
+            self.assertEqual(recorder._states["r_top_p"].pending, [])
+            self.assertEqual(recorder._states["r_top_p"].expected_seq_len, 22)
 
 
 if __name__ == "__main__":

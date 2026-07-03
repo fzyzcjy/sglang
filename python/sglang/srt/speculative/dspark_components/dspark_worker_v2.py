@@ -14,6 +14,7 @@ from sglang.srt.model_executor.forward_batch_info import (
     ForwardMode,
     compute_position,
 )
+from sglang.srt.sampling.sampling_params import TOP_K_ALL
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
 from sglang.srt.speculative.dflash_info import DFlashVerifyInput
@@ -926,20 +927,12 @@ class DSparkWorkerV2(BaseSpecWorker):
                     if sampling_info is not None
                     else draft_block.temperatures
                 ),
-                need_top_k_sampling=(
-                    sampling_info.need_top_k_sampling
+                truncated_sampling_mask=(
+                    (sampling_info.top_ks != TOP_K_ALL)
+                    | (sampling_info.top_ps != 1.0)
+                    | (sampling_info.min_ps > 0)
                     if sampling_info is not None
-                    else False
-                ),
-                need_top_p_sampling=(
-                    sampling_info.need_top_p_sampling
-                    if sampling_info is not None
-                    else False
-                ),
-                need_min_p_sampling=(
-                    sampling_info.need_min_p_sampling
-                    if sampling_info is not None
-                    else False
+                    else None
                 ),
                 logits_adjustments_are_noop=verify_logits_adjustments_are_noop(
                     sampling_info

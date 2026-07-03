@@ -66,9 +66,7 @@ class BlockAcceptEstimateRecorder:
         greedy_mask: torch.Tensor,
         target_logits: torch.Tensor,
         target_temperatures: torch.Tensor,
-        need_top_k_sampling: bool,
-        need_top_p_sampling: bool,
-        need_min_p_sampling: bool,
+        truncated_sampling_mask: Optional[torch.Tensor],
         logits_adjustments_are_noop: bool,
         correct_len: torch.Tensor,
         cap_trim_lens: torch.Tensor,
@@ -76,13 +74,6 @@ class BlockAcceptEstimateRecorder:
         prefix_lens: torch.Tensor,
         layout: Optional[RaggedVerifyLayout],
     ) -> None:
-        if need_top_k_sampling or need_top_p_sampling or need_min_p_sampling:
-            self._skip_step(
-                reason="top-k/top-p/min-p sampling in batch; the estimator only "
-                "supports pure-temperature sampling (processed target distribution "
-                "would differ from plain softmax(logits/T))"
-            )
-            return
         if not logits_adjustments_are_noop:
             self._skip_step(
                 reason="non-noop logits adjustments (penalizer/logit_bias/grammar) "
@@ -106,6 +97,10 @@ class BlockAcceptEstimateRecorder:
         bonus_tokens = bonus.tolist()
         drafts = draft_tokens.tolist()
         greedy_rows = greedy_mask.tolist()
+        if truncated_sampling_mask is not None:
+            truncated_rows = truncated_sampling_mask.tolist()
+        else:
+            truncated_rows = [False] * bs
         seq_lens = prefix_lens.tolist()
         if layout is not None:
             verify_lens = layout.verify_lens.tolist()
@@ -133,7 +128,14 @@ class BlockAcceptEstimateRecorder:
                     state.pending = []
             state.expected_seq_len = seq_len + cl + 1
 
-            if greedy_rows[b]:
+            if greedy_rows[b] or truncated_rows[b]:
+                if truncated_rows[b] and not greedy_rows[b]:
+                    self._warn_once(
+                        reason="requests with top-k/top-p/min-p sampling are "
+                        "excluded per-row; the estimator only supports "
+                        "pure-temperature sampling (processed target distribution "
+                        "would differ from plain softmax(logits/T))"
+                    )
                 state.pending = []
                 row_pending_gathers.append([])
                 continue
@@ -253,13 +255,16 @@ class BlockAcceptEstimateRecorder:
 
     def _skip_step(self, *, reason: str) -> None:
         self._skipped_step_ct += 1
+        self._warn_once(
+            reason=f"skipping step: {reason} (pending blocks of affected requests "
+            "are dropped by the seq-len continuity check)"
+        )
+
+    def _warn_once(self, *, reason: str) -> None:
         if reason not in self._warned_skip_reasons:
             self._warned_skip_reasons.add(reason)
             logger.warning(
-                "DSPARK block accept estimate recorder skipping step: %s "
-                "(warned once; pending blocks of affected requests are dropped "
-                "by the seq-len continuity check)",
-                reason,
+                "DSPARK block accept estimate recorder: %s (warned once)", reason
             )
 
 
