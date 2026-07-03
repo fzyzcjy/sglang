@@ -8,6 +8,7 @@ import argparse
 import importlib.util
 import json
 import logging
+import math
 import random
 import statistics
 import threading
@@ -67,11 +68,12 @@ DEFAULT_OUT = "~/main/artifacts/sglang/dspark_sps_table.json"
 DEFAULT_MAX_BATCH_SIZE = 256
 DEFAULT_INPUT_LEN = 16
 DEFAULT_TEMPERATURE = 1.0
-DEFAULT_TARGET_STEADY_STEPS = 128
 DEFAULT_MIN_STEADY_STEPS = 32
+DEFAULT_MIN_STEADY_SECONDS = 10.0
 DEFAULT_ROUND_TIMEOUT_SECONDS = 300.0
 ROUND_WARMUP_STEPS = 8
 ROUND_STEP_SLACK = 64
+STEP_TIME_FLOOR_SECONDS = 0.02
 WARMUP_ROUND_STEADY_STEPS = 16
 POLL_INTERVAL_SECONDS = 2.0
 LOAD_JOIN_TIMEOUT_SECONDS = 60.0
@@ -147,8 +149,8 @@ class ServerContext(msgspec.Struct, frozen=True):
 class RoundSettings(msgspec.Struct, frozen=True):
     input_len: int
     temperature: float
-    target_steady_steps: int
     min_steady_steps: int
+    min_steady_seconds: float
     round_timeout_seconds: float
     ramp_token_slack: int = 0
 
@@ -623,7 +625,11 @@ def round_max_new_tokens(*, settings: RoundSettings, context: ServerContext) -> 
     # the whole batch can take minutes, and requests that finish their step
     # budget before the last request enters decode make full-batch alignment
     # unreachable (observed: input_len 8192, bs 384 -> 0 aligned steps).
-    total_steps = ROUND_WARMUP_STEPS + settings.target_steady_steps + ROUND_STEP_SLACK
+    steady_steps_budget = max(
+        settings.min_steady_steps,
+        math.ceil(settings.min_steady_seconds / STEP_TIME_FLOOR_SECONDS),
+    )
+    total_steps = ROUND_WARMUP_STEPS + steady_steps_budget + ROUND_STEP_SLACK
     return total_steps * commit_tokens_per_step + settings.ramp_token_slack
 
 
@@ -639,8 +645,8 @@ def run_warmup_round(
     warmup_settings = RoundSettings(
         input_len=settings.input_len,
         temperature=settings.temperature,
-        target_steady_steps=WARMUP_ROUND_STEADY_STEPS,
-        min_steady_steps=1,
+        min_steady_steps=WARMUP_ROUND_STEADY_STEPS,
+        min_steady_seconds=0.0,
         round_timeout_seconds=settings.round_timeout_seconds,
         ramp_token_slack=settings.ramp_token_slack,
     )
@@ -703,7 +709,8 @@ def run_one_round(
         context=context,
         watermarks=watermarks,
         batch_size_per_rank=batch_size_per_rank,
-        target_aligned_steps=ROUND_WARMUP_STEPS + settings.target_steady_steps,
+        min_steady_steps=settings.min_steady_steps,
+        min_steady_seconds=settings.min_steady_seconds,
         timeout_seconds=settings.round_timeout_seconds,
     )
     abort_all_requests(base_url=context.base_url)
@@ -718,11 +725,12 @@ def run_one_round(
     wall_seconds = time.monotonic() - start_time
     if not reached_target:
         logger.warning(
-            "Round bs=%s hit the %.0fs timeout before collecting %s aligned "
-            "steps; proceeding with what was collected.",
+            "Round bs=%s hit the %.0fs timeout before both gates (>=%s steady "
+            "steps and >=%.1fs) were met; proceeding with what was collected.",
             batch_size,
             settings.round_timeout_seconds,
-            ROUND_WARMUP_STEPS + settings.target_steady_steps,
+            settings.min_steady_steps,
+            settings.min_steady_seconds,
         )
 
     rank_rows = fetch_rank_rows(
@@ -800,10 +808,12 @@ def wait_for_aligned_steps(
     context: ServerContext,
     watermarks: list[int],
     batch_size_per_rank: int,
-    target_aligned_steps: int,
+    min_steady_steps: int,
+    min_steady_seconds: float,
     timeout_seconds: float,
 ) -> bool:
     deadline = time.monotonic() + timeout_seconds
+    steady_start: Optional[float] = None
     while time.monotonic() < deadline:
         time.sleep(POLL_INTERVAL_SECONDS)
         try:
@@ -822,10 +832,21 @@ def wait_for_aligned_steps(
         aligned = count_aligned_steps(
             rank_rows=new_rank_rows, batch_size_per_rank=batch_size_per_rank
         )
-        logger.debug(
-            "Aligned-step poll: %d/%d aligned steps", aligned, target_aligned_steps
+        if aligned >= ROUND_WARMUP_STEPS and steady_start is None:
+            steady_start = time.monotonic()
+        steady_steps = max(0, aligned - ROUND_WARMUP_STEPS)
+        steady_seconds = (
+            time.monotonic() - steady_start if steady_start is not None else 0.0
         )
-        if aligned >= target_aligned_steps:
+        logger.debug(
+            "Aligned-step poll: %d aligned (%d/%d steady steps, %.1f/%.1fs)",
+            aligned,
+            steady_steps,
+            min_steady_steps,
+            steady_seconds,
+            min_steady_seconds,
+        )
+        if steady_steps >= min_steady_steps and steady_seconds >= min_steady_seconds:
             return True
     return False
 
@@ -1399,19 +1420,21 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
         "the same accept/sampling kernels as real serving.",
     )
     parser.add_argument(
-        "--target-steady-steps",
-        type=int,
-        default=DEFAULT_TARGET_STEADY_STEPS,
-        help="Aligned decode steps to collect per round before aborting the "
-        "load batch. The batch is held at exactly the target running-request "
-        "count the whole time (no early-finish drain tail).",
-    )
-    parser.add_argument(
         "--min-steady-steps",
         type=int,
         default=DEFAULT_MIN_STEADY_STEPS,
-        help="Reject a probe built from fewer aligned steady steps than this "
-        "(a handful of steps gives a jittery point).",
+        help="Stop a round only after at least this many aligned steady steps "
+        "(and --min-steady-seconds) have been collected, then abort the load "
+        "batch. Bounds cheap small-batch rounds; the batch is held at exactly "
+        "the target running-request count the whole time (no drain tail).",
+    )
+    parser.add_argument(
+        "--min-steady-seconds",
+        type=float,
+        default=DEFAULT_MIN_STEADY_SECONDS,
+        help="Stop a round only after at least this much steady-state wall time "
+        "(and --min-steady-steps) has elapsed. Bounds expensive large-batch "
+        "rounds, where a fixed step count would run many slow steps.",
     )
     parser.add_argument(
         "--round-timeout",
@@ -1482,8 +1505,8 @@ def run_settings(*, args: argparse.Namespace) -> RoundSettings:
     return RoundSettings(
         input_len=args.input_len,
         temperature=args.temperature,
-        target_steady_steps=args.target_steady_steps,
         min_steady_steps=args.min_steady_steps,
+        min_steady_seconds=args.min_steady_seconds,
         round_timeout_seconds=args.round_timeout,
         ramp_token_slack=args.ramp_token_slack,
     )
