@@ -79,6 +79,7 @@ from sglang.srt.speculative.dspark_components.kernels.build_out_tokens import (
 from sglang.srt.speculative.dspark_components.kernels.finalize_accept_lens import (
     FinalizeAcceptLens,
 )
+from sglang.srt.speculative.ragged_verify import RaggedVerifyMode
 from sglang.srt.speculative.spec_utils import draft_tp_context
 from sglang.srt.utils import get_available_gpu_memory, is_cuda
 
