@@ -28,14 +28,15 @@ from sglang.srt.speculative.dspark_components.dspark_sps_table import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_OUT = "~/main/artifacts/sglang/dspark_sps_table.json"
-DEFAULT_MAX_BATCH_SIZE = 128
+DEFAULT_MAX_BATCH_SIZE = 256
 DEFAULT_INPUT_LEN = 16
 DEFAULT_OUTPUT_LEN = 480
 DEFAULT_TEMPERATURE = 1.0
 WARMUP_OUTPUT_LEN = 32
 ROUND_WARMUP_STEPS = 8
-MATCH_FRACTION_WARN = 0.5
-MATCH_FRACTION_ERROR = 0.2
+MIN_STEADY_STEPS = 16
+MATCH_FRACTION_WARN = 0.9
+MATCH_FRACTION_ERROR = 0.5
 PROFILE_SEED = 42
 PROFILE_STREAM_INTERVAL = 1
 PROFILE_INPUT_LEN_STEP_PERCENTAGE = 0.0
@@ -500,30 +501,38 @@ def postprocess_round(
                     )
             aligned_cts.append(ct)
 
-    match_fraction = len(aligned_cts) / len(common_cts)
+    if len(aligned_cts) < ROUND_WARMUP_STEPS + MIN_STEADY_STEPS:
+        raise RuntimeError(
+            f"Round bs={batch_size} never stabilized: only {len(aligned_cts)} "
+            f"of {len(common_cts)} common decode steps had every rank at the "
+            f"target {batch_size_per_rank} requests (need at least "
+            f"{ROUND_WARMUP_STEPS + MIN_STEADY_STEPS}). Increase --output-len, "
+            "or inspect the raw records for retraction / DP imbalance."
+        )
+
+    window_cts = [
+        ct
+        for ct in sorted(common_cts)
+        if aligned_cts[0] <= ct <= aligned_cts[-1]
+    ]
+    match_fraction = len(aligned_cts) / len(window_cts)
     if match_fraction < MATCH_FRACTION_ERROR:
         raise RuntimeError(
-            f"Only {match_fraction:.0%} of {len(common_cts)} common decode steps "
-            f"ran at the target {batch_size_per_rank} requests per rank; the "
-            "round never stabilized (retraction, early finishes, or DP "
-            "imbalance). Inspect the raw records."
+            f"Round bs={batch_size} is unstable mid-round: only "
+            f"{match_fraction:.0%} of the {len(window_cts)} decode steps inside "
+            "the steady window ran at the target per-rank batch (retraction or "
+            "DP imbalance, not just ramp-in/drain). Inspect the raw records."
         )
     if match_fraction < MATCH_FRACTION_WARN:
         logger.warning(
-            "Round bs=%s: only %.0f%% of %s common decode steps ran at the "
+            "Round bs=%s: %.0f%% of %s steady-window decode steps ran at the "
             "target per-rank batch; treat this probe with suspicion.",
             batch_size,
             match_fraction * 100.0,
-            len(common_cts),
+            len(window_cts),
         )
 
     steady_cts = aligned_cts[ROUND_WARMUP_STEPS:]
-    if not steady_cts:
-        raise RuntimeError(
-            f"Round bs={batch_size} has only {len(aligned_cts)} aligned steps, "
-            f"not enough after dropping {ROUND_WARMUP_STEPS} warmup steps; "
-            "increase --output-len."
-        )
 
     per_ct_step_times = [
         statistics.fmean(by_ct[ct].step_time for by_ct in by_ct_per_rank)

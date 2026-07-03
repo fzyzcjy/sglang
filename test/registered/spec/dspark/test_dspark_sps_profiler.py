@@ -89,7 +89,23 @@ class TestPostprocessRound(CustomTestCase):
             client_result={},
         )
         self.assertAlmostEqual(outcome.steps_per_sec, 50.0)
-        self.assertAlmostEqual(outcome.match_fraction, 0.75)
+        self.assertAlmostEqual(outcome.match_fraction, 1.0)
+
+    def test_mid_round_instability_raises(self):
+        """Off-target steps inside the steady window (not ramp/drain) fail the round."""
+        head = make_rows(num_rows=15)
+        gap = make_rows(
+            num_rows=40, num_running_reqs=3, num_verify_tokens=24, first_forward_ct=15
+        )
+        tail = make_rows(num_rows=15, first_forward_ct=55)
+        with self.assertRaisesRegex(RuntimeError, "unstable mid-round"):
+            postprocess_round(
+                rank_rows=[head + gap + tail],
+                batch_size=4,
+                dp_size=1,
+                verify_num_draft_tokens=8,
+                client_result={},
+            )
 
     def test_round_that_never_stabilizes_raises(self):
         """A round where almost no step hits the target batch is rejected."""
