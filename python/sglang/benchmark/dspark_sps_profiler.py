@@ -67,6 +67,34 @@ class SpsRow(msgspec.Struct, frozen=True):
     step_time: float
 
 
+class RecordSource(msgspec.Struct, frozen=True):
+    name: str
+    payload_key: str
+    enable_hint: str
+    step_time_ms: bool
+
+
+SPS_RECORD_SOURCE = RecordSource(
+    name="sps",
+    payload_key="dspark_sps_record",
+    enable_hint="SGLANG_DSPARK_ENABLE_SPS_RECORD=1 (and SGLANG_RAGGED_VERIFY_MODE=static)",
+    step_time_ms=False,
+)
+INFO_RECORD_SOURCE = RecordSource(
+    name="info",
+    payload_key="dspark_info_record",
+    enable_hint=(
+        "SGLANG_DSPARK_DEBUG_DUMP=core,step_cpu_time "
+        "(and SGLANG_RAGGED_VERIFY_MODE=static)"
+    ),
+    step_time_ms=True,
+)
+RECORD_SOURCES = {
+    SPS_RECORD_SOURCE.name: SPS_RECORD_SOURCE,
+    INFO_RECORD_SOURCE.name: INFO_RECORD_SOURCE,
+}
+
+
 class ServerContext(msgspec.Struct, frozen=True):
     base_url: str
     tokenizer_path: str
@@ -77,6 +105,7 @@ class ServerContext(msgspec.Struct, frozen=True):
     cuda_graph_max_bs: Optional[int]
     skip_max_running_requests_threshold: float
     skip_token_capacity_threshold: float
+    record_source: RecordSource
 
 
 class RoundSettings(msgspec.Struct, frozen=True):
@@ -85,6 +114,7 @@ class RoundSettings(msgspec.Struct, frozen=True):
     target_steady_steps: int
     min_steady_steps: int
     round_timeout_seconds: float
+    ramp_token_slack: int = 0
 
 
 class LoadInfo(msgspec.Struct, frozen=True):
@@ -116,6 +146,7 @@ def profile(
     repeats: int,
     self_check: bool,
     local_tokenizer_path: Optional[str],
+    recorder_source: str,
 ) -> None:
     if not base_url:
         raise ValueError(
@@ -134,7 +165,9 @@ def profile(
             path.unlink()
 
     context = fetch_server_context(
-        base_url=base_url, local_tokenizer_path=local_tokenizer_path
+        base_url=base_url,
+        local_tokenizer_path=local_tokenizer_path,
+        record_source=RECORD_SOURCES[recorder_source],
     )
     vocab_size = len(get_tokenizer(context.tokenizer_path))
     batch_sizes = sorted(set(batch_sizes))
@@ -216,7 +249,10 @@ def profile(
 
 
 def fetch_server_context(
-    *, base_url: str, local_tokenizer_path: Optional[str]
+    *,
+    base_url: str,
+    local_tokenizer_path: Optional[str],
+    record_source: RecordSource,
 ) -> ServerContext:
     response = requests.get(base_url + "/server_info", timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
@@ -240,19 +276,27 @@ def fetch_server_context(
     internal_states = info.get("internal_states") or []
     if not internal_states:
         raise RuntimeError(f"{base_url}/server_info returned no internal_states.")
-    sps_payloads = [state.get("dspark_sps_record") for state in internal_states]
+    sps_payloads = [state.get(record_source.payload_key) for state in internal_states]
     for rank_index, payload in enumerate(sps_payloads):
         if payload is None:
             raise ValueError(
-                f"DP rank {rank_index} reports no dspark_sps_record; launch the "
-                "server with SGLANG_DSPARK_ENABLE_SPS_RECORD=1 (and "
-                "SGLANG_RAGGED_VERIFY_MODE=static)."
+                f"DP rank {rank_index} reports no {record_source.payload_key}; "
+                f"launch the server with {record_source.enable_hint}."
             )
         if payload.get("mode") != "static":
             raise ValueError(
-                "dspark_sps_record.mode must be 'static', got "
+                f"{record_source.payload_key}.mode must be 'static', got "
                 f"{payload.get('mode')!r} on DP rank {rank_index}."
             )
+        if record_source is INFO_RECORD_SOURCE:
+            components = payload.get("components") or []
+            missing = {"core", "step_cpu_time"} - set(components)
+            if missing:
+                raise ValueError(
+                    f"DP rank {rank_index} {record_source.payload_key} is missing "
+                    f"component(s) {sorted(missing)}; launch with "
+                    f"{record_source.enable_hint}."
+                )
         if payload.get("simulate_acc_len") != REQUIRED_SIMULATE_ACC_LEN:
             raise ValueError(
                 f"DP rank {rank_index} reports simulate_acc_len="
@@ -314,6 +358,7 @@ def fetch_server_context(
         cuda_graph_max_bs=cuda_graph_max_bs,
         skip_max_running_requests_threshold=skip_max_running,
         skip_token_capacity_threshold=skip_token_capacity,
+        record_source=record_source,
     )
 
 
@@ -389,8 +434,12 @@ def round_max_new_tokens(*, settings: RoundSettings, context: ServerContext) -> 
         )
         + 1
     )
+    # Long inputs need a ramp allowance on top of the step budget: prefilling
+    # the whole batch can take minutes, and requests that finish their step
+    # budget before the last request enters decode make full-batch alignment
+    # unreachable (observed: input_len 8192, bs 384 -> 0 aligned steps).
     total_steps = ROUND_WARMUP_STEPS + settings.target_steady_steps + ROUND_STEP_SLACK
-    return total_steps * commit_tokens_per_step
+    return total_steps * commit_tokens_per_step + settings.ramp_token_slack
 
 
 def run_warmup_round(
@@ -407,6 +456,7 @@ def run_warmup_round(
         target_steady_steps=WARMUP_ROUND_STEADY_STEPS,
         min_steady_steps=1,
         round_timeout_seconds=settings.round_timeout_seconds,
+        ramp_token_slack=settings.ramp_token_slack,
     )
     try:
         run_one_round(
@@ -443,7 +493,9 @@ def run_one_round(
     flush_cache(base_url=context.base_url)
     watermarks = [
         max((row.forward_ct for row in rows), default=-1)
-        for rows in fetch_rank_rows(base_url=context.base_url)
+        for rows in fetch_rank_rows(
+            base_url=context.base_url, record_source=context.record_source
+        )
     ]
 
     start_time = time.monotonic()
@@ -482,7 +534,9 @@ def run_one_round(
             ROUND_WARMUP_STEPS + settings.target_steady_steps,
         )
 
-    rank_rows = fetch_rank_rows(base_url=context.base_url)
+    rank_rows = fetch_rank_rows(
+        base_url=context.base_url, record_source=context.record_source
+    )
     if len(rank_rows) != len(watermarks):
         raise RuntimeError(
             f"DP rank count changed mid-profile: {len(watermarks)} -> "
@@ -561,7 +615,9 @@ def wait_for_aligned_steps(
     while time.monotonic() < deadline:
         time.sleep(POLL_INTERVAL_SECONDS)
         try:
-            rank_rows = fetch_rank_rows(base_url=context.base_url)
+            rank_rows = fetch_rank_rows(
+                base_url=context.base_url, record_source=context.record_source
+            )
         except Exception:
             logger.warning("Polling /server_info failed; retrying.", exc_info=True)
             continue
@@ -617,25 +673,37 @@ def flush_cache(*, base_url: str) -> None:
         logger.warning("POST /flush_cache failed; continuing.", exc_info=True)
 
 
-def fetch_rank_rows(*, base_url: str) -> list[list[SpsRow]]:
+def fetch_rank_rows(
+    *, base_url: str, record_source: RecordSource
+) -> list[list[SpsRow]]:
     response = requests.get(base_url + "/server_info", timeout=DEFAULT_TIMEOUT)
     response.raise_for_status()
     internal_states = response.json().get("internal_states") or []
     rank_rows: list[list[SpsRow]] = []
     for state in internal_states:
-        payload = state.get("dspark_sps_record") or {}
-        rank_rows.append(
-            [
+        payload = state.get(record_source.payload_key) or {}
+        rows: list[SpsRow] = []
+        for record in payload.get("records", []):
+            step_time = _row_step_time(record=record, record_source=record_source)
+            if step_time is None:
+                continue
+            rows.append(
                 SpsRow(
                     forward_ct=int(record["forward_ct"]),
                     num_running_reqs=int(record["num_running_reqs"]),
                     num_verify_tokens=int(record["num_verify_tokens"]),
-                    step_time=float(record["step_time"]),
+                    step_time=step_time,
                 )
-                for record in payload.get("records", [])
-            ]
-        )
+            )
+        rank_rows.append(rows)
     return rank_rows
+
+
+def _row_step_time(*, record: dict, record_source: RecordSource) -> Optional[float]:
+    if not record_source.step_time_ms:
+        return float(record["step_time"])
+    value = record.get("step_cpu_ms")
+    return None if value is None else float(value) / 1000.0
 
 
 def postprocess_round(
@@ -680,13 +748,15 @@ def postprocess_round(
         rows_at_ct = [by_ct[ct] for by_ct in by_ct_per_rank]
         if all(row.num_running_reqs == batch_size_per_rank for row in rows_at_ct):
             for rank_index, row in enumerate(rows_at_ct):
-                if row.num_verify_tokens != expected_tokens:
+                if row.num_verify_tokens < expected_tokens:
                     raise RuntimeError(
                         f"DP rank {rank_index} at forward_ct={ct} reports "
-                        f"num_verify_tokens={row.num_verify_tokens}, expected "
-                        f"{expected_tokens} (= {batch_size_per_rank} reqs x "
+                        f"num_verify_tokens={row.num_verify_tokens}, expected at "
+                        f"least {expected_tokens} (= {batch_size_per_rank} reqs x "
                         f"{verify_num_draft_tokens}); ranks are not running the "
-                        "uniform static verify the table assumes."
+                        "uniform static verify the table assumes. The recorded "
+                        "count is the replayed graph tier, which may exceed the "
+                        "candidate count when a bs is not an exact capture tier."
                     )
             aligned_cts.append(ct)
 
@@ -944,6 +1014,16 @@ def cli_main() -> None:
         "steps before giving up and using what was collected.",
     )
     parser.add_argument(
+        "--ramp-token-slack",
+        type=int,
+        default=0,
+        help="Extra per-request tokens on top of the step budget so requests "
+        "outlive the whole-batch prefill ramp. Required for long --input-len "
+        "at high batch sizes, where the ramp exceeds the request lifetime and "
+        "full-batch alignment becomes unreachable; size it as roughly "
+        "ramp_seconds / step_time.",
+    )
+    parser.add_argument(
         "--out",
         type=str,
         default=DEFAULT_OUT,
@@ -981,6 +1061,16 @@ def cli_main() -> None:
         "/server_info).",
     )
     parser.add_argument(
+        "--recorder-source",
+        type=str,
+        choices=sorted(RECORD_SOURCES),
+        default=SPS_RECORD_SOURCE.name,
+        help="Which server-side per-step record feed to read: 'sps' (legacy "
+        "SpsDataRecorder via SGLANG_DSPARK_ENABLE_SPS_RECORD) or 'info' (the "
+        "DsparkInfoDumper 'core'+'step_cpu_time' components via "
+        "SGLANG_DSPARK_DEBUG_DUMP). Both yield the same steps_per_sec table.",
+    )
+    parser.add_argument(
         "--log-level",
         type=str,
         default="info",
@@ -1004,6 +1094,7 @@ def cli_main() -> None:
         target_steady_steps=args.target_steady_steps,
         min_steady_steps=args.min_steady_steps,
         round_timeout_seconds=args.round_timeout,
+        ramp_token_slack=args.ramp_token_slack,
     )
 
     profile(
@@ -1015,6 +1106,7 @@ def cli_main() -> None:
         repeats=args.repeats,
         self_check=args.self_check,
         local_tokenizer_path=args.local_tokenizer_path,
+        recorder_source=args.recorder_source,
     )
 
 
