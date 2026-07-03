@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Union
 
 import msgspec
 import torch
@@ -42,12 +42,14 @@ class _RequestState(msgspec.Struct):
 
 
 class BlockAcceptEstimateRecorder:
-    def __init__(self, *, path: str, gamma: int, device: torch.device) -> None:
+    def __init__(
+        self, *, path: str, gamma: int, device: Union[str, torch.device]
+    ) -> None:
         self._gamma = gamma
         self._path = Path(path)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._file = self._path.open("w")
-        self._device = device
+        self._device = torch.device(device)
         self._states: dict[str, _RequestState] = {}
         self._steps_since_flush = 0
         self._observed_step_ct = 0
@@ -57,9 +59,9 @@ class BlockAcceptEstimateRecorder:
 
         self._retained_h2d: List[torch.Tensor] = []
         self._delayed: Optional[DelayedDeviceHostHandler] = None
-        if device.type == "cuda":
+        if self._device.type == "cuda":
             self._delayed = DelayedDeviceHostHandler(
-                d2h_stream=torch.cuda.Stream(device=device)
+                d2h_stream=torch.cuda.Stream(device=self._device)
             )
 
         logger.info(
