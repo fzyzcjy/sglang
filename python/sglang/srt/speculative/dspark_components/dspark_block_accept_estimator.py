@@ -20,7 +20,6 @@ _STATE_SWEEP_INTERVAL = 1024
 _STATE_EXPIRE_STEPS = 4096
 _FLUSH_EVERY_STEPS = 16
 _PENDING_BUCKET_MIN = 16
-_ONLINE_WINDOW_BLOCKS = 65536
 
 
 def _pending_bucket(count: int) -> int:
@@ -33,46 +32,62 @@ def _pending_bucket(count: int) -> int:
 
 
 class _OnlineCeiling:
-    def __init__(self, *, log_interval: int, window_blocks: int) -> None:
+    def __init__(self, *, log_interval: int, window_steps: int) -> None:
         self._log_interval = log_interval
-        self._brackets: deque[Tuple[float, float]] = deque(maxlen=window_blocks)
+        self._window_steps = window_steps
+        self._steps: deque[Tuple[int, float, float, int]] = deque()
         self._sum_lo = 0.0
         self._sum_hi = 0.0
-        self._finalized_ct = 0
+        self._count = 0
+        self._max_forward_ct = 0
 
-    def add(self, *, lo: float, hi: float) -> None:
-        if len(self._brackets) == self._brackets.maxlen:
-            old_lo, old_hi = self._brackets[0]
-            self._sum_lo -= old_lo
-            self._sum_hi -= old_hi
-        self._brackets.append((lo, hi))
+    def add(self, *, forward_ct: int, lo: float, hi: float) -> None:
+        self._max_forward_ct = max(self._max_forward_ct, forward_ct)
+        if self._steps and self._steps[-1][0] == forward_ct:
+            fct, slo, shi, c = self._steps[-1]
+            self._steps[-1] = (fct, slo + lo, shi + hi, c + 1)
+        else:
+            self._steps.append((forward_ct, lo, hi, 1))
         self._sum_lo += lo
         self._sum_hi += hi
-        self._finalized_ct += 1
+        self._count += 1
 
-    def estimate(self) -> Optional[Tuple[float, float, int]]:
-        n = len(self._brackets)
-        if n == 0:
+    def _evict(self, *, forward_ct: int) -> None:
+        cutoff = forward_ct - self._window_steps
+        while self._steps and self._steps[0][0] <= cutoff:
+            _, slo, shi, c = self._steps.popleft()
+            self._sum_lo -= slo
+            self._sum_hi -= shi
+            self._count -= c
+
+    def estimate(self) -> Optional[Tuple[float, float, int, int]]:
+        self._evict(forward_ct=self._max_forward_ct)
+        if self._count == 0:
             return None
-        return (self._sum_lo / n, self._sum_hi / n, n)
+        return (
+            self._sum_lo / self._count,
+            self._sum_hi / self._count,
+            self._count,
+            len(self._steps),
+        )
 
     def maybe_log(self, *, forward_ct: int) -> None:
         if self._log_interval <= 0 or forward_ct % self._log_interval != 0:
             return
-        n = len(self._brackets)
-        if n == 0:
+        est = self.estimate()
+        if est is None:
             return
-        lo = self._sum_lo / n
-        hi = self._sum_hi / n
+        lo, hi, num_blocks, num_steps = est
         logger.info(
             "DSpark uncapped-acc-len estimate (forward_ct=%d): ~%.3f "
-            "bracket=[%.3f, %.3f] width=%.3f over last %d blocks",
+            "bracket=[%.3f, %.3f] width=%.3f over last %d forward passes (%d blocks)",
             forward_ct,
             0.5 * (lo + hi),
             lo,
             hi,
             hi - lo,
-            n,
+            num_steps,
+            num_blocks,
         )
 
 
@@ -101,8 +116,10 @@ class BlockAcceptEstimateRecorder:
         gamma: int,
         device: Union[str, torch.device],
         online_log_interval: int = 0,
+        online_window_steps: int = 0,
     ) -> None:
         self._gamma = gamma
+        self._last_forward_ct = 0
         if path:
             self._path: Optional[Path] = Path(path)
             self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -122,7 +139,11 @@ class BlockAcceptEstimateRecorder:
         if online_log_interval > 0:
             self._online = _OnlineCeiling(
                 log_interval=online_log_interval,
-                window_blocks=_ONLINE_WINDOW_BLOCKS,
+                window_steps=(
+                    online_window_steps
+                    if online_window_steps > 0
+                    else online_log_interval
+                ),
             )
 
         self._retained_h2d: List[torch.Tensor] = []
@@ -210,7 +231,7 @@ class BlockAcceptEstimateRecorder:
             self._file.flush()
         self._steps_since_flush = 0
 
-    def online_estimate(self) -> Optional[Tuple[float, float, int]]:
+    def online_estimate(self) -> Optional[Tuple[float, float, int, int]]:
         if self._online is None:
             return None
         return self._online.estimate()
@@ -220,10 +241,12 @@ class BlockAcceptEstimateRecorder:
             return
         for state in self._states.values():
             for block in state.pending:
-                self._finalize_at_end_online(block)
+                self._finalize_at_end_online(block, forward_ct=self._last_forward_ct)
             state.pending = []
 
-    def _finalize_walk_online(self, block: _PendingBlock, *, diverged: bool) -> None:
+    def _finalize_walk_online(
+        self, block: _PendingBlock, *, diverged: bool, forward_ct: int
+    ) -> None:
         base = block.window + 1.0
         lo = base + block.est_lo_extra
         if diverged:
@@ -233,13 +256,13 @@ class BlockAcceptEstimateRecorder:
             )
         else:
             tail = 0.0
-        self._online.add(lo=lo, hi=lo + tail)
+        self._online.add(forward_ct=forward_ct, lo=lo, hi=lo + tail)
 
-    def _finalize_at_end_online(self, block: _PendingBlock) -> None:
+    def _finalize_at_end_online(self, block: _PendingBlock, *, forward_ct: int) -> None:
         base = block.window + 1.0
         lo = base + block.est_lo_extra
         tail = block.est_prod * (self._gamma - block.next_offset + 1)
-        self._online.add(lo=lo, hi=lo + tail)
+        self._online.add(forward_ct=forward_ct, lo=lo, hi=lo + tail)
 
     def _build_device_bundle(
         self,
@@ -364,6 +387,7 @@ class BlockAcceptEstimateRecorder:
     def _settle_and_write(self, bundle: dict[str, Any]) -> None:
         gamma = self._gamma
         forward_ct = bundle["forward_ct"]
+        self._last_forward_ct = forward_ct
         rids = bundle["rids"]
         bs = len(rids)
 
@@ -390,7 +414,7 @@ class BlockAcceptEstimateRecorder:
                     self._discontinuity_drop_ct += len(state.pending)
                     if self._online is not None:
                         for block in state.pending:
-                            self._finalize_at_end_online(block)
+                            self._finalize_at_end_online(block, forward_ct=forward_ct)
                     state.pending = []
             state.expected_seq_len = seq_len + cl + 1
 
@@ -432,7 +456,7 @@ class BlockAcceptEstimateRecorder:
                 record["trimmed_tokens"] = trimmed_tokens
                 record["q_lp"] = q_lps
             elif self._online is not None:
-                self._online.add(lo=cl + 1.0, hi=cl + 1.0)
+                self._online.add(forward_ct=forward_ct, lo=cl + 1.0, hi=cl + 1.0)
 
             pending_gathers: List[list] = []
             kept_pending: List[_PendingBlock] = []
@@ -476,7 +500,9 @@ class BlockAcceptEstimateRecorder:
                 if not diverged and block.next_offset <= gamma:
                     kept_pending.append(block)
                 elif self._online is not None:
-                    self._finalize_walk_online(block, diverged=diverged)
+                    self._finalize_walk_online(
+                        block, diverged=diverged, forward_ct=forward_ct
+                    )
             state.pending = kept_pending
 
             if pending_gathers:
@@ -534,7 +560,7 @@ class BlockAcceptEstimateRecorder:
         for rid in expired:
             if self._online is not None:
                 for block in self._states[rid].pending:
-                    self._finalize_at_end_online(block)
+                    self._finalize_at_end_online(block, forward_ct=forward_ct)
             del self._states[rid]
 
     def _skip_reason(
