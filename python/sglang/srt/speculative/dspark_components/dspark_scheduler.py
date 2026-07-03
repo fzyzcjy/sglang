@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Optional, Union
 
 import msgspec
 import torch
@@ -12,7 +12,9 @@ from sglang.srt.speculative.dspark_components.dspark_sps_online import (
     OnlineSpsProfiler,
 )
 from sglang.srt.speculative.dspark_components.dspark_sps_table import (
+    SpsAdditiveCostTable,
     SpsCostTable,
+    _interp_clamped,
     build_uninitialized_sps_table,
     load_sps_table_from_path,
 )
@@ -54,7 +56,7 @@ class DSparkScheduleConfig(msgspec.Struct):
 def compute_verify_token_budget(
     *,
     history_survival_probs: torch.Tensor,
-    sps_table: SpsCostTable,
+    sps_table: Union[SpsCostTable, SpsAdditiveCostTable],
     cfg: DSparkScheduleConfig,
 ) -> int:
     num_requests = history_survival_probs.shape[0]
@@ -68,10 +70,22 @@ def compute_verify_token_budget(
     tau_star = num_requests + torch.cat(
         [torch.zeros(1, dtype=torch.float64), prefix_sum]
     )
-    batch_tokens = num_requests + torch.arange(tau_star.numel(), dtype=torch.int64)
-    theta = tau_star * _lookup_sps_tensor(
-        sps_table=sps_table, batch_tokens=batch_tokens
-    )
+    if isinstance(sps_table, SpsAdditiveCostTable):
+        # Additive model: theta(K) = tau*(K) / T(bs, K) with
+        # T = bias + alpha(bs) + theta_cost(K). alpha(bs) is a constant at
+        # decision time (the trim-invariant floor), so unlike the diagonal 1D
+        # lookup the argmax only trades tau* against the true K-marginal cost.
+        step_time = _additive_step_time_tensor(
+            table=sps_table,
+            num_requests=int(num_requests),
+            num_budgets=int(tau_star.numel()),
+        )
+        theta = tau_star / step_time
+    else:
+        batch_tokens = num_requests + torch.arange(tau_star.numel(), dtype=torch.int64)
+        theta = tau_star * _lookup_sps_tensor(
+            sps_table=sps_table, batch_tokens=batch_tokens
+        )
     return int(torch.argmax(theta))
 
 
@@ -83,6 +97,28 @@ def _lookup_sps_tensor(
     idx = torch.bucketize(batch_tokens, probes, right=True) - 1
     idx = idx.clamp_(0, probes.numel() - 1)
     return sps[idx]
+
+
+def _additive_step_time_tensor(
+    *, table: SpsAdditiveCostTable, num_requests: int, num_budgets: int
+) -> torch.Tensor:
+    # T(bs, K) for K = 0..num_budgets-1 at fixed bs. bias + alpha(bs) is a
+    # scalar floor; theta is indexed on M = bs + K (piecewise-linear interp on
+    # the M grid, edge clamp).
+    floor = table.bias_seconds + _interp_clamped(
+        table.bs_probes, table.alpha_seconds, float(num_requests)
+    )
+    m_probes = torch.tensor(table.m_probes, dtype=torch.float64)
+    theta_vals = torch.tensor(table.theta_seconds, dtype=torch.float64)
+    m = (num_requests + torch.arange(num_budgets, dtype=torch.float64)).clamp_(
+        min=float(table.m_probes[0]), max=float(table.m_probes[-1])
+    )
+    hi = torch.bucketize(m, m_probes, right=True).clamp_(1, m_probes.numel() - 1)
+    lo = hi - 1
+    span = (m_probes[hi] - m_probes[lo]).clamp_(min=1e-9)
+    frac = (m - m_probes[lo]) / span
+    theta_at_m = theta_vals[lo] + frac * (theta_vals[hi] - theta_vals[lo])
+    return floor + theta_at_m
 
 
 class HostConfidenceBudgetPlanner:
@@ -103,6 +139,12 @@ class HostConfidenceBudgetPlanner:
         self._online_profiler = online_profiler
         self._log_table_swaps = log_table_swaps
         self._model_runner = model_runner
+        # Verify-budget measurement pin (off-diagonal T(bs, K) profiling).
+        # Off at launch; set purely at runtime via /set_internal_state ->
+        # DSparkWorkerV2.set_dspark_forced_budget_frac -> DSparkVerifyPlanner,
+        # broadcast to every TP rank at the same scheduler recv boundary
+        # (rank-consistent). None = theta decides the budget normally.
+        self.forced_budget_frac: Optional[float] = None
         self.lag_steps = max(
             int(envs.SGLANG_DSPARK_CONFIDENCE_RELAY_LAG_STEPS.get()), 1
         )
@@ -129,6 +171,15 @@ class HostConfidenceBudgetPlanner:
             lagged_generation=lagged_generation,
             current_generation=current_generation,
         )
+        forced_frac = self.forced_budget_frac
+        if forced_frac is not None:
+            # Measurement pin for off-diagonal T(bs, K) profiling: run a fixed
+            # budget fraction of verify-all, bypassing theta entirely. The
+            # budget is a pure function of (bs, pin) and the pin flips on the
+            # same step on every rank (control-req broadcast), so it stays
+            # rank- and tier-consistent without any extra sync.
+            full_budget = int(survival[:, : self.cfg.resolved_max_verify_len()].numel())
+            return max(0, int(float(forced_frac) * full_budget))
         budget = compute_verify_token_budget(
             history_survival_probs=survival,
             sps_table=self.sps_table,
@@ -208,7 +259,9 @@ def build_sps_cost_table(
     *,
     server_args: ServerArgs,
     verify_num_draft_tokens: int,
-) -> SpsCostTable:
+) -> Union[SpsCostTable, SpsAdditiveCostTable]:
+    # A loaded table may be the 1D diagonal SpsCostTable or the additive
+    # SpsAdditiveCostTable (sniffed by load_sps_table_from_path).
     sps_table_path = server_args.speculative_dspark_sps_table_path
     if sps_table_path:
         return load_sps_table_from_path(sps_table_path)

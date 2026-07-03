@@ -3766,6 +3766,7 @@ class Scheduler(
                 "pp_max_micro_batch_size",
                 "speculative_accept_threshold_single",
                 "speculative_accept_threshold_acc",
+                "dspark_force_budget_frac",
             ]
         )
 
@@ -3783,6 +3784,25 @@ class Scheduler(
                 )
                 if_success = False
                 break
+            elif k == "dspark_force_budget_frac":
+                # Runtime verify-budget pin (off-diagonal T(bs, K) profiling).
+                # Control reqs are broadcast to every TP rank at the same recv
+                # boundary, so all ranks flip the pin on the same step and the
+                # budget-derived graph tier stays rank-consistent.
+                if not self.spec_algorithm.is_dspark() or not hasattr(
+                    self.draft_worker, "set_dspark_forced_budget_frac"
+                ):
+                    logging.warning(
+                        "dspark_force_budget_frac requires a DSpark draft worker."
+                    )
+                    if_success = False
+                    break
+                if v is not None and not (0.0 < float(v) <= 1.0):
+                    logging.warning(
+                        f"dspark_force_budget_frac must be in (0, 1] or null, got {v}."
+                    )
+                    if_success = False
+                    break
 
         if if_success:
             if (
@@ -3798,6 +3818,11 @@ class Scheduler(
                 self.metrics_reporter.spec_total_num_forward_ct
             ) = 0
             for k, v in server_args_dict.items():
+                if k == "dspark_force_budget_frac":
+                    self.draft_worker.set_dspark_forced_budget_frac(
+                        None if v is None else float(v)
+                    )
+                    continue
                 setattr(get_global_server_args(), k, v)
             logger.info(f"Global server args updated! {get_global_server_args()=}")
 

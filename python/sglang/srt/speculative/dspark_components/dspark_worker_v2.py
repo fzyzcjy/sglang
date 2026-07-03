@@ -300,16 +300,18 @@ class DSparkWorkerV2(BaseSpecWorker):
 
         self._sts_recorder: Optional[StsDataRecorder] = None
 
+        # Verify-budget measurement pin: off at launch, set purely at runtime
+        # via /set_internal_state {"dspark_force_budget_frac": f} (see
+        # set_dspark_forced_budget_frac).
+        self._forced_budget_frac: Optional[float] = None
+
         self._sps_recorder: Optional[SpsDataRecorder] = None
         if envs.SGLANG_DSPARK_ENABLE_SPS_RECORD.get():
-            if self._verify_planner.mode_value != RaggedVerifyMode.STATIC.value:
-                raise ValueError(
-                    "SGLANG_DSPARK_ENABLE_SPS_RECORD only supports "
-                    "SGLANG_RAGGED_VERIFY_MODE=static (the per-step verify token "
-                    "count is a host-side constant there; other modes would need a "
-                    "device sync to read it). Got mode="
-                    f"{self._verify_planner.mode_value!r}."
-                )
+            # static: the per-step verify token count is a host constant.
+            # Ragged modes: the recorded count is the host-INTENDED packed
+            # total -- exact under a budget pin (bs + pinned budget) and equal
+            # to the full uniform extent when unpinned; reading the actual
+            # packed lens would need a device sync in the hot path.
             self._sps_recorder = SpsDataRecorder()
 
         self._simulate_acc_len = float(envs.SGLANG_SIMULATE_ACC_LEN.get())
@@ -458,6 +460,29 @@ class DSparkWorkerV2(BaseSpecWorker):
 
     def clear_cache_pool(self):
         pass
+
+    def set_dspark_forced_budget_frac(self, frac: Optional[float]) -> None:
+        # Runtime verify-budget pin, delivered via /set_internal_state. The
+        # control req is broadcast to every TP rank at the same scheduler recv
+        # boundary, so all ranks flip the pin on the same step (rank-consistent
+        # budgets, hence rank-consistent graph tiers). None clears the pin.
+        self._forced_budget_frac = frac
+        self._verify_planner.set_forced_budget_frac(frac)
+
+    def _recorder_verify_tokens(self, *, bs: int, verify_ids_2d) -> int:
+        # static: the uniform packed total, a host constant. Pinned ragged
+        # modes (off-diagonal T(bs, K) profiling): the intended packed total
+        # is host-known -- a 1-token floor per request plus the pinned budget,
+        # clamped to the per-request gamma+1 cap.
+        forced_frac = self._forced_budget_frac
+        if (
+            forced_frac is None
+            or self._verify_planner.mode_value == RaggedVerifyMode.STATIC.value
+        ):
+            return int(verify_ids_2d.numel())
+        max_len = int(verify_ids_2d.shape[1])
+        budget = int(float(forced_frac) * bs * max_len)
+        return bs + min(budget, bs * (max_len - 1))
 
     def dump_sps_records(self) -> Optional[dict]:
         if self._sps_recorder is None:
@@ -781,7 +806,9 @@ class DSparkWorkerV2(BaseSpecWorker):
             self._sps_recorder.observe_decode_step(
                 forward_ct=int(batch.forward_iter),
                 num_running_reqs=bs,
-                num_verify_tokens=int(verify_ids_2d.numel()),
+                num_verify_tokens=self._recorder_verify_tokens(
+                    bs=bs, verify_ids_2d=verify_ids_2d
+                ),
             )
 
         # Pre-replay fold eligibility (everything except can_run_cuda_graph,

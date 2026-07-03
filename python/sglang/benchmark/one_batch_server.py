@@ -360,6 +360,11 @@ class BenchOneCaseResult(BaseModel):
     last_ttft: float
     last_gen_throughput: float
     acc_length: float
+    # Strict per-decode-step wall time for this case, from the server's
+    # step_time_dict[batch_size] (requires SGLANG_RECORD_STEP_TIME=1); -1 when
+    # unavailable. n_decode_steps counts the samples this run contributed.
+    iter_time: float = -1.0
+    n_decode_steps: int = 0
     cache_hit_rate: Optional[float] = None
     profile_link: Optional[str] = None
 
@@ -377,6 +382,8 @@ class BenchOneCaseResult(BaseModel):
                 "last_ttft": round(self.last_ttft, 4),
                 "last_gen_throughput": round(self.last_gen_throughput, 2),
                 "acc_length": round(self.acc_length, 2),
+                "iter_time": round(self.iter_time, 6),
+                "n_decode_steps": self.n_decode_steps,
                 "cache_hit_rate": (
                     round(self.cache_hit_rate, 4)
                     if self.cache_hit_rate is not None
@@ -721,6 +728,19 @@ def run_one_case(
         last_gen_throughput = internal_state.get("last_gen_throughput", None) or -1
         acc_length = internal_state.get("avg_spec_accept_length", None) or -1
 
+    # Strict per-decode-step wall time = decode wall / decode steps, both for
+    # THIS case only: decode wall = latency - last_ttft (prefill excluded);
+    # decode steps = output_len / acc_length (each spec verify step commits
+    # acc_length tokens per request in lockstep). Amortized over the whole
+    # decode phase -> robust, unlike a few noisy per-window samples.
+    n_decode_steps = 0
+    iter_time = -1.0
+    decode_wall = latency - last_ttft
+    if acc_length > 0 and output_len > 1 and decode_wall > 0:
+        steps = output_len / acc_length  # float step count (lockstep bursts)
+        iter_time = decode_wall / steps
+        n_decode_steps = round(steps)
+
     # Calculate cache hit rate from before/after metrics delta
     metrics_after = get_cache_tokens_from_metrics(url)
     metrics_cache_hit_rate = calculate_cache_hit_rate(metrics_before, metrics_after)
@@ -753,9 +773,13 @@ def run_one_case(
         last_ttft=last_ttft,
         last_gen_throughput=last_gen_throughput,
         acc_length=acc_length,
+        iter_time=iter_time,
+        n_decode_steps=n_decode_steps,
         cache_hit_rate=metrics_cache_hit_rate,
         profile_link=profile_link,
     )
+    if iter_time > 0:
+        print(f"iter_time: {iter_time*1e3:.3f} ms/step ({n_decode_steps} steps)")
 
     # Save and return the results
     if result_filename:
