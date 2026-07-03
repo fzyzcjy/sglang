@@ -618,10 +618,10 @@ def fetch_rank_rows(*, base_url: str) -> list[list[SpsRow]]:
         rank_rows.append(
             [
                 SpsRow(
-                    forward_ct=int(record[0]),
-                    num_running_reqs=int(record[1]),
-                    num_verify_tokens=int(record[2]),
-                    step_time=float(record[3]),
+                    forward_ct=int(record["forward_ct"]),
+                    num_running_reqs=int(record["num_running_reqs"]),
+                    num_verify_tokens=int(record["num_verify_tokens"]),
+                    step_time=float(record["step_time"]),
                 )
                 for record in payload.get("records", [])
             ]

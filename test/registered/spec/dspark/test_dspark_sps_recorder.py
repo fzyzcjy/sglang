@@ -47,8 +47,10 @@ class TestSpsDataRecorderPairing(CustomTestCase):
         )
         records = recorder.dump_records()
         self.assertEqual(len(records), 1)
-        self.assertEqual(records[0][:3], [1, 4, 32])
-        self.assertAlmostEqual(records[0][3], 0.02)
+        self.assertEqual(records[0]["forward_ct"], 1)
+        self.assertEqual(records[0]["num_running_reqs"], 4)
+        self.assertEqual(records[0]["num_verify_tokens"], 32)
+        self.assertAlmostEqual(records[0]["step_time"], 0.02)
 
     def test_consecutive_steps_emit_one_record_per_gap(self):
         """N observed steps emit N-1 records, each keyed by the earlier step."""
@@ -59,7 +61,7 @@ class TestSpsDataRecorderPairing(CustomTestCase):
             )
             clock.advance(0.01)
         records = recorder.dump_records()
-        self.assertEqual([record[0] for record in records], [1, 2, 3])
+        self.assertEqual([record["forward_ct"] for record in records], [1, 2, 3])
 
     def test_non_decode_step_breaks_the_pairing(self):
         """A prefill/idle step between two decode steps suppresses the cross-gap record."""
@@ -89,7 +91,7 @@ class TestSpsDataRecorderPairing(CustomTestCase):
         recorder.observe_decode_step(
             forward_ct=3, num_running_reqs=4, num_verify_tokens=32
         )
-        self.assertEqual([record[0] for record in recorder.dump_records()], [2])
+        self.assertEqual([record["forward_ct"] for record in recorder.dump_records()], [2])
 
 
 class TestSpsDataRecorderBuffer(CustomTestCase):
@@ -101,7 +103,7 @@ class TestSpsDataRecorderBuffer(CustomTestCase):
                 forward_ct=forward_ct, num_running_reqs=1, num_verify_tokens=8
             )
             clock.advance(0.01)
-        self.assertEqual([record[0] for record in recorder.dump_records()], [4, 5, 6])
+        self.assertEqual([record["forward_ct"] for record in recorder.dump_records()], [4, 5, 6])
 
     def test_dump_is_non_destructive(self):
         """Dumping twice returns the same records; reading never drains the ring."""

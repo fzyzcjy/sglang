@@ -56,13 +56,5 @@ class SpsDataRecorder:
     def note_non_decode_step(self) -> None:
         self._prev_stamp = None
 
-    def dump_records(self) -> list[list]:
-        return [
-            [
-                record.forward_ct,
-                record.num_running_reqs,
-                record.num_verify_tokens,
-                record.step_time,
-            ]
-            for record in self._records
-        ]
+    def dump_records(self) -> list[dict]:
+        return [msgspec.to_builtins(record) for record in self._records]
