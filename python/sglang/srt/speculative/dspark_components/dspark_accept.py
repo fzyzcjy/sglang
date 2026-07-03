@@ -42,9 +42,7 @@ def sample_simulated_correct_drafts(
     elif simulate_acc_method == "match-expected":
         lower = int(correct_target)
         fraction_upper = correct_target - lower
-        picks = (
-            torch.rand(bs, generator=generator) < fraction_upper
-        ).to(torch.int32)
+        picks = (torch.rand(bs, generator=generator) < fraction_upper).to(torch.int32)
         correct_drafts = torch.full((bs,), lower, dtype=torch.int32) + picks
     else:
         raise ValueError(f"Invalid simulate_acc_method: {simulate_acc_method}")

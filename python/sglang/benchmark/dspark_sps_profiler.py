@@ -262,9 +262,7 @@ def fetch_server_context(
     verify_num_draft_tokens = {
         int(payload["verify_num_draft_tokens"]) for payload in sps_payloads
     }
-    simulate_acc_lens = {
-        float(payload["simulate_acc_len"]) for payload in sps_payloads
-    }
+    simulate_acc_lens = {float(payload["simulate_acc_len"]) for payload in sps_payloads}
     if len(simulate_acc_lens) != 1:
         raise RuntimeError(
             f"DP ranks disagree on simulate_acc_len: {sorted(simulate_acc_lens)}."

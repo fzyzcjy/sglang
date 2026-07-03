@@ -28,9 +28,7 @@ class TestSampleSimulatedCorrectDrafts(CustomTestCase):
     def test_match_expected_mean_matches_target(self):
         """match-expected sampling averages to simulate_acc_len - 1 correct drafts."""
         correct_drafts = sample()
-        self.assertAlmostEqual(
-            float(correct_drafts.float().mean()), 3.5, delta=0.05
-        )
+        self.assertAlmostEqual(float(correct_drafts.float().mean()), 3.5, delta=0.05)
 
     def test_values_stay_within_draft_bounds(self):
         """Sampled correct drafts never leave [0, gamma] for either method."""
