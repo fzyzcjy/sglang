@@ -13,10 +13,18 @@ from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 
 logger = logging.getLogger(__name__)
 
-_GATHER_ROW_CHUNK = 128
+_GATHER_ROW_CHUNK = 512
 _STATE_SWEEP_INTERVAL = 1024
 _STATE_EXPIRE_STEPS = 4096
 _FLUSH_EVERY_STEPS = 16
+_PENDING_BUCKET_MIN = 256
+
+
+def _pending_bucket(count: int) -> int:
+    bucket = _PENDING_BUCKET_MIN
+    while bucket < count:
+        bucket *= 2
+    return bucket
 
 
 class _PendingBlock(msgspec.Struct):
@@ -47,6 +55,7 @@ class BlockAcceptEstimateRecorder:
         self._skipped_step_ct = 0
         self._warned_skip_reasons: set[str] = set()
 
+        self._retained_h2d: List[torch.Tensor] = []
         self._delayed: Optional[DelayedDeviceHostHandler] = None
         if device.type == "cuda":
             self._delayed = DelayedDeviceHostHandler(
@@ -190,6 +199,7 @@ class BlockAcceptEstimateRecorder:
             temps=target_temps_full,
         ).reshape(bs, gamma)
 
+        self._retained_h2d = []
         pending_rows: List[int] = []
         pending_tokens: List[int] = []
         pending_slot_lookup: dict[tuple[int, int, int], int] = {}
@@ -210,29 +220,34 @@ class BlockAcceptEstimateRecorder:
                     pending_tokens.append(token)
                     offset += 1
 
-        if pending_rows:
-            pending_logprobs = self._gather_logprobs(
-                logits=target_logits,
-                row_indices=torch.tensor(pending_rows, dtype=torch.long, device=device),
-                token_indices=torch.tensor(
-                    pending_tokens, dtype=torch.long, device=device
-                ),
-                temps=target_temps_full,
-            )
-        else:
-            pending_logprobs = torch.zeros(0, dtype=torch.float32, device=device)
+        bucket = _pending_bucket(len(pending_rows))
+        pending_rows.extend([0] * (bucket - len(pending_rows)))
+        pending_tokens.extend([0] * (bucket - len(pending_tokens)))
+        pending_logprobs = self._gather_logprobs(
+            logits=target_logits,
+            row_indices=self._host_to_device_async(pending_rows, device=device),
+            token_indices=self._host_to_device_async(pending_tokens, device=device),
+            temps=target_temps_full,
+        )
+
+        row_meta = torch.stack(
+            [
+                correct_len.to(torch.int64),
+                cap_trim_lens.to(torch.int64),
+                bonus.to(torch.int64),
+                prefix_lens.to(torch.int64),
+                greedy_mask.to(torch.int64),
+                truncated_mask.to(torch.int64),
+                verify_lens.to(torch.int64),
+            ],
+            dim=1,
+        )
 
         return {
             "forward_ct": int(forward_ct),
             "rids": list(rids),
+            "row_meta": row_meta,
             "draft_tokens": draft_tokens,
-            "correct_len": correct_len,
-            "cap_trim_lens": cap_trim_lens,
-            "bonus": bonus,
-            "prefix_lens": prefix_lens,
-            "greedy_mask": greedy_mask,
-            "truncated_mask": truncated_mask,
-            "verify_lens": verify_lens,
             "q_all": q_all,
             "target_diag_logprobs": target_diag_logprobs,
             "pending_logprobs": pending_logprobs,
@@ -245,14 +260,8 @@ class BlockAcceptEstimateRecorder:
         rids = bundle["rids"]
         bs = len(rids)
 
-        correct_lens = bundle["correct_len"].tolist()
-        cap_trims = bundle["cap_trim_lens"].tolist()
-        bonus_tokens = bundle["bonus"].tolist()
+        row_meta = bundle["row_meta"].tolist()
         drafts = bundle["draft_tokens"].tolist()
-        greedy_rows = bundle["greedy_mask"].tolist()
-        truncated_rows = bundle["truncated_mask"].tolist()
-        seq_lens = bundle["prefix_lens"].tolist()
-        verify_lens = bundle["verify_lens"].tolist()
         q_all = bundle["q_all"].tolist()
         target_diag_logprobs = bundle["target_diag_logprobs"].tolist()
         pending_logprobs = bundle["pending_logprobs"].tolist()
@@ -263,9 +272,10 @@ class BlockAcceptEstimateRecorder:
             state = self._states.setdefault(rid, _RequestState())
             state.last_seen_ct = forward_ct
 
-            cl = int(correct_lens[b])
-            window = int(verify_lens[b]) - 1
-            seq_len = int(seq_lens[b])
+            cl, cap_trim, bonus_token, seq_len, is_greedy, is_truncated, verify_len = (
+                row_meta[b]
+            )
+            window = verify_len - 1
             assert 0 <= cl <= window <= gamma
 
             if state.expected_seq_len >= 0 and seq_len != state.expected_seq_len:
@@ -274,8 +284,8 @@ class BlockAcceptEstimateRecorder:
                     state.pending = []
             state.expected_seq_len = seq_len + cl + 1
 
-            if greedy_rows[b] or truncated_rows[b]:
-                if truncated_rows[b] and not greedy_rows[b]:
+            if is_greedy or is_truncated:
+                if is_truncated and not is_greedy:
                     self._warn_once(
                         reason="requests with top-k/top-p/min-p sampling are "
                         "excluded per-row; the estimator only supports "
@@ -285,14 +295,14 @@ class BlockAcceptEstimateRecorder:
                 state.pending = []
                 continue
 
-            realized = drafts[b][:cl] + [bonus_tokens[b]]
+            realized = drafts[b][:cl] + [bonus_token]
 
             record: dict[str, Any] = {
                 "rid": rid,
                 "fct": forward_ct,
                 "w": window,
                 "cl": cl,
-                "ct": int(cap_trims[b]),
+                "ct": cap_trim,
             }
             censored = cl == window and window < gamma
             num_old_pending = len(state.pending)
@@ -355,6 +365,13 @@ class BlockAcceptEstimateRecorder:
             self._steps_since_flush = 0
         if self._observed_step_ct % _STATE_SWEEP_INTERVAL == 0:
             self._sweep_states(forward_ct=forward_ct)
+
+    def _host_to_device_async(
+        self, values: List[int], *, device: torch.device
+    ) -> torch.Tensor:
+        host = torch.tensor(values, dtype=torch.long, pin_memory=device.type == "cuda")
+        self._retained_h2d.append(host)
+        return host.to(device=device, non_blocking=True)
 
     def _gather_logprobs(
         self,
