@@ -90,6 +90,9 @@ class BlockAcceptEstimateRecorder:
         prefix_lens: torch.Tensor,
         layout: Optional[RaggedVerifyLayout],
     ) -> None:
+        if self._delayed is not None and torch.cuda.is_current_stream_capturing():
+            return
+
         skip_reason = self._skip_reason(
             logits_adjustments_are_noop=logits_adjustments_are_noop,
             corrected_logits=corrected_logits,
