@@ -265,9 +265,7 @@ class TestSweepHelpers(CustomTestCase):
         internal_state = {
             "cuda_graph_config": {"decode": {"bs": [1, 2, 160], "max_bs": 128}}
         }
-        self.assertEqual(
-            resolve_cuda_graph_max_bs(internal_state=internal_state), 160
-        )
+        self.assertEqual(resolve_cuda_graph_max_bs(internal_state=internal_state), 160)
 
     def test_resolve_cuda_graph_max_bs_handles_missing_config(self):
         """A server without a parseable cuda_graph_config resolves to None."""

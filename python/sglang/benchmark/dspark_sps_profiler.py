@@ -488,9 +488,7 @@ def postprocess_round(
     aligned_cts: list[int] = []
     for ct in sorted(common_cts):
         rows_at_ct = [by_ct[ct] for by_ct in by_ct_per_rank]
-        if all(
-            row.num_running_reqs == batch_size_per_rank for row in rows_at_ct
-        ):
+        if all(row.num_running_reqs == batch_size_per_rank for row in rows_at_ct):
             for rank_index, row in enumerate(rows_at_ct):
                 if row.num_verify_tokens != expected_tokens:
                     raise RuntimeError(
