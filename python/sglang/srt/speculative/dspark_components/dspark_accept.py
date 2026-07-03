@@ -17,6 +17,41 @@ from sglang.srt.speculative.dspark_components.kernels.softmax_temp import Softma
 from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 
 
+def sample_simulated_correct_drafts(
+    *,
+    simulate_acc_len: float,
+    simulate_acc_method: str,
+    gamma: int,
+    bs: int,
+    forward_ct: int,
+    device: torch.device,
+) -> torch.Tensor:
+    correct_target = min(max(simulate_acc_len - 1.0, 0.0), float(gamma))
+    # Seeded from the step counter so every TP/DP rank derives the same
+    # simulated lengths without assuming aligned RNG streams.
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(((forward_ct + 1) * 1_000_003) % (2**63 - 1))
+
+    if simulate_acc_method == "multinomial":
+        values = torch.normal(
+            mean=torch.full((bs,), correct_target, dtype=torch.float32),
+            std=1.0,
+            generator=generator,
+        )
+        correct_drafts = values.round().clamp_(0, gamma).to(torch.int32)
+    elif simulate_acc_method == "match-expected":
+        lower = int(correct_target)
+        fraction_upper = correct_target - lower
+        picks = (
+            torch.rand(bs, generator=generator) < fraction_upper
+        ).to(torch.int32)
+        correct_drafts = torch.full((bs,), lower, dtype=torch.int32) + picks
+    else:
+        raise ValueError(f"Invalid simulate_acc_method: {simulate_acc_method}")
+
+    return correct_drafts.to(device=device)
+
+
 def accept_draft_tokens(
     *,
     candidates: torch.Tensor,

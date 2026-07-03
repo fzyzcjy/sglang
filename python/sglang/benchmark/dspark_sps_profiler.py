@@ -72,6 +72,7 @@ class ServerContext(msgspec.Struct, frozen=True):
     tp_size: int
     dp_size: int
     verify_num_draft_tokens: int
+    simulate_acc_len: float
     cuda_graph_max_bs: Optional[int]
     skip_max_running_requests_threshold: float
     skip_token_capacity_threshold: float
@@ -251,9 +252,23 @@ def fetch_server_context(
                 "dspark_sps_record.mode must be 'static', got "
                 f"{payload.get('mode')!r} on DP rank {rank_index}."
             )
+        if payload.get("simulate_acc_len") is None:
+            raise ValueError(
+                f"DP rank {rank_index} runs with real (per-request varying) "
+                "accept lengths; the SPS table wants a controlled uniform "
+                "advance per step. Relaunch the server with "
+                "SGLANG_SIMULATE_ACC_LEN=<expected accept length, e.g. 4.5>."
+            )
     verify_num_draft_tokens = {
         int(payload["verify_num_draft_tokens"]) for payload in sps_payloads
     }
+    simulate_acc_lens = {
+        float(payload["simulate_acc_len"]) for payload in sps_payloads
+    }
+    if len(simulate_acc_lens) != 1:
+        raise RuntimeError(
+            f"DP ranks disagree on simulate_acc_len: {sorted(simulate_acc_lens)}."
+        )
     if len(verify_num_draft_tokens) != 1:
         raise RuntimeError(
             "DP ranks disagree on verify_num_draft_tokens: "
@@ -293,6 +308,7 @@ def fetch_server_context(
         tp_size=int(info.get("tp_size", 1) or 1),
         dp_size=dp_size,
         verify_num_draft_tokens=verify_num_draft_tokens.pop(),
+        simulate_acc_len=simulate_acc_lens.pop(),
         cuda_graph_max_bs=cuda_graph_max_bs,
         skip_max_running_requests_threshold=skip_max_running,
         skip_token_capacity_threshold=skip_token_capacity,
@@ -783,6 +799,7 @@ def write_manifest(
         "tp_size": context.tp_size,
         "dp_size": context.dp_size,
         "verify_num_draft_tokens": context.verify_num_draft_tokens,
+        "simulate_acc_len": context.simulate_acc_len,
         "batch_size_per_rank_sweep": batch_sizes,
         "settings": msgspec.to_builtins(settings),
         "repeats": repeats,

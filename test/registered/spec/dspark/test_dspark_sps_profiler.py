@@ -49,6 +49,7 @@ def make_context(**overrides) -> ServerContext:
         tp_size=4,
         dp_size=1,
         verify_num_draft_tokens=8,
+        simulate_acc_len=4.5,
         cuda_graph_max_bs=128,
         skip_max_running_requests_threshold=float("inf"),
         skip_token_capacity_threshold=float("inf"),

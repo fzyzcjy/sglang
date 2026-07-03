@@ -31,6 +31,7 @@ from sglang.srt.speculative.draft_worker_common import (
 )
 from sglang.srt.speculative.dspark_components.dspark_accept import (
     accept_draft_tokens,
+    sample_simulated_correct_drafts,
 )
 from sglang.srt.speculative.dspark_components.dspark_confidence_metrics import (
     ConfidenceMetricsProbe,
@@ -305,6 +306,18 @@ class DSparkWorkerV2(BaseSpecWorker):
                 )
             self._sps_recorder = SpsDataRecorder()
 
+        self._simulate_acc_len = float(envs.SGLANG_SIMULATE_ACC_LEN.get())
+        if (
+            self._simulate_acc_len > 0
+            and self._verify_planner.mode_value != RaggedVerifyMode.STATIC.value
+        ):
+            raise ValueError(
+                "SGLANG_SIMULATE_ACC_LEN with DSpark only supports "
+                "SGLANG_RAGGED_VERIFY_MODE=static (the simulated correct_len "
+                "would break the cutoff/cap accounting of ragged modes). Got "
+                f"mode={self._verify_planner.mode_value!r}."
+            )
+
         self._confidence_probe = ConfidenceMetricsProbe(
             gamma=self.gamma,
             verify_num_draft_tokens=self.verify_num_draft_tokens,
@@ -436,6 +449,9 @@ class DSparkWorkerV2(BaseSpecWorker):
         return {
             "mode": self._verify_planner.mode_value,
             "verify_num_draft_tokens": int(self.verify_num_draft_tokens),
+            "simulate_acc_len": (
+                self._simulate_acc_len if self._simulate_acc_len > 0 else None
+            ),
             "records": self._sps_recorder.dump_records(),
         }
 
@@ -729,6 +745,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             self._verify_executor.verify_epilogue is not None
             and proposal.folded
             and verify_logits_adjustments_are_noop(sampling_info)
+            and self._simulate_acc_len <= 0
         )
         if run_compact:
             target_verify, hidden_strided = self._verify_executor.run_compact(
@@ -779,6 +796,15 @@ class DSparkWorkerV2(BaseSpecWorker):
                 verify_num_draft_tokens=self.verify_num_draft_tokens,
                 cutoff_layout=layout,
             )
+            if self._simulate_acc_len > 0:
+                correct_len = sample_simulated_correct_drafts(
+                    simulate_acc_len=self._simulate_acc_len,
+                    simulate_acc_method=envs.SGLANG_SIMULATE_ACC_METHOD.get(),
+                    gamma=self.gamma,
+                    bs=bs,
+                    forward_ct=int(batch.forward_iter),
+                    device=correct_len.device,
+                ).to(correct_len.dtype)
 
             finalized = FinalizeAcceptLens.execute(
                 correct_len=correct_len,
