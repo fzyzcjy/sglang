@@ -119,6 +119,7 @@ class TestPostprocessRound(CustomTestCase):
                 client_result={},
             )
 
+
 class TestPostprocessRoundCrossRank(CustomTestCase):
     def test_two_uniform_ranks_average_their_step_times(self):
         """With dp=2 the per-step timing averages the two ranks' step times."""
