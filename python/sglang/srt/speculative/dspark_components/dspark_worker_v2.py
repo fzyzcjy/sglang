@@ -369,6 +369,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             tp_rank=self.tp_rank,
             device=self.device,
             mode_value=self._verify_planner.mode_value,
+            sps_report_interval=envs.SGLANG_DSPARK_LOG_SPS_PRED_INTERVAL.get(),
         )
 
     def _resolve_target_embed_tokens(self, target_model):
@@ -1019,6 +1020,16 @@ class DSparkWorkerV2(BaseSpecWorker):
                 layout=layout,
             )
         if self._info_dumper.enabled:
+            budget_decision = self._verify_planner.take_budget_decision()
+            predicted_step_ms = (
+                None
+                if budget_decision is None
+                or budget_decision.predicted_step_seconds is None
+                else budget_decision.predicted_step_seconds * 1e3
+            )
+            predicted_theta = (
+                None if budget_decision is None else budget_decision.predicted_theta
+            )
             self._info_dumper.observe_decode_step(
                 DecodeStepObservation(
                     forward_ct=int(batch.forward_iter),
@@ -1031,6 +1042,8 @@ class DSparkWorkerV2(BaseSpecWorker):
                         if layout is not None
                         else int(verify_ids_2d.numel())
                     ),
+                    predicted_step_ms=predicted_step_ms,
+                    predicted_theta=predicted_theta,
                     verify_lens=layout.verify_lens if layout is not None else None,
                     confidence=confidence,
                     req_pool_indices=batch.req_pool_indices,

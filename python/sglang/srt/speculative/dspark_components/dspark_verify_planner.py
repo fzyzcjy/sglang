@@ -23,6 +23,7 @@ from sglang.srt.speculative.dspark_components.dspark_confidence import (
 from sglang.srt.speculative.dspark_components.dspark_scheduler import (
     DSparkScheduleConfig,
     HostConfidenceBudgetPlanner,
+    VerifyBudgetDecision,
     build_sps_cost_table,
 )
 from sglang.srt.speculative.dspark_components.dspark_sps_online import (
@@ -280,6 +281,11 @@ class DSparkVerifyPlanner:
         if self._budget_planner is None:
             return None
         return self._budget_planner.lag_steps
+
+    def take_budget_decision(self) -> Optional[VerifyBudgetDecision]:
+        if self._budget_planner is None:
+            return None
+        return self._budget_planner.take_last_decision()
 
     def should_run_compact(self, *, layout: Optional[RaggedVerifyLayout]) -> bool:
         return (

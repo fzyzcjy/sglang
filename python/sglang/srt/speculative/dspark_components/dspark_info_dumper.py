@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import statistics
 import time
 from collections import deque
 from contextlib import contextmanager, nullcontext
@@ -10,6 +12,8 @@ import msgspec
 import torch
 
 from sglang.srt.kv_canary.runner.future_tensor import FutureTensors
+
+logger = logging.getLogger(__name__)
 
 _NULL_SEGMENT = nullcontext()
 
@@ -73,6 +77,8 @@ class DecodeStepRecord(msgspec.Struct, omit_defaults=True):
     lag_steps: Optional[int] = None
     num_running_reqs: int = -1
     num_verify_tokens: int = -1
+    predicted_step_ms: Optional[float] = None
+    predicted_theta: Optional[float] = None
     step_cpu_ms: Optional[float] = None
     step_gpu_ms: Optional[float] = None
     draft_gpu_ms: Optional[float] = None
@@ -87,6 +93,8 @@ class DecodeStepObservation(msgspec.Struct):
     budget: Optional[int]
     lag_steps: Optional[int]
     num_verify_tokens: int
+    predicted_step_ms: Optional[float]
+    predicted_theta: Optional[float]
     verify_lens: Optional[torch.Tensor]
     confidence: Optional[torch.Tensor]
     req_pool_indices: torch.Tensor
@@ -106,6 +114,8 @@ class _PendingStep(msgspec.Struct):
     budget: Optional[int]
     lag_steps: Optional[int]
     num_verify_tokens: int
+    predicted_step_ms: Optional[float]
+    predicted_theta: Optional[float]
     step_cpu_ms: Optional[float]
     rids: Optional[list[str]]
     future: Optional[FutureTensors]
@@ -122,6 +132,7 @@ class DsparkInfoDumper:
         tp_rank: int,
         device: torch.device,
         mode_value: str,
+        sps_report_interval: int = 0,
         max_records: int = INFO_DUMP_MAX_RECORDS,
         max_step_cpu_seconds: float = INFO_DUMP_MAX_STEP_CPU_SECONDS,
         clock: Callable[[], float] = time.monotonic,
@@ -137,7 +148,14 @@ class DsparkInfoDumper:
         self._components: set[InfoComponent] = {
             InfoComponent(component) for component in components
         }
+        self._sps_report_interval = int(sps_report_interval)
+        if self._sps_report_interval > 0:
+            # The online SPS-prediction reporter needs step GPU timing; enable it
+            # on its own so the reporter works without SGLANG_DSPARK_DEBUG_DUMP.
+            self._components.add(InfoComponent.STEP_GPU_TIME)
         self.enabled = bool(self._components) and self.tp_rank == 0
+        self._sps_window: list[tuple[float, float]] = []
+        self._sps_mismatched = 0
 
         self._records: deque[DecodeStepRecord] = deque(maxlen=max_records)
         self._pending: Optional[_PendingStep] = None
@@ -196,6 +214,8 @@ class DsparkInfoDumper:
             budget=None if obs.budget is None else int(obs.budget),
             lag_steps=None if obs.lag_steps is None else int(obs.lag_steps),
             num_verify_tokens=int(obs.num_verify_tokens),
+            predicted_step_ms=obs.predicted_step_ms,
+            predicted_theta=obs.predicted_theta,
             step_cpu_ms=step_cpu_ms,
             rids=obs.rids,
             future=future,
@@ -281,6 +301,8 @@ class DsparkInfoDumper:
             record.lag_steps = pending.lag_steps
             record.num_running_reqs = pending.bs
             record.num_verify_tokens = pending.num_verify_tokens
+            record.predicted_step_ms = pending.predicted_step_ms
+            record.predicted_theta = pending.predicted_theta
         if InfoComponent.STEP_CPU_TIME in self._components:
             record.step_cpu_ms = pending.step_cpu_ms
         if InfoComponent.STEP_GPU_TIME in self._components:
@@ -299,6 +321,47 @@ class DsparkInfoDumper:
             pending.future.wait()
 
         self._records.append(record)
+        if self._sps_report_interval > 0:
+            self._report_sps_prediction(pending=pending, step_gpu_ms=record.step_gpu_ms)
+
+    def _report_sps_prediction(
+        self, *, pending: _PendingStep, step_gpu_ms: Optional[float]
+    ) -> None:
+        predicted = pending.predicted_step_ms
+        if predicted is None or step_gpu_ms is None:
+            return
+        matched = (
+            pending.budget is not None
+            and pending.bs + pending.budget == pending.num_verify_tokens
+        )
+        if not matched:
+            self._sps_mismatched += 1
+            return
+        self._sps_window.append((predicted, step_gpu_ms))
+        if len(self._sps_window) < self._sps_report_interval:
+            return
+
+        predictions = [p for p, _ in self._sps_window]
+        actuals = [a for _, a in self._sps_window]
+        abs_err = [abs(p - a) for p, a in self._sps_window]
+        rel_err = [abs(p - a) / a * 100 for p, a in self._sps_window if a > 0]
+        total = len(self._sps_window) + self._sps_mismatched
+        logger.info(
+            "DSpark SPS prediction: n=%d  mean predicted=%.3fms  mean actual=%.3fms  "
+            "MAE=%.3fms  median rel-err=%.1f%%  mean bias(pred-actual)=%+.3fms  "
+            "M_mismatch_rate=%.1f%% (%d/%d)",
+            len(self._sps_window),
+            statistics.fmean(predictions),
+            statistics.fmean(actuals),
+            statistics.fmean(abs_err),
+            statistics.median(rel_err) if rel_err else float("nan"),
+            statistics.fmean([p - a for p, a in self._sps_window]),
+            self._sps_mismatched / total * 100 if total else 0.0,
+            self._sps_mismatched,
+            total,
+        )
+        self._sps_window = []
+        self._sps_mismatched = 0
 
     def _step_cpu_ms(self, *, now: float) -> Optional[float]:
         prev = self._prev_stamp

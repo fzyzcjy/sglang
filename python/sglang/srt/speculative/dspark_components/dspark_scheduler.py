@@ -53,12 +53,18 @@ class DSparkScheduleConfig(msgspec.Struct):
             raise ValueError(f"survival_eps must be >= 0, got {self.survival_eps}.")
 
 
+class VerifyBudgetDecision(msgspec.Struct):
+    budget: int
+    predicted_step_seconds: Optional[float] = None
+    predicted_theta: Optional[float] = None
+
+
 def compute_verify_token_budget(
     *,
     history_survival_probs: torch.Tensor,
     sps_table: Union[SpsCostTable, SpsAdditiveCostTable],
     cfg: DSparkScheduleConfig,
-) -> int:
+) -> VerifyBudgetDecision:
     num_requests = history_survival_probs.shape[0]
     max_len = cfg.resolved_max_verify_len()
 
@@ -81,12 +87,20 @@ def compute_verify_token_budget(
             num_budgets=int(tau_star.numel()),
         )
         theta = tau_star / step_time
+        idx = int(torch.argmax(theta))
+        predicted_step_seconds = float(step_time[idx])
     else:
         batch_tokens = num_requests + torch.arange(tau_star.numel(), dtype=torch.int64)
-        theta = tau_star * _lookup_sps_tensor(
-            sps_table=sps_table, batch_tokens=batch_tokens
-        )
-    return int(torch.argmax(theta))
+        sps = _lookup_sps_tensor(sps_table=sps_table, batch_tokens=batch_tokens)
+        theta = tau_star * sps
+        idx = int(torch.argmax(theta))
+        sps_at_idx = float(sps[idx])
+        predicted_step_seconds = 1.0 / sps_at_idx if sps_at_idx > 0 else None
+    return VerifyBudgetDecision(
+        budget=idx,
+        predicted_step_seconds=predicted_step_seconds,
+        predicted_theta=float(theta[idx]),
+    )
 
 
 def _lookup_sps_tensor(
@@ -145,6 +159,7 @@ class HostConfidenceBudgetPlanner:
         # broadcast to every TP rank at the same scheduler recv boundary
         # (rank-consistent). None = theta decides the budget normally.
         self.forced_budget_frac: Optional[float] = None
+        self.last_decision: Optional[VerifyBudgetDecision] = None
         self.lag_steps = max(
             int(envs.SGLANG_DSPARK_CONFIDENCE_RELAY_LAG_STEPS.get()), 1
         )
@@ -179,17 +194,28 @@ class HostConfidenceBudgetPlanner:
             # same step on every rank (control-req broadcast), so it stays
             # rank- and tier-consistent without any extra sync.
             full_budget = int(survival[:, : self.cfg.resolved_max_verify_len()].numel())
-            return max(0, int(float(forced_frac) * full_budget))
-        budget = compute_verify_token_budget(
+            forced_budget = max(0, int(float(forced_frac) * full_budget))
+            self.last_decision = VerifyBudgetDecision(budget=forced_budget)
+            return forced_budget
+        decision = compute_verify_token_budget(
             history_survival_probs=survival,
             sps_table=self.sps_table,
             cfg=self.cfg,
         )
+        self.last_decision = decision
         if self._online_profiler is not None:
-            self._observe_online_step(batch_tokens=int(survival.shape[0]) + budget)
-        return budget
+            self._observe_online_step(
+                batch_tokens=int(survival.shape[0]) + decision.budget
+            )
+        return decision.budget
+
+    def take_last_decision(self) -> Optional[VerifyBudgetDecision]:
+        decision = self.last_decision
+        self.last_decision = None
+        return decision
 
     def note_non_decode_step(self) -> None:
+        self.last_decision = None
         if self._online_profiler is not None:
             self._online_profiler.note_non_decode_step()
 
