@@ -158,6 +158,9 @@ class OfflineBlockAcceptEstimateRecorder:
         self._file.flush()
         self._steps_since_flush = 0
 
+    def estimate_log_suffix(self) -> Optional[str]:
+        return None
+
     def _read_inputs(
         self,
         *,

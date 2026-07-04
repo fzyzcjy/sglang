@@ -528,6 +528,11 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
         return dumped
 
+    def block_accept_estimate_log_suffix(self) -> Optional[str]:
+        if self._block_accept_recorder is None:
+            return None
+        return self._block_accept_recorder.estimate_log_suffix()
+
     def forward_batch_generation(
         self,
         batch: ScheduleBatch,

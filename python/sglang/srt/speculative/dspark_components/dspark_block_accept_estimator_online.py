@@ -20,6 +20,7 @@ _STATE_SWEEP_INTERVAL = 1024
 _STATE_EXPIRE_STEPS = 4096
 _FLUSH_EVERY_STEPS = 16
 _PENDING_BUCKET_MIN = 16
+_DEFAULT_ONLINE_WINDOW_STEPS = 256
 
 
 def _pending_bucket(count: int) -> int:
@@ -67,6 +68,7 @@ class _OnlineCeiling:
         self._cum_lo += lo
         self._cum_hi += hi
         self._cum_count += 1
+        self._evict(forward_ct=self._max_forward_ct)
 
     def _evict(self, *, forward_ct: int) -> None:
         cutoff = forward_ct - self._window_steps
@@ -77,7 +79,6 @@ class _OnlineCeiling:
             self._win_count -= c
 
     def estimate(self) -> Optional[_CeilingSnapshot]:
-        self._evict(forward_ct=self._max_forward_ct)
         if self._cum_count == 0:
             return None
         return _CeilingSnapshot(
@@ -189,16 +190,18 @@ class OnlineBlockAcceptEstimateRecorder:
         self._skipped_step_ct = 0
         self._warned_skip_reasons: set[str] = set()
 
-        self._online: Optional[_OnlineCeiling] = None
-        if online_log_interval > 0:
-            self._online = _OnlineCeiling(
-                log_interval=online_log_interval,
-                window_steps=(
-                    online_window_steps
-                    if online_window_steps > 0
-                    else online_log_interval
-                ),
-            )
+        self._online = _OnlineCeiling(
+            log_interval=online_log_interval,
+            window_steps=(
+                online_window_steps
+                if online_window_steps > 0
+                else (
+                    online_log_interval
+                    if online_log_interval > 0
+                    else _DEFAULT_ONLINE_WINDOW_STEPS
+                )
+            ),
+        )
 
         self._retained_h2d: List[torch.Tensor] = []
         self._delayed: Optional[DelayedDeviceHostHandler] = None
@@ -289,6 +292,16 @@ class OnlineBlockAcceptEstimateRecorder:
         if self._online is None:
             return None
         return self._online.estimate()
+
+    def estimate_log_suffix(self) -> Optional[str]:
+        snap = self.online_estimate()
+        if snap is None:
+            return None
+        mid = 0.5 * (snap.cumulative_lo + snap.cumulative_hi)
+        return (
+            f"est uncap acc len: {mid:.2f} "
+            f"[{snap.cumulative_lo:.2f}, {snap.cumulative_hi:.2f}]"
+        )
 
     def drain_pending_online(self) -> None:
         if self._online is None:

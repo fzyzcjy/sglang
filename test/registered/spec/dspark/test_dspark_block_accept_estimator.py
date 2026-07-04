@@ -499,11 +499,37 @@ class TestOnlineCeilingEstimate(CustomTestCase):
             self.assertLessEqual(snap.window_blocks, 3)
             self.assertEqual(snap.cumulative_blocks, 10)
 
-    def test_online_disabled_by_default(self):
-        """Without an interval the online aggregator is absent and online_estimate is None."""
+    def test_online_estimate_none_without_observations(self):
+        """With no observed blocks yet, online_estimate and the log suffix are both None."""
         with tempfile.TemporaryDirectory() as tmp:
             recorder, _ = _make_recorder(tmp)
             self.assertIsNone(recorder.online_estimate())
+            self.assertIsNone(recorder.estimate_log_suffix())
+
+    def test_estimate_log_suffix_reports_cumulative(self):
+        """After observations the log suffix reports the cumulative mid estimate and bracket."""
+        with tempfile.TemporaryDirectory() as tmp:
+            recorder, _ = _make_recorder(tmp)
+            target = torch.randn((_GAMMA + 1), _VOCAB)
+            seq = 10
+            for t in range(6):
+                cl = t % 3
+                _observe(
+                    recorder,
+                    forward_ct=t + 1,
+                    rid="r0",
+                    drafts=[1, 2, 3],
+                    corrected_logits=torch.randn(_GAMMA, _VOCAB),
+                    target_logits=target,
+                    verify_len=_GAMMA + 1,
+                    correct_len=cl,
+                    bonus=5,
+                    seq_len=seq,
+                )
+                seq += cl + 1
+            suffix = recorder.estimate_log_suffix()
+            self.assertIsNotNone(suffix)
+            self.assertIn("est uncap acc len", suffix)
 
 
 class TestOfflineRecorderMatchesOnline(CustomTestCase):
