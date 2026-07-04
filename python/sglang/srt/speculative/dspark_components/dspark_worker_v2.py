@@ -529,6 +529,9 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
         return dumped
 
+    def clear_info_records(self) -> None:
+        self._info_dumper.clear()
+
     def block_accept_estimate_log_suffix(self) -> Optional[str]:
         if self._block_accept_recorder is None:
             return None

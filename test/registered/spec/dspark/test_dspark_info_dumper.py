@@ -199,6 +199,19 @@ class TestCoreAndCpuTiming(CustomTestCase):
         dumper.observe_decode_step(make_obs(forward_ct=2))
         self.assertEqual(dumper.dump(), dumper.dump())
 
+    def test_clear_drops_all_records_and_pending(self):
+        """clear() empties the ring so a later load is analyzed in isolation."""
+        dumper, clock = make_dumper({"core"})
+        dumper.observe_decode_step(make_obs(forward_ct=1))
+        clock.advance(0.01)
+        dumper.observe_decode_step(make_obs(forward_ct=2))
+        dumper.clear()
+        self.assertEqual(dumper.dump()["records"], [])
+        dumper.observe_decode_step(make_obs(forward_ct=9))
+        clock.advance(0.01)
+        dumper.observe_decode_step(make_obs(forward_ct=10))
+        self.assertEqual([r["forward_ct"] for r in dumper.dump()["records"]], [9, 10])
+
 
 class TestPredictedStepFields(CustomTestCase):
     def test_predicted_fields_recorded_under_core(self):

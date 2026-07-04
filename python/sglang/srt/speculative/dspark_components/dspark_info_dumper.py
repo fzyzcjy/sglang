@@ -237,6 +237,15 @@ class DsparkInfoDumper:
             return
         self._drain_pending()
 
+    def clear(self) -> None:
+        self._records.clear()
+        self._pending = None
+        self._prev_stamp = None
+        self._current_segments = {}
+        self._open_segments = {}
+        self._sps_window = []
+        self._sps_mismatched = 0
+
     def dump(self) -> Optional[dict]:
         if not self.enabled:
             return None
