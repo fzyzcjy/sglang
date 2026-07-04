@@ -210,9 +210,7 @@ class TestCoreAndCpuTiming(CustomTestCase):
         dumper.observe_decode_step(make_obs(forward_ct=9))
         clock.advance(0.01)
         dumper.observe_decode_step(make_obs(forward_ct=10))
-        self.assertEqual(
-            [r["forward_ct"] for r in dumper.dump()["records"]], [9, 10]
-        )
+        self.assertEqual([r["forward_ct"] for r in dumper.dump()["records"]], [9, 10])
 
 
 class TestPredictedStepFields(CustomTestCase):
