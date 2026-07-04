@@ -24,6 +24,14 @@ class LoadedRecords(msgspec.Struct):
     eos_terminated: set
 
 
+class PerRequestEstimate(msgspec.Struct):
+    rid: str
+    num_blocks: int
+    mean_lo: float
+    mean_hi: float
+    mean_mid: float
+
+
 def load_records(jsonl_path: Path) -> LoadedRecords:
     blocks: List[Dict[str, Any]] = []
     gathers: Dict[Tuple[str, int], List[List[Any]]] = defaultdict(list)
@@ -106,6 +114,29 @@ def evaluate_block(
     )
 
 
+def per_request_estimates(
+    blocks: List[Dict[str, Any]], results: List[BlockEstimate]
+) -> List[PerRequestEstimate]:
+    sums: Dict[str, List[float]] = {}
+    for rec, result in zip(blocks, results):
+        entry = sums.setdefault(rec["rid"], [0.0, 0.0, 0.0])
+        entry[0] += result.lo
+        entry[1] += result.hi
+        entry[2] += 1
+    per_request: List[PerRequestEstimate] = []
+    for rid, (sum_lo, sum_hi, count) in sums.items():
+        per_request.append(
+            PerRequestEstimate(
+                rid=rid,
+                num_blocks=int(count),
+                mean_lo=sum_lo / count,
+                mean_hi=sum_hi / count,
+                mean_mid=0.5 * (sum_lo + sum_hi) / count,
+            )
+        )
+    return per_request
+
+
 def analyze(jsonl_path: Path, *, gamma: int, arm: str) -> Dict[str, Any]:
     loaded = load_records(jsonl_path)
     blocks = loaded.blocks
@@ -153,6 +184,16 @@ def analyze(jsonl_path: Path, *, gamma: int, arm: str) -> Dict[str, Any]:
                 results=results, censored=censored, mean_lo=mean_lo, mean_hi=mean_hi
             )
         )
+
+    per_request = per_request_estimates(blocks, results)
+    if per_request:
+        out["per_request_summary"] = {
+            "num_requests": len(per_request),
+            "mean_of_request_mids": sum(p.mean_mid for p in per_request)
+            / len(per_request),
+            "mean_blocks_per_request": sum(p.num_blocks for p in per_request)
+            / len(per_request),
+        }
 
     return out
 
@@ -239,6 +280,7 @@ def main(
     arm: str,
     driver_meta: Optional[str] = None,
     output: Optional[str] = None,
+    per_request_output: Optional[str] = None,
 ) -> None:
     result = analyze(Path(recorder_jsonl), gamma=gamma, arm=arm)
     if driver_meta is not None:
@@ -248,6 +290,17 @@ def main(
     print(text)
     if output is not None:
         Path(output).write_text(text + "\n")
+
+    if per_request_output is not None:
+        loaded = load_records(Path(recorder_jsonl))
+        results = [
+            evaluate_block(rec, loaded.gathers, gamma, loaded.eos_terminated)
+            for rec in loaded.blocks
+        ]
+        per_request = per_request_estimates(loaded.blocks, results)
+        with Path(per_request_output).open("w") as f:
+            for entry in per_request:
+                f.write(json.dumps(msgspec.to_builtins(entry)) + "\n")
 
 
 if __name__ == "__main__":

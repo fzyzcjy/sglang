@@ -710,6 +710,44 @@ class TestOfflineAnalyzerEos(CustomTestCase):
             self.assertEqual(est.category, "censored_eos")
             self.assertAlmostEqual(est.lo, est.hi, places=6)
 
+    def test_per_request_estimates_group_by_rid(self):
+        """Per-request means aggregate a request's blocks, including exact-in-window ones."""
+        from sglang.srt.speculative.dspark_components.dspark_block_accept_estimator_offline_analyzer import (
+            evaluate_block,
+            load_records,
+            per_request_estimates,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "est.jsonl"
+            records = [
+                {"rid": "r0", "fct": 1, "w": 3, "cl": 2, "ct": 0},
+                {
+                    "rid": "r0",
+                    "fct": 2,
+                    "w": 1,
+                    "cl": 1,
+                    "ct": 0,
+                    "trimmed_tokens": [2, 3],
+                    "q_lp": [-1.0, -1.0],
+                    "pg": [[2, 2, -0.5, 2, 2]],
+                },
+                {"rid": "r0", "eos_end": [2]},
+                {"rid": "r1", "fct": 1, "w": 0, "cl": 0, "ct": 0},
+            ]
+            path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+
+            loaded = load_records(path)
+            results = [
+                evaluate_block(rec, loaded.gathers, _GAMMA, loaded.eos_terminated)
+                for rec in loaded.blocks
+            ]
+            by_rid = {p.rid: p for p in per_request_estimates(loaded.blocks, results)}
+            self.assertEqual(by_rid["r0"].num_blocks, 2)
+            self.assertAlmostEqual(by_rid["r0"].mean_mid, 3.0, places=6)
+            self.assertEqual(by_rid["r1"].num_blocks, 1)
+            self.assertAlmostEqual(by_rid["r1"].mean_mid, 1.0, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()
