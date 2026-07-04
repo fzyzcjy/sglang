@@ -41,9 +41,7 @@ def load_records(jsonl_path: Path) -> LoadedRecords:
                 gathers[(rec["rid"], src_fct)].append(
                     [offset, p_lp, draft_token, realized_token]
                 )
-    return LoadedRecords(
-        blocks=blocks, gathers=gathers, eos_terminated=eos_terminated
-    )
+    return LoadedRecords(blocks=blocks, gathers=gathers, eos_terminated=eos_terminated)
 
 
 def evaluate_block(
