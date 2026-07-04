@@ -17,7 +17,6 @@ requires_cuda = pytest.mark.skipif(
 )
 @pytest.mark.parametrize("bias_dtype", [torch.float32, torch.bfloat16])
 def test_triton_matches_torch(bs, org_width, per_partition, bias_dtype):
-    """triton pad+add+upcast equals the torch F.pad(bias.float())+base_local reference elementwise."""
     torch.manual_seed(0)
     device = torch.device("cuda")
     bias = (torch.randn(bs, org_width, device=device) * 3.0).to(bias_dtype)
@@ -30,7 +29,6 @@ def test_triton_matches_torch(bs, org_width, per_partition, bias_dtype):
 
 @requires_cuda
 def test_padding_columns_are_pure_base():
-    """Columns past org_width receive no bias, so they equal base_local exactly."""
     device = torch.device("cuda")
     org_width, per_partition = 100, 128
     bias = torch.randn(1, org_width, device=device)
@@ -40,7 +38,6 @@ def test_padding_columns_are_pure_base():
 
 
 def test_torch_reference_matches_manual_pad_add():
-    """The torch reference reproduces the original F.pad + add tail bit-for-bit."""
     torch.manual_seed(1)
     org_width, per_partition = 100, 128
     bias = torch.randn(1, org_width)

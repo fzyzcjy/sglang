@@ -29,8 +29,6 @@ def accept_draft_tokens(
     cutoff_layout: Optional[RaggedVerifyLayout] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     greedy_mask = draft_block.greedy_mask
-    # The accept kernels take the raw per-request verify_lens; unwrap the
-    # layout once at this boundary (None -> no cutoff cap).
     cutoff_verify_lens = None if cutoff_layout is None else cutoff_layout.verify_lens
     all_greedy = sampling_info is None or sampling_info.is_all_greedy
     if all_greedy:

@@ -22,8 +22,6 @@ class DsparkDraftSampler:
         self.model = model
         self.markov_head = model.markov_head
         self.gamma = int(gamma)
-        # An external ``out`` (the verify epilogue's draft_tokens_buf) makes the
-        # verify graph read the same stable memory the draft graph writes.
         if out is not None:
             assert out.shape == (int(max_bs) * self.gamma,) and out.dtype == torch.int64
             self.out = out

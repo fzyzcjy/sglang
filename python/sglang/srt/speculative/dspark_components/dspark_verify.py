@@ -24,12 +24,6 @@ def local_verify_tier_num_tokens(
     verify_num_draft_tokens: int,
     min_verify_len: int,
 ) -> int:
-    # -1 is the "no budget on this rank" sentinel: any rank contributing it
-    # pins the whole DP group to the legacy tier for the step, so a rank whose
-    # confidence relay missed (racy copy_done) can never diverge from ranks
-    # that resolved a budget. The floor term is bs * max(min_verify_len, 1),
-    # matching the top-k allocator: only tokens above that floor count against
-    # the budget.
     if verify_token_budget is None:
         return -1
     floor_tokens = bs * max(min_verify_len, 1)
@@ -57,8 +51,6 @@ def idle_ragged_layout(
     model_runner,
 ) -> Optional[RaggedVerifyLayout]:
     if ragged_capture_num_tokens(model_runner=model_runner) is None:
-        # No token-keyed capture grid: the busy side degrades to the eager
-        # path, so the tier agreement must degrade symmetrically.
         dp_tier_num_tokens = None
     if dp_tier_num_tokens is None:
         return uniform_ragged_layout(
@@ -75,11 +67,6 @@ def idle_ragged_layout(
         tier_tokens_hint=dp_tier_num_tokens,
     ):
         return None
-    # All rows on an idle rank are padding, so the lens only need a legal
-    # geometry whose bucket lands on the SAME tier the busy ranks select:
-    # verify-all lens would sum past the trimmed tier (total must stay <=
-    # graph_num_tokens); one anchor per slot keeps the sum minimal and lets
-    # the floor pick the tier.
     verify_lens_cpu = [1] * tier_num_reqs
     grid = verify_layout_grid(
         verify_lens_cpu=verify_lens_cpu,
@@ -165,10 +152,6 @@ def verify_layout_graph_num_tokens_floor(
     ):
         return 0
     if tier_num_tokens is not None:
-        # Budget-tiered floor (local_verify_tier_num_tokens upper-bounds the
-        # packed total from host ints, so the tier choice stays sync-free);
-        # the clamp pins the invariant that a budget tier never exceeds the
-        # legacy pinned tier.
         return min(tier_num_tokens, num_reqs * verify_num_draft_tokens)
     return num_reqs * verify_num_draft_tokens
 

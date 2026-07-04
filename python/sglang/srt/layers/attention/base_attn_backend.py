@@ -42,11 +42,6 @@ class AttentionBackend(ABC):
     prefill_attention_backend_str: Optional[str] = None
     decode_attention_backend_str: Optional[str] = None
 
-    # Contract: a ragged-verify-capable backend must tolerate the decoupled
-    # (slots, tokens) ragged capture -- replayed pad layouts may contain
-    # 0-length rows and slack rows longer than the verify window (real tokens
-    # stay front-packed per row; pad outputs are never read). Verified on
-    # fa3, trtllm_mha and dsv4.
     supports_ragged_verify_graph: bool = False
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):

@@ -972,10 +972,6 @@ class Req(ReqDllmMixin):
         # Example: histogram[0] = 5 means 5 steps with 0 accepted tokens, histogram[3] = 10 means 10 steps with 3 accepted tokens.
         self.spec_correct_drafts_histogram: List[int] = []
 
-        # Per-step verify-window (cap length) histogram for speculative decoding.
-        # List index = cap length (verify window) assigned in a step, value = count of
-        # steps with that window. Surfaces the per-request verify_len distribution
-        # (blog figure 4b) via meta_info, replacing the per-step decision-dump print.
         self.spec_cap_lens_histogram: List[int] = []
 
         # The number of times this request has been retracted / preempted.
@@ -1099,11 +1095,6 @@ class Req(ReqDllmMixin):
         self.spec_correct_drafts_histogram[num_correct_drafts] += 1
 
     def update_spec_cap_lens_histogram(self, cap_len: int):
-        """Update the per-step verify-window (cap length) histogram.
-
-        Args:
-            cap_len: Verify window (cap length) assigned to this request this step.
-        """
         cap_len = int(cap_len)
         if len(self.spec_cap_lens_histogram) <= cap_len:
             self.spec_cap_lens_histogram.extend(
@@ -1806,9 +1797,6 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
     can_run_dp_cuda_graph: bool = False
     can_run_dp_breakable_cuda_graph: bool = False
     tbo_split_seq_index: Optional[int] = None
-    # Local verify graph-tier token demand contributed to the dp tier gather;
-    # -1 means "no budget resolved on this rank" and pins every rank to the
-    # legacy tier for the step.
     spec_verify_tier_num_tokens: int = -1
 
     # For processing logprobs

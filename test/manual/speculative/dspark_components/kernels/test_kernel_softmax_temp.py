@@ -67,7 +67,6 @@ def test_column_temperatures_accepted():
 @pytest.mark.parametrize("vocab", [4096, 129280])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_flashinfer_matches_torch_probs(rows_per_request, vocab, dtype):
-    """flashinfer fused temp-softmax matches the torch cast/div/softmax chain within float tolerance."""
     device = torch.device("cuda")
     g = torch.Generator(device=device).manual_seed(rows_per_request * 100 + vocab)
     logits = (
@@ -96,7 +95,6 @@ def test_flashinfer_matches_torch_probs(rows_per_request, vocab, dtype):
     _flashinfer_softmax is None, reason="flashinfer.sampling.softmax unavailable"
 )
 def test_impl_timing_smoke():
-    """Print-only per-impl timing at the accept-path shape; never asserts (manual perf check)."""
     device = torch.device("cuda")
     g = torch.Generator(device=device).manual_seed(0)
     vocab = 129280

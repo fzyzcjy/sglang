@@ -269,9 +269,6 @@ class DSparkWorkerV2(BaseSpecWorker):
             draft_block_spec_info=self._draft_block_spec_info,
             dp_moe_sync=self._draft_is_moe and server_args.enable_dp_attention,
         )
-        # Compact-mode verify epilogue, attached to the TARGET model runner
-        # HERE: the scheduler captures the target verify graphs right after
-        # worker construction, before this worker's own (draft) init_cuda_graphs.
         self._verify_epilogue = None
         if (
             self._verify_planner.is_compact_mode
@@ -311,18 +308,10 @@ class DSparkWorkerV2(BaseSpecWorker):
             )
         )
 
-        # Verify-budget measurement pin: off at launch, set purely at runtime
-        # via /set_internal_state {"dspark_force_budget_frac": f} (see
-        # set_dspark_forced_budget_frac).
         self._forced_budget_frac: Optional[float] = None
 
         self._sps_recorder: Optional[SpsDataRecorder] = None
         if envs.SGLANG_DSPARK_ENABLE_SPS_RECORD.get():
-            # static: the per-step verify token count is a host constant.
-            # Ragged modes: the recorded count is the host-INTENDED packed
-            # total -- exact under a budget pin (bs + pinned budget) and equal
-            # to the full uniform extent when unpinned; reading the actual
-            # packed lens would need a device sync in the hot path.
             self._sps_recorder = SpsDataRecorder()
 
         self._simulate_acc_len = float(envs.SGLANG_SIMULATE_ACC_LEN.get())
@@ -474,8 +463,6 @@ class DSparkWorkerV2(BaseSpecWorker):
                 if self._verify_planner.carries_confidence
                 else None
             ),
-            # Share the verify epilogue's draft-token buffer so the verify graph's
-            # in-graph BuildOutTokens reads the drafts the draft graph just wrote.
             out=(
                 self._verify_epilogue.draft_tokens_buf
                 if self._verify_epilogue is not None
@@ -487,18 +474,10 @@ class DSparkWorkerV2(BaseSpecWorker):
         pass
 
     def set_dspark_forced_budget_frac(self, frac: Optional[float]) -> None:
-        # Runtime verify-budget pin, delivered via /set_internal_state. The
-        # control req is broadcast to every TP rank at the same scheduler recv
-        # boundary, so all ranks flip the pin on the same step (rank-consistent
-        # budgets, hence rank-consistent graph tiers). None clears the pin.
         self._forced_budget_frac = frac
         self._verify_planner.set_forced_budget_frac(frac)
 
     def _recorder_verify_tokens(self, *, bs: int, verify_ids_2d) -> int:
-        # static: the uniform packed total, a host constant. Pinned ragged
-        # modes (off-diagonal T(bs, K) profiling): the intended packed total
-        # is host-known -- a 1-token floor per request plus the pinned budget,
-        # clamped to the per-request gamma+1 cap.
         forced_frac = self._forced_budget_frac
         if (
             forced_frac is None
@@ -620,30 +599,9 @@ class DSparkWorkerV2(BaseSpecWorker):
         return batch_output
 
     def _run_idle_verify_participation(self, batch: ScheduleBatch) -> None:
-        """Under DP attention an idle attention-DP group must still run the target
-        verify forward so it joins the target's dp_gather collective; otherwise busy
-        groups hang. The dummy DFlashVerifyInput carries draft_token_num ==
-        verify_num_draft_tokens so get_spec_adjusted_global_num_tokens scales
-        global_num_tokens by the same factor as a busy verify -> matching dp buffer
-        length across ranks. The forward output is discarded (no real requests).
-
-        Under compact ragged verify the busy groups replay the token-keyed graph
-        (their verify carries a ragged_verify_layout). The idle group MUST select the
-        SAME graph, else it replays the bs-keyed graph while busy replays the
-        token-keyed one -> two distinct captured graphs whose baked dp_gather
-        collectives can never rendezvous -> hang. So carry the same uniform layout the
-        planner builds for a layout-less compact step, floored to the DP-global tier
-        (0 local reqs -> the graph pads it out). None outside compact / when DP metadata
-        is absent, keeping static / cap-accept on the shared bs-keyed path."""
         if self._verify_epilogue is not None:
-            # Disarm the captured commit write and mask the scatter: an idle
-            # replay carries stale req_pool / commit buffers and must not
-            # mutate the draft KV pool.
             self._verify_epilogue.begin_step(None, armed=False)
         idle_layout = self._idle_verify_ragged_layout(batch)
-        # The token-keyed graph's buffer fill pairs the captured token-width
-        # buffers against these inputs, so the idle dummies must span the
-        # layout's token count (all rows are padding aimed at pool slot 0).
         num_dummy_tokens = (
             idle_layout.graph_num_tokens if idle_layout is not None else 0
         )
@@ -663,8 +621,6 @@ class DSparkWorkerV2(BaseSpecWorker):
             (num_dummy_tokens,), dtype=torch.int64, device=self.device
         )
         if idle_layout is not None:
-            # The captured per-request buffers span the tier's slot count; the
-            # idle batch must present matching dummy rows (padding at req 0).
             num_dummy_slots = int(idle_layout.verify_lens.numel())
             batch.seq_lens = torch.ones(
                 (num_dummy_slots,), dtype=torch.int64, device=self.device
@@ -674,10 +630,6 @@ class DSparkWorkerV2(BaseSpecWorker):
             )
             batch.seq_lens_cpu = torch.ones((num_dummy_slots,), dtype=torch.int64)
             batch.seq_lens_sum = num_dummy_slots
-            # The token-keyed graph was captured as TARGET_VERIFY; an IDLE
-            # forward batch materializes zero tokens (empty positions) and
-            # cannot rendezvous with it. The dummies above make the idle rank
-            # a well-formed all-padding verify batch.
             batch.forward_mode = ForwardMode.TARGET_VERIFY
         verify_forward_batch, _ = verify_input.prepare_for_verify(
             batch, self.target_worker
@@ -690,16 +642,6 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
 
     def _idle_verify_ragged_layout(self, batch: ScheduleBatch):
-        # Build the SAME layout family the busy compact verify selects, sized to
-        # the DP-global tier so the idle verify keys the exact same graph: the
-        # gathered budget tier round_up(F) when the agreement is live, else the
-        # uniform verify-all layout at the pinned tier. The tier holds
-        # max(global bs) padded rows (a 0-request layout is rejected; the idle
-        # rank's real tokens are 0 and the graph pads them out). Only compact
-        # uses the token-keyed graph -- static / cap-accept stay on the shared
-        # bs-keyed path (return None). None too when DP metadata is absent or
-        # the tier exceeds the captured grid (the busy side then falls back to
-        # the same bs-keyed path).
         if batch.global_num_tokens is None or not self._verify_planner.is_compact_mode:
             return None
         global_bs = max(batch.global_num_tokens)
@@ -714,9 +656,6 @@ class DSparkWorkerV2(BaseSpecWorker):
         )
 
     def _dp_verify_tier_num_tokens(self, batch: ScheduleBatch) -> Optional[int]:
-        # The single F-consumption predicate shared by the busy and idle verify
-        # paths: if it ever diverged between them, one side would key the
-        # gathered tier while the other stayed pinned -> collective hang.
         if not (
             self._draft_is_moe
             and self.server_args.enable_dp_attention
@@ -863,9 +802,6 @@ class DSparkWorkerV2(BaseSpecWorker):
                 ),
             )
 
-        # Pre-replay fold eligibility (everything except can_run_cuda_graph,
-        # known only post-forward): gates the captured commit KV write and, with
-        # can_run_cuda_graph, the accept-buffer read below.
         fold_eligible = (
             self._verify_executor.verify_epilogue is not None
             and proposal.folded
@@ -896,11 +832,6 @@ class DSparkWorkerV2(BaseSpecWorker):
         logits_output = target_verify.logits_output
         can_run_cuda_graph = target_verify.can_run_cuda_graph
 
-        # In-graph accept read path: requires the draft fold this step
-        # (proposal.folded -> draft_tokens_buf fresh, all-greedy), a token-keyed
-        # graph replay, and no-op logits adjustments (the captured accept saw
-        # unadjusted logits). Else the eager chain reads the same strided
-        # static buffers, byte-identical.
         epilogue = self._verify_executor.verify_epilogue
         folded_accept = fold_eligible and run_compact and can_run_cuda_graph
         if folded_accept:
@@ -952,8 +883,6 @@ class DSparkWorkerV2(BaseSpecWorker):
             else:
                 on_publish(new_seq_lens)
 
-        # The captured commit write already injected the committed KV when the
-        # folded (armed) graph replayed; anything else eager-injects as before.
         folded_commit = folded_accept and epilogue.folds_commit
         if not folded_commit:
             self._verify_executor.commit_hidden(
@@ -969,10 +898,6 @@ class DSparkWorkerV2(BaseSpecWorker):
         logits_output.hidden_states = None
 
         if not proposal.folded:
-            # Raw-confidence taps read the head's last eager stash; on a folded
-            # step that stash aliases a capture-time buffer of whichever bs
-            # tier captured last (cross-tier stale), so the debug taps skip
-            # folded steps instead of recording silently wrong values.
             self._maybe_record_sts_collect(
                 verify_ids_2d=verify_ids_2d,
                 target_logits=logits_output.next_token_logits,

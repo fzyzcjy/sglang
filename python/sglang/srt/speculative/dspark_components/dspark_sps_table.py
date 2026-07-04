@@ -10,7 +10,6 @@ logger = logging.getLogger(__name__)
 
 
 def floor_probe_index(edges: list[int], batch_tokens: int) -> int:
-    # Tensor mirror: dspark_scheduler._lookup_sps_tensor (keep in sync).
     idx = bisect.bisect_right(edges, batch_tokens) - 1
     return max(0, min(idx, len(edges) - 1))
 
@@ -53,7 +52,6 @@ class SpsCostTable(msgspec.Struct, frozen=True):
 
 
 def _interp_clamped(xs: list[int], ys: list[float], x: float) -> float:
-    # Piecewise-linear with edge clamp. xs strictly increasing.
     if x <= xs[0]:
         return ys[0]
     if x >= xs[-1]:
@@ -65,27 +63,6 @@ def _interp_clamped(xs: list[int], ys: list[float], x: float) -> float:
 
 
 class SpsAdditiveCostTable(msgspec.Struct, frozen=True):
-    """Additive step-cost model: T(bs, M) = bias + alpha(bs) + theta(M), in
-    seconds, with bs the running request count and M = bs + K the total packed
-    verify tokens (1-token-per-request floor + K trimmable candidates).
-
-    The three components are mutually independent lookup functions:
-    - bias: per-step fixed cost (launch / scheduling), invariant to bs and M.
-    - alpha(bs): request-scaling cost (draft pass, per-request KV/attention),
-      invariant to M -- the part trimming can never recover.
-    - theta(M): verify-token-scaling cost of the target forward over M tokens;
-      trimming lowers M and only this term.
-
-    Indexed on M (not K): along an off-diagonal (bs, K) grid the K-ranges are
-    disjoint across bs, but the M = bs + K ranges overlap, so theta is
-    identifiable (the collapse test: equal M + higher bs -> higher T isolates
-    alpha). Unlike the 1D diagonal SpsCostTable, whose single slope conflates
-    alpha' with theta' and overestimates the marginal saving of trimming.
-
-    Gauge convention (identifiability): alpha(bs_probes[0]) = 0 and
-    theta(m_probes[0]) = 0; bias absorbs the reference-point cost. Only the
-    sum is ever consumed, so the gauge is a storage convention.
-    """
 
     bias_seconds: float
     bs_probes: list[int]
@@ -113,7 +90,6 @@ class SpsAdditiveCostTable(msgspec.Struct, frozen=True):
             raise ValueError(f"bias_seconds must be > 0, got {self.bias_seconds}.")
 
     def step_time(self, *, num_reqs: int, budget: int) -> float:
-        # budget = K above the floor; the verify forward sees M = num_reqs + K.
         return (
             self.bias_seconds
             + _interp_clamped(self.bs_probes, self.alpha_seconds, float(num_reqs))
@@ -170,8 +146,6 @@ def profile_sps_table(
 
 
 def load_sps_table_from_path(path: str):
-    # Sniff by the discriminating top-level key: only the additive model
-    # carries "bias_seconds"; the 1D diagonal table stays the default.
     with open(path, "r", encoding="utf-8") as f:
         data = f.read()
     if '"bias_seconds"' in data:

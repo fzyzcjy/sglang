@@ -369,9 +369,6 @@ class BenchOneCaseResult(BaseModel):
     last_ttft: float
     last_gen_throughput: float
     acc_length: float
-    # Strict per-decode-step wall time for this case, from the server's
-    # step_time_dict[batch_size] (requires SGLANG_RECORD_STEP_TIME=1); -1 when
-    # unavailable. n_decode_steps counts the samples this run contributed.
     iter_time: float = -1.0
     n_decode_steps: int = 0
     cache_hit_rate: Optional[float] = None
@@ -524,11 +521,6 @@ def run_one_case(
     else:
         _flush_cache_with_retry(url, "/flush_cache")
 
-    # Load input token ids. A --fixed-prompt-file pins EVERY request in the batch
-    # to one real prompt (its tokenized ids, replicated batch_size times) so the
-    # accept length is a controlled constant across bs and arms -- decode dynamics
-    # (accept / iter_time / itl) then reflect only bs scaling, not which prompts
-    # happened to be sampled. Otherwise fall back to the synthetic get_dataset path.
     if fixed_prompt_file:
         tok_inner = getattr(tokenizer, "tokenizer", tokenizer)
         with open(fixed_prompt_file) as f:
@@ -561,8 +553,6 @@ def run_one_case(
             gsp_system_prompt_len=gsp_system_prompt_len,
             gsp_question_len=gsp_question_len,
             gsp_output_len=gsp_output_len,
-            # The generated-shared-prefix dataset's from_args requires these; the
-            # batch-bench path only ever uses the uniform group distribution.
             gsp_group_distribution="uniform",
             gsp_zipf_alpha=None,
         )
@@ -751,16 +741,11 @@ def run_one_case(
         last_gen_throughput = internal_state.get("last_gen_throughput", None) or -1
         acc_length = internal_state.get("avg_spec_accept_length", None) or -1
 
-    # Strict per-decode-step wall time = decode wall / decode steps, both for
-    # THIS case only: decode wall = latency - last_ttft (prefill excluded);
-    # decode steps = output_len / acc_length (each spec verify step commits
-    # acc_length tokens per request in lockstep). Amortized over the whole
-    # decode phase -> robust, unlike a few noisy per-window samples.
     n_decode_steps = 0
     iter_time = -1.0
     decode_wall = latency - last_ttft
     if acc_length > 0 and output_len > 1 and decode_wall > 0:
-        steps = output_len / acc_length  # float step count (lockstep bursts)
+        steps = output_len / acc_length
         iter_time = decode_wall / steps
         n_decode_steps = round(steps)
 

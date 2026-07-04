@@ -315,7 +315,6 @@ class TestBuildBatchSizeSweep(CustomTestCase):
 
 class TestIsUninitializedSpsTable(CustomTestCase):
     def test_additive_table_is_never_uninitialized(self):
-        "A fitted additive table is initialized, so the check returns False without an attr crash."
         table = SpsAdditiveCostTable(
             bias_seconds=0.1,
             bs_probes=[128, 192, 256],
@@ -326,7 +325,6 @@ class TestIsUninitializedSpsTable(CustomTestCase):
         self.assertFalse(is_uninitialized_sps_table(table))
 
     def test_placeholder_diagonal_table_is_uninitialized(self):
-        "The single-probe placeholder diagonal table is detected as uninitialized."
         self.assertTrue(
             is_uninitialized_sps_table(
                 build_uninitialized_sps_table(max_batch_tokens=128)
@@ -334,7 +332,6 @@ class TestIsUninitializedSpsTable(CustomTestCase):
         )
 
     def test_real_diagonal_table_is_initialized(self):
-        "A multi-probe fitted diagonal table is not flagged as uninitialized."
         self.assertFalse(is_uninitialized_sps_table(_make_table()))
 
 

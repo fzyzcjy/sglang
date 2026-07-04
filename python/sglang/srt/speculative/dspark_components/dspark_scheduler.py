@@ -77,10 +77,6 @@ def compute_verify_token_budget(
         [torch.zeros(1, dtype=torch.float64), prefix_sum]
     )
     if isinstance(sps_table, SpsAdditiveCostTable):
-        # Additive model: theta(K) = tau*(K) / T(bs, K) with
-        # T = bias + alpha(bs) + theta_cost(K). alpha(bs) is a constant at
-        # decision time (the trim-invariant floor), so unlike the diagonal 1D
-        # lookup the argmax only trades tau* against the true K-marginal cost.
         step_time = _additive_step_time_tensor(
             table=sps_table,
             num_requests=int(num_requests),
@@ -116,9 +112,6 @@ def _lookup_sps_tensor(
 def _additive_step_time_tensor(
     *, table: SpsAdditiveCostTable, num_requests: int, num_budgets: int
 ) -> torch.Tensor:
-    # T(bs, K) for K = 0..num_budgets-1 at fixed bs. bias + alpha(bs) is a
-    # scalar floor; theta is indexed on M = bs + K (piecewise-linear interp on
-    # the M grid, edge clamp).
     floor = table.bias_seconds + _interp_clamped(
         table.bs_probes, table.alpha_seconds, float(num_requests)
     )
@@ -153,11 +146,6 @@ class HostConfidenceBudgetPlanner:
         self._online_profiler = online_profiler
         self._log_table_swaps = log_table_swaps
         self._model_runner = model_runner
-        # Verify-budget measurement pin (off-diagonal T(bs, K) profiling).
-        # Off at launch; set purely at runtime via /set_internal_state ->
-        # DSparkWorkerV2.set_dspark_forced_budget_frac -> DSparkVerifyPlanner,
-        # broadcast to every TP rank at the same scheduler recv boundary
-        # (rank-consistent). None = theta decides the budget normally.
         self.forced_budget_frac: Optional[float] = None
         self.last_decision: Optional[VerifyBudgetDecision] = None
         self.lag_steps = max(
@@ -188,11 +176,6 @@ class HostConfidenceBudgetPlanner:
         )
         forced_frac = self.forced_budget_frac
         if forced_frac is not None:
-            # Measurement pin for off-diagonal T(bs, K) profiling: run a fixed
-            # budget fraction of verify-all, bypassing theta entirely. The
-            # budget is a pure function of (bs, pin) and the pin flips on the
-            # same step on every rank (control-req broadcast), so it stays
-            # rank- and tier-consistent without any extra sync.
             full_budget = int(survival[:, : self.cfg.resolved_max_verify_len()].numel())
             forced_budget = max(0, int(float(forced_frac) * full_budget))
             self.last_decision = VerifyBudgetDecision(budget=forced_budget)
@@ -286,8 +269,6 @@ def build_sps_cost_table(
     server_args: ServerArgs,
     verify_num_draft_tokens: int,
 ) -> Union[SpsCostTable, SpsAdditiveCostTable]:
-    # A loaded table may be the 1D diagonal SpsCostTable or the additive
-    # SpsAdditiveCostTable (sniffed by load_sps_table_from_path).
     sps_table_path = server_args.speculative_dspark_sps_table_path
     if sps_table_path:
         return load_sps_table_from_path(sps_table_path)

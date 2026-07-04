@@ -60,7 +60,6 @@ def make_context(**overrides) -> ServerContext:
 
 class TestPostprocessRound(CustomTestCase):
     def test_single_rank_round_builds_probe_from_median_step_time(self):
-        """A steady single-rank round yields batch_tokens=bs*gamma1 and sps=1/median(dt)."""
         outcome = postprocess_round(
             rank_rows=[make_rows(step_time=0.01)],
             batch_size_per_rank=4,
@@ -74,7 +73,6 @@ class TestPostprocessRound(CustomTestCase):
         self.assertEqual(outcome.match_fraction, 1.0)
 
     def test_round_warmup_steps_are_dropped_from_timing(self):
-        """The first aligned steps are excluded so ramp-in noise never enters the median."""
         slow_head = make_rows(num_rows=8, step_time=0.5, first_forward_ct=0)
         steady_tail = make_rows(num_rows=20, step_time=0.01, first_forward_ct=8)
         outcome = postprocess_round(
@@ -88,7 +86,6 @@ class TestPostprocessRound(CustomTestCase):
         self.assertAlmostEqual(outcome.steps_per_sec, 100.0)
 
     def test_off_target_batch_rows_are_filtered_out(self):
-        """Ramp-up rows at a smaller running batch are excluded from the probe."""
         ramp = make_rows(num_rows=10, num_running_reqs=2, num_verify_tokens=16)
         steady = make_rows(num_rows=30, first_forward_ct=10, step_time=0.02)
         outcome = postprocess_round(
@@ -103,7 +100,6 @@ class TestPostprocessRound(CustomTestCase):
         self.assertAlmostEqual(outcome.match_fraction, 1.0)
 
     def test_mid_round_instability_raises(self):
-        """Off-target steps inside the steady window (not ramp/drain) fail the round."""
         head = make_rows(num_rows=15)
         gap = make_rows(
             num_rows=40, num_running_reqs=3, num_verify_tokens=24, first_forward_ct=15
@@ -120,7 +116,6 @@ class TestPostprocessRound(CustomTestCase):
             )
 
     def test_round_that_never_stabilizes_raises(self):
-        """A round where almost no step hits the target batch is rejected."""
         rows = make_rows(num_rows=50, num_running_reqs=3, num_verify_tokens=24)
         rows += make_rows(num_rows=2, first_forward_ct=50)
         with self.assertRaisesRegex(RuntimeError, "never stabilized"):
@@ -136,7 +131,6 @@ class TestPostprocessRound(CustomTestCase):
 
 class TestPostprocessRoundCrossRank(CustomTestCase):
     def test_two_uniform_ranks_average_their_step_times(self):
-        """With dp=2 the per-step timing averages the two ranks' step times."""
         outcome = postprocess_round(
             rank_rows=[make_rows(step_time=0.01), make_rows(step_time=0.03)],
             batch_size_per_rank=4,
@@ -153,7 +147,6 @@ class TestPostprocessRoundCrossRank(CustomTestCase):
         self.assertAlmostEqual(outcome.per_rank_median_step_time[1], 0.03)
 
     def test_rank_with_no_new_records_raises(self):
-        """A DP rank that produced no decode-step records fails the round loudly."""
         with self.assertRaisesRegex(RuntimeError, "no new decode-step records"):
             postprocess_round(
                 rank_rows=[make_rows(), []],
@@ -165,7 +158,6 @@ class TestPostprocessRoundCrossRank(CustomTestCase):
             )
 
     def test_disjoint_forward_ct_ranges_raise(self):
-        """Ranks whose forward_ct counters never overlap are misaligned and rejected."""
         with self.assertRaisesRegex(RuntimeError, "no common forward_ct"):
             postprocess_round(
                 rank_rows=[
@@ -180,7 +172,6 @@ class TestPostprocessRoundCrossRank(CustomTestCase):
             )
 
     def test_cross_rank_verify_token_mismatch_raises(self):
-        """Ranks at the target batch but with different verify token counts are rejected."""
         with self.assertRaisesRegex(RuntimeError, "num_verify_tokens"):
             postprocess_round(
                 rank_rows=[make_rows(), make_rows(num_verify_tokens=40)],
@@ -192,7 +183,6 @@ class TestPostprocessRoundCrossRank(CustomTestCase):
             )
 
     def test_rank_count_mismatch_raises(self):
-        """Getting records from fewer ranks than dp_size is rejected."""
         with self.assertRaisesRegex(RuntimeError, "DP ranks"):
             postprocess_round(
                 rank_rows=[make_rows()],
@@ -206,7 +196,6 @@ class TestPostprocessRoundCrossRank(CustomTestCase):
 
 class TestTableAssembly(CustomTestCase):
     def test_repeats_take_the_median_per_batch_tokens(self):
-        """Multiple rounds at the same batch_tokens collapse to their median sps."""
         rounds = [
             postprocess_round(
                 rank_rows=[make_rows(step_time=step_time)],
@@ -223,7 +212,6 @@ class TestTableAssembly(CustomTestCase):
         self.assertAlmostEqual(table.sample_steps_per_sec[0], 50.0)
 
     def test_probes_are_sorted_by_batch_tokens(self):
-        """Rounds swept out of order still produce a sorted probe grid."""
         rounds = [
             postprocess_round(
                 rank_rows=[
@@ -246,19 +234,16 @@ class TestTableAssembly(CustomTestCase):
 
 class TestSweepHelpers(CustomTestCase):
     def test_request_count_sweep_tapers_and_hits_the_max(self):
-        """The default sweep starts at powers of two and always includes the max."""
         sweep = build_request_count_sweep(100)
         self.assertEqual(sweep[:4], [1, 2, 4, 8])
         self.assertEqual(sweep[-1], 100)
         self.assertIn(64, sweep)
 
     def test_request_count_sweep_rejects_non_positive_max(self):
-        """A non-positive maximum request count raises."""
         with self.assertRaises(ValueError):
             build_request_count_sweep(0)
 
     def test_sweep_beyond_captured_cuda_graphs_raises(self):
-        """A sweep exceeding the captured decode cuda-graph max bs is rejected."""
         with self.assertRaisesRegex(ValueError, "cuda graphs"):
             validate_sweep_against_server(
                 context=make_context(cuda_graph_max_bs=64),
@@ -266,27 +251,23 @@ class TestSweepHelpers(CustomTestCase):
             )
 
     def test_sweep_within_captured_cuda_graphs_passes(self):
-        """A per-rank sweep max that fits the captured graphs is accepted."""
         validate_sweep_against_server(
             context=make_context(cuda_graph_max_bs=64, dp_size=2),
             batch_sizes=[8, 64],
         )
 
     def test_resolve_cuda_graph_max_bs_prefers_captured_list(self):
-        """The captured bs list wins over the max_bs field when both exist."""
         internal_state = {
             "cuda_graph_config": {"decode": {"bs": [1, 2, 160], "max_bs": 128}}
         }
         self.assertEqual(resolve_cuda_graph_max_bs(internal_state=internal_state), 160)
 
     def test_resolve_cuda_graph_max_bs_handles_missing_config(self):
-        """A server without a parseable cuda_graph_config resolves to None."""
         self.assertIsNone(resolve_cuda_graph_max_bs(internal_state={}))
 
 
 class TestCountAlignedSteps(CustomTestCase):
     def test_counts_common_cts_at_target_batch(self):
-        """Only forward_cts present on every rank at the target batch are counted."""
         rows_a = make_rows(num_rows=10)
         rows_b = make_rows(num_rows=8, first_forward_ct=2)
         self.assertEqual(
@@ -295,14 +276,12 @@ class TestCountAlignedSteps(CustomTestCase):
         )
 
     def test_zero_when_any_rank_is_empty(self):
-        """A rank without records means no aligned steps yet."""
         self.assertEqual(
             count_aligned_steps(rank_rows=[make_rows(), []], batch_size_per_rank=4),
             0,
         )
 
     def test_off_target_steps_are_not_counted(self):
-        """Steps at a different running batch do not count toward the target."""
         rows = make_rows(num_rows=10, num_running_reqs=3)
         self.assertEqual(
             count_aligned_steps(rank_rows=[rows], batch_size_per_rank=4), 0
@@ -311,7 +290,6 @@ class TestCountAlignedSteps(CustomTestCase):
 
 class TestMinSteadySteps(CustomTestCase):
     def test_min_steady_steps_rejects_thin_probes(self):
-        """A probe built from fewer aligned steps than required is rejected."""
         with self.assertRaisesRegex(RuntimeError, "never stabilized"):
             postprocess_round(
                 rank_rows=[make_rows(num_rows=20)],

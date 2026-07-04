@@ -214,9 +214,6 @@ def build_capture_verify_lens(
     num_slots: int,
     num_draft_tokens: int,
 ) -> list[int]:
-    # Legal (slots, tokens) layout for graph capture: every row in
-    # [1, num_draft_tokens] and the rows sum to exactly num_tokens, so the
-    # captured kernels see a self-consistent ragged geometry.
     if num_slots < 1 or num_tokens < num_slots:
         raise ValueError(
             f"capture layout needs 1 <= num_slots <= num_tokens, got "

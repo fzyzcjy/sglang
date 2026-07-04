@@ -566,9 +566,6 @@ def validate_sweep_against_server(
     *, context: ServerContext, batch_sizes: list[int]
 ) -> None:
     if context.cuda_graph_max_bs is None:
-        # If you REALLY want to profile without confirming the graph cap, delete
-        # this raise -- but be careful: any step above the captured cuda-graph
-        # bs silently falls back to eager and poisons the table.
         raise ValueError(
             "Could not resolve the server's captured cuda-graph max batch size "
             "from /server_info, so the sweep cannot be confirmed to stay inside "
@@ -579,8 +576,6 @@ def validate_sweep_against_server(
         )
     max_per_rank = max(batch_sizes)
     if max_per_rank > context.cuda_graph_max_bs:
-        # If you REALLY want to profile past the graph cap, delete this raise --
-        # but be careful: cells above the cap run eager and poison the table.
         raise ValueError(
             f"The sweep reaches {max_per_rank} running requests per DP rank but "
             "the server captured decode cuda graphs only up to bs="
@@ -611,13 +606,6 @@ def build_request_count_sweep(max_num_reqs: int) -> list[int]:
 
 
 def round_max_new_tokens(*, settings: RoundSettings, context: ServerContext) -> int:
-    # Under the required simulate_acc_len == 1.0 every request advances
-    # exactly ONE token per verify step (bonus only, zero correct drafts), so
-    # the per-request token budget for N steps is N, not N * (gamma+1).
-    # Multiplying by the verify window made requests outlive the target by
-    # (gamma+1)x, so rounds that missed the poll-based abort ran ~6x longer
-    # than designed. Natural exhaustion now bounds every round at the step
-    # budget even if the abort never fires.
     commit_tokens_per_step = (
         max(
             0,
@@ -627,10 +615,6 @@ def round_max_new_tokens(*, settings: RoundSettings, context: ServerContext) -> 
         )
         + 1
     )
-    # Long inputs need a ramp allowance on top of the step budget: prefilling
-    # the whole batch can take minutes, and requests that finish their step
-    # budget before the last request enters decode make full-batch alignment
-    # unreachable (observed: input_len 8192, bs 384 -> 0 aligned steps).
     steady_steps_budget = max(
         settings.min_steady_steps,
         math.ceil(settings.min_steady_seconds / STEP_TIME_FLOOR_SECONDS),
@@ -1229,13 +1213,6 @@ def build_additive_table_from_cells(*, cells: list[dict]) -> SpsAdditiveCostTabl
 
 
 def ols_resid_backfit(cells: list, mbin_w: int = 64):
-    # Additive step-cost model T(bs, M) ~ bias + alpha(bs) + theta(M), M = bs + K
-    # binned to mbin_w. Ordinary least squares over the two-way indicator design
-    # (bias + per-bs + per-Mbin dummies, gauge alpha(min bs)=0, theta(min M)=0)
-    # via a min-norm SVD solve, so the confounded null space (disjoint M ranges
-    # across bs) resolves to small sensible offsets instead of the local minimum
-    # an iterated median polish lands in. Returns (bias, alpha{bs}, theta{mbin},
-    # residuals%, stats).
     def mbin(m):
         return round(m / mbin_w) * mbin_w
 

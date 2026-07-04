@@ -74,36 +74,30 @@ def make_obs(
 
 class TestResolveComponents(CustomTestCase):
     def test_empty_disables(self):
-        """No tokens means the dumper is disabled."""
         self.assertEqual(resolve_components(()), set())
 
     def test_all_expands_to_every_component(self):
-        """The 'all' token selects every known component."""
         self.assertEqual(resolve_components(("all",)), set(InfoComponent))
 
     def test_subset_and_whitespace_are_kept(self):
-        """A comma list keeps exactly the named components, stripped."""
         self.assertEqual(
             resolve_components((" core ", "reqs")),
             {InfoComponent.CORE, InfoComponent.REQS},
         )
 
     def test_unknown_component_raises(self):
-        """An unknown component name is a configuration error."""
         with self.assertRaises(ValueError):
             resolve_components(("core", "bogus"))
 
 
 class TestCoreAndCpuTiming(CustomTestCase):
     def test_disabled_dumper_records_nothing(self):
-        """With no components enabled, observe is a no-op and dump returns None."""
         dumper, clock = make_dumper(set())
         dumper.begin_step()
         dumper.observe_decode_step(make_obs(forward_ct=1))
         self.assertIsNone(dumper.dump())
 
     def test_non_root_rank_is_disabled(self):
-        """Only tp_rank 0 records, to avoid duplicated per-rank dumps."""
         clock = FakeClock()
         dumper = DsparkInfoDumper(
             components={"core"},
@@ -119,7 +113,6 @@ class TestCoreAndCpuTiming(CustomTestCase):
         self.assertIsNone(dumper.dump())
 
     def test_one_record_per_step_including_the_last(self):
-        """dump() flushes the pending step, so N observes yield N records."""
         dumper, clock = make_dumper({"core", "step_cpu_time"})
         for forward_ct in range(1, 4):
             dumper.observe_decode_step(make_obs(forward_ct=forward_ct))
@@ -128,7 +121,6 @@ class TestCoreAndCpuTiming(CustomTestCase):
         self.assertEqual([r["forward_ct"] for r in records], [1, 2, 3])
 
     def test_step_cpu_ms_is_attributed_to_the_step_it_measures(self):
-        """The gap before observe(S) is step S's cpu period, not step S-1's."""
         dumper, clock = make_dumper({"core", "step_cpu_time"})
         dumper.observe_decode_step(make_obs(forward_ct=1))
         clock.advance(0.02)
@@ -140,7 +132,6 @@ class TestCoreAndCpuTiming(CustomTestCase):
         self.assertAlmostEqual(second["step_cpu_ms"], 20.0, places=3)
 
     def test_core_fields_present(self):
-        """The core component carries bs / mode / budget / verify-token counts."""
         dumper, _ = make_dumper({"core"})
         dumper.observe_decode_step(make_obs(forward_ct=7, bs=3, num_verify_tokens=18))
         record = dumper.dump()["records"][0]
@@ -150,7 +141,6 @@ class TestCoreAndCpuTiming(CustomTestCase):
         self.assertEqual(record["mode"], "static")
 
     def test_core_only_omits_timing_fields(self):
-        """Selecting only core drops step_cpu_ms from the record."""
         dumper, clock = make_dumper({"core"})
         dumper.observe_decode_step(make_obs(forward_ct=1))
         clock.advance(0.01)
@@ -159,7 +149,6 @@ class TestCoreAndCpuTiming(CustomTestCase):
             self.assertNotIn("step_cpu_ms", record)
 
     def test_non_decode_step_resets_cpu_pairing(self):
-        """A prefill/idle step drains pending and breaks the cpu-time gap."""
         dumper, clock = make_dumper({"core", "step_cpu_time"})
         dumper.observe_decode_step(make_obs(forward_ct=1))
         clock.advance(0.02)
@@ -172,7 +161,6 @@ class TestCoreAndCpuTiming(CustomTestCase):
             self.assertNotIn("step_cpu_ms", record)
 
     def test_oversized_gap_nulls_cpu_ms_but_keeps_record(self):
-        """A stall above the threshold nulls step_cpu_ms without dropping the step."""
         dumper, clock = make_dumper({"core", "step_cpu_time"}, max_step_cpu_seconds=0.5)
         dumper.observe_decode_step(make_obs(forward_ct=1))
         clock.advance(0.6)
@@ -183,7 +171,6 @@ class TestCoreAndCpuTiming(CustomTestCase):
         self.assertNotIn("step_cpu_ms", second)
 
     def test_ring_buffer_evicts_oldest(self):
-        """max_records bounds the deque, evicting the oldest records."""
         dumper, clock = make_dumper({"core"}, max_records=3)
         for forward_ct in range(1, 8):
             dumper.observe_decode_step(make_obs(forward_ct=forward_ct))
@@ -192,7 +179,6 @@ class TestCoreAndCpuTiming(CustomTestCase):
         self.assertEqual([r["forward_ct"] for r in records], [5, 6, 7])
 
     def test_dump_is_repeatable(self):
-        """A second dump returns the same records without re-draining."""
         dumper, clock = make_dumper({"core"})
         dumper.observe_decode_step(make_obs(forward_ct=1))
         clock.advance(0.01)
@@ -200,7 +186,6 @@ class TestCoreAndCpuTiming(CustomTestCase):
         self.assertEqual(dumper.dump(), dumper.dump())
 
     def test_clear_drops_all_records_and_pending(self):
-        """clear() empties the ring so a later load is analyzed in isolation."""
         dumper, clock = make_dumper({"core"})
         dumper.observe_decode_step(make_obs(forward_ct=1))
         clock.advance(0.01)
@@ -215,7 +200,6 @@ class TestCoreAndCpuTiming(CustomTestCase):
 
 class TestPredictedStepFields(CustomTestCase):
     def test_predicted_fields_recorded_under_core(self):
-        """The scheduler's predicted step time / objective land in the record."""
         dumper, clock = make_dumper({"core"})
         dumper.observe_decode_step(
             make_obs(forward_ct=1, predicted_step_ms=1.5, predicted_theta=200.0)
@@ -227,7 +211,6 @@ class TestPredictedStepFields(CustomTestCase):
         self.assertAlmostEqual(record["predicted_theta"], 200.0)
 
     def test_predicted_fields_omitted_when_none(self):
-        """Steps without a fresh theta decision carry no prediction field."""
         dumper, clock = make_dumper({"core"})
         dumper.observe_decode_step(make_obs(forward_ct=1))
         clock.advance(0.01)
@@ -256,18 +239,15 @@ def _pending(*, bs, budget, num_verify_tokens, predicted_step_ms):
 
 class TestOnlineSpsReporter(CustomTestCase):
     def test_report_interval_enables_dumper_and_gpu_timing(self):
-        """The reporter env var alone enables the dumper plus step GPU timing."""
         dumper, _ = make_dumper(set(), sps_report_interval=2)
         self.assertTrue(dumper.enabled)
         self.assertIn(InfoComponent.STEP_GPU_TIME, dumper._components)
 
     def test_report_interval_zero_leaves_dumper_disabled(self):
-        """No components and no reporter means the dumper stays off."""
         dumper, _ = make_dumper(set(), sps_report_interval=0)
         self.assertFalse(dumper.enabled)
 
     def test_reporter_logs_summary_every_interval_matched_steps(self):
-        """A summary is logged once N matched (bs+budget==tokens) steps accrue."""
         dumper, _ = make_dumper(set(), sps_report_interval=2)
         matched = dict(bs=4, budget=20, num_verify_tokens=24)
         with self.assertLogs(logger, level="INFO") as cm:
@@ -281,7 +261,6 @@ class TestOnlineSpsReporter(CustomTestCase):
         self.assertEqual(dumper._sps_window, [])
 
     def test_reporter_counts_mismatch_and_excludes_it_from_means(self):
-        """A step whose executed tokens differ from bs+budget is a mismatch only."""
         dumper, _ = make_dumper(set(), sps_report_interval=1)
         with self.assertLogs(logger, level="INFO") as cm:
             dumper._report_sps_prediction(
@@ -299,7 +278,6 @@ class TestOnlineSpsReporter(CustomTestCase):
         self.assertTrue(any("M_mismatch_rate=50.0%" in m for m in cm.output))
 
     def test_reporter_skips_steps_missing_prediction_or_actual(self):
-        """Steps lacking predicted_step_ms or step_gpu_ms never enter the window."""
         dumper, _ = make_dumper(set(), sps_report_interval=2)
         dumper._report_sps_prediction(
             pending=_pending(
@@ -353,7 +331,6 @@ class TestReqsAndGpuTiming(CustomTestCase):
         )
 
     def test_reqs_component_stages_per_request_detail(self):
-        """The reqs component drains per-request tensors into the record."""
         dumper = self._make({"core", "reqs"})
         dumper.observe_decode_step(self._cuda_obs(forward_ct=1, bs=3))
         dumper.observe_decode_step(self._cuda_obs(forward_ct=2, bs=3))
@@ -367,7 +344,6 @@ class TestReqsAndGpuTiming(CustomTestCase):
         self.assertEqual(len(req["survival"]), 5)
 
     def test_gpu_timing_populates_segment_fields(self):
-        """Whole-step / draft / target-verify GPU ms are read at drain."""
         dumper = self._make(
             {"step_gpu_time", "draft_gpu_time", "target_verify_gpu_time"}
         )

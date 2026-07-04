@@ -40,7 +40,6 @@ def _make_recorder(tmp_dir: str) -> tuple[BlockAcceptEstimateRecorder, Path]:
 
 
 class _FakeDelayed:
-    """Lag-by-one stand-in for DelayedDeviceHostHandler: settle the prior step's bundle."""
 
     def __init__(self):
         self._pending = None
@@ -95,7 +94,6 @@ def _read_records(path: Path) -> list[dict]:
 
 class TestBlockAcceptEstimateRecorder(CustomTestCase):
     def test_exact_block_when_rejected_inside_window(self):
-        """A block rejected inside the verify window emits an exact record without q/pg."""
         with tempfile.TemporaryDirectory() as tmp:
             recorder, path = _make_recorder(tmp)
             corrected = torch.randn(_GAMMA, _VOCAB)
@@ -122,7 +120,6 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
             self.assertNotIn("pg", records[0])
 
     def test_censored_block_gathers_q_and_same_step_bonus_row_p(self):
-        """A cap-hit block records trimmed q values and resolves its first trimmed offset against the bonus row."""
         with tempfile.TemporaryDirectory() as tmp:
             recorder, path = _make_recorder(tmp)
             corrected = torch.randn(_GAMMA, _VOCAB)
@@ -169,7 +166,6 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
             )
 
     def test_pending_block_resolves_in_later_step(self):
-        """A trimmed offset beyond this step's commits resolves against a later step's committed row."""
         with tempfile.TemporaryDirectory() as tmp:
             recorder, path = _make_recorder(tmp)
             corrected1 = torch.randn(_GAMMA, _VOCAB)
@@ -217,7 +213,6 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
             self.assertEqual(recorder._states["r0"].pending, [])
 
     def test_divergence_drops_block_after_final_gather(self):
-        """After a trimmed token mismatches the realized token, the block stops producing gathers."""
         with tempfile.TemporaryDirectory() as tmp:
             recorder, path = _make_recorder(tmp)
             corrected1 = torch.randn(_GAMMA, _VOCAB)
@@ -243,7 +238,6 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
             self.assertEqual(recorder._states["r0"].pending, [])
 
     def test_temperature_scales_logprobs(self):
-        """Recorded logprobs use softmax(logits/T) with the per-request temperature."""
         with tempfile.TemporaryDirectory() as tmp:
             recorder, path = _make_recorder(tmp)
             corrected = torch.randn(_GAMMA, _VOCAB)
@@ -276,7 +270,6 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
             )
 
     def test_greedy_row_is_skipped_but_seq_len_bookkeeping_advances(self):
-        """A greedy request emits no record while its expected-seq-len bookkeeping still advances."""
         with tempfile.TemporaryDirectory() as tmp:
             recorder, path = _make_recorder(tmp)
             corrected = torch.randn(_GAMMA, _VOCAB)
@@ -304,7 +297,6 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
             self.assertEqual(recorder._states["r0"].expected_seq_len, 13)
 
     def test_seq_len_discontinuity_drops_pending_blocks(self):
-        """A seq-len jump (retraction signature) drops pending blocks instead of gathering at wrong rows."""
         with tempfile.TemporaryDirectory() as tmp:
             recorder, path = _make_recorder(tmp)
             corrected1 = torch.randn(_GAMMA, _VOCAB)
@@ -345,7 +337,6 @@ class TestBlockAcceptEstimateRecorder(CustomTestCase):
             self.assertEqual(recorder._discontinuity_drop_ct, 1)
 
     def test_truncated_sampling_row_is_excluded_while_clean_row_records(self):
-        """A mixed batch records the pure-temperature row and excludes only the truncated-sampling row."""
         with tempfile.TemporaryDirectory() as tmp:
             recorder, path = _make_recorder(tmp)
             corrected = torch.randn(2, _GAMMA, _VOCAB)
@@ -420,7 +411,6 @@ def _offline_estimate(path: Path, gamma: int) -> tuple[float, float, int]:
 
 class TestOnlineCeilingEstimate(CustomTestCase):
     def test_online_estimate_matches_offline_aggregation(self):
-        """The online rolling ceiling estimate equals the offline analyzer over the same blocks."""
         bs, steps = 4, 14
         gen = torch.Generator().manual_seed(11)
         seq = [50 + 3 * b for b in range(bs)]
@@ -482,7 +472,6 @@ class TestOnlineCeilingEstimate(CustomTestCase):
             self.assertLessEqual(snap.window_blocks, snap.cumulative_blocks)
 
     def test_online_window_evicts_forward_passes_outside_horizon(self):
-        """The rolling window only keeps blocks finalized within the last window_steps forward passes."""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "est.jsonl"
             recorder = BlockAcceptEstimateRecorder(
@@ -516,14 +505,12 @@ class TestOnlineCeilingEstimate(CustomTestCase):
             self.assertEqual(snap.cumulative_blocks, 10)
 
     def test_online_estimate_none_without_observations(self):
-        """With no observed blocks yet, online_estimate and the log suffix are both None."""
         with tempfile.TemporaryDirectory() as tmp:
             recorder, _ = _make_recorder(tmp)
             self.assertIsNone(recorder.online_estimate())
             self.assertIsNone(recorder.estimate_log_suffix())
 
     def test_estimate_log_suffix_reports_cumulative(self):
-        """After observations the log suffix reports the cumulative mid estimate and bracket."""
         with tempfile.TemporaryDirectory() as tmp:
             recorder, _ = _make_recorder(tmp)
             target = torch.randn((_GAMMA + 1), _VOCAB)
@@ -550,7 +537,6 @@ class TestOnlineCeilingEstimate(CustomTestCase):
 
 class TestOfflineRecorderMatchesOnline(CustomTestCase):
     def test_offline_dump_matches_online_dump_over_random_stream(self):
-        """The synchronous offline recorder writes byte-identical JSONL to the async online recorder."""
         bs, steps = 4, 16
         gen = torch.Generator().manual_seed(23)
         with tempfile.TemporaryDirectory() as tmp:
@@ -648,19 +634,16 @@ class TestNaturalStopEosTail(CustomTestCase):
             return recorder.online_estimate()
 
     def test_natural_eos_caps_tail_to_zero(self):
-        """A request ending via a natural token stop finalizes its kept block with tail=0."""
         snap = self._finalize_kept_block(natural_stop=True)
         self.assertEqual(snap.cumulative_blocks, 1)
         self.assertAlmostEqual(snap.cumulative_lo, snap.cumulative_hi, places=6)
 
     def test_external_finish_keeps_optimistic_tail(self):
-        """A request cut off externally keeps the optimistic upper-bound tail (hi > lo)."""
         snap = self._finalize_kept_block(natural_stop=False)
         self.assertEqual(snap.cumulative_blocks, 1)
         self.assertGreater(snap.cumulative_hi, snap.cumulative_lo)
 
     def test_offline_and_online_emit_same_eos_marker(self):
-        """Both recorders emit an identical eos_end marker for the terminated block."""
         with tempfile.TemporaryDirectory() as tmp:
             online_path = Path(tmp) / "online.jsonl"
             offline_path = Path(tmp) / "offline.jsonl"
@@ -697,7 +680,6 @@ class TestNaturalStopEosTail(CustomTestCase):
 
 class TestAsyncFinishIntent(CustomTestCase):
     def test_intent_buffered_then_applied_at_next_drain(self):
-        """On the async path the finish intent applies after the finishing step's bundle drains."""
         with tempfile.TemporaryDirectory() as tmp:
             recorder, _ = _make_recorder(tmp)
             recorder._delayed = _FakeDelayed()
@@ -739,7 +721,6 @@ class TestAsyncFinishIntent(CustomTestCase):
 
 class TestOfflineAnalyzerEos(CustomTestCase):
     def test_eos_terminated_block_has_zero_tail(self):
-        """The analyzer zeroes the tail of an eos-terminated at-end block."""
         from sglang.srt.speculative.dspark_components.dspark_block_accept_estimator_offline_analyzer import (
             evaluate_block,
             load_records,
@@ -772,7 +753,6 @@ class TestOfflineAnalyzerEos(CustomTestCase):
             self.assertAlmostEqual(est.lo, est.hi, places=6)
 
     def test_per_request_estimates_group_by_rid(self):
-        """Per-request means aggregate a request's blocks, including exact-in-window ones."""
         from sglang.srt.speculative.dspark_components.dspark_block_accept_estimator_offline_analyzer import (
             evaluate_block,
             load_records,

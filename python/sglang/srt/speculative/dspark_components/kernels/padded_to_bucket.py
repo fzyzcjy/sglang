@@ -56,13 +56,6 @@ def pad_verify_lens_to_bucket(
     bs: int,
     padded_bs: int,
 ) -> torch.Tensor:
-    # Grow the [bs] real verify_lens to the captured [padded_bs] rows so they
-    # sum to exactly graph_num_tokens. The slack (tier tokens minus real
-    # tokens) spreads as evenly as possible over the pad rows; with no pad row
-    # it rides on the last real row. A row absorbing slack may exceed gamma+1
-    # (and a pad row may be 0): compact packing keeps every real token at the
-    # FRONT of its row, so right-aligned causal attention still computes real
-    # tokens exactly, and the pad-token outputs are never read.
     assert padded_bs >= bs, (
         f"padded_bs {padded_bs} < bs {bs}: the captured tier cannot hold this "
         "batch's requests"
@@ -99,7 +92,6 @@ def _padded_to_bucket_kernel(
     vl = tl.load(verify_lens_ptr + idx, mask=is_real, other=0).to(tl.int64)
     leftover = graph_num_tokens - tl.sum(vl)
     num_pad = padded_bs - bs
-    # Guard the divisor; base/rem are only read on pad rows (num_pad > 0).
     num_pad_safe = tl.maximum(num_pad, 1)
     base = leftover // num_pad_safe
     rem = leftover - base * num_pad_safe

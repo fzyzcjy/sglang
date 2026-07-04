@@ -3787,10 +3787,6 @@ class Scheduler(
                 if_success = False
                 break
             elif k == "dspark_force_budget_frac":
-                # Runtime verify-budget pin (off-diagonal T(bs, K) profiling).
-                # Control reqs are broadcast to every TP rank at the same recv
-                # boundary, so all ranks flip the pin on the same step and the
-                # budget-derived graph tier stays rank-consistent.
                 if not self.spec_algorithm.is_dspark() or not hasattr(
                     self.draft_worker, "set_dspark_forced_budget_frac"
                 ):
@@ -3806,8 +3802,6 @@ class Scheduler(
                     if_success = False
                     break
             elif k == "dspark_clear_info_records":
-                # Drop the zero-overhead observability ring so a following load
-                # is analyzed in isolation (no warmup / prior-traffic records).
                 if not self.spec_algorithm.is_dspark() or not hasattr(
                     self.draft_worker, "clear_info_records"
                 ):

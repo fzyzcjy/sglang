@@ -382,9 +382,6 @@ class DSparkDraftMixin:
     def compute_base_logits(
         self, hidden: torch.Tensor
     ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
-        # Returns (base_logits, confidence_tap). The dense draft has no hc
-        # tap (its confidence consumes the post-norm draft_hidden directly),
-        # so the tap slot is None; dsv4 returns its post-hc_head PRE-norm tap.
         if self.lm_head is None:
             raise ValueError(
                 "DSpark dense draft requires the target lm_head "

@@ -14,14 +14,12 @@ pytestmark = pytest.mark.skipif(
 @pytest.mark.parametrize(
     "bs,padded_bs,graph_num_tokens",
     [
-        # uniform tiers (padded_bs == tier / num_draft)
         (1, 1, 6),
         (2, 2, 12),
         (2, 4, 24),
         (3, 16, 96),
         (8, 128, 768),
         (1, 64, 384),
-        # decoupled slots: budget tier below padded_bs * num_draft
         (3, 3, 16),
         (3, 6, 16),
         (2, 8, 16),
@@ -34,7 +32,6 @@ def test_triton_matches_torch_eager_and_padded_buckets(bs, padded_bs, graph_num_
     verify_lens = torch.randint(
         1, num_draft + 1, (bs,), dtype=torch.int32, device=device
     )
-    # Keep the tier a valid upper bound of the real total.
     total = int(verify_lens.sum())
     if total > graph_num_tokens:
         verify_lens = torch.ones(bs, dtype=torch.int32, device=device)
@@ -54,5 +51,4 @@ def test_triton_matches_torch_eager_and_padded_buckets(bs, padded_bs, graph_num_
     assert torch.equal(got, ref)
     assert int(got.to(torch.int64).sum()) == graph_num_tokens
     if padded_bs > bs:
-        # Pad rows soak up all the slack; real rows come through untouched.
         assert torch.equal(got[:bs], verify_lens.to(torch.int32))

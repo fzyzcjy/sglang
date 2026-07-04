@@ -436,7 +436,6 @@ class EagleDraftWorker(EagleDraftWorkerBase):
             )
 
             graph_supported_backend_types.append(DeepseekSparseAttnBackend)
-            # DSV4 is CUDA-only as well; keep the import lazy for the same reason.
             from sglang.srt.layers.attention.deepseek_v4_backend import (
                 DeepseekV4AttnBackend,
             )

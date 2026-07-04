@@ -156,19 +156,16 @@ class TestOnlineSpsProfilerUninitializedColdStart(CustomTestCase):
 
 class TestOnlineSpsTableMonotonic(CustomTestCase):
     def test_pava_projects_sawtooth_onto_non_increasing_sequence(self):
-        """A noisy sawtooth series becomes non-increasing with its total mass preserved."""
         values = [100.0, 80.0, 90.0, 40.0, 60.0]
         smoothed = _pava_non_increasing(values)
         self.assertEqual(smoothed, sorted(smoothed, reverse=True))
         self.assertAlmostEqual(sum(smoothed), sum(values))
 
     def test_pava_keeps_already_non_increasing_series_unchanged(self):
-        """An already non-increasing series passes through PAVA untouched."""
         values = [100.0, 90.0, 90.0, 10.0]
         self.assertEqual(_pava_non_increasing(values), values)
 
     def test_rebuilt_table_is_non_increasing_when_bins_measure_a_sawtooth(self):
-        """Online-rebuilt tables stay monotone even if a larger-B bin measures faster steps."""
         profiler, clock = _make_online_profiler(
             rebuild_interval_steps=10, min_bin_samples=3
         )
@@ -184,7 +181,6 @@ class TestOnlineSpsTableMonotonic(CustomTestCase):
         self.assertEqual(sps, sorted(sps, reverse=True))
 
     def test_rebuilt_table_has_no_zero_slope_plateau(self):
-        """Online-rebuilt tables are strictly decreasing so the budget argmax never sees a free plateau."""
         profiler, clock = _make_online_profiler(
             rebuild_interval_steps=10, min_bin_samples=3
         )

@@ -13,7 +13,6 @@ register_cpu_ci(est_time=5, suite="base-a-test-cpu")
 
 class TestLocalVerifyTierNumTokens(CustomTestCase):
     def test_no_budget_returns_sentinel(self):
-        """A rank without a resolved budget contributes the -1 pin sentinel."""
         self.assertEqual(
             local_verify_tier_num_tokens(
                 bs=8,
@@ -25,7 +24,6 @@ class TestLocalVerifyTierNumTokens(CustomTestCase):
         )
 
     def test_budget_adds_to_anchor_floor(self):
-        """With min_verify_len=1 the demand is bs + budget."""
         self.assertEqual(
             local_verify_tier_num_tokens(
                 bs=8,
@@ -37,7 +35,6 @@ class TestLocalVerifyTierNumTokens(CustomTestCase):
         )
 
     def test_clamps_to_verify_all(self):
-        """A huge budget never demands more than the full verify window."""
         self.assertEqual(
             local_verify_tier_num_tokens(
                 bs=8,
@@ -49,7 +46,6 @@ class TestLocalVerifyTierNumTokens(CustomTestCase):
         )
 
     def test_min_verify_len_raises_floor(self):
-        """The floor term is bs * min_verify_len, not bs."""
         self.assertEqual(
             local_verify_tier_num_tokens(
                 bs=8,
@@ -61,7 +57,6 @@ class TestLocalVerifyTierNumTokens(CustomTestCase):
         )
 
     def test_min_verify_len_zero_behaves_as_one(self):
-        """min_verify_len=0 uses the same effective floor of 1 as the kernel."""
         self.assertEqual(
             local_verify_tier_num_tokens(
                 bs=8,
@@ -75,23 +70,19 @@ class TestLocalVerifyTierNumTokens(CustomTestCase):
 
 class TestDpGlobalVerifyTierNumTokens(CustomTestCase):
     def test_none_list_pins(self):
-        """No gathered list (gather disabled) keeps the pinned tier."""
         self.assertIsNone(dp_global_verify_tier_num_tokens(global_tier_num_tokens=None))
 
     def test_any_sentinel_pins_everyone(self):
-        """A single -1 contribution pins the whole group for the step."""
         self.assertIsNone(
             dp_global_verify_tier_num_tokens(global_tier_num_tokens=[100, -1, 50, 0])
         )
 
     def test_all_idle_pins(self):
-        """An all-zero step (no busy verify anywhere) yields no tier."""
         self.assertIsNone(
             dp_global_verify_tier_num_tokens(global_tier_num_tokens=[0, 0, 0, 0])
         )
 
     def test_max_over_busy_ranks(self):
-        """The agreed tier is the max demand across ranks, idles neutral."""
         self.assertEqual(
             dp_global_verify_tier_num_tokens(global_tier_num_tokens=[0, 120, 48, 0]),
             120,
@@ -100,7 +91,6 @@ class TestDpGlobalVerifyTierNumTokens(CustomTestCase):
 
 class TestBusyIdleGraphKeyIdentity(CustomTestCase):
     def test_busy_and_idle_floors_agree_on_random_topologies(self):
-        """Busy floor arithmetic and idle bucket input both land exactly on F."""
         rng = random.Random(20260703)
         for _ in range(2000):
             verify_num_draft_tokens = rng.randint(2, 8)

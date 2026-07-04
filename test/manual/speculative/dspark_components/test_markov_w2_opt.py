@@ -10,7 +10,6 @@ from sglang.srt.layers.vocab_parallel_embedding import (
 
 
 def _lm_head_partition(vocab: int, tp_size: int) -> tuple[int, int]:
-    """Padded per-partition width + padded vocab, mirroring VocabParallelEmbedding."""
     padding_size = DEFAULT_VOCAB_PADDING_SIZE
     if pad_vocab_size(vocab, padding_size) % tp_size != 0:
         padding_size *= tp_size
@@ -21,7 +20,6 @@ def _lm_head_partition(vocab: int, tp_size: int) -> tuple[int, int]:
 @pytest.mark.parametrize("bs", [1, 4])
 @pytest.mark.parametrize("vocab", [5003, 4096])
 def test_bf16_project_bias_stays_close_to_fp32_and_is_fp32(bs: int, vocab: int) -> None:
-    """bf16 markov_w2 read (bf16xbf16 matmul then fp32 upcast) stays close to the fp32-weight matmul and returns fp32."""
     torch.manual_seed(0)
     rank = 512
     latent = torch.randn(bs, rank, dtype=torch.bfloat16)
@@ -38,7 +36,6 @@ def test_bf16_project_bias_stays_close_to_fp32_and_is_fp32(bs: int, vocab: int) 
 @pytest.mark.parametrize("tp_size", [1, 2, 4])
 @pytest.mark.parametrize("vocab", [5003, 4096])
 def test_sharded_corrected_logits_equal_full_vocab(tp_size: int, vocab: int) -> None:
-    """Per-rank markov bias + sharded base, attn-TP gathered and cropped, equals the full-vocab corrected logits."""
     torch.manual_seed(0)
     bs, rank = 3, 128
     per_partition, num_padded = _lm_head_partition(vocab, tp_size)
@@ -74,7 +71,6 @@ def test_sharded_corrected_logits_equal_full_vocab(tp_size: int, vocab: int) -> 
 
 @pytest.mark.parametrize("tp_size", [2, 4])
 def test_sharded_argmax_matches_full_vocab_argmax(tp_size: int) -> None:
-    """The sampled (argmax) token from the sharded+gathered corrected logits equals the full-vocab argmax."""
     torch.manual_seed(1)
     bs, rank, vocab = 5, 64, 4096
     per_partition, num_padded = _lm_head_partition(vocab, tp_size)

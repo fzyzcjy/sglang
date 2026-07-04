@@ -159,8 +159,6 @@ class DsparkInfoDumper:
         }
         self._sps_report_interval = int(sps_report_interval)
         if self._sps_report_interval > 0:
-            # The online SPS-prediction reporter needs step GPU timing; enable it
-            # on its own so the reporter works without SGLANG_DSPARK_DEBUG_DUMP.
             self._components.add(InfoComponent.STEP_GPU_TIME)
         self.enabled = bool(self._components) and self.tp_rank == 0
         self._sps_window: list[tuple[float, float]] = []

@@ -455,10 +455,6 @@ class TRTLLMHAAttnBackend(FlashInferAttnBackend):
             metadata.is_ragged_verify = (
                 getattr(spec_info, "ragged_verify_layout", None) is not None
             )
-            # Ragged verify captures decoupled (slots, tokens): num_tokens //
-            # bs is the layout's mean row length, not the per-request bound the
-            # kernel must budget for -- a replayed real row can hold up to the
-            # full verify window.
             metadata.max_seq_len_q = (
                 self.speculative_num_draft_tokens
                 if metadata.is_ragged_verify

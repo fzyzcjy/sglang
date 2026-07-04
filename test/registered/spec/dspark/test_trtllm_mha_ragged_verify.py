@@ -95,8 +95,6 @@ class TestPaddedRaggedVerifyGeometry(CustomTestCase):
         self.assertEqual(raw.graph_num_tokens, 32)
         padded = raw.padded_to_bucket(padded_bs=4)
         self.assertEqual(padded.bs, 4)
-        # padded layouts carry device verify_lens only (verify_lens_cpu stays
-        # None -- the pad happens on-device, sync-free).
         self.assertEqual(padded.verify_lens.tolist(), [8, 1, 3, 20])
         self.assertEqual(padded.qo_indptr_device.tolist(), [0, 8, 9, 12, 32])
         seq_lens = torch.tensor([10, 20, 30, 1], dtype=torch.int32)
@@ -117,8 +115,6 @@ class TestPaddedRaggedVerifyGeometry(CustomTestCase):
         self.assertEqual(padded.qo_indptr_device.numel(), padded.bs + 1)
 
     def test_padded_layout_decoupled_slots_spread_slack(self):
-        # Capture slots decoupled from the token tier: 6 slots on a 32-token
-        # tier spread the 20-token slack evenly over the 3 pad rows.
         raw = RaggedVerifyLayout.from_verify_lens(
             verify_lens_cpu=[8, 1, 3],
             device=_DEVICE,
@@ -131,9 +127,6 @@ class TestPaddedRaggedVerifyGeometry(CustomTestCase):
         self.assertEqual(int(padded.qo_indptr_device[-1]), 32)
 
     def test_padded_layout_budget_tier_below_uniform(self):
-        # Budget-sized tier round_up(bs + budget) sits BELOW bs*(gamma+1):
-        # 3 reqs on a 16-token tier, no pad slot -> slack rides on the last
-        # real row (its real tokens stay front-aligned, pads are discarded).
         raw = RaggedVerifyLayout.from_verify_lens(
             verify_lens_cpu=[8, 1, 3],
             device=_DEVICE,
@@ -145,8 +138,6 @@ class TestPaddedRaggedVerifyGeometry(CustomTestCase):
         self.assertEqual(int(padded.qo_indptr_device[-1]), 16)
 
     def test_padded_layout_zero_len_pad_rows(self):
-        # More pad slots than slack tokens -> trailing pad rows are 0-length
-        # (empty varlen segments), and the row sum still fills the tier.
         raw = RaggedVerifyLayout.from_verify_lens(
             verify_lens_cpu=[8, 8],
             device=_DEVICE,
@@ -266,7 +257,6 @@ class TestBudgetTierSelection(CustomTestCase):
         )
 
         model_runner = _fake_model_runner([8, 16, 1024], max_bs=128)
-        # More requests than captured slots -> rejected even with a tiny tier.
         self.assertTrue(
             ragged_layout_exceeds_captured_grid(
                 num_reqs=129,
@@ -275,7 +265,6 @@ class TestBudgetTierSelection(CustomTestCase):
                 tier_tokens_hint=200,
             )
         )
-        # Budget tier within the grid readmits a bs whose pinned tier bursts it.
         self.assertFalse(
             ragged_layout_exceeds_captured_grid(
                 num_reqs=128,
@@ -284,7 +273,6 @@ class TestBudgetTierSelection(CustomTestCase):
                 tier_tokens_hint=512,
             )
         )
-        # Pinned hint (None) keeps the legacy num_reqs * (gamma+1) gate.
         self.assertFalse(
             ragged_layout_exceeds_captured_grid(
                 num_reqs=128,

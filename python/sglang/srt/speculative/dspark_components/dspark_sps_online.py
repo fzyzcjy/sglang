@@ -78,8 +78,6 @@ class OnlineSpsProfiler:
         return floor_probe_index(self._bin_edges, batch_tokens)
 
     def _rebuild(self) -> Optional[SpsCostTable]:
-        # Bin edges are already sorted and unique, so profile_sps_table's
-        # sort/dedup/validation would be pure per-rebuild overhead.
         measured: list[Optional[float]] = [
             (
                 1.0 / statistics.median(samples)
@@ -121,8 +119,6 @@ class OnlineSpsProfiler:
 
 
 def _pava_non_increasing(values: list[float]) -> list[float]:
-    # SPS(B) is physically non-increasing in B; isotonic projection removes
-    # measurement sawtooth that would otherwise make the budget argmax jump.
     blocks: list[tuple[float, int]] = []
     for value in values:
         blocks.append((value, 1))
@@ -142,9 +138,6 @@ _STRICT_DECREASE_RELATIVE_STEP = 1e-3
 
 
 def _enforce_strictly_decreasing(values: list[float]) -> list[float]:
-    # A zero-slope plateau makes the budget argmax see no cost for admitting
-    # more tokens (unbounded admission); a tiny strict tilt restores the
-    # "more tokens is never free" prior without distorting real slopes.
     out: list[float] = []
     for value in values:
         if out:

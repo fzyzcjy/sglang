@@ -43,8 +43,6 @@ class TargetVerifyExecutor:
         self.verify_num_draft_tokens = verify_num_draft_tokens
         self.model_runner = model_runner
         self.kv_injector = kv_injector
-        # DsparkVerifyEpilogue when the compact scatter folds into the
-        # token-keyed graph; None -> eager scatter.
         self.verify_epilogue = verify_epilogue
         self._verify_backend_self_adds_seq_lens_cache: Optional[bool] = None
 
@@ -159,9 +157,6 @@ class TargetVerifyExecutor:
         seq_lens_cpu_backup = batch.seq_lens_cpu
         seq_lens_sum_backup = batch.seq_lens_sum
         if seq_lens_cpu_backup is not None:
-            # The graph fast path builds the layout device-side
-            # (verify_lens_cpu is None); pay a one-off D2H only when a CPU
-            # mirror is actually being maintained (e.g. overlap disabled).
             verify_lens_cpu = (
                 layout.verify_lens_cpu
                 if layout.verify_lens_cpu is not None
@@ -215,9 +210,6 @@ class TargetVerifyExecutor:
             model_runner=self.model_runner,
         )
         if self.verify_epilogue is not None:
-            # Sole pre-replay feed of the epilogue's static inputs (harmless
-            # on an eager-fallback step); armed gates the captured commit
-            # write, disarmed replays collapse it to a no-op.
             self.verify_epilogue.begin_step(layout.verify_lens, armed=inject_gate)
         target_verify = self._run_ragged(
             batch=batch,
@@ -229,9 +221,6 @@ class TargetVerifyExecutor:
 
         stride = self.verify_num_draft_tokens
         if self.verify_epilogue is not None and target_verify.can_run_cuda_graph:
-            # The graph already scattered into the epilogue's static buffers
-            # (padded rows zero-filled, sliced off here); only the sampling-info
-            # adjustments stay eager, in place on the static buffer.
             strided_logits = self.verify_epilogue.strided_logits
             hidden_strided = self.verify_epilogue.strided_hidden
             assert strided_logits is not None and hidden_strided is not None, (

@@ -11,9 +11,6 @@ from sglang.srt.environ import envs
 logger = logging.getLogger(__name__)
 
 
-# DEPRECATED: superseded by dspark_info_dumper.DsparkInfoDumper (the `reqs`
-# component), which stages the same per-request detail zero-blocking via a d2h
-# side stream instead of the inline blocking copies + per-step logging here.
 class DsparkDecisionDumper:
 
     def __init__(

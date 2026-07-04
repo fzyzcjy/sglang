@@ -177,13 +177,6 @@ def make_draft_block_spec_info(
 
 
 def make_draft_sampler_capture_hook(draft_sampler):
-    """Capture-tail hook wrapping a draft sampler (DFlash / DSpark greedy
-    proposal): runs inside the DRAFT decode graph capture. Fails loudly when
-    the forward exposes no hidden_states -- a silently skipped sampler would
-    leave a stale out buffer the worker reads as valid tokens. input_ids
-    carries the per-block anchor (bonus token at pos 0) the DSpark Markov
-    sampler needs; DFlash ignores it.
-    """
 
     def capture_hook(runner, out, forward_batch, num_tokens):
         del runner, num_tokens

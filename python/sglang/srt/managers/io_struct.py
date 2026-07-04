@@ -1273,7 +1273,6 @@ class BatchTokenIDOutput(BaseBatchReq, kw_only=True):
     spec_num_cap_tokens: Optional[List[int]] = None
     # Acceptance histogram
     spec_correct_drafts_histogram: Optional[List[List[int]]] = None
-    # Per-step verify-window (cap length) histogram
     spec_cap_lens_histogram: Optional[List[List[int]]] = None
 
 
@@ -1352,7 +1351,6 @@ class BatchStrOutput(BaseBatchReq, kw_only=True):
     spec_num_cap_tokens: Optional[List[int]] = None
     # Acceptance histogram
     spec_correct_drafts_histogram: Optional[List[List[int]]] = None
-    # Per-step verify-window (cap length) histogram
     spec_cap_lens_histogram: Optional[List[List[int]]] = None
 
 

@@ -292,14 +292,6 @@ def _resolve_dspark_pool() -> DeepSeekV4TokenToKVPool:
 
 
 class MarkovW2ShardGeometry(msgspec.Struct, frozen=True):
-    """markov_w2 vocab-shard geometry, mirrored from the target lm_head partition.
-
-    ``tp_size`` / ``num_embeddings_per_partition`` / ``num_embeddings_padded`` copy the
-    lm_head ``ParallelLMHead`` so the per-rank base logits and the per-rank markov bias line
-    up column-for-column and one attn-TP all-gather reassembles the padded vocab exactly
-    (then cropped to the org vocab). ``org_vocab_start`` / ``org_vocab_end`` are this rank's
-    slice of the real (unpadded) vocab rows inside the full markov_w2 weight.
-    """
 
     tp_size: int
     org_vocab_start: int
@@ -309,22 +301,6 @@ class MarkovW2ShardGeometry(msgspec.Struct, frozen=True):
 
 
 class DSparkV4MarkovHead(nn.Module):
-    """V4 DSpark Markov head: full-logits bias = w2(w1(prev_token)).
-
-    Mirrors the reference ``DSparkMarkovHead`` (model.py:795): ``markov_w1`` is a full
-    (non-vocab-parallel) embedding, ``markov_w2`` a head producing the whole-vocab logits
-    bias. Exposes the same ``apply_step_logits``/``sample_block`` interface as the dense
-    ``VanillaMarkov`` so the shared serial-Markov loop can reuse it.
-
-    Two opt-in perf toggles (both default off, baseline is fp32 replicated):
-    ``SGLANG_DSPARK_OPT_MARKOV_W2_BF16`` stores + reads markov_w2 in bf16 (the fp32-stored
-    checkpoint value is a bf16 already, so fp32 storage only doubles the HBM read), doing a
-    bf16xbf16 matmul with the bias upcast back to fp32 on the logits side.
-    ``SGLANG_DSPARK_OPT_MARKOV_W2_TP_SHARD`` shards the markov_w2 GEMV over the vocab dim
-    across the attn-TP ranks aligned to the lm_head partition (``configure_tp_shard``): each
-    rank reads only its 1/tp rows, and ``apply_step_logits`` all-gathers the per-step
-    corrected logits over the attn-TP group. markov_w1 stays replicated either way.
-    """
 
     markov_head_type = "vanilla"
 
@@ -348,16 +324,6 @@ class DSparkV4MarkovHead(nn.Module):
         self._tp_shard: Optional[MarkovW2ShardGeometry] = None
 
     def configure_tp_shard(self, *, lm_head: nn.Module) -> None:
-        """Align the markov_w2 vocab shard to the target lm_head partition (shard flag on).
-
-        Reads the lm_head ``ParallelLMHead`` partition (tp size, per-partition width, this
-        rank's org-vocab slice) so the sharded ``apply_step_logits`` produces a per-rank
-        bias that matches the per-rank base logits ``compute_base_logits`` leaves sharded.
-        No-op when the flag is off. Asserts the vocab + partition line up (a mismatch --
-        e.g. DP attention without ``--enable-dp-lm-head``, where lm_head shards over the
-        global TP group but the attn-TP group is size-1 -- fails loudly rather than
-        silently corrupting the logits; the flag is off by default so the baseline is safe).
-        """
         if not self._opt_markov_w2_tp_shard:
             return
         if int(lm_head.org_vocab_size) != self.vocab_size:
@@ -426,17 +392,6 @@ class DSparkV4MarkovHead(nn.Module):
     def _apply_step_logits_sharded(
         self, *, base_local: torch.Tensor, token_ids: torch.Tensor
     ) -> torch.Tensor:
-        """Sharded step: local markov bias + local base logits, then attn-TP gather + crop.
-
-        ``base_local`` is this rank's ``[bs, num_embeddings_per_partition]`` slice of the
-        base logits (``compute_base_logits`` left it sharded). The markov_w1 lookup stays
-        replicated; only this rank's org-vocab rows of markov_w2 are read for the bias
-        (the 1/tp GEMV win). The bias is zero-padded up to the partition width so the
-        padding vocab columns get no bias (they are cropped after the gather), then the
-        per-step corrected logits are all-gathered over the attn-TP group and cropped to the
-        org vocab -- byte-identical to the replicated full-vocab matmul (modulo the bf16
-        toggle), just with the row-parallel matmul split across ranks.
-        """
         shard = self._tp_shard
         latent = self.get_prev_embeddings(token_ids)
         weight_local = self.markov_w2.weight[
@@ -703,12 +658,6 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
     def attach_shared_modules(
         self, *, embed_tokens: nn.Module, lm_head: nn.Module
     ) -> None:
-        """Attach the target model's shared embedding and lm_head (worker wiring).
-
-        Also aligns the markov_w2 vocab shard to the lm_head partition when the TP-shard
-        flag is on (no-op otherwise); the geometry read is safe here regardless of the
-        markov_w2 weight-load order (the weight itself is only sliced at forward time).
-        """
         self.embed_tokens = embed_tokens
         self.lm_head = lm_head
         self.markov_head.configure_tp_shard(lm_head=lm_head)
@@ -784,22 +733,6 @@ class DeepseekV4ForCausalLMDSpark(nn.Module):
         )
 
     def compute_base_logits(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Base logits + confidence tap from the draft backbone hidden.
-
-        Collapses the mHC draft hidden through the last stage's hc_head (PRE-norm), then
-        applies ``norm`` and the target's local-vocab lm_head matmul, all-gathers to the
-        full vocab (no-op at tp=1), and crops the TP vocab padding. This is the dsv4
-        analog of the dense ``DSparkDraftMixin.compute_base_logits`` (which has no hc_head
-        collapse); the matmul dtype is bf16 by default like the dense path, or the
-        reference-parity fp32 ``F.linear`` when ``SGLANG_DSPARK_FP32_LM_HEAD`` is set.
-        When ``SGLANG_DSPARK_OPT_MARKOV_W2_TP_SHARD`` is on, the base logits are returned
-        SHARDED (this rank's ``[*, per_partition]`` vocab slice, no gather); the markov head
-        adds its per-rank bias and does the attn-TP all-gather per step instead.
-        This is the SOLE base-logit producer: ``forward`` no longer computes them. Returns
-        ``(base_logits, confidence_tap)``: the post-hc_head PRE-norm tap feeds
-        ``compute_confidence`` explicitly (no cross-call stash -- a stashed attr would
-        alias the capture-time buffer of whichever bs tier captured last).
-        """
 
         x_post_hc = self.collapse_hc_head(x)
         return self._logits_from_x_post_hc(x_post_hc), x_post_hc

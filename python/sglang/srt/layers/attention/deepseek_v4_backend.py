@@ -587,10 +587,6 @@ class _GraphBucket(enum.Enum):
 class DeepseekV4AttnBackend(
     AttentionBackend, C4IndexerBackendMixin, CompressorBackendMixin
 ):
-    # Also the trait the WAR read-done placement keys on: this backend rebuilds
-    # its page tables inside the captured graph, so the verify replay keeps
-    # reading req_to_token and the read-done event must not be recorded
-    # pre-replay (decode_cuda_graph_runner.execute).
     use_captured_forward_metadata_for_breakable_cuda_graph: bool = True
     supports_ragged_verify_graph: bool = True
     needs_cpu_seq_lens: bool = False

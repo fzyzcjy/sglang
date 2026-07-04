@@ -24,9 +24,6 @@ from sglang.srt.speculative.dspark_components.kernels.scatter_compact_to_strided
 
 
 class CommitInjectCtx(msgspec.Struct):
-    """Forward-injected deps for the in-graph commit KV write (MLA pool
-    only). Pool-owned tensors resolve lazily at capture time -- memory pools
-    are allocated after worker __init__, before the graphs capture."""
 
     draft_model: object
     block_pos_offsets: torch.Tensor
@@ -35,8 +32,6 @@ class CommitInjectCtx(msgspec.Struct):
 
 
 class AcceptOuts(msgspec.Struct):
-    # Folded-path accept results: [bs] slices of the epilogue's static buffers,
-    # valid until the next verify replay overwrites them (stream-ordered).
     correct_len: torch.Tensor
     bonus: torch.Tensor
     cap_trim_lens: torch.Tensor
@@ -46,38 +41,6 @@ class AcceptOuts(msgspec.Struct):
 
 
 class DsparkVerifyEpilogue:
-    """Post-verify chain captured inside the token-keyed verify graph, right
-    after the target forward:
-
-    1. compact ``[graph_num_tokens, dim]`` logits / hidden scattered to the
-       ``[bs*(gamma+1), dim]`` strided layout (static out buffers) -- RNG-free,
-       valid for every compact replay;
-    2. the GREEDY accept chain (candidates rebuild -> argmax-match + cap ->
-       finalize -> out tokens) into static [max_bs] buffers. The worker reads
-       these only when the step is all-greedy, the draft fold ran this step,
-       and the sampling-info logits adjustments are a no-op (the in-graph
-       accept sees UNADJUSTED logits); else it eager-accepts on the same
-       strided static buffers.
-
-    Capture invariants:
-    - verify_lens comes from the epilogue's OWN static buffer (worker fills it
-      pre-replay); the capture-time uniform layout's tensors are capture-local,
-      i.e. dead addresses at replay. The scatter bounds every read by
-      verify_lens (<= stride each), so a stale tail cannot index out of the
-      compact rows.
-    - Candidates are rebuilt in-graph by scattering the compact ``input_ids``
-      with fill 0. Rows past a request's verify_len differ from the eager
-      candidates (0 vs the real unverified draft), but the cap clamps
-      correct_len to verify_len - 1 on both paths and the bonus is re-gathered
-      at the capped index, so the committed result is identical.
-    - ``draft_tokens_buf`` is allocated HERE (before the target graphs capture)
-      and shared as ``DsparkDraftSampler.out``: the draft graph WRITES and the
-      verify graph READS the same stable memory (draft replay precedes verify
-      replay on the stream).
-    - Model-dim (vocab / hidden) out buffers are lazily allocated on the first
-      warmup call (capture_one warms up twice before capturing), never in the
-      graph memory pool; [max_bs] buffers are eager in __init__.
-    """
 
     def __init__(
         self,
@@ -90,25 +53,14 @@ class DsparkVerifyEpilogue:
         self.max_bs = int(max_bs)
         self.stride = int(verify_num_draft_tokens)
         self.gamma = self.stride - 1
-        # CommitInjectCtx when the commit KV write folds in-graph; None keeps
-        # the commit eager.
         self.commit_ctx = commit_ctx
-        # 1 -> the captured commit write is live this replay; 0 -> every
-        # swa_loc collapses to -1 and the fused writer skips all rows. Pool
-        # writes are SIDE EFFECTS: a sampling / non-fold step must not let the
-        # captured write mutate the draft KV (the worker eager-injects).
         self.inject_gate_buf = torch.zeros((1,), dtype=torch.int32, device=device)
-        # Filled by the worker pre-replay; zero-init keeps a pre-fill idle
-        # replay bounded.
         self.verify_lens_buf = torch.zeros(
             (self.max_bs,), dtype=torch.int64, device=device
         )
-        # Written by the draft graph (DsparkDraftSampler.out aliases this),
-        # read by the verify graph's BuildOutTokens.
         self.draft_tokens_buf = torch.zeros(
             (self.max_bs * self.gamma,), dtype=torch.int64, device=device
         )
-        # Accept-chain outs, read by the worker on the folded path.
         self.correct_len_buf = torch.zeros(
             (self.max_bs,), dtype=torch.int64, device=device
         )
@@ -125,17 +77,10 @@ class DsparkVerifyEpilogue:
         self.out_tokens_buf = torch.zeros(
             (self.max_bs, self.stride), dtype=torch.int64, device=device
         )
-        # [max_bs*stride, dim], allocated on the first warmup call.
         self.strided_logits: Optional[torch.Tensor] = None
         self.strided_hidden: Optional[torch.Tensor] = None
 
     def capture_hook(self, runner, out, forward_batch, num_tokens) -> None:
-        # Capture-tail hook for the token-keyed TARGET verify graph. NULL-hidden
-        # initial captures are skipped -- the first real verify forces a FULL
-        # recapture (recapture_if_needed) and only that graph ever replays a
-        # verify. input_ids carries the compact verify-window tokens (in-graph
-        # candidates rebuild); seq_lens stays at the prefix (the accept
-        # finalize input).
         if runner.model_runner.is_draft_worker or not runner.ragged_verify_mode:
             return
         if (
@@ -144,9 +89,6 @@ class DsparkVerifyEpilogue:
             or out.hidden_states is None
         ):
             return
-        # batch_size is the capture slot count S, decoupled from the token
-        # tier (S = min(num_tokens, max_bs)), so num_tokens // (gamma+1) no
-        # longer recovers it.
         self(
             compact_logits=out.next_token_logits,
             compact_hidden=out.hidden_states,
@@ -157,16 +99,9 @@ class DsparkVerifyEpilogue:
         )
 
     def begin_step(self, verify_lens, armed: bool) -> None:
-        """Sole pre-replay write entry: feed the static verify_lens input and
-        arm / disarm the captured commit write. EVERY replay path must come
-        through here first -- a disarmed replay collapses the commit write to
-        a no-op and the worker eager-injects instead. verify_lens=None (idle
-        participation) zeroes the whole buffer so the scatter is fully masked.
-        """
         if verify_lens is None:
             self.verify_lens_buf.zero_()
         else:
-            # The zeroed tail keeps padded-tier rows out of the scatter.
             bs = verify_lens.shape[0]
             self.verify_lens_buf[:bs].copy_(verify_lens)
             if bs < self.max_bs:
@@ -185,9 +120,6 @@ class DsparkVerifyEpilogue:
 
     @property
     def folds_commit(self) -> bool:
-        # Only the MLA single-latent pool has the masked (-1-skipping) fused
-        # writer the captured commit relies on; the dense MHA prefix-valid
-        # write stays eager.
         if self.commit_ctx is None:
             return False
         pool = self.commit_ctx.resolve_pool()
@@ -223,8 +155,6 @@ class DsparkVerifyEpilogue:
         req_pool_indices: torch.Tensor,
         bs: int,
     ) -> None:
-        # bs is the padded capture-tier bs; the worker re-slices to the real
-        # bs post-replay.
         self.strided_logits = self._ensure_out(self.strided_logits, compact_logits)
         self.strided_hidden = self._ensure_out(self.strided_hidden, compact_hidden)
         verify_lens = self.verify_lens_buf[:bs]
@@ -252,9 +182,6 @@ class DsparkVerifyEpilogue:
         )
 
     def _accept(self, input_ids, seq_lens, verify_lens, bs: int) -> torch.Tensor:
-        # Greedy accept chain. Intermediates (candidates, correct_len, ...) are
-        # graph-internal (pool) tensors; only the final copies land in the
-        # static out buffers.
         candidates = torch.zeros(
             (bs * self.stride, 1), dtype=input_ids.dtype, device=input_ids.device
         )
@@ -294,11 +221,6 @@ class DsparkVerifyEpilogue:
     def _commit_inject(
         self, commit_lens, verify_lens, seq_lens, req_pool_indices, bs: int
     ) -> None:
-        # Commit KV inject in-graph (mirrors inject_ragged's MLA branch).
-        # min(commit, verify_lens) zeroes the padded-tier rows (their
-        # req_pool / prefix buffer rows are stale and must never write);
-        # a real row's commit_lens <= verify_lens already, so the min is a
-        # no-op there. The gate collapses non-fold replays to all -1.
         ctx = self.commit_ctx
         pool = ctx.resolve_pool()
         gated_commit_lens = (

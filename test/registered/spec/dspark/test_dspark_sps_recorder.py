@@ -28,7 +28,6 @@ def make_recorder(**kwargs) -> tuple[SpsDataRecorder, FakeClock]:
 
 class TestSpsDataRecorderPairing(CustomTestCase):
     def test_first_step_emits_no_record(self):
-        """A single observed step has no successor stamp, so nothing is emitted."""
         recorder, _ = make_recorder()
         recorder.observe_decode_step(
             forward_ct=1, num_running_reqs=4, num_verify_tokens=32
@@ -36,7 +35,6 @@ class TestSpsDataRecorderPairing(CustomTestCase):
         self.assertEqual(recorder.dump_records(), [])
 
     def test_dt_is_attributed_to_the_previous_step(self):
-        """The gap between two stamps becomes the previous step's step_time."""
         recorder, clock = make_recorder()
         recorder.observe_decode_step(
             forward_ct=1, num_running_reqs=4, num_verify_tokens=32
@@ -53,7 +51,6 @@ class TestSpsDataRecorderPairing(CustomTestCase):
         self.assertAlmostEqual(records[0]["step_time"], 0.02)
 
     def test_consecutive_steps_emit_one_record_per_gap(self):
-        """N observed steps emit N-1 records, each keyed by the earlier step."""
         recorder, clock = make_recorder()
         for forward_ct in range(1, 5):
             recorder.observe_decode_step(
@@ -64,7 +61,6 @@ class TestSpsDataRecorderPairing(CustomTestCase):
         self.assertEqual([record["forward_ct"] for record in records], [1, 2, 3])
 
     def test_non_decode_step_breaks_the_pairing(self):
-        """A prefill/idle step between two decode steps suppresses the cross-gap record."""
         recorder, clock = make_recorder()
         recorder.observe_decode_step(
             forward_ct=1, num_running_reqs=4, num_verify_tokens=32
@@ -78,7 +74,6 @@ class TestSpsDataRecorderPairing(CustomTestCase):
         self.assertEqual(recorder.dump_records(), [])
 
     def test_oversized_gap_is_dropped(self):
-        """A gap above max_step_interval is treated as a stall and not recorded."""
         recorder, clock = make_recorder(max_step_interval=0.5)
         recorder.observe_decode_step(
             forward_ct=1, num_running_reqs=4, num_verify_tokens=32
@@ -98,7 +93,6 @@ class TestSpsDataRecorderPairing(CustomTestCase):
 
 class TestSpsDataRecorderBuffer(CustomTestCase):
     def test_ring_buffer_keeps_only_the_newest_records(self):
-        """When more records than max_records arrive, the oldest are evicted."""
         recorder, clock = make_recorder(max_records=3)
         for forward_ct in range(1, 8):
             recorder.observe_decode_step(
@@ -110,7 +104,6 @@ class TestSpsDataRecorderBuffer(CustomTestCase):
         )
 
     def test_dump_is_non_destructive(self):
-        """Dumping twice returns the same records; reading never drains the ring."""
         recorder, clock = make_recorder()
         recorder.observe_decode_step(
             forward_ct=1, num_running_reqs=4, num_verify_tokens=32
@@ -122,7 +115,6 @@ class TestSpsDataRecorderBuffer(CustomTestCase):
         self.assertEqual(recorder.dump_records(), recorder.dump_records())
 
     def test_rejects_non_positive_max_records(self):
-        """max_records below 1 is a configuration error."""
         with self.assertRaises(ValueError):
             SpsDataRecorder(max_records=0)
 

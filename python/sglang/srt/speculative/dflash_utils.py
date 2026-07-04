@@ -108,11 +108,6 @@ def resolve_dflash_verify_mask_policy(attn_backend: Any) -> tuple[str, bool]:
 
 
 def verify_logits_adjustments_are_noop(sampling_info) -> bool:
-    """True iff apply_dflash_verify_logits_adjustments would leave logits
-    untouched (mirror of its activation conditions). Gate for the in-graph
-    greedy accept fold, which sees UNADJUSTED logits and is only
-    byte-equivalent to the eager path when the adjustments are a no-op.
-    """
     if sampling_info is None:
         return True
     if sampling_info.has_custom_logit_processor:

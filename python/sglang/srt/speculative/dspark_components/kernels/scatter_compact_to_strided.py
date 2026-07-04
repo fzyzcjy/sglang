@@ -117,15 +117,7 @@ def scatter_compact_to_strided_into(
     stride: int,
     fill_value: float,
 ) -> torch.Tensor:
-    """Scatter into a caller-owned ``out`` [bs*stride, dim], so the verify-graph
-    epilogue can run in-graph writing its own static buffer (an allocation here
-    would land in the graph pool, unreadable post-replay). The ``start`` cumsum
-    stays a graph-internal intermediate.
-    """
     dim = compact.shape[1]
-    # Normalize the fill scalar to the out dtype family: triton specializes on
-    # the scalar's python type, and a float fill in an integer-lane kernel
-    # would promote the tl.where to fp32.
     fill_value = float(fill_value) if out.dtype.is_floating_point else int(fill_value)
     compact = compact.contiguous()
     verify_lens = verify_lens.to(dtype=torch.int64).contiguous()

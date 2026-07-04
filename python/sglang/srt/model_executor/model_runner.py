@@ -400,11 +400,6 @@ class ModelRunner(ModelRunnerKVCacheMixin):
         self.spec_algorithm = SpeculativeAlgorithm.from_string(
             server_args.speculative_algorithm
         )
-        # Capture tail hooks: callables the spec worker registers before this
-        # runner's decode graphs capture; the graph runner invokes each right
-        # after the captured forward (hook(runner, out, forward_batch,
-        # num_tokens)), so their work replays inside the graph. Each hook owns
-        # its own gating. Empty -> plain capture.
         self.capture_tail_hooks = []
         self.page_size = server_args.page_size
         self.req_to_token_pool = req_to_token_pool

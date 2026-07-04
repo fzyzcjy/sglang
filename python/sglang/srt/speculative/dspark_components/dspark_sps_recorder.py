@@ -10,13 +10,6 @@ SPS_RECORD_MAX_STEP_INTERVAL_SECONDS = 1.0
 SPS_RECORD_MAX_RECORDS = 200_000
 
 
-# DEPRECATED: superseded by dspark_info_dumper.DsparkInfoDumper (the `core` /
-# `step_cpu_time` components). Retained only for the existing offline SPS
-# profiler path (SGLANG_DSPARK_ENABLE_SPS_RECORD); do not extend.
-# DEBT: the three verify_tokens_* tier fields below intentionally break the
-# "do not extend" rule so the sps and info profiler sources report identical
-# local / dp-synced / graph-key token counts for cross-checking; drop them with
-# this recorder once the profiler moves fully onto DsparkInfoDumper.
 class SpsStepRecord(msgspec.Struct, frozen=True):
     forward_ct: int
     num_running_reqs: int
@@ -27,9 +20,6 @@ class SpsStepRecord(msgspec.Struct, frozen=True):
     verify_tokens_graph_key: int = -1
 
 
-# TODO: unify with OnlineSpsProfiler's step sampling (same pairing semantics);
-# deferred for now because that code is being changed concurrently by others
-# and unifying would conflict.
 class SpsDataRecorder:
     def __init__(
         self,

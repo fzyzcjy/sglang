@@ -45,8 +45,6 @@ class DraftBlockProposer:
         self._dp_moe_sync = dp_moe_sync
 
     def attach_draft_sampler(self, draft_sampler) -> None:
-        # Bound at init_cuda_graphs time: the sampler folds into the draft
-        # graph, so it exists only once graphs capture.
         self._draft_sampler = draft_sampler
 
     def _base_logits_context(self):

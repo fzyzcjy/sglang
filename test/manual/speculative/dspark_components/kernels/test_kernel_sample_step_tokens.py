@@ -15,7 +15,6 @@ requires_cuda = pytest.mark.skipif(
 @pytest.mark.parametrize("vocab", [5003, 130000])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_triton_matches_torch_with_injected_noise(bs, vocab, dtype):
-    """Given the same injected exp_noise, triton ratio-space argmax equals the torch reference elementwise."""
     torch.manual_seed(0)
     device = torch.device("cuda")
     step_logits = (torch.randn(bs, vocab, device=device) * 4.0).to(dtype)
@@ -40,7 +39,6 @@ def test_triton_matches_torch_with_injected_noise(bs, vocab, dtype):
 
 
 def test_dropping_softmax_normalization_is_argmax_invariant():
-    """Dropping softmax's Z is argmax-invariant: argmax(softmax(s)/e) == argmax(exp(s-m)/e)."""
     torch.manual_seed(0)
     bs, vocab = 3, 512
     step_logits = torch.randn(bs, vocab) * 5.0
@@ -54,7 +52,6 @@ def test_dropping_softmax_normalization_is_argmax_invariant():
 
 
 def test_underflow_token_not_selected_in_ratio_space():
-    """A token whose logit gap underflows exp(s-m) to 0 is never selected, even given tiny noise."""
     vocab = 8
     step_logits = torch.zeros(1, vocab)
     step_logits[0, 3] = -300.0
@@ -68,7 +65,6 @@ def test_underflow_token_not_selected_in_ratio_space():
 
 
 def test_greedy_rows_pick_argmax_logits_regardless_of_noise():
-    """greedy_mask rows return argmax(step_logits) for any exp_noise (noise forced to 1)."""
     torch.manual_seed(1)
     bs, vocab = 4, 256
     step_logits = torch.randn(bs, vocab)
@@ -86,7 +82,6 @@ def test_greedy_rows_pick_argmax_logits_regardless_of_noise():
 
 
 def test_tie_break_picks_smallest_index_on_equal_greedy_logits():
-    """Equal max logits on a greedy row resolve to the smallest index (match torch.argmax)."""
     vocab = 16
     step_logits = torch.zeros(1, vocab)
     step_logits[0, 3] = 5.0
@@ -105,7 +100,6 @@ def test_tie_break_picks_smallest_index_on_equal_greedy_logits():
 
 @requires_cuda
 def test_triton_tie_break_straddles_block_boundary():
-    """A max-key tie straddling a BLOCK_V boundary resolves to the smallest index in stage-2 combine."""
     device = torch.device("cuda")
     vocab = 2050
     step_logits = torch.zeros(1, vocab, device=device)
@@ -126,7 +120,6 @@ def test_triton_tie_break_straddles_block_boundary():
 @requires_cuda
 @pytest.mark.parametrize("padded", [130048, 129536])
 def test_triton_reads_strided_cropped_view_without_contiguous(padded):
-    """A non-contiguous full[..., :vocab] view yields the same tokens as its contiguous copy."""
     torch.manual_seed(3)
     device = torch.device("cuda")
     bs, vocab = 2, 129280
@@ -154,7 +147,6 @@ def test_triton_reads_strided_cropped_view_without_contiguous(padded):
 
 
 def test_fresh_noise_drawn_each_call():
-    """Two consecutive exp_noise draws differ, guarding the wiring against caching a single draw."""
     torch.manual_seed(7)
     shape = (2, 128)
     first = torch.empty(shape, dtype=torch.float32).exponential_(1)

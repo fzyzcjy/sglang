@@ -179,7 +179,6 @@ class TestComputeVerifyTokenBudget(CustomTestCase):
         self.assertLessEqual(budget, 1)
 
     def test_decision_predicted_step_matches_additive_table_at_budget(self):
-        """Additive table reports T(bs, K) of the chosen K as predicted_step_seconds."""
         survival = torch.tensor([[0.9, 0.8, 0.7, 0.6]], dtype=torch.float32)
         cfg = DSparkScheduleConfig(gamma=4)
         table = _additive_table()
@@ -197,7 +196,6 @@ class TestComputeVerifyTokenBudget(CustomTestCase):
         self.assertGreater(decision.predicted_theta, 0.0)
 
     def test_decision_predicted_step_is_inverse_sps_for_diagonal_table(self):
-        """Diagonal table reports 1/sps of the chosen point, never None."""
         survival = torch.tensor([[0.9, 0.8, 0.7, 0.6]], dtype=torch.float32)
         cfg = DSparkScheduleConfig(gamma=4)
         table = _cliff_table()
@@ -222,7 +220,6 @@ def _make_budget_planner() -> HostConfidenceBudgetPlanner:
 
 class TestBudgetDecisionLifecycle(CustomTestCase):
     def test_take_last_decision_is_consume_once(self):
-        """take_last_decision returns the stashed decision, then None."""
         planner = _make_budget_planner()
         planner.last_decision = VerifyBudgetDecision(
             budget=3, predicted_step_seconds=0.01, predicted_theta=100.0
@@ -232,7 +229,6 @@ class TestBudgetDecisionLifecycle(CustomTestCase):
         self.assertIsNone(planner.take_last_decision())
 
     def test_note_non_decode_step_clears_decision(self):
-        """A non-decode step must drop a stale prediction so it never mispairs."""
         planner = _make_budget_planner()
         planner.last_decision = VerifyBudgetDecision(budget=1)
         planner.note_non_decode_step()
