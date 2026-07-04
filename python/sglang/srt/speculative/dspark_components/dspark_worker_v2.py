@@ -845,11 +845,21 @@ class DSparkWorkerV2(BaseSpecWorker):
         ).contiguous()
 
         if self._sps_recorder is not None:
+            sps_dp_tier = self._dp_verify_tier_num_tokens(batch)
             self._sps_recorder.observe_decode_step(
                 forward_ct=int(batch.forward_iter),
                 num_running_reqs=bs,
                 num_verify_tokens=self._recorder_verify_tokens(
                     bs=bs, verify_ids_2d=verify_ids_2d
+                ),
+                verify_tokens_local=int(batch.spec_verify_tier_num_tokens),
+                verify_tokens_dp_synced=(
+                    -1 if sps_dp_tier is None else int(sps_dp_tier)
+                ),
+                verify_tokens_graph_key=(
+                    layout.graph_num_tokens
+                    if layout is not None
+                    else int(verify_ids_2d.numel())
                 ),
             )
 
@@ -1024,6 +1034,7 @@ class DSparkWorkerV2(BaseSpecWorker):
                 layout=layout,
             )
         if self._info_dumper.enabled:
+            info_dp_tier = self._dp_verify_tier_num_tokens(batch)
             budget_decision = self._verify_planner.take_budget_decision()
             predicted_step_ms = (
                 None
@@ -1042,6 +1053,15 @@ class DSparkWorkerV2(BaseSpecWorker):
                     budget=verify_token_budget,
                     lag_steps=self._verify_planner.lag_steps,
                     num_verify_tokens=(
+                        layout.graph_num_tokens
+                        if layout is not None
+                        else int(verify_ids_2d.numel())
+                    ),
+                    verify_tokens_local=int(batch.spec_verify_tier_num_tokens),
+                    verify_tokens_dp_synced=(
+                        -1 if info_dp_tier is None else int(info_dp_tier)
+                    ),
+                    verify_tokens_graph_key=(
                         layout.graph_num_tokens
                         if layout is not None
                         else int(verify_ids_2d.numel())

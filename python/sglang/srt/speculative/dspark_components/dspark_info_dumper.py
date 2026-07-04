@@ -77,6 +77,9 @@ class DecodeStepRecord(msgspec.Struct, omit_defaults=True):
     lag_steps: Optional[int] = None
     num_running_reqs: int = -1
     num_verify_tokens: int = -1
+    verify_tokens_local: int = -1
+    verify_tokens_dp_synced: int = -1
+    verify_tokens_graph_key: int = -1
     predicted_step_ms: Optional[float] = None
     predicted_theta: Optional[float] = None
     step_cpu_ms: Optional[float] = None
@@ -93,6 +96,9 @@ class DecodeStepObservation(msgspec.Struct):
     budget: Optional[int]
     lag_steps: Optional[int]
     num_verify_tokens: int
+    verify_tokens_local: int
+    verify_tokens_dp_synced: int
+    verify_tokens_graph_key: int
     predicted_step_ms: Optional[float]
     predicted_theta: Optional[float]
     verify_lens: Optional[torch.Tensor]
@@ -114,6 +120,9 @@ class _PendingStep(msgspec.Struct):
     budget: Optional[int]
     lag_steps: Optional[int]
     num_verify_tokens: int
+    verify_tokens_local: int
+    verify_tokens_dp_synced: int
+    verify_tokens_graph_key: int
     predicted_step_ms: Optional[float]
     predicted_theta: Optional[float]
     step_cpu_ms: Optional[float]
@@ -214,6 +223,9 @@ class DsparkInfoDumper:
             budget=None if obs.budget is None else int(obs.budget),
             lag_steps=None if obs.lag_steps is None else int(obs.lag_steps),
             num_verify_tokens=int(obs.num_verify_tokens),
+            verify_tokens_local=int(obs.verify_tokens_local),
+            verify_tokens_dp_synced=int(obs.verify_tokens_dp_synced),
+            verify_tokens_graph_key=int(obs.verify_tokens_graph_key),
             predicted_step_ms=obs.predicted_step_ms,
             predicted_theta=obs.predicted_theta,
             step_cpu_ms=step_cpu_ms,
@@ -310,6 +322,9 @@ class DsparkInfoDumper:
             record.lag_steps = pending.lag_steps
             record.num_running_reqs = pending.bs
             record.num_verify_tokens = pending.num_verify_tokens
+            record.verify_tokens_local = pending.verify_tokens_local
+            record.verify_tokens_dp_synced = pending.verify_tokens_dp_synced
+            record.verify_tokens_graph_key = pending.verify_tokens_graph_key
             record.predicted_step_ms = pending.predicted_step_ms
             record.predicted_theta = pending.predicted_theta
         if InfoComponent.STEP_CPU_TIME in self._components:

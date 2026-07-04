@@ -13,11 +13,18 @@ SPS_RECORD_MAX_RECORDS = 200_000
 # DEPRECATED: superseded by dspark_info_dumper.DsparkInfoDumper (the `core` /
 # `step_cpu_time` components). Retained only for the existing offline SPS
 # profiler path (SGLANG_DSPARK_ENABLE_SPS_RECORD); do not extend.
+# DEBT: the three verify_tokens_* tier fields below intentionally break the
+# "do not extend" rule so the sps and info profiler sources report identical
+# local / dp-synced / graph-key token counts for cross-checking; drop them with
+# this recorder once the profiler moves fully onto DsparkInfoDumper.
 class SpsStepRecord(msgspec.Struct, frozen=True):
     forward_ct: int
     num_running_reqs: int
     num_verify_tokens: int
     step_time: float
+    verify_tokens_local: int = -1
+    verify_tokens_dp_synced: int = -1
+    verify_tokens_graph_key: int = -1
 
 
 # TODO: unify with OnlineSpsProfiler's step sampling (same pairing semantics);
@@ -36,17 +43,40 @@ class SpsDataRecorder:
         self._max_step_interval = max_step_interval
         self._clock = clock
         self._records: deque[SpsStepRecord] = deque(maxlen=max_records)
-        self._prev_stamp: Optional[tuple[float, int, int, int]] = None
+        self._prev_stamp: Optional[tuple[float, int, int, int, int, int, int]] = None
 
     def observe_decode_step(
-        self, *, forward_ct: int, num_running_reqs: int, num_verify_tokens: int
+        self,
+        *,
+        forward_ct: int,
+        num_running_reqs: int,
+        num_verify_tokens: int,
+        verify_tokens_local: int = -1,
+        verify_tokens_dp_synced: int = -1,
+        verify_tokens_graph_key: int = -1,
     ) -> None:
         now = self._clock()
         prev = self._prev_stamp
-        self._prev_stamp = (now, forward_ct, num_running_reqs, num_verify_tokens)
+        self._prev_stamp = (
+            now,
+            forward_ct,
+            num_running_reqs,
+            num_verify_tokens,
+            verify_tokens_local,
+            verify_tokens_dp_synced,
+            verify_tokens_graph_key,
+        )
         if prev is None:
             return
-        prev_time, prev_forward_ct, prev_num_running_reqs, prev_num_verify_tokens = prev
+        (
+            prev_time,
+            prev_forward_ct,
+            prev_num_running_reqs,
+            prev_num_verify_tokens,
+            prev_verify_tokens_local,
+            prev_verify_tokens_dp_synced,
+            prev_verify_tokens_graph_key,
+        ) = prev
         step_time = now - prev_time
         if not (0.0 < step_time <= self._max_step_interval):
             return
@@ -56,6 +86,9 @@ class SpsDataRecorder:
                 num_running_reqs=prev_num_running_reqs,
                 num_verify_tokens=prev_num_verify_tokens,
                 step_time=step_time,
+                verify_tokens_local=prev_verify_tokens_local,
+                verify_tokens_dp_synced=prev_verify_tokens_dp_synced,
+                verify_tokens_graph_key=prev_verify_tokens_graph_key,
             )
         )
 
