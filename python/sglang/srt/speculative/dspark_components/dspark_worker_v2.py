@@ -533,6 +533,13 @@ class DSparkWorkerV2(BaseSpecWorker):
             return None
         return self._block_accept_recorder.estimate_log_suffix()
 
+    def note_request_finished(self, *, rid: str, natural_stop: bool) -> None:
+        if self._block_accept_recorder is None:
+            return
+        self._block_accept_recorder.note_request_finished(
+            rid=rid, natural_stop=natural_stop
+        )
+
     def forward_batch_generation(
         self,
         batch: ScheduleBatch,

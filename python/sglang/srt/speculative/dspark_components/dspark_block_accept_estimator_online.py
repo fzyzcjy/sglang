@@ -189,6 +189,7 @@ class OnlineBlockAcceptEstimateRecorder:
         self._discontinuity_drop_ct = 0
         self._skipped_step_ct = 0
         self._warned_skip_reasons: set[str] = set()
+        self._finish_intents: dict[str, bool] = {}
 
         self._online = _OnlineCeiling(
             log_interval=online_log_interval,
@@ -284,9 +285,50 @@ class OnlineBlockAcceptEstimateRecorder:
                 compute_on_device=lambda: None,
                 postprocess_on_host=self._settle_and_write,
             )
+            self._apply_all_finish_intents()
         if self._file is not None:
             self._file.flush()
         self._steps_since_flush = 0
+
+    def note_request_finished(self, *, rid: str, natural_stop: bool) -> None:
+        if self._delayed is None:
+            self._finalize_request(
+                rid=rid, natural_stop=natural_stop, forward_ct=self._last_forward_ct
+            )
+        else:
+            self._finish_intents[rid] = natural_stop
+
+    def _apply_all_finish_intents(self) -> None:
+        for rid in list(self._finish_intents):
+            self._finalize_request(
+                rid=rid,
+                natural_stop=self._finish_intents.pop(rid),
+                forward_ct=self._last_forward_ct,
+            )
+
+    def _finalize_request(
+        self, *, rid: str, natural_stop: bool, forward_ct: int
+    ) -> None:
+        state = self._states.pop(rid, None)
+        if state is None:
+            return
+        for block in state.pending:
+            if natural_stop:
+                self._finalize_eos_online(block, forward_ct=forward_ct)
+            else:
+                self._finalize_at_end_online(block, forward_ct=forward_ct)
+        if natural_stop and state.pending:
+            self._write_eos_marker(rid=rid, blocks=state.pending)
+
+    def _finalize_eos_online(self, block: _PendingBlock, *, forward_ct: int) -> None:
+        lo = block.window + 1.0 + block.est_lo_extra
+        self._online.add(forward_ct=forward_ct, lo=lo, hi=lo)
+
+    def _write_eos_marker(self, *, rid: str, blocks: List[_PendingBlock]) -> None:
+        if self._file is None:
+            return
+        marker = {"rid": rid, "eos_end": [block.forward_ct for block in blocks]}
+        self._file.write(json.dumps(marker) + "\n")
 
     def online_estimate(self) -> Optional[_CeilingSnapshot]:
         if self._online is None:
@@ -498,6 +540,14 @@ class OnlineBlockAcceptEstimateRecorder:
         for b in range(len(batch.rids)):
             self._settle_row(b=b, batch=batch)
         self._finish_step(forward_ct=batch.forward_ct)
+        if self._finish_intents:
+            for rid in batch.rids:
+                if rid in self._finish_intents:
+                    self._finalize_request(
+                        rid=rid,
+                        natural_stop=self._finish_intents.pop(rid),
+                        forward_ct=batch.forward_ct,
+                    )
 
     def _settle_row(self, *, b: int, batch: _SettleBatch) -> None:
         forward_ct = batch.forward_ct

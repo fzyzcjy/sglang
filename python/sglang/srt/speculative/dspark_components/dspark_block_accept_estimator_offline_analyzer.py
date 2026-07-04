@@ -21,27 +21,36 @@ class BlockEstimate(msgspec.Struct):
 class LoadedRecords(msgspec.Struct):
     blocks: List[Dict[str, Any]]
     gathers: Dict[Tuple[str, int], List[List[Any]]]
+    eos_terminated: set
 
 
 def load_records(jsonl_path: Path) -> LoadedRecords:
     blocks: List[Dict[str, Any]] = []
     gathers: Dict[Tuple[str, int], List[List[Any]]] = defaultdict(list)
+    eos_terminated: set = set()
     with jsonl_path.open() as f:
         for line in f:
             rec = json.loads(line)
+            for block_fct in rec.get("eos_end", []):
+                eos_terminated.add((rec["rid"], block_fct))
+            if "cl" not in rec:
+                continue
             blocks.append(rec)
             for entry in rec.get("pg", []):
                 src_fct, offset, p_lp, draft_token, realized_token = entry
                 gathers[(rec["rid"], src_fct)].append(
                     [offset, p_lp, draft_token, realized_token]
                 )
-    return LoadedRecords(blocks=blocks, gathers=gathers)
+    return LoadedRecords(
+        blocks=blocks, gathers=gathers, eos_terminated=eos_terminated
+    )
 
 
 def evaluate_block(
     rec: Dict[str, Any],
     gathers: Dict[Tuple[str, int], List[List[Any]]],
     gamma: int,
+    eos_terminated: set,
 ) -> BlockEstimate:
     cl = rec["cl"]
     window = rec["w"]
@@ -70,8 +79,12 @@ def evaluate_block(
     for offset in range(window + 1, gamma + 1):
         entry = entries.get(offset)
         if entry is None:
-            category = "censored_at_end"
-            tail = prod * (gamma - offset + 1)
+            if (rec["rid"], rec["fct"]) in eos_terminated:
+                category = "censored_eos"
+                tail = 0.0
+            else:
+                category = "censored_at_end"
+                tail = prod * (gamma - offset + 1)
             break
         _, p_lp, draft_token, realized_token = entry
         a = min(1.0, math.exp(p_lp - q_lps[offset - window - 1]))
@@ -98,7 +111,10 @@ def evaluate_block(
 def analyze(jsonl_path: Path, *, gamma: int, arm: str) -> Dict[str, Any]:
     loaded = load_records(jsonl_path)
     blocks = loaded.blocks
-    results = [evaluate_block(rec, loaded.gathers, gamma) for rec in blocks]
+    results = [
+        evaluate_block(rec, loaded.gathers, gamma, loaded.eos_terminated)
+        for rec in blocks
+    ]
 
     n = len(results)
     mean_lo = sum(r.lo for r in results) / n

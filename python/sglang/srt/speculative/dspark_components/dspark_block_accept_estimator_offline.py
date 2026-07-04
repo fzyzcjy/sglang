@@ -161,6 +161,17 @@ class OfflineBlockAcceptEstimateRecorder:
     def estimate_log_suffix(self) -> Optional[str]:
         return None
 
+    def note_request_finished(self, *, rid: str, natural_stop: bool) -> None:
+        state = self._states.pop(rid, None)
+        if state is None or not state.pending:
+            return
+        if natural_stop:
+            marker = {
+                "rid": rid,
+                "eos_end": [block.forward_ct for block in state.pending],
+            }
+            self._file.write(json.dumps(marker) + "\n")
+
     def _read_inputs(
         self,
         *,

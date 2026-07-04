@@ -607,5 +607,109 @@ class TestOfflineRecorderMatchesOnline(CustomTestCase):
                         self.assertEqual(ea[4], eb[4])
 
 
+class TestNaturalStopEosTail(CustomTestCase):
+    def _finalize_kept_block(self, *, natural_stop: bool):
+        with tempfile.TemporaryDirectory() as tmp:
+            recorder, _ = _make_recorder(tmp)
+            _observe(
+                recorder,
+                forward_ct=1,
+                rid="r0",
+                drafts=[1, 2, 3],
+                corrected_logits=torch.randn(_GAMMA, _VOCAB),
+                target_logits=torch.randn((_GAMMA + 1), _VOCAB),
+                verify_len=2,
+                correct_len=1,
+                bonus=2,
+                seq_len=10,
+            )
+            self.assertEqual(len(recorder._states["r0"].pending), 1)
+            recorder.note_request_finished(rid="r0", natural_stop=natural_stop)
+            self.assertNotIn("r0", recorder._states)
+            return recorder.online_estimate()
+
+    def test_natural_eos_caps_tail_to_zero(self):
+        """A request ending via a natural token stop finalizes its kept block with tail=0."""
+        snap = self._finalize_kept_block(natural_stop=True)
+        self.assertEqual(snap.cumulative_blocks, 1)
+        self.assertAlmostEqual(snap.cumulative_lo, snap.cumulative_hi, places=6)
+
+    def test_external_finish_keeps_optimistic_tail(self):
+        """A request cut off externally keeps the optimistic upper-bound tail (hi > lo)."""
+        snap = self._finalize_kept_block(natural_stop=False)
+        self.assertEqual(snap.cumulative_blocks, 1)
+        self.assertGreater(snap.cumulative_hi, snap.cumulative_lo)
+
+    def test_offline_and_online_emit_same_eos_marker(self):
+        """Both recorders emit an identical eos_end marker for the terminated block."""
+        with tempfile.TemporaryDirectory() as tmp:
+            online_path = Path(tmp) / "online.jsonl"
+            offline_path = Path(tmp) / "offline.jsonl"
+            online = BlockAcceptEstimateRecorder(
+                path=str(online_path), gamma=_GAMMA, device="cpu"
+            )
+            offline = OfflineBlockAcceptEstimateRecorder(
+                path=str(offline_path), gamma=_GAMMA
+            )
+            corrected = torch.randn(_GAMMA, _VOCAB)
+            target = torch.randn((_GAMMA + 1), _VOCAB)
+            for recorder in (online, offline):
+                _observe(
+                    recorder,
+                    forward_ct=1,
+                    rid="r0",
+                    drafts=[1, 2, 3],
+                    corrected_logits=corrected,
+                    target_logits=target,
+                    verify_len=2,
+                    correct_len=1,
+                    bonus=2,
+                    seq_len=10,
+                )
+                recorder.note_request_finished(rid="r0", natural_stop=True)
+                recorder.flush()
+            self.assertEqual(
+                _read_records(online_path)[-1], {"rid": "r0", "eos_end": [1]}
+            )
+            self.assertEqual(
+                _read_records(offline_path)[-1], {"rid": "r0", "eos_end": [1]}
+            )
+
+
+class TestOfflineAnalyzerEos(CustomTestCase):
+    def test_eos_terminated_block_has_zero_tail(self):
+        """The analyzer zeroes the tail of an eos-terminated at-end block."""
+        from sglang.srt.speculative.dspark_components.dspark_block_accept_estimator_offline_analyzer import (
+            evaluate_block,
+            load_records,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "est.jsonl"
+            records = [
+                {
+                    "rid": "r0",
+                    "fct": 1,
+                    "w": 1,
+                    "cl": 1,
+                    "ct": 0,
+                    "trimmed_tokens": [2, 3],
+                    "q_lp": [-1.0, -1.0],
+                    "pg": [[1, 2, -0.5, 2, 2]],
+                },
+                {"rid": "r0", "eos_end": [1]},
+            ]
+            path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+
+            loaded = load_records(path)
+            self.assertEqual(len(loaded.blocks), 1)
+            self.assertIn(("r0", 1), loaded.eos_terminated)
+            est = evaluate_block(
+                loaded.blocks[0], loaded.gathers, _GAMMA, loaded.eos_terminated
+            )
+            self.assertEqual(est.category, "censored_eos")
+            self.assertAlmostEqual(est.lo, est.hi, places=6)
+
+
 if __name__ == "__main__":
     unittest.main()
