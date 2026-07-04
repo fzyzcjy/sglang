@@ -23,7 +23,6 @@ from sglang.srt.speculative.dspark_components.dspark_confidence import (
 from sglang.srt.speculative.dspark_components.dspark_scheduler import (
     DSparkScheduleConfig,
     HostConfidenceBudgetPlanner,
-    VerifyBudgetDecision,
     build_sps_cost_table,
 )
 from sglang.srt.speculative.dspark_components.dspark_sps_online import (
@@ -126,6 +125,11 @@ class DSparkVerifyPlanner:
         self._budget_planner: Optional[HostConfidenceBudgetPlanner] = None
         self._dynamic_graph_tier = False
         self._dp_tier_gather_enabled = False
+        # True when every request's verify budget is the full window (gamma+1),
+        # never trimmed. Static verifies the full window by construction; the
+        # ragged branch below overrides this to the compact + uninitialized/flat
+        # (verify-all) case. See the is_verify_all property.
+        self._is_verify_all = True
         if self._ragged_verify_mode is not RaggedVerifyMode.STATIC:
             if self._confidence_head is None:
                 raise ValueError(
@@ -141,6 +145,14 @@ class DSparkVerifyPlanner:
             sps_table = build_sps_cost_table(
                 server_args=self.server_args,
                 verify_num_draft_tokens=self.verify_num_draft_tokens,
+            )
+            # Verify-all iff compact with the uninitialized/flat table (no per-request
+            # trim). Cap-accept always caps to the confidence budget; a profiled
+            # compact table trims via its T(bs, K) argmax -- both can drop the budget
+            # below a fixed simulated correct_len.
+            self._is_verify_all = (
+                self._ragged_verify_mode is RaggedVerifyMode.COMPACT
+                and is_uninitialized_sps_table(sps_table)
             )
             online_profiler = None
             if envs.SGLANG_DSPARK_ENABLE_SPS_ONLINE_PROFILE.get():
@@ -273,6 +285,16 @@ class DSparkVerifyPlanner:
         return self._ragged_verify_mode is RaggedVerifyMode.COMPACT
 
     @property
+    def is_verify_all(self) -> bool:
+        """True when every request's verify budget is the full window (gamma+1),
+        never trimmed: static mode, or compact mode with the uninitialized/flat SPS
+        table. Cap-accept and compact-with-profiled-table trim the budget and return
+        False. Consumed by the SGLANG_SIMULATE_ACC_LEN>1 guard: a constant simulated
+        correct_len is only safe when the budget can never fall below it.
+        """
+        return self._is_verify_all
+
+    @property
     def mode_value(self) -> str:
         return self._ragged_verify_mode.value
 
@@ -281,11 +303,6 @@ class DSparkVerifyPlanner:
         if self._budget_planner is None:
             return None
         return self._budget_planner.lag_steps
-
-    def take_budget_decision(self) -> Optional[VerifyBudgetDecision]:
-        if self._budget_planner is None:
-            return None
-        return self._budget_planner.take_last_decision()
 
     def should_run_compact(self, *, layout: Optional[RaggedVerifyLayout]) -> bool:
         return (
