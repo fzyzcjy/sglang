@@ -39,6 +39,22 @@ def _make_recorder(tmp_dir: str) -> tuple[BlockAcceptEstimateRecorder, Path]:
     return recorder, path
 
 
+class _FakeDelayed:
+    """Lag-by-one stand-in for DelayedDeviceHostHandler: settle the prior step's bundle."""
+
+    def __init__(self):
+        self._pending = None
+
+    def step(self, *, compute_on_device, postprocess_on_host):
+        if self._pending is not None:
+            result, post = self._pending
+            self._pending = None
+            if result is not None:
+                post(result)
+        result = compute_on_device()
+        self._pending = (result, postprocess_on_host) if result is not None else None
+
+
 def _observe(
     recorder: BlockAcceptEstimateRecorder,
     *,
@@ -593,10 +609,13 @@ class TestOfflineRecorderMatchesOnline(CustomTestCase):
             self.assertEqual(len(online_recs), len(offline_recs))
             for a, b in zip(online_recs, offline_recs):
                 self.assertEqual(a.keys(), b.keys())
-                self.assertEqual(a["rid"], b["rid"])
-                self.assertEqual(a["fct"], b["fct"])
-                self.assertEqual(a["w"], b["w"])
-                self.assertEqual(a["cl"], b["cl"])
+                for key in ("rid", "fct", "w", "cl", "ct", "trimmed_tokens"):
+                    if key in a:
+                        self.assertEqual(a[key], b[key])
+                if "q_lp" in a:
+                    self.assertEqual(len(a["q_lp"]), len(b["q_lp"]))
+                    for qa, qb in zip(a["q_lp"], b["q_lp"]):
+                        self.assertAlmostEqual(qa, qb, places=5)
                 if "pg" in a:
                     self.assertEqual(len(a["pg"]), len(b["pg"]))
                     for ea, eb in zip(a["pg"], b["pg"]):
@@ -674,6 +693,48 @@ class TestNaturalStopEosTail(CustomTestCase):
             self.assertEqual(
                 _read_records(offline_path)[-1], {"rid": "r0", "eos_end": [1]}
             )
+
+
+class TestAsyncFinishIntent(CustomTestCase):
+    def test_intent_buffered_then_applied_at_next_drain(self):
+        """On the async path the finish intent applies after the finishing step's bundle drains."""
+        with tempfile.TemporaryDirectory() as tmp:
+            recorder, _ = _make_recorder(tmp)
+            recorder._delayed = _FakeDelayed()
+
+            _observe(
+                recorder,
+                forward_ct=1,
+                rid="r0",
+                drafts=[1, 2, 3],
+                corrected_logits=torch.randn(_GAMMA, _VOCAB),
+                target_logits=torch.randn((_GAMMA + 1), _VOCAB),
+                verify_len=2,
+                correct_len=1,
+                bonus=2,
+                seq_len=10,
+            )
+            recorder.note_request_finished(rid="r0", natural_stop=True)
+            self.assertIn("r0", recorder._finish_intents)
+            self.assertIsNone(recorder.online_estimate())
+
+            _observe(
+                recorder,
+                forward_ct=2,
+                rid="r1",
+                drafts=[4, 5, 6],
+                corrected_logits=torch.randn(_GAMMA, _VOCAB),
+                target_logits=torch.randn((_GAMMA + 1), _VOCAB),
+                verify_len=_GAMMA + 1,
+                correct_len=1,
+                bonus=7,
+                seq_len=20,
+            )
+            self.assertNotIn("r0", recorder._finish_intents)
+            self.assertNotIn("r0", recorder._states)
+            snap = recorder.online_estimate()
+            self.assertEqual(snap.cumulative_blocks, 1)
+            self.assertAlmostEqual(snap.cumulative_lo, snap.cumulative_hi, places=6)
 
 
 class TestOfflineAnalyzerEos(CustomTestCase):

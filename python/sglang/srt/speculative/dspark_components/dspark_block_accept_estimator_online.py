@@ -136,7 +136,7 @@ class _RequestState(msgspec.Struct):
 class _PendingPlan(msgspec.Struct):
     rows: List[int]
     tokens: List[int]
-    slot_lookup: dict
+    slot_lookup: dict[tuple[int, int, int], int]
 
 
 class _SettleBatch(msgspec.Struct):
@@ -147,7 +147,7 @@ class _SettleBatch(msgspec.Struct):
     q_all: List[List[float]]
     target_diag: List[List[float]]
     pending_logprobs: List[float]
-    slot_lookup: dict
+    slot_lookup: dict[tuple[int, int, int], int]
 
     @classmethod
     def from_bundle(cls, bundle: dict[str, Any]) -> _SettleBatch:
@@ -331,8 +331,6 @@ class OnlineBlockAcceptEstimateRecorder:
         self._file.write(json.dumps(marker) + "\n")
 
     def online_estimate(self) -> Optional[_CeilingSnapshot]:
-        if self._online is None:
-            return None
         return self._online.estimate()
 
     def estimate_log_suffix(self) -> Optional[str]:
@@ -346,8 +344,6 @@ class OnlineBlockAcceptEstimateRecorder:
         )
 
     def drain_pending_online(self) -> None:
-        if self._online is None:
-            return
         for state in self._states.values():
             for block in state.pending:
                 self._finalize_at_end_online(block, forward_ct=self._last_forward_ct)
@@ -540,14 +536,7 @@ class OnlineBlockAcceptEstimateRecorder:
         for b in range(len(batch.rids)):
             self._settle_row(b=b, batch=batch)
         self._finish_step(forward_ct=batch.forward_ct)
-        if self._finish_intents:
-            for rid in batch.rids:
-                if rid in self._finish_intents:
-                    self._finalize_request(
-                        rid=rid,
-                        natural_stop=self._finish_intents.pop(rid),
-                        forward_ct=batch.forward_ct,
-                    )
+        self._apply_all_finish_intents()
 
     def _settle_row(self, *, b: int, batch: _SettleBatch) -> None:
         forward_ct = batch.forward_ct
@@ -595,7 +584,7 @@ class OnlineBlockAcceptEstimateRecorder:
                 seq_len=seq_len,
                 forward_ct=forward_ct,
             )
-        elif self._online is not None:
+        else:
             self._online.add(forward_ct=forward_ct, lo=cl + 1.0, hi=cl + 1.0)
 
         pending_gathers = self._settle_pending(
@@ -676,7 +665,7 @@ class OnlineBlockAcceptEstimateRecorder:
                     break
             if not diverged and block.next_offset <= gamma:
                 kept_pending.append(block)
-            elif self._online is not None:
+            else:
                 self._finalize_walk_online(
                     block, diverged=diverged, forward_ct=batch.forward_ct
                 )
@@ -684,8 +673,6 @@ class OnlineBlockAcceptEstimateRecorder:
         return pending_gathers
 
     def _accumulate_online(self, block: _PendingBlock, *, p_lp: float) -> None:
-        if self._online is None:
-            return
         a = min(1.0, math.exp(p_lp - block.q_lps[block.next_offset - block.window - 1]))
         block.est_prod *= a
         block.est_lo_extra += block.est_prod
@@ -698,9 +685,8 @@ class OnlineBlockAcceptEstimateRecorder:
         if not state.pending:
             return
         self._discontinuity_drop_ct += len(state.pending)
-        if self._online is not None:
-            for block in state.pending:
-                self._finalize_at_end_online(block, forward_ct=forward_ct)
+        for block in state.pending:
+            self._finalize_at_end_online(block, forward_ct=forward_ct)
         state.pending = []
 
     def _finish_step(self, *, forward_ct: int) -> None:
@@ -712,8 +698,7 @@ class OnlineBlockAcceptEstimateRecorder:
                 self._steps_since_flush = 0
         if self._observed_step_ct % _STATE_SWEEP_INTERVAL == 0:
             self._sweep_states(forward_ct=forward_ct)
-        if self._online is not None:
-            self._online.maybe_log(forward_ct=forward_ct)
+        self._online.maybe_log(forward_ct=forward_ct)
 
     def _host_to_device_async(
         self, values: List[int], *, device: torch.device
@@ -752,10 +737,10 @@ class OnlineBlockAcceptEstimateRecorder:
             if forward_ct - state.last_seen_ct > _STATE_EXPIRE_STEPS
         ]
         for rid in expired:
-            if self._online is not None:
-                for block in self._states[rid].pending:
-                    self._finalize_at_end_online(block, forward_ct=forward_ct)
+            for block in self._states[rid].pending:
+                self._finalize_at_end_online(block, forward_ct=forward_ct)
             del self._states[rid]
+            self._finish_intents.pop(rid, None)
 
     def _skip_reason(
         self,
