@@ -121,6 +121,7 @@ class BenchArgs:
     profile_output_dir: Optional[str] = None
     dataset_path: str = ""
     dataset_name: str = "random"
+    fixed_prompt_file: str = ""
     gsp_num_groups: int = 1
     gsp_system_prompt_len: int = 2048
     gsp_question_len: int = 128
@@ -217,6 +218,14 @@ class BenchArgs:
             default=BenchArgs.dataset_name,
             choices=["mmmu", "random", "random-ids", "generated-shared-prefix"],
             help="Name of the dataset to benchmark on.",
+        )
+        parser.add_argument(
+            "--fixed-prompt-file",
+            type=str,
+            default=BenchArgs.fixed_prompt_file,
+            help="If set, every request in the batch uses this file's prompt "
+            "(tokenized, replicated batch_size times) instead of --dataset-name, "
+            "so the accept length is a controlled constant across bs and arms.",
         )
         parser.add_argument(
             "--gsp-num-groups",
@@ -507,6 +516,7 @@ def run_one_case(
     lora_name: Optional[List[str]] = None,
     lora_request_distribution: str = BenchArgs.lora_request_distribution,
     lora_zipf_alpha: float = BenchArgs.lora_zipf_alpha,
+    fixed_prompt_file: str = "",
 ):
     if backend == "vllm":
         # You need to have export VLLM_SERVER_DEV_MODE=1 in your environment to use this endpoint.
@@ -514,51 +524,64 @@ def run_one_case(
     else:
         _flush_cache_with_retry(url, "/flush_cache")
 
-    # Load input token ids via benchmark.datasets.get_dataset
-    supported_datasets = ("random", "random-ids", "mmmu", "generated-shared-prefix")
-    if dataset_name not in supported_datasets:
-        raise ValueError(
-            f"Unsupported dataset for batch benchmark: {dataset_name}. "
-            f"Supported: {supported_datasets}"
-        )
-
-    actual_gsp_groups = min(gsp_num_groups, batch_size)
-    dataset_args = SimpleNamespace(
-        dataset_name=dataset_name,
-        num_prompts=batch_size,
-        random_input_len=input_len,
-        random_output_len=output_len,
-        random_range_ratio=1.0,
-        dataset_path=dataset_path,
-        tokenize_prompt=dataset_name not in ("mmmu", "generated-shared-prefix"),
-        backend=backend,
-        seed=BenchArgs.seed,
-        gsp_num_groups=actual_gsp_groups,
-        gsp_prompts_per_group=(batch_size + actual_gsp_groups - 1) // actual_gsp_groups,
-        gsp_system_prompt_len=gsp_system_prompt_len,
-        gsp_question_len=gsp_question_len,
-        gsp_output_len=gsp_output_len,
-        # The generated-shared-prefix dataset's from_args requires these; the
-        # batch-bench path only ever uses the uniform group distribution.
-        gsp_group_distribution="uniform",
-        gsp_zipf_alpha=None,
-    )
-    tok_inner = getattr(tokenizer, "tokenizer", tokenizer)
-    dataset_model_id = model_name or getattr(tok_inner, "name_or_path", None)
-    input_requests = get_dataset(dataset_args, tokenizer, model_id=dataset_model_id)
-
-    if dataset_name == "generated-shared-prefix":
-        input_requests = input_requests[:batch_size]
-        input_ids = [tokenizer.encode(req.prompt) for req in input_requests]
-        input_len = sum(len(ids) for ids in input_ids) // len(input_ids)
-        output_len = gsp_output_len
+    # Load input token ids. A --fixed-prompt-file pins EVERY request in the batch
+    # to one real prompt (its tokenized ids, replicated batch_size times) so the
+    # accept length is a controlled constant across bs and arms -- decode dynamics
+    # (accept / iter_time / itl) then reflect only bs scaling, not which prompts
+    # happened to be sampled. Otherwise fall back to the synthetic get_dataset path.
+    if fixed_prompt_file:
+        tok_inner = getattr(tokenizer, "tokenizer", tokenizer)
+        with open(fixed_prompt_file) as f:
+            prompt_ids = tok_inner.encode(f.read())
+        input_ids = [list(prompt_ids) for _ in range(batch_size)]
+        input_len = len(prompt_ids)
         image_data = None
-    elif dataset_name == "mmmu":
-        input_ids = [tok_inner.encode(req.prompt) for req in input_requests]
-        image_data = [req.image_data for req in input_requests]
     else:
-        input_ids = [req.prompt for req in input_requests]
-        image_data = None
+        supported_datasets = ("random", "random-ids", "mmmu", "generated-shared-prefix")
+        if dataset_name not in supported_datasets:
+            raise ValueError(
+                f"Unsupported dataset for batch benchmark: {dataset_name}. "
+                f"Supported: {supported_datasets}"
+            )
+
+        actual_gsp_groups = min(gsp_num_groups, batch_size)
+        dataset_args = SimpleNamespace(
+            dataset_name=dataset_name,
+            num_prompts=batch_size,
+            random_input_len=input_len,
+            random_output_len=output_len,
+            random_range_ratio=1.0,
+            dataset_path=dataset_path,
+            tokenize_prompt=dataset_name not in ("mmmu", "generated-shared-prefix"),
+            backend=backend,
+            seed=BenchArgs.seed,
+            gsp_num_groups=actual_gsp_groups,
+            gsp_prompts_per_group=(batch_size + actual_gsp_groups - 1)
+            // actual_gsp_groups,
+            gsp_system_prompt_len=gsp_system_prompt_len,
+            gsp_question_len=gsp_question_len,
+            gsp_output_len=gsp_output_len,
+            # The generated-shared-prefix dataset's from_args requires these; the
+            # batch-bench path only ever uses the uniform group distribution.
+            gsp_group_distribution="uniform",
+            gsp_zipf_alpha=None,
+        )
+        tok_inner = getattr(tokenizer, "tokenizer", tokenizer)
+        dataset_model_id = model_name or getattr(tok_inner, "name_or_path", None)
+        input_requests = get_dataset(dataset_args, tokenizer, model_id=dataset_model_id)
+
+        if dataset_name == "generated-shared-prefix":
+            input_requests = input_requests[:batch_size]
+            input_ids = [tokenizer.encode(req.prompt) for req in input_requests]
+            input_len = sum(len(ids) for ids in input_ids) // len(input_ids)
+            output_len = gsp_output_len
+            image_data = None
+        elif dataset_name == "mmmu":
+            input_ids = [tok_inner.encode(req.prompt) for req in input_requests]
+            image_data = [req.image_data for req in input_requests]
+        else:
+            input_ids = [req.prompt for req in input_requests]
+            image_data = None
 
     # Build payload based on backend
     if backend == "vllm":
@@ -1037,6 +1060,7 @@ def run_benchmark_internal(
                 lora_name=bench_args.lora_name,
                 lora_request_distribution=bench_args.lora_request_distribution,
                 lora_zipf_alpha=bench_args.lora_zipf_alpha,
+                fixed_prompt_file=bench_args.fixed_prompt_file,
                 **gsp_kwargs,
             )
         print("=" * 8 + " Warmup End   " + "=" * 8 + "\n")
@@ -1080,6 +1104,7 @@ def run_benchmark_internal(
                     lora_name=bench_args.lora_name,
                     lora_request_distribution=bench_args.lora_request_distribution,
                     lora_zipf_alpha=bench_args.lora_zipf_alpha,
+                    fixed_prompt_file=bench_args.fixed_prompt_file,
                     **gsp_kwargs,
                 )
             )
