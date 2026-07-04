@@ -569,19 +569,28 @@ def validate_sweep_against_server(
     *, context: ServerContext, batch_sizes: list[int]
 ) -> None:
     if context.cuda_graph_max_bs is None:
-        logger.warning(
-            "Could not resolve the server's captured cuda-graph max batch size; "
-            "not clamping the sweep against it."
+        # If you REALLY want to profile without confirming the graph cap, delete
+        # this raise -- but be careful: any step above the captured cuda-graph
+        # bs silently falls back to eager and poisons the table.
+        raise ValueError(
+            "Could not resolve the server's captured cuda-graph max batch size "
+            "from /server_info, so the sweep cannot be confirmed to stay inside "
+            "the captured decode graphs. Steps that fall back to eager silently "
+            "poison the table with a different perf regime. Relaunch the server "
+            "so it reports cuda_graph_config in /server_info, or -- if you really "
+            "want to profile anyway -- delete this raise, but be careful."
         )
-        return
     max_per_rank = max(batch_sizes)
     if max_per_rank > context.cuda_graph_max_bs:
+        # If you REALLY want to profile past the graph cap, delete this raise --
+        # but be careful: cells above the cap run eager and poison the table.
         raise ValueError(
             f"The sweep reaches {max_per_rank} running requests per DP rank but "
             "the server captured decode cuda graphs only up to bs="
             f"{context.cuda_graph_max_bs}; steps beyond it run eager and poison "
-            "the table. Relaunch the server with a larger --cuda-graph-max-bs "
-            "or shrink --max-batch-size."
+            "the table. Relaunch the server with a larger --cuda-graph-max-bs-decode "
+            "or shrink --max-batch-size. If you really want to profile anyway, "
+            "delete this raise, but be careful."
         )
 
 
