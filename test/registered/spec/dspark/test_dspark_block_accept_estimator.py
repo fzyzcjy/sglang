@@ -6,8 +6,11 @@ from pathlib import Path
 
 import torch
 
-from sglang.srt.speculative.dspark_components.dspark_block_accept_estimator import (
-    BlockAcceptEstimateRecorder,
+from sglang.srt.speculative.dspark_components.dspark_block_accept_estimator_offline import (
+    OfflineBlockAcceptEstimateRecorder,
+)
+from sglang.srt.speculative.dspark_components.dspark_block_accept_estimator_online import (
+    OnlineBlockAcceptEstimateRecorder as BlockAcceptEstimateRecorder,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
@@ -501,6 +504,81 @@ class TestOnlineCeilingEstimate(CustomTestCase):
         with tempfile.TemporaryDirectory() as tmp:
             recorder, _ = _make_recorder(tmp)
             self.assertIsNone(recorder.online_estimate())
+
+
+class TestOfflineRecorderMatchesOnline(CustomTestCase):
+    def test_offline_dump_matches_online_dump_over_random_stream(self):
+        """The synchronous offline recorder writes byte-identical JSONL to the async online recorder."""
+        bs, steps = 4, 16
+        gen = torch.Generator().manual_seed(23)
+        with tempfile.TemporaryDirectory() as tmp:
+            online_path = Path(tmp) / "online.jsonl"
+            offline_path = Path(tmp) / "offline.jsonl"
+            online = BlockAcceptEstimateRecorder(
+                path=str(online_path), gamma=_GAMMA, device="cpu"
+            )
+            offline = OfflineBlockAcceptEstimateRecorder(
+                path=str(offline_path), gamma=_GAMMA
+            )
+            seq = [40 + 5 * b for b in range(bs)]
+            for t in range(steps):
+                verify_lens, correct_lens, drafts, bonus, prefix = [], [], [], [], []
+                for b in range(bs):
+                    vl = int(torch.randint(1, _GAMMA + 2, (1,), generator=gen))
+                    window = vl - 1
+                    cl = int(torch.randint(0, window + 1, (1,), generator=gen))
+                    row = torch.randint(0, _VOCAB, (_GAMMA,), generator=gen).tolist()
+                    if cl < _GAMMA and int(torch.randint(0, 2, (1,), generator=gen)):
+                        bt = row[cl]
+                    else:
+                        bt = int(torch.randint(0, _VOCAB, (1,), generator=gen))
+                    verify_lens.append(vl)
+                    correct_lens.append(cl)
+                    drafts.append(row)
+                    bonus.append(bt)
+                    prefix.append(seq[b])
+                    seq[b] += cl + 1
+                kwargs = dict(
+                    forward_ct=t + 1,
+                    rids=[f"r{b}" for b in range(bs)],
+                    draft_tokens=torch.tensor(drafts, dtype=torch.int64),
+                    corrected_logits=torch.randn(bs, _GAMMA, _VOCAB, generator=gen),
+                    draft_temperatures=torch.ones(bs),
+                    greedy_mask=torch.zeros(bs, dtype=torch.bool),
+                    target_logits=torch.randn(bs * (_GAMMA + 1), _VOCAB, generator=gen),
+                    target_temperatures=torch.ones(bs),
+                    truncated_sampling_mask=None,
+                    logits_adjustments_are_noop=True,
+                    correct_len=torch.tensor(correct_lens, dtype=torch.int32),
+                    cap_trim_lens=torch.tensor(
+                        [_GAMMA - (v - 1) for v in verify_lens], dtype=torch.int32
+                    ),
+                    bonus=torch.tensor(bonus, dtype=torch.int64),
+                    prefix_lens=torch.tensor(prefix, dtype=torch.int64),
+                    layout=_FakeLayout(torch.tensor(verify_lens, dtype=torch.int32)),
+                )
+                online.observe_verify_step(**kwargs)
+                offline.observe_verify_step(**kwargs)
+            online.flush()
+            offline.flush()
+
+            online_recs = _read_records(online_path)
+            offline_recs = _read_records(offline_path)
+            self.assertEqual(len(online_recs), len(offline_recs))
+            for a, b in zip(online_recs, offline_recs):
+                self.assertEqual(a.keys(), b.keys())
+                self.assertEqual(a["rid"], b["rid"])
+                self.assertEqual(a["fct"], b["fct"])
+                self.assertEqual(a["w"], b["w"])
+                self.assertEqual(a["cl"], b["cl"])
+                if "pg" in a:
+                    self.assertEqual(len(a["pg"]), len(b["pg"]))
+                    for ea, eb in zip(a["pg"], b["pg"]):
+                        self.assertEqual(ea[0], eb[0])
+                        self.assertEqual(ea[1], eb[1])
+                        self.assertAlmostEqual(ea[2], eb[2], places=5)
+                        self.assertEqual(ea[3], eb[3])
+                        self.assertEqual(ea[4], eb[4])
 
 
 if __name__ == "__main__":
