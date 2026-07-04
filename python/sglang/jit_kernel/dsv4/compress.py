@@ -102,10 +102,6 @@ def _jit_compress_plan_module() -> Module:
 # Plan tensor sizes (must match the C++ structs in compress.cuh).
 # ----------------------------------------------------------------------------
 _PREFILL_PLAN_BYTES = 24
-# sizeof(CompressPlan)==16, sizeof(WritePlan)==8 (static_assert in
-# compress_v2.cuh). The plan out-params are [num_q_tokens, these widths].
-_PLAN_C_BYTES = 16
-_PLAN_W_BYTES = 8
 
 
 # ----------------------------------------------------------------------------
@@ -219,29 +215,14 @@ class CompressorPrefillPlan(NamedTuple):
             dtype=torch.uint8,
             pin_memory=not is_gpu_input,
         )
-        # Allocate the plan out-params with torch (stream-ordered lifetime) and
-        # pass them in, mirroring generate_online. Previously the C++ allocated
-        # them via ffi::empty and returned them through DLPack, giving them a
-        # non-stream-ordered lifetime: dropping the Python ref let the caching
-        # allocator recycle the memory while an enqueued consumer kernel was
-        # still reading it (the cuda-graph-capture wild store / IMA).
-        device = req_pool_indices.device
-        plan_c_dev = torch.empty(
-            (num_q_tokens, _PLAN_C_BYTES), dtype=torch.uint8, device=device
-        )
-        plan_w_dev = torch.empty(
-            (num_q_tokens, _PLAN_W_BYTES), dtype=torch.uint8, device=device
-        )
         module = _jit_compress_plan_module()
-        num_c, num_w = module.plan_prefill(
+        plan_c, plan_w = module.plan_prefill(
             req_pool_indices,
             req_to_token,
             full_to_swa,
             seq_lens,
             extend_lens,
             pin_buffer,
-            plan_c_dev,
-            plan_w_dev,
             int(num_q_tokens),
             int(compress_ratio),
             int(swa_page_size),
@@ -250,8 +231,8 @@ class CompressorPrefillPlan(NamedTuple):
         )
         return CompressorPrefillPlan(
             compress_ratio,
-            plan_c_dev[: int(num_c)],
-            plan_w_dev[: int(num_w)],
+            torch.from_dlpack(plan_c),
+            torch.from_dlpack(plan_w),
             pin_buffer,
         )
 
