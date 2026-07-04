@@ -3768,6 +3768,7 @@ class Scheduler(
                 "speculative_accept_threshold_single",
                 "speculative_accept_threshold_acc",
                 "dspark_force_budget_frac",
+                "dspark_clear_info_records",
             ]
         )
 
@@ -3804,6 +3805,17 @@ class Scheduler(
                     )
                     if_success = False
                     break
+            elif k == "dspark_clear_info_records":
+                # Drop the zero-overhead observability ring so a following load
+                # is analyzed in isolation (no warmup / prior-traffic records).
+                if not self.spec_algorithm.is_dspark() or not hasattr(
+                    self.draft_worker, "clear_info_records"
+                ):
+                    logging.warning(
+                        "dspark_clear_info_records requires a DSpark draft worker."
+                    )
+                    if_success = False
+                    break
 
         if if_success:
             if (
@@ -3823,6 +3835,10 @@ class Scheduler(
                     self.draft_worker.set_dspark_forced_budget_frac(
                         None if v is None else float(v)
                     )
+                    continue
+                if k == "dspark_clear_info_records":
+                    if v:
+                        self.draft_worker.clear_info_records()
                     continue
                 setattr(get_global_server_args(), k, v)
             logger.info(f"Global server args updated! {get_global_server_args()=}")
