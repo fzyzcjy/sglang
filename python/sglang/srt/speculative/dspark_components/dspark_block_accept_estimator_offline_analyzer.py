@@ -4,9 +4,10 @@ import json
 import math
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Annotated, Any, Dict, List, Optional, Tuple
 
 import msgspec
+import typer
 
 
 class BlockEstimate(msgspec.Struct):
@@ -21,7 +22,7 @@ class BlockEstimate(msgspec.Struct):
 class LoadedRecords(msgspec.Struct):
     blocks: List[Dict[str, Any]]
     gathers: Dict[Tuple[str, int], List[List[Any]]]
-    eos_terminated: set
+    eos_terminated: set[Tuple[str, int]]
 
 
 class PerRequestEstimate(msgspec.Struct):
@@ -35,7 +36,7 @@ class PerRequestEstimate(msgspec.Struct):
 def load_records(jsonl_path: Path) -> LoadedRecords:
     blocks: List[Dict[str, Any]] = []
     gathers: Dict[Tuple[str, int], List[List[Any]]] = defaultdict(list)
-    eos_terminated: set = set()
+    eos_terminated: set[Tuple[str, int]] = set()
     with jsonl_path.open() as f:
         for line in f:
             rec = json.loads(line)
@@ -56,7 +57,7 @@ def evaluate_block(
     rec: Dict[str, Any],
     gathers: Dict[Tuple[str, int], List[List[Any]]],
     gamma: int,
-    eos_terminated: set,
+    eos_terminated: set[Tuple[str, int]],
 ) -> BlockEstimate:
     cl = rec["cl"]
     window = rec["w"]
@@ -137,15 +138,25 @@ def per_request_estimates(
     return per_request
 
 
-def analyze(jsonl_path: Path, *, gamma: int, arm: str) -> Dict[str, Any]:
-    loaded = load_records(jsonl_path)
-    blocks = loaded.blocks
-    results = [
+def evaluate_all(loaded: LoadedRecords, gamma: int) -> List[BlockEstimate]:
+    return [
         evaluate_block(rec, loaded.gathers, gamma, loaded.eos_terminated)
-        for rec in blocks
+        for rec in loaded.blocks
     ]
 
+
+def analyze(jsonl_path: Path, *, gamma: int, arm: str) -> Dict[str, Any]:
+    loaded = load_records(jsonl_path)
+    return summarize(loaded.blocks, evaluate_all(loaded, gamma), arm=arm)
+
+
+def summarize(
+    blocks: List[Dict[str, Any]], results: List[BlockEstimate], *, arm: str
+) -> Dict[str, Any]:
     n = len(results)
+    if n == 0:
+        return {"arm": arm, "num_blocks": 0}
+
     mean_lo = sum(r.lo for r in results) / n
     mean_hi = sum(r.hi for r in results) / n
     categories: Dict[str, int] = defaultdict(int)
@@ -275,35 +286,30 @@ def analyze_driver_meta(meta_path: Path) -> Dict[str, Any]:
 
 
 def main(
-    recorder_jsonl: str,
-    gamma: int,
-    arm: str,
-    driver_meta: Optional[str] = None,
-    output: Optional[str] = None,
-    per_request_output: Optional[str] = None,
+    recorder_jsonl: Annotated[Path, typer.Argument()],
+    gamma: Annotated[int, typer.Argument()],
+    arm: Annotated[str, typer.Argument()],
+    driver_meta: Annotated[Optional[Path], typer.Option()] = None,
+    output: Annotated[Optional[Path], typer.Option()] = None,
+    per_request_output: Annotated[Optional[Path], typer.Option()] = None,
 ) -> None:
-    result = analyze(Path(recorder_jsonl), gamma=gamma, arm=arm)
+    loaded = load_records(recorder_jsonl)
+    results = evaluate_all(loaded, gamma)
+    result = summarize(loaded.blocks, results, arm=arm)
     if driver_meta is not None:
-        result["driver_meta"] = analyze_driver_meta(Path(driver_meta))
+        result["driver_meta"] = analyze_driver_meta(driver_meta)
 
     text = json.dumps(result, indent=2)
     print(text)
     if output is not None:
-        Path(output).write_text(text + "\n")
+        output.write_text(text + "\n")
 
     if per_request_output is not None:
-        loaded = load_records(Path(recorder_jsonl))
-        results = [
-            evaluate_block(rec, loaded.gathers, gamma, loaded.eos_terminated)
-            for rec in loaded.blocks
-        ]
         per_request = per_request_estimates(loaded.blocks, results)
-        with Path(per_request_output).open("w") as f:
+        with per_request_output.open("w") as f:
             for entry in per_request:
                 f.write(json.dumps(msgspec.to_builtins(entry)) + "\n")
 
 
 if __name__ == "__main__":
-    import typer
-
     typer.run(main)
