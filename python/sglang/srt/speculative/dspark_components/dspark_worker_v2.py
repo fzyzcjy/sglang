@@ -35,6 +35,7 @@ from sglang.srt.speculative.dspark_components.dspark_accept import (
 )
 from sglang.srt.speculative.dspark_components.dspark_block_accept_estimator import (
     BlockAcceptEstimateRecorder,
+    create_block_accept_estimate_recorder,
 )
 from sglang.srt.speculative.dspark_components.dspark_confidence_metrics import (
     ConfidenceMetricsProbe,
@@ -304,20 +305,11 @@ class DSparkWorkerV2(BaseSpecWorker):
 
         self._sts_recorder: Optional[StsDataRecorder] = None
 
-        self._block_accept_recorder: Optional[BlockAcceptEstimateRecorder] = None
-        block_accept_estimate_path = envs.SGLANG_DSPARK_BLOCK_ACCEPT_ESTIMATE_PATH.get()
-        block_accept_online_interval = (
-            envs.SGLANG_DSPARK_BLOCK_ACCEPT_ONLINE_INTERVAL.get()
-        )
-        if (
-            block_accept_estimate_path or block_accept_online_interval > 0
-        ) and self.tp_rank == 0:
-            self._block_accept_recorder = BlockAcceptEstimateRecorder(
-                path=block_accept_estimate_path,
-                gamma=self.gamma,
-                device=self.device,
-                online_log_interval=block_accept_online_interval,
+        self._block_accept_recorder: Optional[BlockAcceptEstimateRecorder] = (
+            create_block_accept_estimate_recorder(
+                gamma=self.gamma, device=self.device, tp_rank=self.tp_rank
             )
+        )
 
         # Verify-budget measurement pin: off at launch, set purely at runtime
         # via /set_internal_state {"dspark_force_budget_frac": f} (see
@@ -378,6 +370,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             tp_rank=self.tp_rank,
             device=self.device,
             mode_value=self._verify_planner.mode_value,
+            sps_report_interval=envs.SGLANG_DSPARK_LOG_SPS_PRED_INTERVAL.get(),
         )
 
     def _resolve_target_embed_tokens(self, target_model):
@@ -536,6 +529,21 @@ class DSparkWorkerV2(BaseSpecWorker):
             self._simulate_acc_len if self._simulate_acc_len > 0 else None
         )
         return dumped
+
+    def clear_info_records(self) -> None:
+        self._info_dumper.clear()
+
+    def block_accept_estimate_log_suffix(self) -> Optional[str]:
+        if self._block_accept_recorder is None:
+            return None
+        return self._block_accept_recorder.estimate_log_suffix()
+
+    def note_request_finished(self, *, rid: str, natural_stop: bool) -> None:
+        if self._block_accept_recorder is None:
+            return
+        self._block_accept_recorder.note_request_finished(
+            rid=rid, natural_stop=natural_stop
+        )
 
     def forward_batch_generation(
         self,
@@ -1016,6 +1024,16 @@ class DSparkWorkerV2(BaseSpecWorker):
                 layout=layout,
             )
         if self._info_dumper.enabled:
+            budget_decision = self._verify_planner.take_budget_decision()
+            predicted_step_ms = (
+                None
+                if budget_decision is None
+                or budget_decision.predicted_step_seconds is None
+                else budget_decision.predicted_step_seconds * 1e3
+            )
+            predicted_theta = (
+                None if budget_decision is None else budget_decision.predicted_theta
+            )
             self._info_dumper.observe_decode_step(
                 DecodeStepObservation(
                     forward_ct=int(batch.forward_iter),
@@ -1028,6 +1046,8 @@ class DSparkWorkerV2(BaseSpecWorker):
                         if layout is not None
                         else int(verify_ids_2d.numel())
                     ),
+                    predicted_step_ms=predicted_step_ms,
+                    predicted_theta=predicted_theta,
                     verify_lens=layout.verify_lens if layout is not None else None,
                     confidence=confidence,
                     req_pool_indices=batch.req_pool_indices,
