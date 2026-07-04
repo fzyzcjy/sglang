@@ -187,7 +187,9 @@ def build_uninitialized_sps_table(*, max_batch_tokens: int) -> SpsCostTable:
     )
 
 
-def is_uninitialized_sps_table(table: SpsCostTable) -> bool:
+def is_uninitialized_sps_table(table: SpsCostTable | SpsAdditiveCostTable) -> bool:
+    if isinstance(table, SpsAdditiveCostTable):
+        return False
     return len(table.sample_batch_tokens) <= 1
 
 

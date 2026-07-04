@@ -4,8 +4,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from sglang.srt.speculative.dspark_components.dspark_sps_table import (
+    SpsAdditiveCostTable,
     SpsCostTable,
     build_batch_size_sweep,
+    build_uninitialized_sps_table,
+    is_uninitialized_sps_table,
     load_sps_table_from_path,
     profile_sps_table,
 )
@@ -308,6 +311,31 @@ class TestBuildBatchSizeSweep(CustomTestCase):
     def test_non_positive_max_raises(self):
         with self.assertRaises(ValueError):
             self._sweep(0)
+
+
+class TestIsUninitializedSpsTable(CustomTestCase):
+    def test_additive_table_is_never_uninitialized(self):
+        "A fitted additive table is initialized, so the check returns False without an attr crash."
+        table = SpsAdditiveCostTable(
+            bias_seconds=0.1,
+            bs_probes=[128, 192, 256],
+            alpha_seconds=[0.0, 0.008, 0.016],
+            m_probes=[384, 512, 1024],
+            theta_seconds=[0.0, 0.02, 0.1],
+        )
+        self.assertFalse(is_uninitialized_sps_table(table))
+
+    def test_placeholder_diagonal_table_is_uninitialized(self):
+        "The single-probe placeholder diagonal table is detected as uninitialized."
+        self.assertTrue(
+            is_uninitialized_sps_table(
+                build_uninitialized_sps_table(max_batch_tokens=128)
+            )
+        )
+
+    def test_real_diagonal_table_is_initialized(self):
+        "A multi-probe fitted diagonal table is not flagged as uninitialized."
+        self.assertFalse(is_uninitialized_sps_table(_make_table()))
 
 
 if __name__ == "__main__":
