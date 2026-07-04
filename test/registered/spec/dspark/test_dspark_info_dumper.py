@@ -6,6 +6,8 @@ from sglang.srt.speculative.dspark_components.dspark_info_dumper import (
     DecodeStepObservation,
     DsparkInfoDumper,
     InfoComponent,
+    _PendingStep,
+    logger,
     resolve_components,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -40,7 +42,14 @@ def make_dumper(components, **kwargs):
     return dumper, clock
 
 
-def make_obs(*, forward_ct, bs=4, num_verify_tokens=24):
+def make_obs(
+    *,
+    forward_ct,
+    bs=4,
+    num_verify_tokens=24,
+    predicted_step_ms=None,
+    predicted_theta=None,
+):
     return DecodeStepObservation(
         forward_ct=forward_ct,
         bs=bs,
@@ -48,6 +57,8 @@ def make_obs(*, forward_ct, bs=4, num_verify_tokens=24):
         budget=100,
         lag_steps=0,
         num_verify_tokens=num_verify_tokens,
+        predicted_step_ms=predicted_step_ms,
+        predicted_theta=predicted_theta,
         verify_lens=torch.full((bs,), 6, dtype=torch.int32),
         confidence=torch.full((bs, 5), 0.9),
         req_pool_indices=torch.arange(bs, dtype=torch.int64),
@@ -189,6 +200,110 @@ class TestCoreAndCpuTiming(CustomTestCase):
         self.assertEqual(dumper.dump(), dumper.dump())
 
 
+class TestPredictedStepFields(CustomTestCase):
+    def test_predicted_fields_recorded_under_core(self):
+        """The scheduler's predicted step time / objective land in the record."""
+        dumper, clock = make_dumper({"core"})
+        dumper.observe_decode_step(
+            make_obs(forward_ct=1, predicted_step_ms=1.5, predicted_theta=200.0)
+        )
+        clock.advance(0.01)
+        dumper.observe_decode_step(make_obs(forward_ct=2))
+        record = next(r for r in dumper.dump()["records"] if r["forward_ct"] == 1)
+        self.assertAlmostEqual(record["predicted_step_ms"], 1.5)
+        self.assertAlmostEqual(record["predicted_theta"], 200.0)
+
+    def test_predicted_fields_omitted_when_none(self):
+        """Steps without a fresh theta decision carry no prediction field."""
+        dumper, clock = make_dumper({"core"})
+        dumper.observe_decode_step(make_obs(forward_ct=1))
+        clock.advance(0.01)
+        dumper.observe_decode_step(make_obs(forward_ct=2))
+        record = next(r for r in dumper.dump()["records"] if r["forward_ct"] == 1)
+        self.assertNotIn("predicted_step_ms", record)
+        self.assertNotIn("predicted_theta", record)
+
+
+def _pending(*, bs, budget, num_verify_tokens, predicted_step_ms):
+    return _PendingStep(
+        forward_ct=1,
+        bs=bs,
+        mode="compact",
+        budget=budget,
+        lag_steps=1,
+        num_verify_tokens=num_verify_tokens,
+        predicted_step_ms=predicted_step_ms,
+        predicted_theta=1.0,
+        step_cpu_ms=None,
+        rids=None,
+        future=None,
+        segment_events={},
+    )
+
+
+class TestOnlineSpsReporter(CustomTestCase):
+    def test_report_interval_enables_dumper_and_gpu_timing(self):
+        """The reporter env var alone enables the dumper plus step GPU timing."""
+        dumper, _ = make_dumper(set(), sps_report_interval=2)
+        self.assertTrue(dumper.enabled)
+        self.assertIn(InfoComponent.STEP_GPU_TIME, dumper._components)
+
+    def test_report_interval_zero_leaves_dumper_disabled(self):
+        """No components and no reporter means the dumper stays off."""
+        dumper, _ = make_dumper(set(), sps_report_interval=0)
+        self.assertFalse(dumper.enabled)
+
+    def test_reporter_logs_summary_every_interval_matched_steps(self):
+        """A summary is logged once N matched (bs+budget==tokens) steps accrue."""
+        dumper, _ = make_dumper(set(), sps_report_interval=2)
+        matched = dict(bs=4, budget=20, num_verify_tokens=24)
+        with self.assertLogs(logger, level="INFO") as cm:
+            dumper._report_sps_prediction(
+                pending=_pending(**matched, predicted_step_ms=10.0), step_gpu_ms=12.0
+            )
+            dumper._report_sps_prediction(
+                pending=_pending(**matched, predicted_step_ms=8.0), step_gpu_ms=9.0
+            )
+        self.assertEqual(sum("SPS prediction" in m for m in cm.output), 1)
+        self.assertEqual(dumper._sps_window, [])
+
+    def test_reporter_counts_mismatch_and_excludes_it_from_means(self):
+        """A step whose executed tokens differ from bs+budget is a mismatch only."""
+        dumper, _ = make_dumper(set(), sps_report_interval=1)
+        with self.assertLogs(logger, level="INFO") as cm:
+            dumper._report_sps_prediction(
+                pending=_pending(
+                    bs=4, budget=99, num_verify_tokens=24, predicted_step_ms=10.0
+                ),
+                step_gpu_ms=12.0,
+            )
+            dumper._report_sps_prediction(
+                pending=_pending(
+                    bs=4, budget=20, num_verify_tokens=24, predicted_step_ms=10.0
+                ),
+                step_gpu_ms=12.0,
+            )
+        self.assertTrue(any("M_mismatch_rate=50.0%" in m for m in cm.output))
+
+    def test_reporter_skips_steps_missing_prediction_or_actual(self):
+        """Steps lacking predicted_step_ms or step_gpu_ms never enter the window."""
+        dumper, _ = make_dumper(set(), sps_report_interval=2)
+        dumper._report_sps_prediction(
+            pending=_pending(
+                bs=4, budget=20, num_verify_tokens=24, predicted_step_ms=None
+            ),
+            step_gpu_ms=12.0,
+        )
+        dumper._report_sps_prediction(
+            pending=_pending(
+                bs=4, budget=20, num_verify_tokens=24, predicted_step_ms=10.0
+            ),
+            step_gpu_ms=None,
+        )
+        self.assertEqual(dumper._sps_window, [])
+        self.assertEqual(dumper._sps_mismatched, 0)
+
+
 @unittest.skipUnless(torch.cuda.is_available(), "requires CUDA for d2h staging")
 class TestReqsAndGpuTiming(CustomTestCase):
     def _cuda_obs(self, *, forward_ct, bs=4):
@@ -200,6 +315,8 @@ class TestReqsAndGpuTiming(CustomTestCase):
             budget=obs.budget,
             lag_steps=obs.lag_steps,
             num_verify_tokens=obs.num_verify_tokens,
+            predicted_step_ms=obs.predicted_step_ms,
+            predicted_theta=obs.predicted_theta,
             verify_lens=obs.verify_lens.cuda(),
             confidence=obs.confidence.cuda(),
             req_pool_indices=obs.req_pool_indices.cuda(),

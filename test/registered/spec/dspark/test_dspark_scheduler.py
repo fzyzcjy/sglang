@@ -5,10 +5,16 @@ import torch
 
 from sglang.srt.speculative.dspark_components.dspark_scheduler import (
     DSparkScheduleConfig,
+    HostConfidenceBudgetPlanner,
+    VerifyBudgetDecision,
+    _additive_step_time_tensor,
     compute_verify_token_budget,
     schedule_verify_lens_topk_from_survival,
 )
-from sglang.srt.speculative.dspark_components.dspark_sps_table import SpsCostTable
+from sglang.srt.speculative.dspark_components.dspark_sps_table import (
+    SpsAdditiveCostTable,
+    SpsCostTable,
+)
 from sglang.srt.speculative.ragged_verify import RaggedVerifyLayout
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
@@ -31,6 +37,16 @@ def _cliff_table() -> SpsCostTable:
         sample_batch_tokens=[1, 2, 3, 4, 5, 6, 7, 8],
         sample_steps_per_sec=[1.0, 1.0, 1.0, 0.5, 0.45, 0.44, 0.43, 0.42],
         max_batch_tokens=64,
+    )
+
+
+def _additive_table() -> SpsAdditiveCostTable:
+    return SpsAdditiveCostTable(
+        bias_seconds=0.01,
+        bs_probes=[1, 100],
+        alpha_seconds=[0.0, 0.05],
+        m_probes=[1, 200],
+        theta_seconds=[0.0, 0.02],
     )
 
 
@@ -121,7 +137,7 @@ class TestComputeVerifyTokenBudget(CustomTestCase):
         )
         actual = compute_verify_token_budget(
             history_survival_probs=survival, sps_table=table, cfg=cfg
-        )
+        ).budget
         self.assertEqual(actual, expected)
 
     def test_budget_argmax_matches_bruteforce_scan_across_sps_cliffs(self):
@@ -146,10 +162,10 @@ class TestComputeVerifyTokenBudget(CustomTestCase):
         table = _flat_table()
         budget_no_min = compute_verify_token_budget(
             history_survival_probs=survival, sps_table=table, cfg=cfg_no_min
-        )
+        ).budget
         budget_min2 = compute_verify_token_budget(
             history_survival_probs=survival, sps_table=table, cfg=cfg_min2
-        )
+        ).budget
         self.assertEqual(budget_no_min, 4)
         self.assertEqual(budget_min2, 2)
 
@@ -159,8 +175,68 @@ class TestComputeVerifyTokenBudget(CustomTestCase):
         table = _flat_table()
         budget = compute_verify_token_budget(
             history_survival_probs=survival, sps_table=table, cfg=cfg
-        )
+        ).budget
         self.assertLessEqual(budget, 1)
+
+    def test_decision_predicted_step_matches_additive_table_at_budget(self):
+        """Additive table reports T(bs, K) of the chosen K as predicted_step_seconds."""
+        survival = torch.tensor([[0.9, 0.8, 0.7, 0.6]], dtype=torch.float32)
+        cfg = DSparkScheduleConfig(gamma=4)
+        table = _additive_table()
+        decision = compute_verify_token_budget(
+            history_survival_probs=survival, sps_table=table, cfg=cfg
+        )
+        step_time = _additive_step_time_tensor(
+            table=table, num_requests=1, num_budgets=survival.numel() + 1
+        )
+        self.assertAlmostEqual(
+            decision.predicted_step_seconds,
+            float(step_time[decision.budget]),
+            places=9,
+        )
+        self.assertGreater(decision.predicted_theta, 0.0)
+
+    def test_decision_predicted_step_is_inverse_sps_for_diagonal_table(self):
+        """Diagonal table reports 1/sps of the chosen point, never None."""
+        survival = torch.tensor([[0.9, 0.8, 0.7, 0.6]], dtype=torch.float32)
+        cfg = DSparkScheduleConfig(gamma=4)
+        table = _cliff_table()
+        decision = compute_verify_token_budget(
+            history_survival_probs=survival, sps_table=table, cfg=cfg
+        )
+        expected_sps = table.lookup(1 + decision.budget)
+        self.assertIsNotNone(decision.predicted_step_seconds)
+        self.assertAlmostEqual(
+            decision.predicted_step_seconds, 1.0 / expected_sps, places=9
+        )
+        self.assertGreater(decision.predicted_theta, 0.0)
+
+
+def _make_budget_planner() -> HostConfidenceBudgetPlanner:
+    return HostConfidenceBudgetPlanner(
+        sps_table=_flat_table(),
+        cfg=DSparkScheduleConfig(gamma=4),
+        model_runner=None,
+    )
+
+
+class TestBudgetDecisionLifecycle(CustomTestCase):
+    def test_take_last_decision_is_consume_once(self):
+        """take_last_decision returns the stashed decision, then None."""
+        planner = _make_budget_planner()
+        planner.last_decision = VerifyBudgetDecision(
+            budget=3, predicted_step_seconds=0.01, predicted_theta=100.0
+        )
+        first = planner.take_last_decision()
+        self.assertEqual(first.budget, 3)
+        self.assertIsNone(planner.take_last_decision())
+
+    def test_note_non_decode_step_clears_decision(self):
+        """A non-decode step must drop a stale prediction so it never mispairs."""
+        planner = _make_budget_planner()
+        planner.last_decision = VerifyBudgetDecision(budget=1)
+        planner.note_non_decode_step()
+        self.assertIsNone(planner.take_last_decision())
 
 
 class TestScheduleVerifyLensTopk(CustomTestCase):
@@ -335,7 +411,7 @@ class TestVerifyLenAnchorContract(CustomTestCase):
         )
         budget = compute_verify_token_budget(
             history_survival_probs=survival, sps_table=table, cfg=cfg
-        )
+        ).budget
         self.assertEqual(budget, 0)
         verify_lens = schedule_verify_lens_topk_from_survival(
             survival_probs=survival, budget=budget, cfg=cfg
@@ -455,10 +531,10 @@ class TestVerifyLensComposition(CustomTestCase):
         sps_table = _cliff_table()
         low_budget = compute_verify_token_budget(
             history_survival_probs=low_history, sps_table=sps_table, cfg=cfg
-        )
+        ).budget
         high_budget = compute_verify_token_budget(
             history_survival_probs=high_history, sps_table=sps_table, cfg=cfg
-        )
+        ).budget
         self.assertNotEqual(
             low_budget, high_budget, "budgets must differ for this test"
         )
