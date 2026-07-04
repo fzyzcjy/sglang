@@ -35,6 +35,7 @@ from sglang.srt.speculative.dspark_components.dspark_accept import (
 )
 from sglang.srt.speculative.dspark_components.dspark_block_accept_estimator import (
     BlockAcceptEstimateRecorder,
+    create_block_accept_estimate_recorder,
 )
 from sglang.srt.speculative.dspark_components.dspark_confidence_metrics import (
     ConfidenceMetricsProbe,
@@ -304,20 +305,11 @@ class DSparkWorkerV2(BaseSpecWorker):
 
         self._sts_recorder: Optional[StsDataRecorder] = None
 
-        self._block_accept_recorder: Optional[BlockAcceptEstimateRecorder] = None
-        block_accept_estimate_path = envs.SGLANG_DSPARK_BLOCK_ACCEPT_ESTIMATE_PATH.get()
-        block_accept_online_interval = (
-            envs.SGLANG_DSPARK_BLOCK_ACCEPT_ONLINE_INTERVAL.get()
-        )
-        if (
-            block_accept_estimate_path or block_accept_online_interval > 0
-        ) and self.tp_rank == 0:
-            self._block_accept_recorder = BlockAcceptEstimateRecorder(
-                path=block_accept_estimate_path,
-                gamma=self.gamma,
-                device=self.device,
-                online_log_interval=block_accept_online_interval,
+        self._block_accept_recorder: Optional[BlockAcceptEstimateRecorder] = (
+            create_block_accept_estimate_recorder(
+                gamma=self.gamma, device=self.device, tp_rank=self.tp_rank
             )
+        )
 
         # Verify-budget measurement pin: off at launch, set purely at runtime
         # via /set_internal_state {"dspark_force_budget_frac": f} (see
@@ -535,6 +527,18 @@ class DSparkWorkerV2(BaseSpecWorker):
             self._simulate_acc_len if self._simulate_acc_len > 0 else None
         )
         return dumped
+
+    def block_accept_estimate_log_suffix(self) -> Optional[str]:
+        if self._block_accept_recorder is None:
+            return None
+        return self._block_accept_recorder.estimate_log_suffix()
+
+    def note_request_finished(self, *, rid: str, natural_stop: bool) -> None:
+        if self._block_accept_recorder is None:
+            return
+        self._block_accept_recorder.note_request_finished(
+            rid=rid, natural_stop=natural_stop
+        )
 
     def forward_batch_generation(
         self,

@@ -6,8 +6,11 @@ from pathlib import Path
 
 import torch
 
-from sglang.srt.speculative.dspark_components.dspark_block_accept_estimator import (
-    BlockAcceptEstimateRecorder,
+from sglang.srt.speculative.dspark_components.dspark_block_accept_estimator_offline import (
+    OfflineBlockAcceptEstimateRecorder,
+)
+from sglang.srt.speculative.dspark_components.dspark_block_accept_estimator_online import (
+    OnlineBlockAcceptEstimateRecorder as BlockAcceptEstimateRecorder,
 )
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
@@ -34,6 +37,22 @@ def _make_recorder(tmp_dir: str) -> tuple[BlockAcceptEstimateRecorder, Path]:
     path = Path(tmp_dir) / "estimate.jsonl"
     recorder = BlockAcceptEstimateRecorder(path=str(path), gamma=_GAMMA, device="cpu")
     return recorder, path
+
+
+class _FakeDelayed:
+    """Lag-by-one stand-in for DelayedDeviceHostHandler: settle the prior step's bundle."""
+
+    def __init__(self):
+        self._pending = None
+
+    def step(self, *, compute_on_device, postprocess_on_host):
+        if self._pending is not None:
+            result, post = self._pending
+            self._pending = None
+            if result is not None:
+                post(result)
+        result = compute_on_device()
+        self._pending = (result, postprocess_on_host) if result is not None else None
 
 
 def _observe(
@@ -496,11 +515,299 @@ class TestOnlineCeilingEstimate(CustomTestCase):
             self.assertLessEqual(snap.window_blocks, 3)
             self.assertEqual(snap.cumulative_blocks, 10)
 
-    def test_online_disabled_by_default(self):
-        """Without an interval the online aggregator is absent and online_estimate is None."""
+    def test_online_estimate_none_without_observations(self):
+        """With no observed blocks yet, online_estimate and the log suffix are both None."""
         with tempfile.TemporaryDirectory() as tmp:
             recorder, _ = _make_recorder(tmp)
             self.assertIsNone(recorder.online_estimate())
+            self.assertIsNone(recorder.estimate_log_suffix())
+
+    def test_estimate_log_suffix_reports_cumulative(self):
+        """After observations the log suffix reports the cumulative mid estimate and bracket."""
+        with tempfile.TemporaryDirectory() as tmp:
+            recorder, _ = _make_recorder(tmp)
+            target = torch.randn((_GAMMA + 1), _VOCAB)
+            seq = 10
+            for t in range(6):
+                cl = t % 3
+                _observe(
+                    recorder,
+                    forward_ct=t + 1,
+                    rid="r0",
+                    drafts=[1, 2, 3],
+                    corrected_logits=torch.randn(_GAMMA, _VOCAB),
+                    target_logits=target,
+                    verify_len=_GAMMA + 1,
+                    correct_len=cl,
+                    bonus=5,
+                    seq_len=seq,
+                )
+                seq += cl + 1
+            suffix = recorder.estimate_log_suffix()
+            self.assertIsNotNone(suffix)
+            self.assertIn("est uncap acc len", suffix)
+
+
+class TestOfflineRecorderMatchesOnline(CustomTestCase):
+    def test_offline_dump_matches_online_dump_over_random_stream(self):
+        """The synchronous offline recorder writes byte-identical JSONL to the async online recorder."""
+        bs, steps = 4, 16
+        gen = torch.Generator().manual_seed(23)
+        with tempfile.TemporaryDirectory() as tmp:
+            online_path = Path(tmp) / "online.jsonl"
+            offline_path = Path(tmp) / "offline.jsonl"
+            online = BlockAcceptEstimateRecorder(
+                path=str(online_path), gamma=_GAMMA, device="cpu"
+            )
+            offline = OfflineBlockAcceptEstimateRecorder(
+                path=str(offline_path), gamma=_GAMMA
+            )
+            seq = [40 + 5 * b for b in range(bs)]
+            for t in range(steps):
+                verify_lens, correct_lens, drafts, bonus, prefix = [], [], [], [], []
+                for b in range(bs):
+                    vl = int(torch.randint(1, _GAMMA + 2, (1,), generator=gen))
+                    window = vl - 1
+                    cl = int(torch.randint(0, window + 1, (1,), generator=gen))
+                    row = torch.randint(0, _VOCAB, (_GAMMA,), generator=gen).tolist()
+                    if cl < _GAMMA and int(torch.randint(0, 2, (1,), generator=gen)):
+                        bt = row[cl]
+                    else:
+                        bt = int(torch.randint(0, _VOCAB, (1,), generator=gen))
+                    verify_lens.append(vl)
+                    correct_lens.append(cl)
+                    drafts.append(row)
+                    bonus.append(bt)
+                    prefix.append(seq[b])
+                    seq[b] += cl + 1
+                kwargs = dict(
+                    forward_ct=t + 1,
+                    rids=[f"r{b}" for b in range(bs)],
+                    draft_tokens=torch.tensor(drafts, dtype=torch.int64),
+                    corrected_logits=torch.randn(bs, _GAMMA, _VOCAB, generator=gen),
+                    draft_temperatures=torch.ones(bs),
+                    greedy_mask=torch.zeros(bs, dtype=torch.bool),
+                    target_logits=torch.randn(bs * (_GAMMA + 1), _VOCAB, generator=gen),
+                    target_temperatures=torch.ones(bs),
+                    truncated_sampling_mask=None,
+                    logits_adjustments_are_noop=True,
+                    correct_len=torch.tensor(correct_lens, dtype=torch.int32),
+                    cap_trim_lens=torch.tensor(
+                        [_GAMMA - (v - 1) for v in verify_lens], dtype=torch.int32
+                    ),
+                    bonus=torch.tensor(bonus, dtype=torch.int64),
+                    prefix_lens=torch.tensor(prefix, dtype=torch.int64),
+                    layout=_FakeLayout(torch.tensor(verify_lens, dtype=torch.int32)),
+                )
+                online.observe_verify_step(**kwargs)
+                offline.observe_verify_step(**kwargs)
+            online.flush()
+            offline.flush()
+
+            online_recs = _read_records(online_path)
+            offline_recs = _read_records(offline_path)
+            self.assertEqual(len(online_recs), len(offline_recs))
+            for a, b in zip(online_recs, offline_recs):
+                self.assertEqual(a.keys(), b.keys())
+                for key in ("rid", "fct", "w", "cl", "ct", "trimmed_tokens"):
+                    if key in a:
+                        self.assertEqual(a[key], b[key])
+                if "q_lp" in a:
+                    self.assertEqual(len(a["q_lp"]), len(b["q_lp"]))
+                    for qa, qb in zip(a["q_lp"], b["q_lp"]):
+                        self.assertAlmostEqual(qa, qb, places=5)
+                if "pg" in a:
+                    self.assertEqual(len(a["pg"]), len(b["pg"]))
+                    for ea, eb in zip(a["pg"], b["pg"]):
+                        self.assertEqual(ea[0], eb[0])
+                        self.assertEqual(ea[1], eb[1])
+                        self.assertAlmostEqual(ea[2], eb[2], places=5)
+                        self.assertEqual(ea[3], eb[3])
+                        self.assertEqual(ea[4], eb[4])
+
+
+class TestNaturalStopEosTail(CustomTestCase):
+    def _finalize_kept_block(self, *, natural_stop: bool):
+        with tempfile.TemporaryDirectory() as tmp:
+            recorder, _ = _make_recorder(tmp)
+            _observe(
+                recorder,
+                forward_ct=1,
+                rid="r0",
+                drafts=[1, 2, 3],
+                corrected_logits=torch.randn(_GAMMA, _VOCAB),
+                target_logits=torch.randn((_GAMMA + 1), _VOCAB),
+                verify_len=2,
+                correct_len=1,
+                bonus=2,
+                seq_len=10,
+            )
+            self.assertEqual(len(recorder._states["r0"].pending), 1)
+            recorder.note_request_finished(rid="r0", natural_stop=natural_stop)
+            self.assertNotIn("r0", recorder._states)
+            return recorder.online_estimate()
+
+    def test_natural_eos_caps_tail_to_zero(self):
+        """A request ending via a natural token stop finalizes its kept block with tail=0."""
+        snap = self._finalize_kept_block(natural_stop=True)
+        self.assertEqual(snap.cumulative_blocks, 1)
+        self.assertAlmostEqual(snap.cumulative_lo, snap.cumulative_hi, places=6)
+
+    def test_external_finish_keeps_optimistic_tail(self):
+        """A request cut off externally keeps the optimistic upper-bound tail (hi > lo)."""
+        snap = self._finalize_kept_block(natural_stop=False)
+        self.assertEqual(snap.cumulative_blocks, 1)
+        self.assertGreater(snap.cumulative_hi, snap.cumulative_lo)
+
+    def test_offline_and_online_emit_same_eos_marker(self):
+        """Both recorders emit an identical eos_end marker for the terminated block."""
+        with tempfile.TemporaryDirectory() as tmp:
+            online_path = Path(tmp) / "online.jsonl"
+            offline_path = Path(tmp) / "offline.jsonl"
+            online = BlockAcceptEstimateRecorder(
+                path=str(online_path), gamma=_GAMMA, device="cpu"
+            )
+            offline = OfflineBlockAcceptEstimateRecorder(
+                path=str(offline_path), gamma=_GAMMA
+            )
+            corrected = torch.randn(_GAMMA, _VOCAB)
+            target = torch.randn((_GAMMA + 1), _VOCAB)
+            for recorder in (online, offline):
+                _observe(
+                    recorder,
+                    forward_ct=1,
+                    rid="r0",
+                    drafts=[1, 2, 3],
+                    corrected_logits=corrected,
+                    target_logits=target,
+                    verify_len=2,
+                    correct_len=1,
+                    bonus=2,
+                    seq_len=10,
+                )
+                recorder.note_request_finished(rid="r0", natural_stop=True)
+                recorder.flush()
+            self.assertEqual(
+                _read_records(online_path)[-1], {"rid": "r0", "eos_end": [1]}
+            )
+            self.assertEqual(
+                _read_records(offline_path)[-1], {"rid": "r0", "eos_end": [1]}
+            )
+
+
+class TestAsyncFinishIntent(CustomTestCase):
+    def test_intent_buffered_then_applied_at_next_drain(self):
+        """On the async path the finish intent applies after the finishing step's bundle drains."""
+        with tempfile.TemporaryDirectory() as tmp:
+            recorder, _ = _make_recorder(tmp)
+            recorder._delayed = _FakeDelayed()
+
+            _observe(
+                recorder,
+                forward_ct=1,
+                rid="r0",
+                drafts=[1, 2, 3],
+                corrected_logits=torch.randn(_GAMMA, _VOCAB),
+                target_logits=torch.randn((_GAMMA + 1), _VOCAB),
+                verify_len=2,
+                correct_len=1,
+                bonus=2,
+                seq_len=10,
+            )
+            recorder.note_request_finished(rid="r0", natural_stop=True)
+            self.assertIn("r0", recorder._finish_intents)
+            self.assertIsNone(recorder.online_estimate())
+
+            _observe(
+                recorder,
+                forward_ct=2,
+                rid="r1",
+                drafts=[4, 5, 6],
+                corrected_logits=torch.randn(_GAMMA, _VOCAB),
+                target_logits=torch.randn((_GAMMA + 1), _VOCAB),
+                verify_len=_GAMMA + 1,
+                correct_len=1,
+                bonus=7,
+                seq_len=20,
+            )
+            self.assertNotIn("r0", recorder._finish_intents)
+            self.assertNotIn("r0", recorder._states)
+            snap = recorder.online_estimate()
+            self.assertEqual(snap.cumulative_blocks, 1)
+            self.assertAlmostEqual(snap.cumulative_lo, snap.cumulative_hi, places=6)
+
+
+class TestOfflineAnalyzerEos(CustomTestCase):
+    def test_eos_terminated_block_has_zero_tail(self):
+        """The analyzer zeroes the tail of an eos-terminated at-end block."""
+        from sglang.srt.speculative.dspark_components.dspark_block_accept_estimator_offline_analyzer import (
+            evaluate_block,
+            load_records,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "est.jsonl"
+            records = [
+                {
+                    "rid": "r0",
+                    "fct": 1,
+                    "w": 1,
+                    "cl": 1,
+                    "ct": 0,
+                    "trimmed_tokens": [2, 3],
+                    "q_lp": [-1.0, -1.0],
+                    "pg": [[1, 2, -0.5, 2, 2]],
+                },
+                {"rid": "r0", "eos_end": [1]},
+            ]
+            path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+
+            loaded = load_records(path)
+            self.assertEqual(len(loaded.blocks), 1)
+            self.assertIn(("r0", 1), loaded.eos_terminated)
+            est = evaluate_block(
+                loaded.blocks[0], loaded.gathers, _GAMMA, loaded.eos_terminated
+            )
+            self.assertEqual(est.category, "censored_eos")
+            self.assertAlmostEqual(est.lo, est.hi, places=6)
+
+    def test_per_request_estimates_group_by_rid(self):
+        """Per-request means aggregate a request's blocks, including exact-in-window ones."""
+        from sglang.srt.speculative.dspark_components.dspark_block_accept_estimator_offline_analyzer import (
+            evaluate_block,
+            load_records,
+            per_request_estimates,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "est.jsonl"
+            records = [
+                {"rid": "r0", "fct": 1, "w": 3, "cl": 2, "ct": 0},
+                {
+                    "rid": "r0",
+                    "fct": 2,
+                    "w": 1,
+                    "cl": 1,
+                    "ct": 0,
+                    "trimmed_tokens": [2, 3],
+                    "q_lp": [-1.0, -1.0],
+                    "pg": [[2, 2, -0.5, 2, 2]],
+                },
+                {"rid": "r0", "eos_end": [2]},
+                {"rid": "r1", "fct": 1, "w": 0, "cl": 0, "ct": 0},
+            ]
+            path.write_text("\n".join(json.dumps(r) for r in records) + "\n")
+
+            loaded = load_records(path)
+            results = [
+                evaluate_block(rec, loaded.gathers, _GAMMA, loaded.eos_terminated)
+                for rec in loaded.blocks
+            ]
+            by_rid = {p.rid: p for p in per_request_estimates(loaded.blocks, results)}
+            self.assertEqual(by_rid["r0"].num_blocks, 2)
+            self.assertAlmostEqual(by_rid["r0"].mean_mid, 3.0, places=6)
+            self.assertEqual(by_rid["r1"].num_blocks, 1)
+            self.assertAlmostEqual(by_rid["r1"].mean_mid, 1.0, places=6)
 
 
 if __name__ == "__main__":
