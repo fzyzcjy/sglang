@@ -369,7 +369,7 @@ class DSparkWorkerV2(BaseSpecWorker):
             tp_rank=self.tp_rank,
             device=self.device,
             mode_value=self._verify_planner.mode_value,
-            sps_report_interval=envs.SGLANG_DSPARK_LOG_SPS_PREDICTION.get(),
+            sps_report_interval=envs.SGLANG_DSPARK_LOG_SPS_PRED_INTERVAL.get(),
         )
 
     def _resolve_target_embed_tokens(self, target_model):
