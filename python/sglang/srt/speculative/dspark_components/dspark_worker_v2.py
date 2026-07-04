@@ -14,6 +14,7 @@ from sglang.srt.model_executor.forward_batch_info import (
     ForwardMode,
     compute_position,
 )
+from sglang.srt.sampling.sampling_params import TOP_K_ALL
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
 from sglang.srt.speculative.dflash_info import DFlashVerifyInput
@@ -31,6 +32,9 @@ from sglang.srt.speculative.draft_worker_common import (
 )
 from sglang.srt.speculative.dspark_components.dspark_accept import (
     accept_draft_tokens,
+)
+from sglang.srt.speculative.dspark_components.dspark_block_accept_estimator import (
+    BlockAcceptEstimateRecorder,
 )
 from sglang.srt.speculative.dspark_components.dspark_confidence_metrics import (
     ConfidenceMetricsProbe,
@@ -300,6 +304,21 @@ class DSparkWorkerV2(BaseSpecWorker):
 
         self._sts_recorder: Optional[StsDataRecorder] = None
 
+        self._block_accept_recorder: Optional[BlockAcceptEstimateRecorder] = None
+        block_accept_estimate_path = envs.SGLANG_DSPARK_BLOCK_ACCEPT_ESTIMATE_PATH.get()
+        block_accept_online_interval = (
+            envs.SGLANG_DSPARK_BLOCK_ACCEPT_ONLINE_INTERVAL.get()
+        )
+        if (
+            block_accept_estimate_path or block_accept_online_interval > 0
+        ) and self.tp_rank == 0:
+            self._block_accept_recorder = BlockAcceptEstimateRecorder(
+                path=block_accept_estimate_path,
+                gamma=self.gamma,
+                device=self.device,
+                online_log_interval=block_accept_online_interval,
+            )
+
         # Verify-budget measurement pin: off at launch, set purely at runtime
         # via /set_internal_state {"dspark_force_budget_frac": f} (see
         # set_dspark_forced_budget_frac).
@@ -331,6 +350,12 @@ class DSparkWorkerV2(BaseSpecWorker):
                 f"is safe in any mode. Got mode="
                 f"{self._verify_planner.mode_value!r}, simulate_acc_len="
                 f"{self._simulate_acc_len}."
+            )
+        if self._simulate_acc_len > 0 and self._block_accept_recorder is not None:
+            raise ValueError(
+                "SGLANG_DSPARK_BLOCK_ACCEPT_ESTIMATE_PATH cannot be combined with "
+                "SGLANG_SIMULATE_ACC_LEN (simulated correct_len breaks the "
+                "accept-probability bookkeeping of the estimator)."
             )
 
         self._confidence_probe = ConfidenceMetricsProbe(
@@ -526,6 +551,8 @@ class DSparkWorkerV2(BaseSpecWorker):
             if self._sps_recorder is not None:
                 self._sps_recorder.note_non_decode_step()
             self._info_dumper.note_non_decode_step()
+            if self._block_accept_recorder is not None:
+                self._block_accept_recorder.flush()
             return self._forward_prefill(batch, on_publish)
 
         return self._forward_decode(batch, on_publish)
@@ -957,6 +984,36 @@ class DSparkWorkerV2(BaseSpecWorker):
             cap_trim_lens=cap_trim_lens,
             commit_lens=commit_lens,
         )
+        if self._block_accept_recorder is not None and not proposal.folded:
+            self._block_accept_recorder.observe_verify_step(
+                forward_ct=int(batch.forward_iter),
+                rids=[req.rid for req in batch.reqs],
+                draft_tokens=draft_tokens,
+                corrected_logits=draft_block.corrected_logits,
+                draft_temperatures=draft_block.temperatures,
+                greedy_mask=draft_block.greedy_mask,
+                target_logits=logits_output.next_token_logits,
+                target_temperatures=(
+                    sampling_info.temperatures
+                    if sampling_info is not None
+                    else draft_block.temperatures
+                ),
+                truncated_sampling_mask=(
+                    (sampling_info.top_ks != TOP_K_ALL)
+                    | (sampling_info.top_ps != 1.0)
+                    | (sampling_info.min_ps > 0)
+                    if sampling_info is not None
+                    else None
+                ),
+                logits_adjustments_are_noop=verify_logits_adjustments_are_noop(
+                    sampling_info
+                ),
+                correct_len=correct_len,
+                cap_trim_lens=cap_trim_lens,
+                bonus=bonus,
+                prefix_lens=prefix_lens,
+                layout=layout,
+            )
         if self._info_dumper.enabled:
             self._info_dumper.observe_decode_step(
                 DecodeStepObservation(
