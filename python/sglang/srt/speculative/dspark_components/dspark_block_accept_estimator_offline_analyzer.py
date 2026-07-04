@@ -129,12 +129,16 @@ def analyze(jsonl_path: Path, *, gamma: int, arm: str) -> Dict[str, Any]:
     ]
     if a_pairs:
         out["mean_analytic_a_first"] = sum(a for a, _ in a_pairs) / len(a_pairs)
-        out["empirical_cap_trim_positive_rate"] = sum(
-            1 for _, c in a_pairs if c
-        ) / len(a_pairs)
+        out["empirical_cap_trim_positive_rate"] = sum(1 for _, c in a_pairs if c) / len(
+            a_pairs
+        )
 
     if arm == "cap-accept":
-        out.update(_cap_accept_truth(results=results, censored=censored, mean_lo=mean_lo, mean_hi=mean_hi))
+        out.update(
+            _cap_accept_truth(
+                results=results, censored=censored, mean_lo=mean_lo, mean_hi=mean_hi
+            )
+        )
 
     return out
 
