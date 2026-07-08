@@ -21,6 +21,7 @@ from sglang.srt.debug_utils.comparator.aligner.token_aligner.smart.types import 
 from sglang.srt.debug_utils.comparator.bundle_comparator import compare_bundle_pair
 from sglang.srt.debug_utils.comparator.tensor_comparator.comparator import (
     DEFAULT_PREDICATE,
+    FailureDisplayBudget,
 )
 from sglang.srt.debug_utils.comparator.bundle_matcher import (
     TensorBundleInfo,
@@ -150,6 +151,7 @@ def run(args: argparse.Namespace) -> int:
             diff_threshold_rules=parse_diff_threshold_rules(
                 args.diff_threshold, default_predicate=DEFAULT_PREDICATE
             ),
+            failure_display_budget=FailureDisplayBudget(),
             thd_seq_lens_by_step_pair=ta_result.thd_seq_lens_by_step_pair,
             viz_output_dir=viz_output_dir,
             compute_per_token=visualize_per_token is not None,
@@ -230,6 +232,7 @@ def _compare_bundle_pairs(
     token_aligner_mode: Optional[str],
     token_aligner_plan: Optional[TokenAlignerPlan],
     diff_threshold_rules: Optional[list[DiffThresholdRule]] = None,
+    failure_display_budget: Optional[FailureDisplayBudget] = None,
     thd_seq_lens_by_step_pair: Pair[Optional[dict[int, list[int]]]],
     viz_output_dir: Optional[Path] = None,
     compute_per_token: bool = False,
@@ -265,6 +268,7 @@ def _compare_bundle_pairs(
                 token_aligner_mode=token_aligner_mode,
                 token_aligner_plan=token_aligner_plan,
                 diff_threshold_rules=diff_threshold_rules,
+                failure_display_budget=failure_display_budget,
                 thd_seq_lens_by_step_pair=thd_seq_lens_by_step_pair,
                 viz_output_dir=viz_output_dir,
                 compute_per_token=compute_per_token,
