@@ -89,7 +89,12 @@ class DpPaddingMode(IntEnum):
         # overhead from uneven token distribution.
         # For dp_size=1, max_len equals sum_len, so prefer MAX_LEN mode
         # to enable symmetric memory optimization (needed for DSA CP, etc.).
-        if is_extend_in_batch and dp_size > 1:
+        import os as _dbg_os
+
+        _dbg_mode = _dbg_os.environ.get("SGLANG_DBG_DP_PAD", "")
+        if _dbg_mode == "max" and dp_size > 1:
+            return DpPaddingMode.MAX_LEN
+        if _dbg_mode != "heuristic" and is_extend_in_batch and dp_size > 1:
             # Hybrid-SSM models materialize idle ranks via the MAX_LEN
             # fabricated-row conversion; other models keep mainline SUM_LEN.
             if get_flags().dp.max_len_with_idle and min(global_num_tokens) == 0:
@@ -819,3 +824,11 @@ def moe_cp_all_gather_into_tensor(output: torch.Tensor, input: torch.Tensor):
 
 def attn_tp_all_gather(output_list: List[torch.Tensor], input: torch.Tensor):
     return get_attn_tp_group().all_gather(input, output_tensor_list=output_list)
+
+
+# ------------------------------------------------------- dp padding step probe
+_DBG_STEP = [0]
+
+
+def dbg_current_step() -> int:
+    return _DBG_STEP[0]

@@ -1276,6 +1276,26 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         else:
             num_tokens = global_num_tokens[0]
 
+        import os as _dbg_os
+
+        from sglang.srt.layers.dp_attention import _DBG_STEP
+
+        _DBG_STEP[0] += 1
+        if _dbg_os.environ.get("SGLANG_DBG_DP_LOG") == "1" and self.is_extend_in_batch:
+            _DBG_STEP_LOGGER.warning(
+                "[STEP] n=%d rank=%d mode=%s raw=%s final=%s local_rows=%d "
+                "buffer=%d fwd=%s bcg_ok=%s",
+                _DBG_STEP[0],
+                get_parallel().attn_dp_rank,
+                "MAX_LEN" if dp_padding_mode.is_max_len() else "SUM_LEN",
+                list(self.original_global_num_tokens_cpu or []),
+                global_num_tokens,
+                num_tokens,
+                buffer_len,
+                self.forward_mode,
+                self.can_run_dp_breakable_cuda_graph,
+            )
+
         self.global_dp_buffer_len = buffer_len
         set_dp_buffer_len(
             buffer_len,
@@ -1720,3 +1740,6 @@ def _bootstrap_rooms_to_tensor(
 def _stable_hash_str_to_i64(rid: str) -> int:
     digest = hashlib.blake2b(rid.encode("utf-8"), digest_size=8).digest()
     return int.from_bytes(digest, "little", signed=True)
+
+
+_DBG_STEP_LOGGER = __import__("logging").getLogger("dppad")
