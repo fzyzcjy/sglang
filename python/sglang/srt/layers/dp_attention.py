@@ -826,9 +826,77 @@ def attn_tp_all_gather(output_list: List[torch.Tensor], input: torch.Tensor):
     return get_attn_tp_group().all_gather(input, output_tensor_list=output_list)
 
 
-# ------------------------------------------------------- dp padding step probe
-_DBG_STEP = [0]
+# --------------------------------------------------- dp padding / gemm-M probe
+import os as _probe_os
+
+_PROBE_ON = _probe_os.environ.get("SGLANG_DBG_GEMM_M") == "1"
+_PROBE_ROWS = {}
+_PROBE_CALLS = {}
+_PROBE_REAL = 0
+_PROBE_PADDED = 0
+_PROBE_STEPS = 0
+_PROBE_LOGGER = __import__("logging").getLogger("gemmprobe")
+_PROBE_INSTALLED = False
 
 
-def dbg_current_step() -> int:
-    return _DBG_STEP[0]
+def probe_note_step(real_tokens: int, padded_rows: int) -> None:
+    """One call per forward: this rank's real (pre-padding) local token count and
+    the row count _pad_inputs_to_size padded the local tensors to."""
+    global _PROBE_REAL, _PROBE_PADDED, _PROBE_STEPS
+    if not _PROBE_ON:
+        return
+    _PROBE_REAL += int(real_tokens)
+    _PROBE_PADDED += int(padded_rows)
+    _PROBE_STEPS += 1
+    if _PROBE_STEPS % 300 == 0:
+        probe_dump()
+
+
+def probe_dump() -> None:
+    if not _PROBE_ON or _PROBE_REAL == 0:
+        return
+    rank = get_attention_dp_rank()
+    waste = 100.0 * (_PROBE_PADDED - _PROBE_REAL) / _PROBE_REAL
+    lines = [
+        f"[PROBE] rank={rank} steps={_PROBE_STEPS} real={_PROBE_REAL} "
+        f"padded_local_rows={_PROBE_PADDED} local_pad_waste={waste:+.2f}%"
+    ]
+    for name in sorted(_PROBE_ROWS, key=lambda k: -_PROBE_ROWS[k]):
+        rows = _PROBE_ROWS[name]
+        lines.append(
+            f"[PROBE] rank={rank} module={name} rows={rows} "
+            f"calls={_PROBE_CALLS[name]} avg_m={rows / _PROBE_CALLS[name]:.1f} "
+            f"rows_per_real={rows / _PROBE_REAL:.3f}"
+        )
+    _PROBE_LOGGER.warning("\n".join(lines))
+
+
+def _probe_hook(module, args):
+    if not args:
+        return
+    x = args[0]
+    if not hasattr(x, "shape") or getattr(x, "ndim", 0) < 2:
+        return
+    key = getattr(module, "_probe_name", None) or type(module).__name__
+    _PROBE_ROWS[key] = _PROBE_ROWS.get(key, 0) + int(x.shape[0])
+    _PROBE_CALLS[key] = _PROBE_CALLS.get(key, 0) + 1
+
+
+_PROBE_CLASS_HINTS = ("Linear", "Attention", "MLP", "MoE", "Experts", "Gate")
+
+
+def probe_install(model) -> None:
+    global _PROBE_INSTALLED
+    if not _PROBE_ON or _PROBE_INSTALLED:
+        return
+    _PROBE_INSTALLED = True
+    count = 0
+    for name, sub in model.named_modules():
+        cls = type(sub).__name__
+        if not any(hint in cls for hint in _PROBE_CLASS_HINTS):
+            continue
+        parts = [p for p in name.split(".") if not p.isdigit()]
+        sub._probe_name = f"{'.'.join(parts[-3:])}|{cls}"
+        sub.register_forward_pre_hook(_probe_hook)
+        count += 1
+    _PROBE_LOGGER.warning("[PROBE] installed hooks on %d modules", count)

@@ -1278,23 +1278,27 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
         import os as _dbg_os
 
-        from sglang.srt.layers.dp_attention import _DBG_STEP
+        from sglang.srt.layers.dp_attention import probe_note_step
 
-        _DBG_STEP[0] += 1
+        _dbg_raw = list(self.original_global_num_tokens_cpu or [])
+        _dbg_rank = get_parallel().attn_dp_rank
+        _dbg_real = _dbg_raw[_dbg_rank] if _dbg_rank < len(_dbg_raw) else 0
+        if self.is_extend_in_batch:
+            probe_note_step(_dbg_real, num_tokens)
         if _dbg_os.environ.get("SGLANG_DBG_DP_LOG") == "1" and self.is_extend_in_batch:
-            _DBG_STEP_LOGGER.warning(
-                "[STEP] n=%d rank=%d mode=%s raw=%s final=%s local_rows=%d "
-                "buffer=%d fwd=%s bcg_ok=%s",
-                _DBG_STEP[0],
-                get_parallel().attn_dp_rank,
-                "MAX_LEN" if dp_padding_mode.is_max_len() else "SUM_LEN",
-                list(self.original_global_num_tokens_cpu or []),
-                global_num_tokens,
-                num_tokens,
-                buffer_len,
-                self.forward_mode,
-                self.can_run_dp_breakable_cuda_graph,
-            )
+            global _DBG_STEP_N
+            _DBG_STEP_N += 1
+            if _DBG_STEP_N <= 4000:
+                _DBG_STEP_LOGGER.warning(
+                    "[STEP] n=%d rank=%d mode=%s raw=%s local_rows=%d buffer=%d fwd=%s",
+                    _DBG_STEP_N,
+                    _dbg_rank,
+                    "MAX_LEN" if dp_padding_mode.is_max_len() else "SUM_LEN",
+                    _dbg_raw,
+                    num_tokens,
+                    buffer_len,
+                    self.forward_mode,
+                )
 
         self.global_dp_buffer_len = buffer_len
         set_dp_buffer_len(
@@ -1742,4 +1746,5 @@ def _stable_hash_str_to_i64(rid: str) -> int:
     return int.from_bytes(digest, "little", signed=True)
 
 
+_DBG_STEP_N = 0
 _DBG_STEP_LOGGER = __import__("logging").getLogger("dppad")
