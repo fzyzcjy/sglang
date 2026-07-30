@@ -11,7 +11,7 @@ TAG="${PAD}-${PCG}"
 OUT_DIR="/scratch/dppad3/out/${TAG}"
 mkdir -p "$OUT_DIR"
 
-export HF_HOME=/scratch/hf
+export HF_HOME=/cluster-storage/models
 export SGLANG_DBG_DP_LOG=1
 case "$PAD" in
   main)    export SGLANG_DBG_DP_PAD="" ;;        # current main: forced SUM_LEN for extend
