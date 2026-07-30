@@ -848,7 +848,7 @@ def probe_note_step(real_tokens: int, padded_rows: int) -> None:
     _PROBE_REAL += int(real_tokens)
     _PROBE_PADDED += int(padded_rows)
     _PROBE_STEPS += 1
-    if _PROBE_STEPS % 300 == 0:
+    if _PROBE_STEPS % 50 == 0:
         probe_dump()
 
 
