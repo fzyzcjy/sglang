@@ -21,7 +21,15 @@ case "$PAD" in
 esac
 
 SERVER_LOG="${OUT_DIR}/server.log"
-PORT=33000
+# Distinct port per variant: a server that fails to exit cannot block the next
+# variant's rpc_port (that silently killed the first round-3 attempt).
+case "$TAG" in
+  main-breakable)    PORT=33000 ;;
+  no10414-breakable) PORT=34000 ;;
+  main-disabled)     PORT=35000 ;;
+  no10414-disabled)  PORT=36000 ;;
+  *)                 PORT=37000 ;;
+esac
 
 echo "=== launch tag=${TAG} (SGLANG_DBG_DP_PAD='${SGLANG_DBG_DP_PAD}', prefill cg=${PCG}) ==="
 nohup python -m sglang.launch_server \
@@ -80,4 +88,8 @@ grep -E "\[STEP\]|\[PCG\]" "$SERVER_LOG" | head -20
 
 kill "$SERVER_PID" 2>/dev/null
 wait "$SERVER_PID" 2>/dev/null
+for i in $(seq 1 30); do
+  kill -0 "$SERVER_PID" 2>/dev/null || break
+  sleep 2
+done
 echo "=== done ${TAG} ==="
