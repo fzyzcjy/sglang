@@ -1235,6 +1235,29 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
         else:
             num_tokens = global_num_tokens[0]
 
+        import os as _dbg_os
+
+        if (
+            _dbg_os.environ.get("SGLANG_DBG_DP_LOG") == "1"
+            and self.is_extend_in_batch
+            and max(global_num_tokens) >= 256
+        ):
+            global _DBG_DP_COUNT
+            _DBG_DP_COUNT += 1
+            if _DBG_DP_COUNT <= 3000:
+                _DBG_DP_LOGGER.warning(
+                    "[DPPAD] n=%d rank=%d mode=%s raw=%s final=%s local=%d buffer=%d mode_fwd=%s extend_in_batch=%s",
+                    _DBG_DP_COUNT,
+                    get_parallel().attn_dp_rank,
+                    "MAX_LEN" if dp_padding_mode.is_max_len() else "SUM_LEN",
+                    list(self.original_global_num_tokens_cpu or []),
+                    global_num_tokens,
+                    num_tokens,
+                    buffer_len,
+                    self.forward_mode,
+                    self.is_extend_in_batch,
+                )
+
         self.global_dp_buffer_len = buffer_len
         set_dp_buffer_len(
             buffer_len,
@@ -1667,3 +1690,7 @@ def _bootstrap_rooms_to_tensor(
 def _stable_hash_str_to_i64(rid: str) -> int:
     digest = hashlib.blake2b(rid.encode("utf-8"), digest_size=8).digest()
     return int.from_bytes(digest, "little", signed=True)
+
+
+_DBG_DP_COUNT = 0
+_DBG_DP_LOGGER = __import__("logging").getLogger("dppad")
