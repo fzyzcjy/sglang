@@ -824,3 +824,96 @@ def moe_cp_all_gather_into_tensor(output: torch.Tensor, input: torch.Tensor):
 
 def attn_tp_all_gather(output_list: List[torch.Tensor], input: torch.Tensor):
     return get_attn_tp_group().all_gather(input, output_tensor_list=output_list)
+
+
+# ---------------------------------------------------------------- gemm-M probe
+import os as _probe_os
+
+_PROBE_ON = _probe_os.environ.get("SGLANG_DBG_GEMM_M") == "1"
+_PROBE_ROWS = {}
+_PROBE_CALLS = {}
+_PROBE_REAL_TOKENS = 0
+_PROBE_STEPS = 0
+_PROBE_LOGGER = __import__("logging").getLogger("gemmprobe")
+_PROBE_INSTALLED = False
+
+
+def probe_note_step(real_tokens: int) -> None:
+    """Called once per forward from prepare_mlp_sync_batch with this rank's
+    REAL (pre-padding) local token count."""
+    global _PROBE_REAL_TOKENS, _PROBE_STEPS
+    if not _PROBE_ON:
+        return
+    _PROBE_REAL_TOKENS += int(real_tokens)
+    _PROBE_STEPS += 1
+    if _PROBE_STEPS % 200 == 0:
+        probe_dump()
+
+
+def probe_dump() -> None:
+    if not _PROBE_ON or _PROBE_REAL_TOKENS == 0:
+        return
+    import torch as _t
+
+    rank = get_attention_dp_rank()
+    lines = [
+        f"[GEMMPROBE] rank={rank} steps={_PROBE_STEPS} "
+        f"real_local_tokens={_PROBE_REAL_TOKENS}"
+    ]
+    for name in sorted(_PROBE_ROWS, key=lambda k: -_PROBE_ROWS[k]):
+        rows = _PROBE_ROWS[name]
+        lines.append(
+            f"[GEMMPROBE] rank={rank} module={name} rows={rows} "
+            f"calls={_PROBE_CALLS[name]} ratio={rows / _PROBE_REAL_TOKENS:.3f}"
+        )
+    _PROBE_LOGGER.warning("\n".join(lines))
+
+
+def _probe_key(module) -> str:
+    """Collapse per-layer instances into one bucket keyed by role."""
+    cls = type(module).__name__
+    name = getattr(module, "_probe_name", None)
+    return f"{name}|{cls}" if name else cls
+
+
+def _probe_hook(module, args):
+    if not args:
+        return
+    x = args[0]
+    if not hasattr(x, "shape") or x.ndim < 2:
+        return
+    key = _probe_key(module)
+    _PROBE_ROWS[key] = _PROBE_ROWS.get(key, 0) + int(x.shape[0])
+    _PROBE_CALLS[key] = _PROBE_CALLS.get(key, 0) + 1
+
+
+_PROBE_CLASS_HINTS = (
+    "Linear",
+    "Attention",
+    "MLP",
+    "MoE",
+    "Experts",
+    "Gate",
+    "RMSNorm",
+)
+
+
+def probe_install(model) -> None:
+    """Register forward-pre-hooks on every interesting submodule. Called from
+    ModelRunner once the model is loaded."""
+    global _PROBE_INSTALLED
+    if not _PROBE_ON or _PROBE_INSTALLED:
+        return
+    _PROBE_INSTALLED = True
+    count = 0
+    for name, sub in model.named_modules():
+        cls = type(sub).__name__
+        if not any(hint in cls for hint in _PROBE_CLASS_HINTS):
+            continue
+        # Bucket layer 0 separately from the rest so per-layer noise is visible,
+        # and strip the numeric layer index otherwise.
+        parts = [p for p in name.split(".") if not p.isdigit()]
+        sub._probe_name = ".".join(parts[-3:]) if parts else name
+        sub.register_forward_pre_hook(_probe_hook)
+        count += 1
+    _PROBE_LOGGER.warning("[GEMMPROBE] installed hooks on %d modules", count)

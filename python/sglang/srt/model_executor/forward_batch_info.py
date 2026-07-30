@@ -1237,6 +1237,13 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
 
         import os as _dbg_os
 
+        from sglang.srt.layers.dp_attention import probe_note_step
+
+        _dbg_raw = list(self.original_global_num_tokens_cpu or [])
+        _dbg_rank = get_parallel().attn_dp_rank
+        probe_note_step(
+            _dbg_raw[_dbg_rank] if _dbg_rank < len(_dbg_raw) else 0
+        )
         if (
             _dbg_os.environ.get("SGLANG_DBG_DP_LOG") == "1"
             and self.is_extend_in_batch
@@ -1246,16 +1253,15 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
             _DBG_DP_COUNT += 1
             if _DBG_DP_COUNT <= 3000:
                 _DBG_DP_LOGGER.warning(
-                    "[DPPAD] n=%d rank=%d mode=%s raw=%s final=%s local=%d buffer=%d mode_fwd=%s extend_in_batch=%s",
+                    "[DPPAD] n=%d rank=%d mode=%s raw=%s final=%s local=%d buffer=%d mode_fwd=%s",
                     _DBG_DP_COUNT,
-                    get_parallel().attn_dp_rank,
+                    _dbg_rank,
                     "MAX_LEN" if dp_padding_mode.is_max_len() else "SUM_LEN",
-                    list(self.original_global_num_tokens_cpu or []),
+                    _dbg_raw,
                     global_num_tokens,
                     num_tokens,
                     buffer_len,
                     self.forward_mode,
-                    self.is_extend_in_batch,
                 )
 
         self.global_dp_buffer_len = buffer_len

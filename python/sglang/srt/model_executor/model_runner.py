@@ -565,6 +565,9 @@ class ModelRunner:
         self.init_token_oracle()
         self.sampler = create_sampler()
         self.load_model()
+        from sglang.srt.layers.dp_attention import probe_install
+
+        probe_install(self.model)
         prepare_moe_topk(
             model=self.model,
             model_config=self.model_config,

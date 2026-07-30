@@ -812,24 +812,6 @@ class Qwen3MoeDecoderLayer(nn.Module):
             )
         )
 
-        import os as _dbg_os
-
-        if (
-            self.layer_id == 0
-            and _dbg_os.environ.get("SGLANG_DBG_DP_LOG") == "1"
-            and forward_batch.is_extend_in_batch
-        ):
-            global _DBG_ATTN_COUNT
-            _DBG_ATTN_COUNT += 1
-            if _DBG_ATTN_COUNT <= 3000:
-                logger.warning(
-                    "[DPATTN] n=%d attn_rows=%d real_extend_tokens=%s mode=%s",
-                    _DBG_ATTN_COUNT,
-                    hidden_states.shape[0],
-                    forward_batch.extend_seq_lens_cpu,
-                    forward_batch.dp_padding_mode,
-                )
-
         if hidden_states.shape[0] != 0:
             hidden_states = self.self_attn(
                 positions=positions,
@@ -1254,6 +1236,3 @@ class Qwen3MoeForCausalLM(nn.Module):
 
 
 EntryClass = Qwen3MoeForCausalLM
-
-
-_DBG_ATTN_COUNT = 0
