@@ -926,18 +926,6 @@ class PrefillCudaGraphRunner(BaseCudaGraphRunner):
         static_num_tokens = self._pad_to_bucket(num_tokens, self.capture_num_tokens)
         self.raw_num_tokens = num_tokens
 
-        import os as _dbg_os
-
-        if _dbg_os.environ.get("SGLANG_DBG_DP_LOG") == "1":
-            logger.warning(
-                "[PCG] local_rows_in=%d bucket=%d mode=%s global_num_tokens=%s buffer=%s",
-                num_tokens,
-                static_num_tokens,
-                forward_batch.dp_padding_mode,
-                forward_batch.global_num_tokens_cpu,
-                forward_batch.global_dp_buffer_len,
-            )
-
         bs = forward_batch.batch_size
         self.raw_bs = bs
 
