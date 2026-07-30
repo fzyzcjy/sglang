@@ -51,7 +51,7 @@ grep -iE "prefill.*cuda graph|Capture.*prefill|capture_num_tokens" "$SERVER_LOG"
 run_bench() {
   local name="$1"; shift
   echo "=== bench ${name} ==="
-  python -m sglang.bench_serving --backend sglang-oai --port "$PORT" "$@" \
+  python -m sglang.bench_serving --backend sglang-oai --host 127.0.0.1 --port "$PORT" "$@" \
     > "${OUT_DIR}/bench_${name}.log" 2>&1
   grep -E "Input token throughput|Mean TTFT|Successful requests|Benchmark duration" \
     "${OUT_DIR}/bench_${name}.log"
