@@ -1,11 +1,17 @@
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from typing import Optional
+from unittest.mock import MagicMock, patch
 
+import torch
+
+from sglang.srt.disaggregation.utils import DisaggregationMode
+from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.managers.scheduler import Scheduler
 from sglang.srt.managers.scheduler_components.weight_updater import (
     SchedulerWeightUpdaterManager,
 )
+from sglang.srt.model_executor.forward_batch_info import ForwardMode
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 
@@ -96,6 +102,68 @@ class TestSchedulerRecordWeightVersionChange(CustomTestCase):
         )
 
 
+class TestSchedulerBatchWeightVersion(CustomTestCase):
+    def _scheduler(self) -> Scheduler:
+        scheduler = Scheduler.__new__(Scheduler)
+        scheduler.forward_ct = 0
+        scheduler._sched_idled = False
+        scheduler.scripted_scheduler_hook = None
+        scheduler.profiler_manager = MagicMock()
+        scheduler.forward_sleep_time = None
+        scheduler._run_batch_prebuilt = MagicMock(return_value=object())
+        scheduler.publish_load_snapshot = MagicMock()
+        scheduler.kv_weight_version_tracker = MagicMock()
+        scheduler.batch_result_processor = MagicMock()
+        scheduler.disaggregation_mode = DisaggregationMode.NULL
+        scheduler._record_step_counters = MagicMock()
+        scheduler.metrics_reporter = MagicMock()
+        scheduler.enable_fpm = False
+        scheduler._maybe_clear_mm_inputs = MagicMock()
+        scheduler.maybe_send_health_check_signal = MagicMock()
+        return scheduler
+
+    def _batch(self, *, weight_version: Optional[str] = None) -> ScheduleBatch:
+        return ScheduleBatch(
+            reqs=[],
+            forward_mode=ForwardMode.PREBUILT,
+            out_cache_loc=torch.tensor([3], dtype=torch.int64),
+            weight_version=weight_version,
+        )
+
+    def test_pending_result_uses_version_captured_when_batch_ran(self) -> None:
+        """A pending result keeps the forward-time version across a serving update."""
+        serving = _ServingStub("v0")
+        scheduler = self._scheduler()
+        batch = self._batch()
+
+        with patch("sglang.srt.managers.scheduler.get_serving", return_value=serving):
+            result = Scheduler.run_batch(scheduler, batch)
+            queued_batch = batch.copy()
+            serving.weight_version = "v1"
+            Scheduler.process_batch_result(scheduler, queued_batch, result)
+
+        scheduler.kv_weight_version_tracker.record.assert_called_once_with(
+            slot_indices=queued_batch.out_cache_loc,
+            version="v0",
+        )
+
+    def test_copy_preserves_weight_version(self) -> None:
+        """The result-queue snapshot retains the batch's forward-time version."""
+        batch = self._batch(weight_version="v0")
+
+        copied_batch = batch.copy()
+
+        self.assertEqual(copied_batch.weight_version, "v0")
+
+    def test_result_without_forward_time_version_fails_loudly(self) -> None:
+        """Result processing rejects batches that never captured a forward version."""
+        scheduler = self._scheduler()
+        batch = self._batch()
+
+        with self.assertRaises(AssertionError):
+            Scheduler.process_batch_result(scheduler, batch, object())
+
+
 class TestRecordWeightVersionAfterUpdate(CustomTestCase):
     def _updater(
         self, target_result, draft_result=None, method="update_weights_from_disk"
@@ -156,37 +224,80 @@ class TestRecordWeightVersionAfterUpdate(CustomTestCase):
         self.assertFalse(output.success)
         self.assertEqual(self.recorded, [])
 
-    def test_successful_distributed_update_records_the_version(self):
-        """The distributed refit is the path an RL trainer actually drives, so it must record too."""
-        updater = self._updater(
-            target_result=(True, "ok"), method="update_weights_from_distributed"
+    def _runner_updater(self, target_result, receive=lambda *args: {}):
+        self.recorded = []
+        runner = SimpleNamespace(
+            weight_updater=SimpleNamespace(
+                receive_weights_from_distributed=receive,
+                load_weights=lambda weights: None,
+                update_weights_from_tensor=lambda **kwargs: target_result,
+            )
+        )
+        updater = SchedulerWeightUpdaterManager(
+            tp_worker=SimpleNamespace(
+                model_runner=runner,
+                ps=SimpleNamespace(tp_rank=0),
+                iter_runners=lambda: [("", runner)],
+            ),
+            draft_worker=None,
+            tp_cpu_group=None,
+            memory_saver_adapter=None,
+            flush_cache=lambda **kwargs: True,
+            is_fully_idle=lambda **kwargs: True,
+            scheduler=SimpleNamespace(
+                record_weight_version_change=lambda new_version: self.recorded.append(
+                    new_version
+                )
+            ),
+        )
+        updater._weight_update_in_progress = True
+        return updater
+
+    def _distributed_request(self):
+        return self._request(
+            names=[],
+            dtypes=[],
+            shapes=[],
+            group_name="g",
+            load_format=None,
+            selector="target",
         )
 
-        output = updater.update_weights_from_distributed(self._request())
+    def test_successful_distributed_update_records_the_version(self):
+        """The distributed refit is the path an RL trainer actually drives, so it must record too."""
+        updater = self._runner_updater(target_result=(True, "ok"))
+
+        output = updater.update_weights_from_distributed(self._distributed_request())
 
         self.assertTrue(output.success)
         self.assertEqual(self.recorded, ["v2"])
 
     def test_failed_distributed_update_does_not_record_the_version(self):
         """A failed distributed refit leaves the version alone, exactly like the disk path."""
-        updater = self._updater(
-            target_result=(False, "boom"), method="update_weights_from_distributed"
-        )
 
-        output = updater.update_weights_from_distributed(self._request())
+        def boom(*args):
+            raise RuntimeError("boom")
+
+        updater = self._runner_updater(target_result=(False, "boom"), receive=boom)
+
+        output = updater.update_weights_from_distributed(self._distributed_request())
 
         self.assertFalse(output.success)
         self.assertEqual(self.recorded, [])
 
     def test_successful_tensor_update_records_the_version(self):
         """The tensor refit records the version once the load reports success."""
-        updater = self._updater(
-            target_result=(True, "ok"), method="update_weights_from_tensor"
-        )
+        updater = self._runner_updater(target_result=(True, "ok"))
 
-        with patch("torch.distributed.barrier"):
+        with patch("torch.distributed.barrier"), patch(
+            "sglang.srt.managers.scheduler_components.weight_updater."
+            "MultiprocessingSerializer.deserialize",
+            return_value=[],
+        ):
             output = updater.update_weights_from_tensor(
-                self._request(disable_draft_model=True)
+                self._request(
+                    serialized_named_tensors=[b""], selector="target", load_format=None
+                )
             )
 
         self.assertTrue(output.success)

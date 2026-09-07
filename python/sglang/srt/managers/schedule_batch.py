@@ -21,6 +21,7 @@ from sglang.srt.utils.common import (
 )
 from sglang.srt.utils.weight_versions import (
     WeightVersionEvent,
+    WeightVersionSpans,
     truncate_weight_version_events,
 )
 
@@ -1030,6 +1031,7 @@ class Req(ReqDllmMixin):
         self.retracted_stain = False
 
         self.weight_version_events: List[WeightVersionEvent] = []
+        self.prefill_weight_versions: Optional[WeightVersionSpans] = None
 
         # Incremental streamining
         self.send_token_offset: int = 0
@@ -1706,6 +1708,7 @@ class Req(ReqDllmMixin):
         self.already_computed = 0
         assert self.kv is None, "expect it is already released"
         self.kv_committed_len = 0
+        self.prefill_weight_versions = None
         self.extend_batch_idx = 0
         self.decode_batch_idx = 0
 
@@ -2067,6 +2070,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
     prefill_stats: Optional[PrefillStats] = None
     forward_iter: Optional[int] = None
     launch_ts: Optional[float] = None
+    weight_version: Optional[str] = None
     after_idle_gap: bool = False
 
     # === GPU tensors crossing to ForwardBatch (clone targets for stream isolation) ===
@@ -3328,6 +3332,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
             fpm_start_time=self.fpm_start_time,
             forward_iter=self.forward_iter,
             launch_ts=self.launch_ts,
+            weight_version=self.weight_version,
             after_idle_gap=self.after_idle_gap,
             extend_num_tokens=self.extend_num_tokens,
         )
