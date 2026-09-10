@@ -606,7 +606,6 @@ class TpModelWorker(BaseTpWorker):
                 pp_hidden_states_proxy_tensors=pp_proxy_tensors,
                 can_run_cuda_graph=can_run_cuda_graph,
                 expert_distribution_metrics=out.expert_distribution_metrics,
-                kv_weight_version_record=out.kv_weight_version_record,
             )
 
     def forward_batch_split_prefill(self, batch: ScheduleBatch):

@@ -10,13 +10,12 @@ from sglang.srt.managers.scheduler import Scheduler
 from sglang.srt.managers.scheduler_components.weight_updater import (
     SchedulerWeightUpdaterManager,
 )
-from sglang.srt.managers.scheduler_pp_mixin import PPBatchMetadata
 from sglang.srt.managers.utils import GenerationBatchResult
 from sglang.srt.mem_cache.kv_weight_version_tracker import (
     KvWeightVersionRecord,
     KvWeightVersionTracker,
 )
-from sglang.srt.model_executor.forward_batch_info import ForwardMode, PPProxyTensors
+from sglang.srt.model_executor.forward_batch_info import ForwardMode
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -254,45 +253,6 @@ class TestSchedulerBatchWeightVersion(CustomTestCase):
         spans = scheduler.kv_weight_version_tracker._lookup_spans(torch.tensor([3]))
         self.assertEqual([span.version for span in spans], ["v0"])
         self.assertIsNone(result.kv_weight_version_record)
-
-    def test_pp_rebuilt_results_retain_local_forward_provenance(self) -> None:
-        """Both PP output paths preserve each stage's local KV record and copy event."""
-        for skip_output in (False, True):
-            with self.subTest(skip_output=skip_output):
-                scheduler = self._scheduler()
-                scheduler.device = "cpu"
-                scheduler.device_module = SimpleNamespace(
-                    Event=lambda: SimpleNamespace(record=lambda stream: None),
-                    current_stream=lambda: None,
-                )
-                scheduler.future_map = SimpleNamespace(stash=lambda *args: None)
-                batch = self._batch()
-                batch.req_pool_indices = torch.tensor([], dtype=torch.int64)
-                record = KvWeightVersionRecord.capture(
-                    slot_indices=torch.tensor([4]), version="v0"
-                )
-                metadata = PPBatchMetadata(
-                    can_run_cuda_graph=False,
-                    kv_weight_version_record=record,
-                    forward_done=SimpleNamespace(synchronize=lambda: None),
-                )
-
-                if skip_output:
-                    _, result, _ = scheduler._pp_make_skip_output_result(
-                        batch, metadata
-                    )
-                else:
-                    result = scheduler._pp_prep_batch_result(
-                        batch,
-                        metadata,
-                        PPProxyTensors({"next_token_ids": torch.tensor([])}),
-                    )
-                scheduler.process_batch_result(batch, result)
-
-                spans = scheduler.kv_weight_version_tracker._lookup_spans(
-                    torch.tensor([4])
-                )
-                self.assertEqual([span.version for span in spans], ["v0"])
 
 
 class TestRecordWeightVersionAfterUpdate(CustomTestCase):

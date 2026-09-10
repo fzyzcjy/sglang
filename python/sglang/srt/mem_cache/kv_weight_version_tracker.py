@@ -52,6 +52,9 @@ class KvWeightVersionTracker:
         assert model_config.is_generation, (
             "--enable-prefill-weight-versions does not support embedding or reward models"
         )
+        assert server_args.pp_size == 1, (
+            "--enable-prefill-weight-versions does not support pipeline parallelism"
+        )
 
         return cls(
             num_slots=allocator.size_full + allocator.page_size,

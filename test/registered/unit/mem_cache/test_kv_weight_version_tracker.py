@@ -68,10 +68,30 @@ class TestKvWeightVersionRecord(CustomTestCase):
 
 
 class TestKvWeightVersionTracker(CustomTestCase):
+    def test_pipeline_parallelism_is_rejected_only_when_tracking_is_enabled(self) -> None:
+        """The optional tracker rejects PP before allocation without restricting disabled runs."""
+        for enabled in (False, True):
+            with self.subTest(enabled=enabled):
+                kwargs = dict(
+                    server_args=SimpleNamespace(
+                        enable_prefill_weight_versions=enabled, pp_size=2
+                    ),
+                    model_config=SimpleNamespace(
+                        is_encoder_decoder=False, is_generation=True
+                    ),
+                    allocator=None,
+                    req_to_token_pool=None,
+                )
+                if enabled:
+                    with self.assertRaisesRegex(AssertionError, "pipeline parallelism"):
+                        KvWeightVersionTracker.maybe_create(**kwargs)
+                else:
+                    self.assertIsNone(KvWeightVersionTracker.maybe_create(**kwargs))
+
     def test_factory_includes_allocator_padding_and_uses_the_request_pool(self) -> None:
         """Factory sizing includes the allocator's padding page and preserves its mapping."""
         tracker = KvWeightVersionTracker.maybe_create(
-            server_args=SimpleNamespace(enable_prefill_weight_versions=True),
+            server_args=SimpleNamespace(enable_prefill_weight_versions=True, pp_size=1),
             model_config=SimpleNamespace(is_encoder_decoder=False, is_generation=True),
             allocator=SimpleNamespace(size_full=12, page_size=4, device="cpu"),
             req_to_token_pool=_ReqToTokenPoolStub([15]),

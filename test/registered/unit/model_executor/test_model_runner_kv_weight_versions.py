@@ -45,32 +45,30 @@ class TestModelRunnerKvWeightVersions(CustomTestCase):
                 else:
                     self.assertIsNone(record)
 
-    def test_target_worker_preserves_records_on_every_pipeline_stage(self) -> None:
-        """TP result construction retains target provenance on every pipeline stage."""
-        for is_last_rank in (False, True):
-            with self.subTest(is_last_rank=is_last_rank):
-                record = KvWeightVersionRecord.capture(
-                    slot_indices=torch.tensor([4, 5]), version="v0"
-                )
-                output = ModelRunnerOutput(
-                    logits_output=None,
-                    can_run_graph=False,
-                    kv_weight_version_record=record,
-                )
-                worker = SimpleNamespace(
-                    is_dllm=lambda: False,
-                    pp_group=SimpleNamespace(is_last_rank=is_last_rank),
-                    model_runner=SimpleNamespace(forward=lambda *args, **kwargs: output),
-                )
-                batch = SimpleNamespace(
-                    apply_deprecated_skip_attn_backend_init=lambda value: None
-                )
+    def test_target_worker_preserves_forward_provenance(self) -> None:
+        """TP result construction retains the target forward record."""
+        record = KvWeightVersionRecord.capture(
+            slot_indices=torch.tensor([4, 5]), version="v0"
+        )
+        output = ModelRunnerOutput(
+            logits_output=None,
+            can_run_graph=False,
+            kv_weight_version_record=record,
+        )
+        worker = SimpleNamespace(
+            is_dllm=lambda: False,
+            pp_group=SimpleNamespace(is_last_rank=True),
+            model_runner=SimpleNamespace(forward=lambda *args, **kwargs: output),
+        )
+        batch = SimpleNamespace(
+            apply_deprecated_skip_attn_backend_init=lambda value: None
+        )
 
-                result = TpModelWorker.forward_batch_generation(
-                    worker, batch=None, forward_batch=batch, is_verify=True
-                )
+        result = TpModelWorker.forward_batch_generation(
+            worker, batch=None, forward_batch=batch, is_verify=True
+        )
 
-                self.assertIs(result.kv_weight_version_record, record)
+        self.assertIs(result.kv_weight_version_record, record)
 
     def test_result_copies_record_before_publishing_completion(self) -> None:
         """The shared result-copy path includes KV slots before its completion event."""
