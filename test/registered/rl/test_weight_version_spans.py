@@ -16,9 +16,7 @@ from sglang.test.test_utils import (
     popen_launch_server,
 )
 
-register_cuda_ci(
-    est_time=180, stage="nightly", runner_config="2-gpu-large", nightly=True
-)
+register_cuda_ci(est_time=180, stage="nightly", runner_config="2-gpu-large")
 
 _REQUEST_TIMEOUT = 180
 
@@ -754,6 +752,7 @@ class TestWeightVersionSpans(CustomTestCase):
         self._set_weight_version("turn-v1")
         first_prompt = _SHARED_PREFIX + "User: Name a planet.\nAssistant:"
         first = self._generate(max_new_tokens=16, prompt=first_prompt, dp_rank=0)
+        self.assertGreater(first["meta_info"]["spec_verify_ct"], 0)
         self.assertEqual(
             [span["version"] for span in first["meta_info"]["prefill_weight_versions"]],
             ["turn-v1"],
@@ -769,6 +768,7 @@ class TestWeightVersionSpans(CustomTestCase):
         )
 
         meta_info = second["meta_info"]
+        self.assertGreater(meta_info["spec_verify_ct"], 0)
         self.assertGreater(
             meta_info["cached_tokens"], first["meta_info"]["prompt_tokens"]
         )
