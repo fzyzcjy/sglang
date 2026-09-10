@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional
 
+import msgspec
 import torch
 
 from sglang.srt.utils.weight_versions import WeightVersionSpan, WeightVersionSpans
@@ -12,6 +13,21 @@ if TYPE_CHECKING:
 
 
 _UNWRITTEN_VERSION_ID = -1
+
+
+class KvWeightVersionRecord(msgspec.Struct):
+    slot_indices: torch.Tensor
+    version: str
+
+    @classmethod
+    def capture(
+        cls, *, slot_indices: torch.Tensor, version: Optional[str]
+    ) -> KvWeightVersionRecord:
+        assert version is not None
+        return cls(slot_indices=slot_indices.clone(), version=version)
+
+    def map_device_tensors(self, fn: Callable[[torch.Tensor], torch.Tensor]) -> None:
+        self.slot_indices = fn(self.slot_indices)
 
 
 class KvWeightVersionTracker:

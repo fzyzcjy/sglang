@@ -14,6 +14,7 @@ from sglang.srt.eplb.expert_distribution import ExpertDistributionMetrics
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.managers import io_struct
 from sglang.srt.managers.schedule_batch import Req
+from sglang.srt.mem_cache.kv_weight_version_tracker import KvWeightVersionRecord
 from sglang.srt.model_executor.forward_batch_info import PPProxyTensors
 from sglang.srt.runtime_context import get_spec, max_speculative_num_draft_tokens
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
@@ -100,6 +101,7 @@ class GenerationBatchResult:
     # Routed experts: pending async D2H for overlap scheduling
     routed_experts_output: Optional[TopkCaptureOutput] = None
     indexer_topk_output: Optional[TopkCaptureOutput] = None
+    kv_weight_version_record: Optional[KvWeightVersionRecord] = None
 
     # metrics
     expert_distribution_metrics: Optional[ExpertDistributionMetrics] = None
@@ -163,6 +165,7 @@ class GenerationBatchResult:
         # primitive (_async_d2h: pinned D2H + record_stream) is injected here so
         # all device->host copying and lifetime safety lives in one place.
         for holder in (
+            self.kv_weight_version_record,
             self.routed_experts_output,
             self.indexer_topk_output,
             self.expert_distribution_metrics,

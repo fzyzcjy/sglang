@@ -89,6 +89,7 @@ from sglang.srt.mem_cache.allocator import BaseTokenToKVPoolAllocator
 from sglang.srt.mem_cache.kv_cache_configurator import (
     KVCacheConfigurator,
 )
+from sglang.srt.mem_cache.kv_weight_version_tracker import KvWeightVersionRecord
 from sglang.srt.mem_cache.memory_pool import HybridReqToTokenPool, ReqToTokenPool
 from sglang.srt.model_executor.cuda_graph_config import (
     cuda_graph_fully_disabled,
@@ -180,6 +181,7 @@ from sglang.srt.runtime_context import (
     get_model,
     get_parallel,
     get_schedule,
+    get_serving,
     get_spec,
     is_ep_joiner,
     is_ep_scale_joiner,
@@ -270,6 +272,7 @@ class ModelRunnerOutput:
     expert_distribution_metrics: Optional[ExpertDistributionMetrics] = None
     routed_experts_output: Optional[TopkCaptureOutput] = None
     indexer_topk_output: Optional[TopkCaptureOutput] = None
+    kv_weight_version_record: Optional[KvWeightVersionRecord] = None
 
 
 def resolve_draft_attention_backend(
@@ -1569,6 +1572,9 @@ class ModelRunner:
         output.expert_distribution_metrics = recorder_outputs.get("metrics")
 
         no_copy_to_cpu = not get_schedule().disable_overlap_schedule
+        output.kv_weight_version_record = self._capture_kv_weight_version_record(
+            forward_batch
+        )
         # In speculative decoding more than one token is captured per request, so
         # pass the actual number of tokens per DP rank in CUDA graph, not the batch
         # size — the width is captured_req_width.
@@ -1610,6 +1616,20 @@ class ModelRunner:
             self.maybe_join_ep_ranks()
 
         return output
+
+    def _capture_kv_weight_version_record(
+        self, forward_batch: ForwardBatch
+    ) -> Optional[KvWeightVersionRecord]:
+        if (
+            not self.is_draft_worker
+            and self.server_args.enable_prefill_weight_versions
+            and forward_batch.out_cache_loc is not None
+        ):
+            return KvWeightVersionRecord.capture(
+                slot_indices=forward_batch.out_cache_loc,
+                version=get_serving().weight_version,
+            )
+        return None
 
     def _maybe_execute_deferred_mamba_cow_and_clear(
         self, forward_batch: ForwardBatch

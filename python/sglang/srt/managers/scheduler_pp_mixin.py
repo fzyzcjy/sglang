@@ -27,9 +27,11 @@ from sglang.srt.managers.overlap_utils import RelayPayload
 from sglang.srt.managers.schedule_batch import FINISH_ABORT, Req, ScheduleBatch
 from sglang.srt.managers.utils import (
     GenerationBatchResult,
+    _async_d2h,
     get_logprob_dict_from_result,
     get_logprob_from_pp_outputs,
 )
+from sglang.srt.mem_cache.kv_weight_version_tracker import KvWeightVersionRecord
 from sglang.srt.model_executor.forward_batch_info import (
     ForwardBatch,
     ForwardMode,
@@ -62,6 +64,8 @@ def _pp_can_skip_output_comm(batch: ScheduleBatch) -> bool:
 @dataclass
 class PPBatchMetadata:
     can_run_cuda_graph: bool
+    kv_weight_version_record: Optional[KvWeightVersionRecord] = None
+    forward_done: Optional[torch.cuda.Event] = None
 
 
 class SchedulerPPMixin:
@@ -1127,6 +1131,10 @@ class SchedulerPPMixin:
                 mb_metadata.can_run_cuda_graph if mb_metadata else False
             ),
             skipped_output_comm=True,
+            kv_weight_version_record=(
+                mb_metadata.kv_weight_version_record if mb_metadata else None
+            ),
+            copy_done=mb_metadata.forward_done if mb_metadata else None,
         )
         d2h_event = self.device_module.Event()
         d2h_event.record(self.device_module.current_stream())
@@ -1165,6 +1173,8 @@ class SchedulerPPMixin:
             extend_input_len_per_req=extend_input_len_per_req,
             extend_logprob_start_len_per_req=extend_logprob_start_len_per_req,
             can_run_cuda_graph=mb_metadata.can_run_cuda_graph,
+            kv_weight_version_record=mb_metadata.kv_weight_version_record,
+            copy_done=mb_metadata.forward_done,
         )
         return output_result
 
@@ -1300,11 +1310,15 @@ class SchedulerPPMixin:
                     trace_only=True,
                     attrs={"pp_mb_id": mb_id},
                 )
-                mb_metadata[mb_id] = PPBatchMetadata(
-                    can_run_cuda_graph=result.can_run_cuda_graph,
-                )
+                if (record := result.kv_weight_version_record) is not None:
+                    record.map_device_tensors(_async_d2h)
                 event = self.device_module.Event()
                 event.record(self.device_module.current_stream())
+                mb_metadata[mb_id] = PPBatchMetadata(
+                    can_run_cuda_graph=result.can_run_cuda_graph,
+                    kv_weight_version_record=result.kv_weight_version_record,
+                    forward_done=event if record is not None else None,
+                )
                 if self.pp_group.is_last_rank:
                     # (last rank) buffer the outputs for async batch depth
                     last_rank_comm_queue.append(

@@ -3980,10 +3980,13 @@ class Scheduler(
 
         if (
             (x := self.kv_weight_version_tracker) is not None
-            and (not batch.forward_mode.is_decode() or batch.spec_algorithm.is_none())
-            and (slot_indices := batch.out_cache_loc) is not None
+            and isinstance(result, GenerationBatchResult)
+            and (record := result.kv_weight_version_record) is not None
         ):
-            x.record(slot_indices=slot_indices, version=batch.weight_version)
+            if result.copy_done is not None:
+                result.copy_done.synchronize()
+            x.record(slot_indices=record.slot_indices, version=record.version)
+            result.kv_weight_version_record = None
 
         if batch.forward_mode.is_decode():
             self.batch_result_processor.process_batch_result_decode(batch, result)

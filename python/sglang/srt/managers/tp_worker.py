@@ -492,6 +492,9 @@ class TpModelWorker(BaseTpWorker):
             accept_length_per_req_cpu=accept_length_per_req_cpu,
             dllm_algo_state=dllm_algo_state,
             can_run_cuda_graph=can_run_cuda_graph,
+            kv_weight_version_record=self.model_runner._capture_kv_weight_version_record(
+                forward_batch
+            ),
         )
 
     def forward_batch_generation(
@@ -539,6 +542,7 @@ class TpModelWorker(BaseTpWorker):
                 can_run_cuda_graph=can_run_cuda_graph,
                 expert_distribution_metrics=out.expert_distribution_metrics,
                 routed_experts_output=out.routed_experts_output,
+                kv_weight_version_record=out.kv_weight_version_record,
                 indexer_topk_output=out.indexer_topk_output,
             )
 
@@ -602,6 +606,7 @@ class TpModelWorker(BaseTpWorker):
                 pp_hidden_states_proxy_tensors=pp_proxy_tensors,
                 can_run_cuda_graph=can_run_cuda_graph,
                 expert_distribution_metrics=out.expert_distribution_metrics,
+                kv_weight_version_record=out.kv_weight_version_record,
             )
 
     def forward_batch_split_prefill(self, batch: ScheduleBatch):
@@ -627,6 +632,7 @@ class TpModelWorker(BaseTpWorker):
             logits_output=logits_output,
             can_run_cuda_graph=can_run_cuda_graph,
             expert_distribution_metrics=out.expert_distribution_metrics,
+            kv_weight_version_record=out.kv_weight_version_record,
         )
         batch_result.next_token_ids = next_token_ids
         return batch_result

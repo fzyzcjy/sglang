@@ -655,6 +655,7 @@ def run_eagle_verify(
         accept_lens=accept_lens,
         new_seq_lens=new_seq_lens,
         routed_experts_output=forward_batch_output.routed_experts_output,
+        kv_weight_version_record=forward_batch_output.kv_weight_version_record,
         indexer_topk_output=forward_batch_output.indexer_topk_output,
         extra_keep_alive_refs=[verify_forward_batch],
     )

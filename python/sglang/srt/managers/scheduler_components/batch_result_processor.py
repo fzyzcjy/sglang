@@ -690,14 +690,6 @@ class SchedulerBatchResultProcessor:
 
                 # Commit the full accepted run (drafts + bonus).
                 num_accept_tokens = len(accept_tokens)
-                if (tracker := self.kv_weight_version_tracker) is not None:
-                    tracker.record(
-                        slot_indices=self.req_to_token_pool.req_to_token[
-                            req.req_pool_idx,
-                            req.kv_committed_len : req.kv_committed_len + num_accept_tokens,
-                        ],
-                        version=batch.weight_version,
-                    )
                 req.kv_committed_len += num_accept_tokens
                 req.spec_verify_ct += 1
 

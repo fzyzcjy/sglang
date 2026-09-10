@@ -559,4 +559,5 @@ class NGRAMWorker(BaseSpecWorker):
             new_seq_lens=new_seq_lens,
             next_draft_input=next_draft_input,
             speculative_num_draft_tokens=self.speculative_num_draft_tokens,
+            kv_weight_version_record=batch_result.kv_weight_version_record,
         )

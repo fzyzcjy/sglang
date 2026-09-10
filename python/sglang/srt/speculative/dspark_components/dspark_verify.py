@@ -28,6 +28,7 @@ from sglang.kernels.ops.speculative.dspark.dspark_verify_window import (
 )
 from sglang.srt.layers.logits_processor import LogitsProcessorOutput
 from sglang.srt.managers.schedule_batch import ScheduleBatch
+from sglang.srt.mem_cache.kv_weight_version_tracker import KvWeightVersionRecord
 from sglang.srt.model_executor.forward_batch_info import CaptureHiddenMode, ForwardMode
 from sglang.srt.speculative.dflash_info import DFlashVerifyInput
 from sglang.srt.speculative.dflash_info_v2 import DFlashDraftInputV2
@@ -75,6 +76,7 @@ def verify_logits_adjustments_are_noop(sampling_info) -> bool:
 class TargetVerifyResult(msgspec.Struct, frozen=True):
     logits_output: object
     can_run_cuda_graph: bool
+    kv_weight_version_record: Optional[KvWeightVersionRecord] = None
 
 
 class TargetVerifyExecutor:
@@ -299,6 +301,7 @@ class TargetVerifyExecutor:
         return TargetVerifyResult(
             logits_output=target_out.logits_output,
             can_run_cuda_graph=target_out.can_run_cuda_graph,
+            kv_weight_version_record=target_out.kv_weight_version_record,
         )
 
     def commit_hidden(
