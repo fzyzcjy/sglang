@@ -4,6 +4,7 @@ from typing import List
 import torch
 
 from sglang.srt.mem_cache.kv_weight_version_tracker import (
+    KvWeightVersionRecord,
     KvWeightVersionTracker,
     _StringInterner,
 )
@@ -40,6 +41,29 @@ def _table(slots_of_req: List[int] = ()) -> KvWeightVersionTracker:
 
 def _slots(*indices: int) -> torch.Tensor:
     return torch.tensor(indices, dtype=torch.int64)
+
+
+class TestKvWeightVersionRecord(CustomTestCase):
+    def test_capture_without_a_version_fails(self) -> None:
+        """A forward cannot publish KV provenance without a weight version."""
+        with self.assertRaises(AssertionError):
+            KvWeightVersionRecord.capture(slot_indices=_slots(1), version=None)
+
+    def test_capture_survives_source_reuse_and_tensor_mapping(self) -> None:
+        """Reusing forward buffers cannot change a pending record's slots."""
+        slots = _slots(4, 5, 6)
+        record = KvWeightVersionRecord.capture(slot_indices=slots, version="v0")
+        slots.fill_(9)
+        record.map_device_tensors(lambda tensor: tensor.to(dtype=torch.int32))
+        table = _table()
+
+        table.record(slot_indices=record.slot_indices, version=record.version)
+
+        self.assertEqual(
+            table._lookup_spans(_slots(4, 5, 6)),
+            [WeightVersionSpan(version="v0", start=0, end=3)],
+        )
+        self.assertEqual(record.slot_indices.dtype, torch.int32)
 
 
 class TestKvWeightVersionTracker(CustomTestCase):

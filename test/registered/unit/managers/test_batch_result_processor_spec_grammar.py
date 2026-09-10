@@ -114,13 +114,14 @@ def _make_result(num_draft_tokens, accept_lens, flat_tokens):
 
 
 class TestSpecV2GrammarTruncation(CustomTestCase):
-    def test_committed_target_slots_are_stamped_without_overwriting_prefix_or_rejected_kv(self) -> None:
-        """Spec provenance follows compacted target slots and excludes grammar-rejected draft tokens."""
+    def test_grammar_commit_does_not_relabel_forward_recorded_kv(self) -> None:
+        """Grammar commitment leaves forward-recorded provenance unchanged."""
         for overlap in (False, True):
             with self.subTest(overlap=overlap):
                 pool = SimpleNamespace(req_to_token=torch.tensor([[1, 2, 3, 7, 5, 6]]))
                 tracker = KvWeightVersionTracker(num_slots=10, device="cpu", req_to_token_pool=pool)
                 tracker.record(slot_indices=torch.tensor([1, 2, 3, 7, 5, 6]), version="v0")
+                tracker.record(slot_indices=torch.tensor([7, 5, 6]), version="v1")
                 req = _make_req(terminate_after=2)
                 req.req_pool_idx = 0
                 req.kv_committed_len = 3
@@ -131,7 +132,7 @@ class TestSpecV2GrammarTruncation(CustomTestCase):
                     kv_weight_version_tracker=tracker,
                 )
                 batch = _FakeBatch([req])
-                batch.weight_version = "v1"
+                batch.weight_version = "v2"
                 batch.out_cache_loc = torch.tensor([1, 2, 3])
                 result = _make_result(4, [3], [101, 102, 103, 0])
 
@@ -140,7 +141,7 @@ class TestSpecV2GrammarTruncation(CustomTestCase):
                 spans = tracker._lookup_spans(torch.tensor([1, 2, 3, 7, 5, 6]))
                 self.assertEqual(
                     [(span.version, span.start, span.end) for span in spans],
-                    [("v0", 0, 3), ("v1", 3, 5), ("v0", 5, 6)],
+                    [("v0", 0, 3), ("v1", 3, 6)],
                 )
                 self.assertEqual(req.kv_committed_len, 5)
 
