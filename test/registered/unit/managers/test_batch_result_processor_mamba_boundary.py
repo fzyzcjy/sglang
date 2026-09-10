@@ -77,6 +77,7 @@ def _make_result():
         copy_done=None,
         routed_experts_output=None,
         indexer_topk_output=None,
+        kv_weight_version_record=None,
         logits_output=SimpleNamespace(hidden_states=None, customized_info=None),
         next_token_ids=[4],
         can_run_cuda_graph=False,

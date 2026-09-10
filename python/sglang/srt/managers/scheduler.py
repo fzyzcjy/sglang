@@ -3966,16 +3966,6 @@ class Scheduler(
         flush_trace_batch(batch.reqs)
         self.publish_load_snapshot(force=batch.forward_mode.is_extend())
 
-        if (
-            (x := self.kv_weight_version_tracker) is not None
-            and isinstance(result, GenerationBatchResult)
-            and (record := result.kv_weight_version_record) is not None
-        ):
-            if result.copy_done is not None:
-                result.copy_done.synchronize()
-            x.record(slot_indices=record.slot_indices, version=record.version)
-            result.kv_weight_version_record = None
-
         if batch.forward_mode.is_decode():
             self.batch_result_processor.process_batch_result_decode(batch, result)
         elif batch.forward_mode.is_extend():

@@ -165,9 +165,9 @@ class GenerationBatchResult:
         # primitive (_async_d2h: pinned D2H + record_stream) is injected here so
         # all device->host copying and lifetime safety lives in one place.
         for holder in (
-            self.kv_weight_version_record,
             self.routed_experts_output,
             self.indexer_topk_output,
+            self.kv_weight_version_record,
             self.expert_distribution_metrics,
         ):
             if holder is not None:

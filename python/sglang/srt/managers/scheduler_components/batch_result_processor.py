@@ -209,6 +209,9 @@ class SchedulerBatchResultProcessor:
             if result.indexer_topk_output is not None:
                 result.indexer_topk_output.finalize()
                 result.indexer_topk_output = None
+            if (record := result.kv_weight_version_record) is not None:
+                record.finalize(tracker=self.kv_weight_version_tracker)
+                result.kv_weight_version_record = None
 
             (
                 logits_output,
@@ -821,6 +824,9 @@ class SchedulerBatchResultProcessor:
         if result.indexer_topk_output is not None:
             result.indexer_topk_output.finalize()
             result.indexer_topk_output = None
+        if (record := result.kv_weight_version_record) is not None:
+            record.finalize(tracker=self.kv_weight_version_tracker)
+            result.kv_weight_version_record = None
 
         logits_output, next_token_ids, can_run_cuda_graph = (
             result.logits_output,

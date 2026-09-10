@@ -181,7 +181,6 @@ from sglang.srt.runtime_context import (
     get_model,
     get_parallel,
     get_schedule,
-    get_serving,
     get_spec,
     is_ep_joiner,
     is_ep_scale_joiner,
@@ -1572,9 +1571,6 @@ class ModelRunner:
         output.expert_distribution_metrics = recorder_outputs.get("metrics")
 
         no_copy_to_cpu = not get_schedule().disable_overlap_schedule
-        output.kv_weight_version_record = self._capture_kv_weight_version_record(
-            forward_batch
-        )
         # In speculative decoding more than one token is captured per request, so
         # pass the actual number of tokens per DP rank in CUDA graph, not the batch
         # size — the width is captured_req_width.
@@ -1602,6 +1598,10 @@ class ModelRunner:
                 no_copy_to_cpu=no_copy_to_cpu,
             )
 
+        output.kv_weight_version_record = KvWeightVersionRecord.maybe_capture(
+            model_runner=self, forward_batch=forward_batch
+        )
+
         if self.eplb_manager is not None:
             self.eplb_manager.on_forward_pass_end()
 
@@ -1616,20 +1616,6 @@ class ModelRunner:
             self.maybe_join_ep_ranks()
 
         return output
-
-    def _capture_kv_weight_version_record(
-        self, forward_batch: ForwardBatch
-    ) -> Optional[KvWeightVersionRecord]:
-        if (
-            not self.is_draft_worker
-            and self.server_args.enable_prefill_weight_versions
-            and forward_batch.out_cache_loc is not None
-        ):
-            return KvWeightVersionRecord.capture(
-                slot_indices=forward_batch.out_cache_loc,
-                version=get_serving().weight_version,
-            )
-        return None
 
     def _maybe_execute_deferred_mamba_cow_and_clear(
         self, forward_batch: ForwardBatch

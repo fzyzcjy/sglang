@@ -135,6 +135,7 @@ class TestPrefillHiddenStateOffsets(CustomTestCase):
                     copy_done=None,
                     routed_experts_output=None,
                     indexer_topk_output=None,
+                    kv_weight_version_record=None,
                     logits_output=SimpleNamespace(
                         hidden_states=hidden_states,
                         customized_info=None,
@@ -183,6 +184,7 @@ class TestDecodeHiddenStateRetention(CustomTestCase):
                 copy_done=None,
                 routed_experts_output=None,
                 indexer_topk_output=None,
+                kv_weight_version_record=None,
                 logits_output=SimpleNamespace(hidden_states=hidden_states),
                 next_token_ids=None,
                 can_run_cuda_graph=False,

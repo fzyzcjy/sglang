@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional
 import msgspec
 import torch
 
+from sglang.srt.runtime_context import get_serving
 from sglang.srt.utils.weight_versions import WeightVersionSpan, WeightVersionSpans
 
 if TYPE_CHECKING:
@@ -12,6 +13,8 @@ if TYPE_CHECKING:
     from sglang.srt.managers.schedule_batch import Req
     from sglang.srt.mem_cache.allocator import BaseTokenToKVPoolAllocator
     from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
+    from sglang.srt.model_executor.forward_batch_info import ForwardBatch
+    from sglang.srt.model_executor.model_runner import ModelRunner
     from sglang.srt.server_args import ServerArgs
 
 
@@ -23,6 +26,21 @@ class KvWeightVersionRecord(msgspec.Struct):
     version: str
 
     @classmethod
+    def maybe_capture(
+        cls, model_runner: ModelRunner, forward_batch: ForwardBatch
+    ) -> Optional[KvWeightVersionRecord]:
+        if (
+            not model_runner.is_draft_worker
+            and model_runner.server_args.enable_prefill_weight_versions
+            and forward_batch.out_cache_loc is not None
+        ):
+            return cls.capture(
+                slot_indices=forward_batch.out_cache_loc,
+                version=get_serving().weight_version,
+            )
+        return None
+
+    @classmethod
     def capture(
         cls, *, slot_indices: torch.Tensor, version: Optional[str]
     ) -> KvWeightVersionRecord:
@@ -31,6 +49,10 @@ class KvWeightVersionRecord(msgspec.Struct):
 
     def map_device_tensors(self, fn: Callable[[torch.Tensor], torch.Tensor]) -> None:
         self.slot_indices = fn(self.slot_indices)
+
+    def finalize(self, *, tracker: Optional[KvWeightVersionTracker]) -> None:
+        assert tracker is not None
+        tracker.record(slot_indices=self.slot_indices, version=self.version)
 
 
 class KvWeightVersionTracker:

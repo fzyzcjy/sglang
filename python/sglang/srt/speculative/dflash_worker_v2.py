@@ -1958,6 +1958,6 @@ class DFlashWorkerV2(BaseSpecWorker):
             # from the result; overlap carries it via next_draft_input instead.
             new_seq_lens=new_seq_lens,
             routed_experts_output=target_out.routed_experts_output,
-            kv_weight_version_record=target_out.kv_weight_version_record,
             indexer_topk_output=target_out.indexer_topk_output,
+            kv_weight_version_record=target_out.kv_weight_version_record,
         )

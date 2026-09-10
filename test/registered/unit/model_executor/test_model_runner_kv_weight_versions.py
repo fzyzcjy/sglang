@@ -33,10 +33,12 @@ class TestModelRunnerKvWeightVersions(CustomTestCase):
                     out_cache_loc=torch.tensor([4, 5]) if has_slots else None
                 )
                 with patch(
-                    "sglang.srt.model_executor.model_runner.get_serving",
+                    "sglang.srt.mem_cache.kv_weight_version_tracker.get_serving",
                     return_value=SimpleNamespace(weight_version="v0"),
                 ):
-                    record = runner._capture_kv_weight_version_record(batch)
+                    record = KvWeightVersionRecord.maybe_capture(
+                        model_runner=runner, forward_batch=batch
+                    )
 
                 if enabled and not draft and has_slots:
                     batch.out_cache_loc.fill_(9)

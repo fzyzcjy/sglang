@@ -7,6 +7,9 @@ import torch
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.managers.scheduler import Scheduler
+from sglang.srt.managers.scheduler_components.batch_result_processor import (
+    SchedulerBatchResultProcessor,
+)
 from sglang.srt.managers.scheduler_components.weight_updater import (
     SchedulerWeightUpdaterManager,
 )
@@ -15,7 +18,7 @@ from sglang.srt.mem_cache.kv_weight_version_tracker import (
     KvWeightVersionRecord,
     KvWeightVersionTracker,
 )
-from sglang.srt.model_executor.forward_batch_info import ForwardMode
+from sglang.srt.model_executor.forward_batch_info import CaptureHiddenMode, ForwardMode
 from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.test.ci.ci_register import register_cpu_ci
@@ -165,7 +168,37 @@ class TestSchedulerBatchWeightVersion(CustomTestCase):
             device="cpu",
             req_to_token_pool=SimpleNamespace(req_to_token=torch.tensor([[3]])),
         )
-        scheduler.batch_result_processor = MagicMock()
+        scheduler.batch_result_processor = SchedulerBatchResultProcessor(
+            is_generation=True,
+            disaggregation_mode=DisaggregationMode.NULL,
+            enable_overlap=False,
+            enable_overlap_mlx=False,
+            server_args=SimpleNamespace(),
+            model_config=SimpleNamespace(),
+            token_to_kv_pool_allocator=MagicMock(),
+            tree_cache=None,
+            hisparse_coordinator=None,
+            req_to_token_pool=None,
+            kv_weight_version_tracker=scheduler.kv_weight_version_tracker,
+            decode_offload_manager=None,
+            metrics_collector=None,
+            metrics_reporter=MagicMock(),
+            draft_worker=None,
+            model_worker=MagicMock(),
+            logprob_result_processor=None,
+            output_streamer=MagicMock(),
+            abort_request=lambda *args, **kwargs: None,
+        )
+        for name, value in (
+            ("get_observability", SimpleNamespace(enable_metrics=False)),
+            ("get_server_return_hidden_states_mode", CaptureHiddenMode.NULL),
+        ):
+            patcher = patch(
+                f"sglang.srt.managers.scheduler_components.batch_result_processor.{name}",
+                return_value=value,
+            )
+            patcher.start()
+            self.addCleanup(patcher.stop)
         scheduler.disaggregation_mode = DisaggregationMode.NULL
         scheduler._record_step_counters = MagicMock()
         scheduler.metrics_reporter = MagicMock()
@@ -177,7 +210,7 @@ class TestSchedulerBatchWeightVersion(CustomTestCase):
     def _batch(self) -> ScheduleBatch:
         return ScheduleBatch(
             reqs=[],
-            forward_mode=ForwardMode.PREBUILT,
+            forward_mode=ForwardMode.EXTEND,
             out_cache_loc=torch.tensor([3], dtype=torch.int64),
         )
 
@@ -191,10 +224,14 @@ class TestSchedulerBatchWeightVersion(CustomTestCase):
         runner.is_draft_worker = False
         runner.server_args = SimpleNamespace(enable_prefill_weight_versions=True)
         with patch(
-            "sglang.srt.model_executor.model_runner.get_serving", return_value=serving
+            "sglang.srt.mem_cache.kv_weight_version_tracker.get_serving",
+            return_value=serving,
         ):
             result = GenerationBatchResult(
-                kv_weight_version_record=runner._capture_kv_weight_version_record(batch)
+                next_token_ids=torch.tensor([], dtype=torch.int64),
+                kv_weight_version_record=KvWeightVersionRecord.maybe_capture(
+                    model_runner=runner, forward_batch=batch
+                ),
             )
             queued_batch = batch.copy()
             serving.weight_version = "v1"
@@ -223,9 +260,12 @@ class TestSchedulerBatchWeightVersion(CustomTestCase):
                     forward_slots = torch.tensor([4, 5, 6])
                     batch.out_cache_loc = forward_slots
                     result = GenerationBatchResult(
+                        next_token_ids=torch.tensor([], dtype=torch.int64),
+                        accept_lens=torch.tensor([], dtype=torch.int32),
+                        speculative_num_draft_tokens=3,
                         kv_weight_version_record=KvWeightVersionRecord.capture(
                             slot_indices=forward_slots, version="v1"
-                        )
+                        ),
                     )
                     forward_slots.fill_(7)
                 scheduler.process_batch_result(batch.copy(), result)
@@ -243,9 +283,11 @@ class TestSchedulerBatchWeightVersion(CustomTestCase):
         record = KvWeightVersionRecord.capture(
             slot_indices=torch.tensor([0]), version="v0"
         )
+        synchronize = MagicMock(side_effect=lambda: record.slot_indices.fill_(3))
         result = GenerationBatchResult(
+            next_token_ids=torch.tensor([], dtype=torch.int64),
             kv_weight_version_record=record,
-            copy_done=SimpleNamespace(synchronize=lambda: record.slot_indices.fill_(3)),
+            copy_done=SimpleNamespace(synchronize=synchronize),
         )
 
         scheduler.process_batch_result(batch, result)
@@ -253,6 +295,7 @@ class TestSchedulerBatchWeightVersion(CustomTestCase):
         spans = scheduler.kv_weight_version_tracker._lookup_spans(torch.tensor([3]))
         self.assertEqual([span.version for span in spans], ["v0"])
         self.assertIsNone(result.kv_weight_version_record)
+        synchronize.assert_called_once_with()
 
 
 class TestRecordWeightVersionAfterUpdate(CustomTestCase):
