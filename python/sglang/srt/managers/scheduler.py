@@ -3681,7 +3681,6 @@ class Scheduler(
         batch.forward_iter = self.forward_ct
         batch.launch_ts = time.monotonic()
         batch.after_idle_gap = self._sched_idled
-        batch.weight_version = get_serving().weight_version
         self._sched_idled = False
 
         if self.scripted_scheduler_hook is not None:

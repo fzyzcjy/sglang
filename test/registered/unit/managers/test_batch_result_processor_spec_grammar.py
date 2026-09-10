@@ -132,7 +132,6 @@ class TestSpecV2GrammarTruncation(CustomTestCase):
                     kv_weight_version_tracker=tracker,
                 )
                 batch = _FakeBatch([req])
-                batch.weight_version = "v2"
                 batch.out_cache_loc = torch.tensor([1, 2, 3])
                 result = _make_result(4, [3], [101, 102, 103, 0])
 

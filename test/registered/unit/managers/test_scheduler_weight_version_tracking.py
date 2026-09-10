@@ -1,6 +1,5 @@
 import unittest
 from types import SimpleNamespace
-from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import torch
@@ -18,6 +17,7 @@ from sglang.srt.mem_cache.kv_weight_version_tracker import (
     KvWeightVersionTracker,
 )
 from sglang.srt.model_executor.forward_batch_info import ForwardMode, PPProxyTensors
+from sglang.srt.model_executor.model_runner import ModelRunner
 from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
@@ -150,12 +150,6 @@ class TestSchedulerBatchWeightVersion(CustomTestCase):
 
     def _scheduler(self) -> Scheduler:
         scheduler = Scheduler.__new__(Scheduler)
-        scheduler.forward_ct = 0
-        scheduler._sched_idled = False
-        scheduler.scripted_scheduler_hook = None
-        scheduler.profiler_manager = MagicMock()
-        scheduler.forward_sleep_time = None
-        scheduler._run_batch_prebuilt = MagicMock(return_value=GenerationBatchResult())
         scheduler.publish_load_snapshot = MagicMock()
         scheduler.kv_weight_version_tracker = KvWeightVersionTracker(
             num_slots=8,
@@ -171,12 +165,11 @@ class TestSchedulerBatchWeightVersion(CustomTestCase):
         scheduler.maybe_send_health_check_signal = MagicMock()
         return scheduler
 
-    def _batch(self, *, weight_version: Optional[str] = None) -> ScheduleBatch:
+    def _batch(self) -> ScheduleBatch:
         return ScheduleBatch(
             reqs=[],
             forward_mode=ForwardMode.PREBUILT,
             out_cache_loc=torch.tensor([3], dtype=torch.int64),
-            weight_version=weight_version,
         )
 
     def test_pending_result_uses_version_captured_when_batch_ran(self) -> None:
@@ -185,14 +178,17 @@ class TestSchedulerBatchWeightVersion(CustomTestCase):
         scheduler = self._scheduler()
         batch = self._batch()
 
-        with patch("sglang.srt.managers.scheduler.get_serving", return_value=serving):
-            result = Scheduler.run_batch(scheduler, batch)
-            result.kv_weight_version_record = KvWeightVersionRecord.capture(
-                slot_indices=batch.out_cache_loc, version=serving.weight_version
+        runner = ModelRunner.__new__(ModelRunner)
+        runner.is_draft_worker = False
+        runner.server_args = SimpleNamespace(enable_prefill_weight_versions=True)
+        with patch(
+            "sglang.srt.model_executor.model_runner.get_serving", return_value=serving
+        ):
+            result = GenerationBatchResult(
+                kv_weight_version_record=runner._capture_kv_weight_version_record(batch)
             )
             queued_batch = batch.copy()
             serving.weight_version = "v1"
-            queued_batch.weight_version = "v1"
             Scheduler.process_batch_result(scheduler, queued_batch, result)
 
         spans = scheduler.kv_weight_version_tracker._lookup_spans(
@@ -202,21 +198,13 @@ class TestSchedulerBatchWeightVersion(CustomTestCase):
             [(span.version, span.start, span.end) for span in spans], [("v0", 0, 1)]
         )
 
-    def test_copy_preserves_weight_version(self) -> None:
-        """The result-queue snapshot retains the batch's forward-time version."""
-        batch = self._batch(weight_version="v0")
-
-        copied_batch = batch.copy()
-
-        self.assertEqual(copied_batch.weight_version, "v0")
-
     def test_spec_decode_does_not_restamp_restored_prefill_slots(self) -> None:
         """Restoring the batch after speculative forward must not relabel old prompt KV."""
         for overlap in (False, True):
             with self.subTest(overlap=overlap):
                 scheduler = self._scheduler()
                 scheduler.record_batch_in_overlap = lambda batch: None
-                batch = self._batch(weight_version="v1")
+                batch = self._batch()
                 batch.forward_mode = ForwardMode.DECODE
                 batch.spec_algorithm = SpeculativeAlgorithm.EAGLE
                 tracker = scheduler.kv_weight_version_tracker
@@ -268,7 +256,7 @@ class TestSchedulerBatchWeightVersion(CustomTestCase):
                     current_stream=lambda: None,
                 )
                 scheduler.future_map = SimpleNamespace(stash=lambda *args: None)
-                batch = self._batch(weight_version="v1")
+                batch = self._batch()
                 batch.req_pool_indices = torch.tensor([], dtype=torch.int64)
                 record = KvWeightVersionRecord.capture(
                     slot_indices=torch.tensor([4]), version="v0"
