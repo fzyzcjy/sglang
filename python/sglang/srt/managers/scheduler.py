@@ -2167,21 +2167,10 @@ class Scheduler(
         )
 
     def init_kv_weight_version_tracker(self) -> None:
-        if not self.server_args.enable_prefill_weight_versions:
-            self.kv_weight_version_tracker = None
-            return
-
-        assert not self.model_config.is_encoder_decoder, (
-            "--enable-prefill-weight-versions does not support encoder-decoder models"
-        )
-        assert self.model_config.is_generation, (
-            "--enable-prefill-weight-versions does not support embedding or reward models"
-        )
-
-        allocator = self.token_to_kv_pool_allocator
-        self.kv_weight_version_tracker = KvWeightVersionTracker(
-            num_slots=allocator.size_full + allocator.page_size,
-            device=allocator.device,
+        self.kv_weight_version_tracker = KvWeightVersionTracker.maybe_create(
+            server_args=self.server_args,
+            model_config=self.model_config,
+            allocator=self.token_to_kv_pool_allocator,
             req_to_token_pool=self.req_to_token_pool,
         )
 

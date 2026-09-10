@@ -8,8 +8,11 @@ import torch
 from sglang.srt.utils.weight_versions import WeightVersionSpan, WeightVersionSpans
 
 if TYPE_CHECKING:
+    from sglang.srt.configs.model_config import ModelConfig
     from sglang.srt.managers.schedule_batch import Req
+    from sglang.srt.mem_cache.allocator import BaseTokenToKVPoolAllocator
     from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
+    from sglang.srt.server_args import ServerArgs
 
 
 _UNWRITTEN_VERSION_ID = -1
@@ -31,6 +34,31 @@ class KvWeightVersionRecord(msgspec.Struct):
 
 
 class KvWeightVersionTracker:
+    @classmethod
+    def maybe_create(
+        cls,
+        *,
+        server_args: ServerArgs,
+        model_config: ModelConfig,
+        allocator: BaseTokenToKVPoolAllocator,
+        req_to_token_pool: ReqToTokenPool,
+    ) -> Optional[KvWeightVersionTracker]:
+        if not server_args.enable_prefill_weight_versions:
+            return None
+
+        assert not model_config.is_encoder_decoder, (
+            "--enable-prefill-weight-versions does not support encoder-decoder models"
+        )
+        assert model_config.is_generation, (
+            "--enable-prefill-weight-versions does not support embedding or reward models"
+        )
+
+        return cls(
+            num_slots=allocator.size_full + allocator.page_size,
+            device=allocator.device,
+            req_to_token_pool=req_to_token_pool,
+        )
+
     def __init__(
         self, *, num_slots: int, device: str, req_to_token_pool: ReqToTokenPool
     ):

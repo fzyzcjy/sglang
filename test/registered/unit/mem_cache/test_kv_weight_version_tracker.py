@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from typing import List
 
 import torch
@@ -67,6 +68,24 @@ class TestKvWeightVersionRecord(CustomTestCase):
 
 
 class TestKvWeightVersionTracker(CustomTestCase):
+    def test_factory_includes_allocator_padding_and_uses_the_request_pool(self) -> None:
+        """Factory sizing includes the allocator's padding page and preserves its mapping."""
+        tracker = KvWeightVersionTracker.maybe_create(
+            server_args=SimpleNamespace(enable_prefill_weight_versions=True),
+            model_config=SimpleNamespace(is_encoder_decoder=False, is_generation=True),
+            allocator=SimpleNamespace(size_full=12, page_size=4, device="cpu"),
+            req_to_token_pool=_ReqToTokenPoolStub([15]),
+        )
+        req = _ReqStub(num_prompt_tokens=1, kv_committed_len=1)
+
+        tracker.record(slot_indices=_slots(15), version="v0")
+        tracker.fill_req_prefill_weight_versions(req)
+
+        self.assertEqual(
+            req.prefill_weight_versions,
+            [WeightVersionSpan(version="v0", start=0, end=1)],
+        )
+
     def test_equal_neighbours_merge_while_a_returning_version_starts_a_new_span(self):
         """Run-length compression merges adjacent equal versions and never merges across a change."""
         table = _table()
