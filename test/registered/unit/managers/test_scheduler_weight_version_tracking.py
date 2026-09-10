@@ -8,6 +8,7 @@ import torch
 from sglang.srt.disaggregation.utils import DisaggregationMode
 from sglang.srt.managers.schedule_batch import ScheduleBatch
 from sglang.srt.managers.scheduler import Scheduler
+from sglang.srt.mem_cache.kv_weight_version_tracker import KvWeightVersionTracker
 from sglang.srt.managers.scheduler_components.weight_updater import (
     SchedulerWeightUpdaterManager,
 )
@@ -112,7 +113,11 @@ class TestSchedulerBatchWeightVersion(CustomTestCase):
         scheduler.forward_sleep_time = None
         scheduler._run_batch_prebuilt = MagicMock(return_value=object())
         scheduler.publish_load_snapshot = MagicMock()
-        scheduler.kv_weight_version_tracker = MagicMock()
+        scheduler.kv_weight_version_tracker = KvWeightVersionTracker(
+            num_slots=8,
+            device="cpu",
+            req_to_token_pool=SimpleNamespace(req_to_token=torch.tensor([[3]])),
+        )
         scheduler.batch_result_processor = MagicMock()
         scheduler.disaggregation_mode = DisaggregationMode.NULL
         scheduler._record_step_counters = MagicMock()
@@ -142,10 +147,8 @@ class TestSchedulerBatchWeightVersion(CustomTestCase):
             serving.weight_version = "v1"
             Scheduler.process_batch_result(scheduler, queued_batch, result)
 
-        scheduler.kv_weight_version_tracker.record.assert_called_once_with(
-            slot_indices=queued_batch.out_cache_loc,
-            version="v0",
-        )
+        spans = scheduler.kv_weight_version_tracker._lookup_spans(queued_batch.out_cache_loc)
+        self.assertEqual([(span.version, span.start, span.end) for span in spans], [("v0", 0, 1)])
 
     def test_copy_preserves_weight_version(self) -> None:
         """The result-queue snapshot retains the batch's forward-time version."""
