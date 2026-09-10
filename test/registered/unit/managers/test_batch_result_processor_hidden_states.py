@@ -40,6 +40,7 @@ def _make_processor(case, server_mode: str = "full") -> SchedulerBatchResultProc
         tree_cache=None,
         hisparse_coordinator=None,
         req_to_token_pool=None,
+        kv_weight_version_tracker=None,
         decode_offload_manager=None,
         metrics_collector=None,
         metrics_reporter=metrics_reporter,
