@@ -594,6 +594,7 @@ A request can outlive a version change: the RL flow retracts it with `pause_gene
 - `--enable-prefill-weight-versions` adds `prefill_weight_versions`, the same span list over the prompt tokens, so KV reused from the prefix cache under older weights is visible.
 - `--enable-prefill-weight-versions` does not support encoder-decoder models.
 - `--enable-prefill-weight-versions` does not support embedding or reward models.
+- Speculative decode records the committed target KV positions after acceptance and compaction, not transient draft slots.
 
 ## Easy To Postpone Generation
 

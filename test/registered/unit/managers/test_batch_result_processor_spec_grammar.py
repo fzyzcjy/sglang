@@ -5,11 +5,13 @@ token, so the over-drafted suffix is never committed to KV nor emitted.
 """
 
 import unittest
+from dataclasses import replace
 from types import SimpleNamespace
 
 import torch
 
 from sglang.srt.managers.schedule_batch import Req
+from sglang.srt.mem_cache.kv_weight_version_tracker import KvWeightVersionTracker
 from sglang.srt.managers.scheduler_components.batch_result_processor import (
     SchedulerBatchResultProcessor,
 )
@@ -112,6 +114,36 @@ def _make_result(num_draft_tokens, accept_lens, flat_tokens):
 
 
 class TestSpecV2GrammarTruncation(CustomTestCase):
+    def test_committed_target_slots_are_stamped_without_overwriting_prefix_or_rejected_kv(self) -> None:
+        """Spec provenance follows compacted target slots and excludes grammar-rejected draft tokens."""
+        for overlap in (False, True):
+            with self.subTest(overlap=overlap):
+                pool = SimpleNamespace(req_to_token=torch.tensor([[1, 2, 3, 7, 5, 6]]))
+                tracker = KvWeightVersionTracker(num_slots=10, device="cpu", req_to_token_pool=pool)
+                tracker.record(slot_indices=torch.tensor([1, 2, 3, 7, 5, 6]), version="v0")
+                req = _make_req(terminate_after=2)
+                req.req_pool_idx = 0
+                req.kv_committed_len = 3
+                processor = replace(
+                    _make_processor(),
+                    enable_overlap=overlap,
+                    req_to_token_pool=pool,
+                    kv_weight_version_tracker=tracker,
+                )
+                batch = _FakeBatch([req])
+                batch.weight_version = "v1"
+                batch.out_cache_loc = torch.tensor([1, 2, 3])
+                result = _make_result(4, [3], [101, 102, 103, 0])
+
+                processor._resolve_spec_v2_tokens(result, batch)
+
+                spans = tracker._lookup_spans(torch.tensor([1, 2, 3, 7, 5, 6]))
+                self.assertEqual(
+                    [(span.version, span.start, span.end) for span in spans],
+                    [("v0", 0, 3), ("v1", 3, 5), ("v0", 5, 6)],
+                )
+                self.assertEqual(req.kv_committed_len, 5)
+
     def test_resolve_truncates_after_grammar_completion(self):
         req = _make_req(terminate_after=2)
         proc = _make_processor()

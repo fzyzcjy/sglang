@@ -13,6 +13,7 @@ from sglang.srt.managers.scheduler_components.weight_updater import (
     SchedulerWeightUpdaterManager,
 )
 from sglang.srt.model_executor.forward_batch_info import ForwardMode
+from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 
@@ -195,6 +196,25 @@ class TestSchedulerBatchWeightVersion(CustomTestCase):
         copied_batch = batch.copy()
 
         self.assertEqual(copied_batch.weight_version, "v0")
+
+    def test_spec_decode_does_not_restamp_restored_prefill_slots(self) -> None:
+        """Restoring the batch after speculative forward must not relabel old prompt KV."""
+        for overlap in (False, True):
+            with self.subTest(overlap=overlap):
+                scheduler = self._scheduler()
+                scheduler.record_batch_in_overlap = lambda batch: None
+                batch = self._batch(weight_version="v1")
+                batch.forward_mode = ForwardMode.DECODE
+                batch.spec_algorithm = SpeculativeAlgorithm.EAGLE
+                tracker = scheduler.kv_weight_version_tracker
+                tracker.record(slot_indices=batch.out_cache_loc, version="v0")
+
+                with scheduler._forward_isolation(batch, overlap=overlap):
+                    batch.out_cache_loc = torch.tensor([4, 5, 6])
+                scheduler.process_batch_result(batch.copy(), object())
+
+                spans = tracker._lookup_spans(torch.tensor([3]))
+                self.assertEqual([span.version for span in spans], ["v0"])
 
     def test_result_without_forward_time_version_fails_loudly(self) -> None:
         """Result processing rejects batches that never captured a forward version."""
