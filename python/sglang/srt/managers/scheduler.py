@@ -2174,6 +2174,9 @@ class Scheduler(
         assert not self.model_config.is_encoder_decoder, (
             "--enable-prefill-weight-versions does not support encoder-decoder models"
         )
+        assert self.model_config.is_generation, (
+            "--enable-prefill-weight-versions does not support embedding or reward models"
+        )
 
         allocator = self.token_to_kv_pool_allocator
         self.kv_weight_version_tracker = KvWeightVersionTracker(

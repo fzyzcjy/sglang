@@ -104,6 +104,25 @@ class TestSchedulerRecordWeightVersionChange(CustomTestCase):
 
 
 class TestSchedulerBatchWeightVersion(CustomTestCase):
+    def test_embedding_rejects_enabled_prefill_tracking(self) -> None:
+        """Embedding and reward models reject enabled prefill tracking before allocation."""
+        scheduler = Scheduler.__new__(Scheduler)
+        scheduler.server_args = SimpleNamespace(enable_prefill_weight_versions=True)
+        scheduler.model_config = SimpleNamespace(is_encoder_decoder=False, is_generation=False)
+
+        with self.assertRaisesRegex(AssertionError, "does not support embedding or reward"):
+            scheduler.init_kv_weight_version_tracker()
+
+    def test_embedding_without_prefill_tracking_remains_supported(self) -> None:
+        """Embedding initialization remains unchanged when prefill tracking is disabled."""
+        scheduler = Scheduler.__new__(Scheduler)
+        scheduler.server_args = SimpleNamespace(enable_prefill_weight_versions=False)
+        scheduler.model_config = SimpleNamespace(is_encoder_decoder=False, is_generation=False)
+
+        scheduler.init_kv_weight_version_tracker()
+
+        self.assertIsNone(scheduler.kv_weight_version_tracker)
+
     def test_encoder_decoder_rejects_enabled_prefill_tracking(self) -> None:
         """Encoder-decoder models reject prefill tracking before allocating a tracker."""
         scheduler = Scheduler.__new__(Scheduler)
