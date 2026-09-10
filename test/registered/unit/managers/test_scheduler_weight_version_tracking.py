@@ -104,6 +104,25 @@ class TestSchedulerRecordWeightVersionChange(CustomTestCase):
 
 
 class TestSchedulerBatchWeightVersion(CustomTestCase):
+    def test_encoder_decoder_rejects_enabled_prefill_tracking(self) -> None:
+        """Encoder-decoder models reject prefill tracking before allocating a tracker."""
+        scheduler = Scheduler.__new__(Scheduler)
+        scheduler.server_args = SimpleNamespace(enable_prefill_weight_versions=True)
+        scheduler.model_config = SimpleNamespace(is_encoder_decoder=True)
+
+        with self.assertRaisesRegex(AssertionError, "does not support encoder-decoder"):
+            scheduler.init_kv_weight_version_tracker()
+
+    def test_encoder_decoder_without_prefill_tracking_remains_supported(self) -> None:
+        """Disabled tracking leaves encoder-decoder initialization unchanged."""
+        scheduler = Scheduler.__new__(Scheduler)
+        scheduler.server_args = SimpleNamespace(enable_prefill_weight_versions=False)
+        scheduler.model_config = SimpleNamespace(is_encoder_decoder=True)
+
+        scheduler.init_kv_weight_version_tracker()
+
+        self.assertIsNone(scheduler.kv_weight_version_tracker)
+
     def _scheduler(self) -> Scheduler:
         scheduler = Scheduler.__new__(Scheduler)
         scheduler.forward_ct = 0

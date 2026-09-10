@@ -2171,6 +2171,10 @@ class Scheduler(
             self.kv_weight_version_tracker = None
             return
 
+        assert not self.model_config.is_encoder_decoder, (
+            "--enable-prefill-weight-versions does not support encoder-decoder models"
+        )
+
         allocator = self.token_to_kv_pool_allocator
         self.kv_weight_version_tracker = KvWeightVersionTracker(
             num_slots=allocator.size_full + allocator.page_size,
